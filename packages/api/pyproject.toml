@@ -1,0 +1,48 @@
+[project]
+name = "jetuse-api"
+version = "0.1.0"
+description = "OCI版JetUse バックエンド(共有パッケージ + CI用FastAPI + Functionsハンドラ)"
+requires-python = ">=3.12"
+dependencies = [
+  # 共有のセキュリティ要件ロジック(SSRFガード/Webツール/SQLサニタイズ)。monorepo の path 依存。
+  # PEP 508 の path 直接参照(cwd=packages/api からの相対)。CI は packages/api で
+  # `pip install -e ".[dev]"` を実行するため、この相対参照で ../jetuse_shared が自動導入される
+  # (CI 変更不要)。ローカルでも `cd packages/api && pip install -e .` で同様に解決される。
+  "jetuse-shared @ file:../jetuse_shared",
+  "fastapi>=0.115",
+  "httpx>=0.27",
+  "openai>=1.50",
+  "oci-genai-auth",
+  "pydantic-settings>=2.5",
+  "PyJWT[crypto]>=2.9",
+  "oracledb>=2.0",
+  "oci>=2.150",
+  "python-multipart>=0.0.9",
+  "oci-ai-speech-realtime>=2.0",
+  "openai-agents>=0.17",
+  "langgraph>=1,<2",
+  "langchain-openai>=1",
+  "pypdf>=5",
+  "pymupdf>=1.24",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov", "ruff", "uvicorn"]
+
+[tool.setuptools]
+packages = ["jetuse_core", "service", "fn"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# 軽量カバレッジ下限(現状実測49%。回帰防止用の控えめな床)
+addopts = "--cov=jetuse_core --cov=service --cov-fail-under=45"
+
+[tool.coverage.run]
+omit = ["tests/*"]

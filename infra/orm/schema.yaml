@@ -1,0 +1,133 @@
+title: "JetUse on OCI — ワンクリックデプロイ"
+description: >-
+  生成AIアプリ JetUse を OCI 上に一括構築します（VCN / Autonomous Database /
+  API Gateway / Container Instance / Functions / Object Storage / Identity Domain）。
+  デプロイ後、出力の app_url を開き demo ユーザーでログインしてください。
+schemaVersion: 1.1.0
+version: "20260101"
+
+logoUrl: ""
+
+locale: "en"
+
+variableGroups:
+  - title: "必須"
+    variables:
+      - compartment_ocid
+  - title: "アプリ設定"
+    variables:
+      - prefix
+      - enable_auth
+      - demo_email
+      - adb_admin_password
+  - title: "オプション（詳細）"
+    variables:
+      - enable_iam
+      - enable_opensearch
+      - rate_limit_rps
+      - api_image_url
+      - fn_router_image
+  - title: "Hidden"
+    visible: false
+    variables:
+      - tenancy_ocid
+      - region
+      - home_region
+
+variables:
+  compartment_ocid:
+    type: oci:identity:compartment:id
+    title: "コンパートメント"
+    description: "リソースを作成するコンパートメント"
+    required: true
+
+  prefix:
+    type: string
+    title: "リソース名プレフィックス"
+    description: "作成リソースの名前接頭辞（英小文字+数字）"
+    default: "jetuse"
+    required: true
+
+  enable_auth:
+    type: boolean
+    title: "OIDC認証を有効化"
+    description: "Identity Domain + OIDCアプリ + デモユーザーを作成し、ログインを必須にする"
+    default: true
+
+  demo_email:
+    type: string
+    title: "デモユーザーのメール"
+    description: "デモログインユーザーのメールアドレス"
+    default: "demo@example.com"
+    visible: enable_auth
+
+  adb_admin_password:
+    type: password
+    title: "ADB ADMIN パスワード（任意）"
+    description: "空欄なら自動生成します（出力に表示）。12〜30文字・英大小+数字"
+    required: false
+
+  enable_iam:
+    type: boolean
+    title: "IAM動的グループ/ポリシーを作成"
+    description: "テナンシ管理者のみ。権限が無い場合はオフ（GenAI/Object機能は別途ポリシーが必要）"
+    default: true
+
+  enable_opensearch:
+    type: boolean
+    title: "OpenSearch RAG を有効化"
+    description: "常設課金（高コスト）。RAGのOpenSearchバックエンドを使う場合のみ"
+    default: false
+
+  rate_limit_rps:
+    type: number
+    title: "APIレート上限（req/秒）"
+    description: "0で無効"
+    default: 20
+
+  api_image_url:
+    type: string
+    title: "API コンテナイメージ"
+    description: "通常は変更不要（公開GHCRイメージ）"
+    default: "ghcr.io/sogawa-yk/jetuse-api:latest"
+
+  fn_router_image:
+    type: string
+    title: "Functions ルーターイメージ"
+    description: "通常は変更不要（公開GHCRイメージ）"
+    default: "ghcr.io/sogawa-yk/jetuse-fn-router:latest"
+
+  tenancy_ocid:
+    type: oci:identity:tenancy:id
+    title: "Tenancy"
+    visible: false
+
+  region:
+    type: oci:identity:region:name
+    title: "Region"
+    visible: false
+
+  home_region:
+    type: string
+    title: "Home region"
+    default: "us-ashburn-1"
+    visible: false
+
+outputs:
+  app_url:
+    type: link
+    title: "アプリURL"
+  demo_username:
+    type: string
+    title: "デモユーザー"
+  demo_password:
+    type: string
+    title: "デモパスワード"
+    sensitive: true
+
+outputGroups:
+  - title: "デプロイ結果"
+    outputs:
+      - app_url
+      - demo_username
+      - demo_password

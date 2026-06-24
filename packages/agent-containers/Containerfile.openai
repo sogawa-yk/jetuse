@@ -1,0 +1,14 @@
+# ビルドコンテキストはリポジトリルート(jetuse_shared が agent-containers の外にあるため)。
+#   podman build -f packages/agent-containers/Containerfile.openai -t jetuse-agent-openai .
+# まとめてビルドするには packages/agent-containers/build.sh を使う。
+FROM python:3.12-slim
+WORKDIR /app
+COPY packages/agent-containers/requirements-openai.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+# 共有のセキュリティ要件ロジック(SSRFガード/Webツール/SQLサニタイズ)を pip 取り込み(P1b)
+COPY packages/jetuse_shared ./jetuse_shared
+RUN pip install --no-cache-dir ./jetuse_shared
+COPY packages/agent-containers/agent_common.py packages/agent-containers/agent_db.py \
+     packages/agent-containers/server.py packages/agent-containers/run_openai.py ./
+EXPOSE 8080
+CMD ["uvicorn", "run_openai:app", "--host", "0.0.0.0", "--port", "8080"]

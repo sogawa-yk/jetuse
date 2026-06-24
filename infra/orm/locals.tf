@@ -1,0 +1,38 @@
+locals {
+  adb_admin_password = var.adb_admin_password != "" ? var.adb_admin_password : random_password.adb_admin.result
+  db_name            = substr(replace(var.prefix, "-", ""), 0, 14)
+
+  # OIDC: enable_auth=false の間は空(SPAはdev-userモード)
+  domain_url     = var.enable_auth ? module.identity_domain[0].domain_url : ""
+  oidc_client_id = var.enable_auth ? module.identity_domain_app[0].client_id : ""
+
+  # Container Instance / Functions に渡す環境変数(jetuse_core.settings のフィールド名に対応)。
+  # CIは OIDC issuer/JWKS のみ参照し client_id には依存しない(循環回避)。
+  api_environment = {
+    OCI_REGION       = var.region
+    COMPARTMENT_OCID = var.compartment_ocid
+    AUTH_MODE        = "resource_principal"
+    AUTH_REQUIRED    = var.enable_auth ? "true" : "false"
+    OIDC_ISSUER      = var.enable_auth ? "https://identity.oraclecloud.com/" : ""
+    OIDC_JWKS_URL    = var.enable_auth ? "${local.domain_url}/admin/v1/SigningCert/jwk" : ""
+    # Select AI は ADB のリソースプリンシパル資格情報を使う(bootstrapがENABLE_RESOURCE_PRINCIPAL)
+    SELECT_AI_CREDENTIAL = "OCI$RESOURCE_PRINCIPAL"
+    # DB自己ブートストラップ(entrypoint.sh → jetuse_core.bootstrap)
+    RUN_DB_BOOTSTRAP    = "true"
+    ADB_ADMIN_PASSWORD  = local.adb_admin_password
+    ADB_USER            = "JETUSE_APP"
+    ADB_QUERY_USER      = "JETUSE_QUERY"
+    ADB_PASSWORD        = random_password.jetuse_app.result
+    ADB_QUERY_PASSWORD  = random_password.jetuse_query.result
+    ADB_DSN             = "${local.db_name}_low"
+    ADB_WALLET_PASSWORD = random_password.wallet.result
+    # ウォレットは Terraform が base64テキストでバケットへ配置(コンテナはobject readで取得・デコード)
+    ADB_WALLET_BUCKET = module.object_storage.app_data_bucket
+    ADB_WALLET_OBJECT = "adb_wallet.zip.b64"
+    ADB_WALLET_BASE64 = "true"
+    ADB_OCID          = module.adb.adb_id # フォールバック(バケット未配置時にAPI生成)
+    RAG_BUCKET        = module.object_storage.app_data_bucket
+    SPEECH_BUCKET     = module.object_storage.speech_bucket
+    OS_NAMESPACE      = module.object_storage.namespace
+  }
+}

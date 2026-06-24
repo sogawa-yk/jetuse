@@ -1,0 +1,1 @@
+ALTER TABLE agents ADD auto_tools NUMBER(1) DEFAULT 0 NOT NULL

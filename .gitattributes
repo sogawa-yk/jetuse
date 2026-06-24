@@ -1,0 +1,7 @@
+# ORMワンクリック(INFRA-03): git archive(GitHubのソースzip=ORMが取得する)から
+# スタックに不要な大物を除外し、パッケージサイズを抑える。
+# ※ infra/ と packages/ はスタックが参照するため除外しない。
+docs/                export-ignore
+spikes/              export-ignore
+.playwright-mcp/     export-ignore
+.github/             export-ignore

@@ -1,0 +1,70 @@
+name: release
+
+# INFRA-03(ORMワンクリック): main へ push されたら
+#  - API / fn-router コンテナイメージを GHCR(public)へ publish
+#  - SPA(dist)をビルドしてリポジトリへコミット(ORMのzipに同梱し Terraform が配信)
+# ※ 初回のみ GHCR パッケージを public 設定にする(Settings → Packages、または gh api)。
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build & push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/api/Containerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/jetuse-api:latest
+            ghcr.io/${{ github.repository_owner }}/jetuse-api:${{ github.sha }}
+      - name: Build & push Functions router image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/api/Containerfile.fn
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/jetuse-fn-router:latest
+            ghcr.io/${{ github.repository_owner }}/jetuse-fn-router:${{ github.sha }}
+
+  spa:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: packages/web/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: Commit dist (self-contained ORM zip)
+        working-directory: .
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f packages/web/dist
+          if git diff --cached --quiet; then
+            echo "dist unchanged"
+          else
+            git commit -m "chore(spa): rebuild dist for ORM deploy [skip ci]"
+            git push
+          fi

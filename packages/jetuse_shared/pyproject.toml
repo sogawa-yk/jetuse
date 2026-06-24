@@ -1,0 +1,26 @@
+[project]
+name = "jetuse-shared"
+version = "0.1.0"
+description = "JetUse 共有のセキュリティ要件ロジック(SSRFガード/Webツール/SQLサニタイズ)。API と各SDKコンテナで一本化"
+requires-python = ">=3.12"
+# 依存は httpx のみ(API・各コンテナの requirements に既に存在)。pydantic/settings には依存しない。
+dependencies = [
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["jetuse_shared"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

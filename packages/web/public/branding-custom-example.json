@@ -1,0 +1,10 @@
+{
+  "productName": "ACME AI Workbench",
+  "shortName": "ACME-AI",
+  "logoText": "A",
+  "colors": {
+    "primary": "#1d4ed8",
+    "primaryStrong": "#1e40af",
+    "primarySoft": "#dbeafe"
+  }
+}

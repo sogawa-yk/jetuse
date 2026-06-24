@@ -1,0 +1,189 @@
+@import 'tailwindcss';
+@import './styles/tokens.css';
+
+/*
+ * OCIコンソール風トークン（UI-02 / docs/ui/plan.md）
+ * - 意味トークン(--rw-系/--oci-系)は tokens.css のRedwood実値(--oj-系)を参照する。
+ *   色のハードコード禁止。例外はRedwoodに該当トークンがないスクリーンショット由来の
+ *   コンソール緑(band系)のみで、ここに集約する（矛盾時はスクリーンショット優先のルール）。
+ * - ダークヘッダ(neutral-170 #312D2A) + 白ナビ + ライトグレー本文 + 白カード
+ * - リンク・選択はRedwood brand(ティールブルー)。Oracle Red系はブランドマークに限定
+ */
+:root {
+  /* 指定パレット(docs/feedbacks/colorcode.md):
+   * ライト背景 Neutral 10 #FBF9F8 ＋ アクセント3色
+   *   Oracle Red #C74634 / Sky 140 #04536F / Rose 140 #6C3F49
+   * ダーク背景 Slate 170 #2A2F2F は .dark とヘッダーで使用 */
+  --brand-primary: #c74634; /* Oracle Red */
+  --brand-primary-strong: #a63a2b;
+  --brand-primary-soft: #f6e6e3;
+
+  --rw-bg: #fbf9f8; /* Neutral 10 本文背景 */
+  --rw-surface: #ffffff; /* カード・ナビ面 */
+  --rw-line: #e4dfdb; /* 分割線(中立) */
+  --rw-ink: #2a2f2f; /* Slate 170 を本文テキストに */
+  --rw-ink-muted: #5e6463;
+  --rw-accent: #04536f; /* Sky 140 */
+
+  --oci-header-bg: #2a2f2f; /* Slate 170 ダーク背景=ヘッダー */
+  --oci-header-ink: #fbf9f8;
+  --oci-header-line: #3c4242;
+  --oci-search-bg: #1f2424; /* ヘッダー内検索バー */
+
+  /* チャット吹き出し・アイコンチップ: Rose 140 */
+  --oci-band: #6c3f49; /* Rose 140 */
+  --oci-band-ink: #ffffff;
+  --oci-band-chip: #875460; /* 明るめRose(アバター/バッジ) */
+  --oci-band-link: #e9c9d0; /* 吹き出し内リンク(淡Rose) */
+
+  --rw-action: #04536f; /* Sky 140 リンク */
+  --rw-action-soft: #e3ecf0; /* 選択(淡Sky) */
+  --rw-cta: #c74634; /* プライマリボタン=Oracle Red */
+  --rw-cta-strong: #a63a2b;
+  --rw-cta-ink: #ffffff;
+  --rw-pill-ok-bg: rgb(var(--oj-palette-success-rgb-20)); /* ステータスピル(機能色・対象外) */
+  --rw-pill-ok-ink: rgb(var(--oj-palette-success-rgb-130));
+  --rw-pill-warn-bg: rgb(var(--oj-palette-warning-rgb-20));
+  --rw-pill-warn-ink: rgb(var(--oj-palette-warning-rgb-130));
+  --rw-pill-err-bg: rgb(var(--oj-palette-danger-rgb-20));
+  --rw-pill-err-ink: rgb(var(--oj-palette-danger-rgb-130));
+}
+
+/* ダーク: --oj-* 自体が [data-theme="dark"] で切り替わるため、自動で反転しない
+ * 生パレット参照(neutral等は両テーマ共通値)のみここで上書きする */
+.dark {
+  /* ダーク背景 Slate 170 #2A2F2F ＋ アクセント3色
+   *   Brand 170 #F0CC72 / Teal 79 #89B2B0 / Pine 70 #86B596 */
+  --brand-primary: #e0705f; /* 通知/警告アクセントは赤系を維持(機能色) */
+  --brand-primary-strong: #c74634;
+  --brand-primary-soft: #3a2422;
+
+  --rw-bg: #2a2f2f; /* Slate 170 */
+  --rw-surface: #333939; /* カード面(やや明るいSlate) */
+  --rw-line: #434a4a;
+  --rw-ink: #fbf9f8;
+  --rw-ink-muted: #b7bcbc;
+  --rw-accent: #89b2b0; /* Teal 79 */
+
+  --oci-band: #3a5446; /* 吹き出し: Pine系深色 */
+  --oci-band-chip: #4c6b58;
+  --oci-band-link: #b7e0c4;
+
+  --rw-action: #89b2b0; /* Teal 79 リンク */
+  --rw-action-soft: #2f3b3b; /* 淡Teal(暗) */
+  --rw-cta: #f0cc72; /* プライマリボタン=Brand 170 ゴールド */
+  --rw-cta-strong: #e0bc5a;
+  --rw-cta-ink: #2a2f2f; /* ゴールド上は暗テキスト */
+  --rw-pill-ok-bg: rgb(var(--oj-palette-success-rgb-160));
+  --rw-pill-ok-ink: rgb(var(--oj-palette-success-rgb-40));
+  --rw-pill-warn-bg: rgb(var(--oj-palette-warning-rgb-160));
+  --rw-pill-warn-ink: rgb(var(--oj-palette-warning-rgb-40));
+  --rw-pill-err-bg: rgb(var(--oj-palette-danger-rgb-160));
+  --rw-pill-err-ink: rgb(var(--oj-palette-danger-rgb-40));
+}
+
+@theme inline {
+  --color-primary: var(--brand-primary);
+  --color-primary-strong: var(--brand-primary-strong);
+  --color-primary-soft: var(--brand-primary-soft);
+  --color-bg: var(--rw-bg);
+  --color-surface: var(--rw-surface);
+  --color-line: var(--rw-line);
+  --color-ink: var(--rw-ink);
+  --color-ink-muted: var(--rw-ink-muted);
+  --color-accent: var(--rw-accent);
+
+  --color-header: var(--oci-header-bg);
+  --color-header-ink: var(--oci-header-ink);
+  --color-header-line: var(--oci-header-line);
+  --color-search: var(--oci-search-bg);
+  --color-band: var(--oci-band);
+  --color-band-ink: var(--oci-band-ink);
+  --color-band-chip: var(--oci-band-chip);
+  --color-band-link: var(--oci-band-link);
+  --color-action: var(--rw-action);
+  --color-action-soft: var(--rw-action-soft);
+  --color-cta: var(--rw-cta);
+  --color-cta-strong: var(--rw-cta-strong);
+  --color-cta-ink: var(--rw-cta-ink);
+  --color-pill-ok: var(--rw-pill-ok-bg);
+  --color-pill-ok-ink: var(--rw-pill-ok-ink);
+  --color-pill-warn: var(--rw-pill-warn-bg);
+  --color-pill-warn-ink: var(--rw-pill-warn-ink);
+  --color-pill-err: var(--rw-pill-err-bg);
+  --color-pill-err-ink: var(--rw-pill-err-ink);
+
+  /* Oracle Sans不使用。Redwood抽出のシステムフォントスタック(plan.md Phase 2) */
+  --font-sans: var(--oj-html-font-family);
+
+  --radius-rw: var(--oj-core-border-radius-md);
+  --radius-rw-lg: var(--oj-core-border-radius-lg);
+  --radius-rw-xl: var(--oj-core-border-radius-xl);
+  --shadow-rw: var(--oj-core-box-shadow-xs);
+  --shadow-rw-md: var(--oj-core-box-shadow-sm);
+}
+
+body {
+  background-color: var(--rw-bg);
+  color: var(--rw-ink);
+  font-family: var(--font-sans);
+}
+
+/* メイン領域の背景テクスチャ(docs/ui/texture-10.png、ユーザー指定 2026-06-12)。
+ * multiplyで背景色(--rw-bg)の色味を保ったまま等高線を薄く重ねる(ダークでも破綻しない)。
+ * 上層に半透明の背景色を重ね、模様を背景へ溶かして薄くする(濃さ=texture-fadeで調整。
+ * 値が大きいほど薄い。2026-06-17 ユーザー要望で65%まで淡く) */
+.bg-texture {
+  --texture-fade: 65%;
+  background-color: var(--rw-bg);
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--rw-bg) var(--texture-fade), transparent),
+      color-mix(in srgb, var(--rw-bg) var(--texture-fade), transparent)
+    ),
+    url('./assets/texture-10.png');
+  background-size: auto, 480px;
+  background-blend-mode: normal, multiply;
+}
+
+/* チャットのMarkdownレンダリング(CHAT-03)。.md 配下に限定 */
+.md > *:first-child { margin-top: 0; }
+.md > *:last-child { margin-bottom: 0; }
+.md p, .md ul, .md ol, .md table, .md blockquote { margin: 0.5rem 0; }
+.md ul { list-style: disc; padding-left: 1.25rem; }
+.md ol { list-style: decimal; padding-left: 1.25rem; }
+.md h1, .md h2, .md h3 { margin: 0.75rem 0 0.35rem; font-weight: 600; }
+.md h1 { font-size: 1.1rem; }
+.md h2 { font-size: 1.05rem; }
+.md code {
+  background: var(--rw-bg);
+  border: 1px solid var(--rw-line);
+  border-radius: 3px;
+  padding: 0.05rem 0.3rem;
+  font-size: 0.85em;
+}
+.md pre {
+  background: var(--oci-header-bg);
+  color: var(--oci-header-ink);
+  border-radius: var(--radius-rw);
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  margin: 0.5rem 0;
+}
+.md pre code { background: transparent; border: 0; padding: 0; font-size: 0.85rem; }
+/* highlight.jsテーマ(github-dark)の背景は .md pre の黒背景を使うため透過(CHAT-03b) */
+.md pre code.hljs { background: transparent; padding: 0; }
+.md .mermaid-svg svg { margin: 0 auto; max-width: 100%; height: auto; }
+/* 大きなテーブルは枠からはみ出さず横スクロール(UC UIフィードバック 2026-06-11) */
+.md table {
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  display: block;
+  max-width: 100%;
+  width: fit-content;
+  overflow-x: auto;
+}
+.md { overflow-wrap: anywhere; }
+.md th, .md td { border: 1px solid var(--rw-line); padding: 0.3rem 0.6rem; }
+.md blockquote { border-left: 3px solid var(--rw-line); padding-left: 0.75rem; color: var(--rw-ink-muted); }
+.md a { color: var(--rw-action); text-decoration: underline; }

@@ -1,0 +1,37 @@
+# 開発者ごとアプリ・スタックの設定例。<dev>.tfvars にコピーして使う(秘密値を含むためコミット禁止)。
+# 使い方は ops/dev-env-up.sh が自動化。手動なら:
+#   terraform init
+#   terraform apply -var-file=alice.tfvars -state=alice.tfstate
+
+dev_name = "alice"
+region   = "ap-osaka-1"
+
+# OCIRイメージ(不変shaタグ推奨)。ops/dev-env-up.sh は -var で上書きするので雛形では仮値でよい
+api_image_url     = "kix.ocir.io/<namespace>/jetuse-dev-api:dev-alice-<sha>"
+registry_username = "<namespace>/<user>@example.com"
+registry_password = "<OCIR auth token>"
+
+# 本人のADBスキーマ(ops/setup-dev-schema.py --dev alice で作成済みのもの)
+adb_user       = "JETUSE_ALICE"
+adb_query_user = "JETUSE_ALICE_Q"
+
+# 既定: 認証オフ(専用スキーマで分離)。公開GWのため許可IPを社内/VPNに絞ることを推奨
+auth_required    = false
+apigw_allow_cidr = "0.0.0.0/0" # 例: "203.0.113.10/32"
+
+# CIへ注入する環境変数。共有値は environments/dev/terraform.tfvars の api_environment から流用し、
+# ADB_PASSWORD/ADB_QUERY_PASSWORD だけ本人スキーマのものに差し替える。
+# AUTH_REQUIRED / ADB_USER / ADB_QUERY_USER / LOG_OCID は main.tf が上書きするので不要。
+api_environment = {
+  AUTH_MODE           = "resource_principal"
+  OCI_REGION          = "ap-osaka-1"
+  COMPARTMENT_OCID    = "ocid1.compartment.oc1..xxxx"
+  PROJECT_OCID        = "ocid1.generativeaiproject.oc1.ap-osaka-1.xxxx"
+  SEMSTORE_OCID       = "ocid1.generativeaisemanticstore.oc1.ap-osaka-1.xxxx"
+  OS_NAMESPACE        = "<namespace>"
+  ADB_DSN             = "jetusedev_low"
+  ADB_WALLET_BUCKET   = "jetuse-dev-app-data" # 共有ウォレット
+  ADB_WALLET_PASSWORD = "<shared wallet pw>"
+  ADB_PASSWORD        = "<JETUSE_ALICE のパスワード>"
+  ADB_QUERY_PASSWORD  = "<JETUSE_ALICE_Q のパスワード>"
+}

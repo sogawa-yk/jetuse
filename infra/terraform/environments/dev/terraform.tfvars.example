@@ -1,0 +1,17 @@
+# 実値は terraform.tfvars に置く(コミット禁止)。.env と同期すること
+tenancy_ocid       = "ocid1.tenancy.oc1..xxxxxxxx"
+compartment_ocid   = "ocid1.compartment.oc1..xxxxxxxx"
+prefix             = "jetuse-dev"
+adb_admin_password = "change-me"
+
+# 初回applyではOCIRが空のためCIなし。イメージpush後に設定して再apply
+# api_image_url        = "kix.ocir.io/<namespace>/jetuse-dev-api:latest"
+# image_pull_secret_id = "ocid1.vaultsecret.oc1..xxxxxxxx"
+
+# APP-01でFunctionsをデプロイ後に追加
+# functions_routes = {
+#   conversations = "ocid1.fnfunc.oc1..xxxxxxxx"
+# }
+
+# テナンシ管理権限がなければ false(docs/setup/ の手順書で人間が実施)
+# enable_iam = false

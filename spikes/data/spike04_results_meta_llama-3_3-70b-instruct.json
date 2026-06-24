@@ -1,0 +1,256 @@
+[
+  {
+    "q": "2001年の売上合計金額はいくらですか",
+    "sql": "SELECT \n  SUM(s.\"AMOUNT_SOLD\") AS \"total_sales\"\nFROM \n  \"SH\".\"SALES\" s\n  JOIN \"SH\".\"TIMES\" t ON s.\"TIME_ID\" = t.\"TIME_ID\"\nWHERE \n  t.\"CALENDAR_YEAR\" = 2001",
+    "exec_error": null,
+    "result": {
+      "columns": [
+        "total_sales"
+      ],
+      "rows": [
+        [
+          "28136461.98"
+        ]
+      ],
+      "rowcount_sample": 1
+    }
+  },
+  {
+    "q": "販売チャネルごとの売上合計を教えてください",
+    "sql": "SELECT \n  \"CH\".\"CHANNEL_DESC\" AS \"CHANNEL\",\n  SUM(\"S\".\"AMOUNT_SOLD\") AS \"TOTAL_SALES\"\nFROM \n  \"SH\".\"SALES\" \"S\"\n  JOIN \"SH\".\"CHANNELS\" \"CH\" ON \"S\".\"CHANNEL_ID\" = \"CH\".\"CHANNEL_ID\"\nGROUP BY \n  \"CH\".\"CHANNEL_DESC\"",
+    "exec_error": null,
+    "result": {
+      "columns": [
+        "CHANNEL",
+        "TOTAL_SALES"
+      ],
+      "rows": [
+        [
+          "Internet",
+          "13706802.03"
+        ],
+        [
+          "Direct Sales",
+          "57875260.6"
+        ],
+        [
+          "Partners",
+          "26346342.32"
+        ],
+        [
+          "Tele Sales",
+          "277426.26"
+        ]
+      ],
+      "rowcount_sample": 4
+    }
+  },
+  {
+    "q": "売上金額が最も多い商品カテゴリの上位3件は何ですか",
+    "sql": "SELECT \n  p.\"PROD_CATEGORY\" AS \"商品カテゴリ\",\n  SUM(s.\"AMOUNT_SOLD\") AS \"売上金額\"\nFROM \n  \"SH\".\"SALES\" s\n  JOIN \"SH\".\"PRODUCTS\" p ON s.\"PROD_ID\" = p.\"PROD_ID\"\nGROUP BY \n  p.\"PROD_CATEGORY\"\nORDER BY \n  SUM(s.\"AMOUNT_SOLD\") DESC\nFETCH FIRST 3 ROWS ONLY",
+    "exec_error": null,
+    "result": {
+      "columns": [
+        "商品カテゴリ",
+        "売上金額"
+      ],
+      "rows": [
+        [
+          "Peripherals and Accessories",
+          "31163988.41"
+        ],
+        [
+          "Hardware",
+          "20647605.6"
+        ],
+        [
+          "Photo",
+          "17961865.9"
+        ]
+      ],
+      "rowcount_sample": 3
+    }
+  },
+  {
+    "q": "顧客数が多い国の上位5件を教えてください",
+    "sql": "SELECT \n  c.\"COUNTRY_NAME\" AS country_name, \n  COUNT(DISTINCT cu.\"CUST_ID\") AS customer_count\nFROM \n  \"SH\".\"COUNTRIES\" c\n  JOIN \"SH\".\"CUSTOMERS\" cu ON c.\"COUNTRY_ID\" = cu.\"COUNTRY_ID\"\nGROUP BY \n  c.\"COUNTRY_NAME\"\nORDER BY \n  customer_count DESC\nFETCH FIRST 5 ROWS ONLY",
+    "exec_error": null,
+    "result": {
+      "columns": [
+        "COUNTRY_NAME",
+        "CUSTOMER_COUNT"
+      ],
+      "rows": [
+        [
+          "United States of America",
+          "18520"
+        ],
+        [
+          "Germany",
+          "8173"
+        ],
+        [
+          "Italy",
+          "7780"
+        ],
+        [
+          "United Kingdom",
+          "7557"
+        ],
+        [
+          "France",
+          "3833"
+        ]
+      ],
+      "rowcount_sample": 5
+    }
+  },
+  {
+    "q": "1999年に売上金額が最も大きかった商品トップ5は",
+    "sql": "SELECT \n  p.\"PROD_NAME\" AS product_name, \n  SUM(s.\"AMOUNT_SOLD\") AS total_sales\nFROM \n  \"SH\".\"SALES\" s\n  JOIN \"SH\".\"PRODUCTS\" p ON s.\"PROD_ID\" = p.\"PROD_ID\"\n  JOIN \"SH\".\"TIMES\" t ON s.\"TIME_ID\" = t.\"TIME_ID\"\nWHERE \n  t.\"CALENDAR_YEAR\" = 1999\nGROUP BY \n  p.\"PROD_NAME\"\nORDER BY \n  total_sales DESC\nFETCH FIRST 5 ROWS ONLY",
+    "exec_error": null,
+    "result": {
+      "columns": [
+        "PRODUCT_NAME",
+        "TOTAL_SALES"
+      ],
+      "rows": [
+        [
+          "Envoy Ambassador",
+          "2502740.15"
+        ],
+        [
+          "Mini DV Camcorder with 3.5\" Swivel LCD",
+          "2036768.59"
+        ],
+        [
+          "Home Theatre Package with DVD-Audio/Vide",
+          "1934132.74"
+        ],
+        [
+          "17\" LCD w/built-in HDTV Tuner",
+          "1650125.23"
+        ],
+        [
+          "Envoy 256MB - 40GB",
+          "1278503.12"
+        ]
+      ],
+      "rowcount_sample": 5
+    }
+  },
+  {
+    "q": "2001年の月別売上推移を見せてください",
+    "sql": "SELECT \n  \"T2\".\"CALENDAR_MONTH_NAME\" AS \"月\",\n  SUM(\"T1\".\"AMOUNT_SOLD\") AS \"売上\"\nFROM \n  \"SH\".\"SALES\" \"T1\"\n  JOIN \"SH\".\"TIMES\" \"T2\" ON \"T1\".\"TIME_ID\" = \"T2\".\"TIME_ID\"\nWHERE \n  \"T2\".\"CALENDAR_YEAR\" = 2001\nGROUP BY \n  \"T2\".\"CALENDAR_MONTH_NAME\", \"T2\".\"CALENDAR_MONTH_NUMBER\"\nORDER BY \n  \"T2\".\"CALENDAR_MONTH_NUMBER\"",
+    "exec_error": null,
+    "result": {
+      "columns": [
+        "月",
+        "売上"
+      ],
+      "rows": [
+        [
+          "January",
+          "2113709.13"
+        ],
+        [
+          "February",
+          "2103124.54"
+        ],
+        [
+          "March",
+          "2330263.77"
+        ],
+        [
+          "April",
+          "2379957.23"
+        ],
+        [
+          "May",
+          "2187022.11"
+        ]
+      ],
+      "rowcount_sample": 10
+    }
+  },
+  {
+    "q": "プロモーション別の売上合計の上位5件は",
+    "sql": "SELECT \n  p.\"PROMO_NAME\" AS \"PROMO_NAME\",\n  SUM(s.\"AMOUNT_SOLD\") AS \"TOTAL_SALES\"\nFROM \n  \"SH\".\"PROMOTIONS\" p,\n  \"SH\".\"SALES\" s\nWHERE \n  p.\"PROMO_ID\" = s.\"PROMO_ID\"\nGROUP BY \n  p.\"PROMO_NAME\"\nORDER BY \n  \"TOTAL_SALES\" DESC\nFETCH FIRST 5 ROWS ONLY",
+    "exec_error": null,
+    "result": {
+      "columns": [
+        "PROMO_NAME",
+        "TOTAL_SALES"
+      ],
+      "rows": [
+        [
+          "NO PROMOTION #",
+          "94504520.79"
+        ],
+        [
+          "internet promotion #29-350",
+          "2199380.9"
+        ],
+        [
+          "TV promotion #13-351",
+          "1224503.26"
+        ],
+        [
+          "post promotion #20-33",
+          "277426.26"
+        ]
+      ],
+      "rowcount_sample": 4
+    }
+  },
+  {
+    "q": "平均販売単価が最も高い商品はどれですか",
+    "sql": "SELECT \n  p.\"PROD_NAME\" AS product_name, \n  AVG(s.\"AMOUNT_SOLD\" / s.\"QUANTITY_SOLD\") AS average_sale_price\nFROM \n  \"SH\".\"SALES\" s\n  JOIN \"SH\".\"PRODUCTS\" p ON s.\"PROD_ID\" = p.\"PROD_ID\"\nGROUP BY \n  p.\"PROD_NAME\"\nORDER BY \n  average_sale_price DESC\nFETCH FIRST 1 ROW ONLY",
+    "exec_error": null,
+    "result": {
+      "columns": [
+        "PRODUCT_NAME",
+        "AVERAGE_SALE_PRICE"
+      ],
+      "rows": [
+        [
+          "Envoy Ambassador",
+          "1565.1801188614327"
+        ]
+      ],
+      "rowcount_sample": 1
+    }
+  },
+  {
+    "q": "2001年で売上が最大だった四半期はいつですか",
+    "sql": "SELECT \n  \"T2\".\"FISCAL_QUARTER_DESC\" AS \"quarter\"\nFROM \n  \"SH\".\"SALES\" \"T1\"\n  JOIN \"SH\".\"TIMES\" \"T2\" ON \"T1\".\"TIME_ID\" = \"T2\".\"TIME_ID\"\nWHERE \n  \"T2\".\"CALENDAR_YEAR\" = 2001\nGROUP BY \n  \"T2\".\"FISCAL_QUARTER_DESC\"\nORDER BY \n  SUM(\"T1\".\"AMOUNT_SOLD\") DESC\nFETCH FIRST 1 ROW ONLY",
+    "exec_error": null,
+    "result": {
+      "columns": [
+        "quarter"
+      ],
+      "rows": [
+        [
+          "2001-03"
+        ]
+      ],
+      "rowcount_sample": 1
+    }
+  },
+  {
+    "q": "インターネットチャネルでの2000年の売上合計はいくらですか",
+    "sql": "SELECT \n  SUM(s.\"AMOUNT_SOLD\") AS \"total_sales\"\nFROM \n  \"SH\".\"SALES\" s\n  JOIN \"SH\".\"CHANNELS\" c ON s.\"CHANNEL_ID\" = c.\"CHANNEL_ID\"\n  JOIN \"SH\".\"TIMES\" t ON s.\"TIME_ID\" = t.\"TIME_ID\"\nWHERE \n  c.\"CHANNEL_DESC\" = 'internet'\n  AND t.\"CALENDAR_YEAR\" = 2000",
+    "exec_error": null,
+    "result": {
+      "columns": [
+        "total_sales"
+      ],
+      "rows": [
+        [
+          "None"
+        ]
+      ],
+      "rowcount_sample": 1
+    }
+  }
+]

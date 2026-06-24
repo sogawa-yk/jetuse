@@ -1,0 +1,74 @@
+# Resource Manager がテンプレート変数として注入(schema.yaml で hidden)。
+variable "tenancy_ocid" {
+  type = string
+}
+
+variable "region" {
+  type = string
+}
+
+variable "home_region" {
+  description = "テナンシのホームリージョン(Identity Domain作成用)"
+  type        = string
+  default     = "us-ashburn-1"
+}
+
+# --- ユーザー入力 ---
+variable "compartment_ocid" {
+  description = "リソースを作成するコンパートメント"
+  type        = string
+}
+
+variable "prefix" {
+  description = "リソース名プレフィックス"
+  type        = string
+  default     = "jetuse"
+}
+
+variable "adb_admin_password" {
+  description = "ADB ADMIN パスワード。空なら自動生成(出力に表示)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "demo_email" {
+  description = "デモログインユーザーのメールアドレス"
+  type        = string
+  default     = "demo@example.com"
+}
+
+variable "enable_auth" {
+  description = "OIDC認証を有効化(Identity Domain + OIDCアプリ + デモユーザーを作成)"
+  type        = bool
+  default     = true
+}
+
+variable "enable_opensearch" {
+  description = "OpenSearch RAGクラスタ(常設課金・高コスト)。既定OFF"
+  type        = bool
+  default     = false
+}
+
+variable "enable_iam" {
+  description = "IAM動的グループ+ポリシー(テナンシレベル)を作成。テナンシ管理者でない場合はfalseに"
+  type        = bool
+  default     = true
+}
+
+variable "rate_limit_rps" {
+  description = "API Gateway のレート上限(req/秒。0で無効)"
+  type        = number
+  default     = 20
+}
+
+# 公開コンテナイメージ(GitHub Actions が GHCR public へ push。ユーザーは変更不要)
+variable "api_image_url" {
+  type    = string
+  default = "ghcr.io/sogawa-yk/jetuse-api:latest"
+}
+
+variable "fn_router_image" {
+  type    = string
+  default = "ghcr.io/sogawa-yk/jetuse-fn-router:latest"
+}

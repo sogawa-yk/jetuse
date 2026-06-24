@@ -1,0 +1,1 @@
+ALTER TABLE agents ADD framework VARCHAR2(20) DEFAULT 'native' NOT NULL

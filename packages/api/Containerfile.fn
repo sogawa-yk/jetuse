@@ -1,0 +1,13 @@
+# OCI Functionsルーター用イメージ(ARCH-02)。jetuse_core/jetuse_shared を共用。
+# ビルドコンテキストはリポジトリルート(jetuse_shared が api の外にあるため。P1b)。
+#   podman build -f packages/api/Containerfile.fn -t <image> .
+FROM docker.io/library/python:3.12-slim
+WORKDIR /app
+# 共有ロジックを pyproject の file:../jetuse_shared が解決できる位置(/jetuse_shared)へ先に配置
+COPY packages/jetuse_shared /jetuse_shared
+COPY packages/api/pyproject.toml ./
+COPY packages/api/jetuse_core ./jetuse_core
+COPY packages/api/service ./service
+COPY packages/api/fn ./fn
+RUN pip install --no-cache-dir . fdk
+ENTRYPOINT ["fdk", "/app/fn/router/func.py", "handler"]

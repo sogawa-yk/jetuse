@@ -1,0 +1,46 @@
+# secrets / environment
+.env
+.env.local
+*.pem
+*.key
+# tfvars は秘密値を含むため全て無視(雛形 *.tfvars.example のみ追跡)
+*.tfvars
+!*.tfvars.example
+
+# python
+.venv/
+.coverage
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+
+# node
+node_modules/
+dist/
+# ORMワンクリック(INFRA-03): SPAビルド成果物のみ追跡しTerraformでバケットへ配信(release.ymlが更新)
+!/packages/web/dist/
+!/packages/web/dist/**
+.vite/
+
+# terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+.terraform.lock.hcl
+
+# misc
+*.log
+.DS_Store
+tmp/
+
+# spike audio artifacts
+spikes/data/*.mp3
+spikes/data/*.wav
+.playwright-mcp/
+
+# 個人フィードバック原文はリポジトリに含めない(ローカル管理)
+/docs/feedbacks/
