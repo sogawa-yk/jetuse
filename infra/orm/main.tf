@@ -72,6 +72,8 @@ module "ocir" {
   source           = "../terraform/modules/ocir"
   compartment_ocid = var.compartment_ocid
   prefix           = var.prefix
+  # API(Container Instance) と fn-router(Functions) の両イメージ置き場(ADR-0011)
+  repositories = ["api", "fn-router"]
 }
 
 module "observability" {
@@ -87,7 +89,7 @@ module "functions" {
   compartment_ocid = var.compartment_ocid
   prefix           = var.prefix
   subnet_id        = module.network.private_subnet_id
-  router_image     = var.fn_router_image
+  router_image     = local.fn_router_image
   router_config = merge(local.api_environment, {
     AUTH_MODE = "resource_principal"
     LOG_OCID  = module.observability.app_log_id
@@ -100,7 +102,7 @@ module "container_instance" {
   prefix                = var.prefix
   subnet_id             = module.network.private_subnet_id
   nsg_id                = module.network.app_nsg_id
-  image_url             = var.api_image_url
+  image_url             = local.api_image_url
   environment_variables = merge(local.api_environment, { LOG_OCID = module.observability.app_log_id })
   memory_gb             = 4
 }

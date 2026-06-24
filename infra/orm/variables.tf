@@ -62,13 +62,28 @@ variable "rate_limit_rps" {
   default     = 20
 }
 
-# 公開コンテナイメージ(GitHub Actions が GHCR public へ push。ユーザーは変更不要)
+# コンテナイメージは OCIR(ap-osaka-1) に置く(ADR-0011)。Functions は OCIR必須・
+# Container Instance も同一OCIRを参照。private のまま Resource Principal で pull。
+# 既定は ocir_namespace / ocir_region_key から locals.tf で合成(override 可)。
+variable "ocir_region_key" {
+  description = "OCIRレジストリのリージョンキー(ap-osaka-1 は kix → kix.ocir.io)"
+  type        = string
+  default     = "kix"
+}
+
+variable "ocir_namespace" {
+  description = "OCIRネームスペース(= Object Storage namespace。tenancy固有)"
+  type        = string
+  default     = "idqcucnenh88"
+}
+
+# 明示指定時は合成より優先(空なら ocir_* から合成)。
 variable "api_image_url" {
   type    = string
-  default = "ghcr.io/sogawa-yk/jetuse-api:latest"
+  default = ""
 }
 
 variable "fn_router_image" {
   type    = string
-  default = "ghcr.io/sogawa-yk/jetuse-fn-router:latest"
+  default = ""
 }
