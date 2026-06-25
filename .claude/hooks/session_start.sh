@@ -19,6 +19,13 @@ if [ -f "tasks/${LOOP_TASK}.md" ]; then
     || echo "[loop] ブランチ自動切替をスキップ（手動で feat/${LOOP_TASK} を用意してください）" >&2
 fi
 
+# worktree（linked working tree）で動いているか。start-loop.sh 起動なら true。
+if [ "$(git rev-parse --git-dir)" != "$(git rev-parse --git-common-dir)" ]; then
+  WORKTREE_MODE=true
+else
+  WORKTREE_MODE=false
+fi
+
 RUN_ID="$(date +%Y-%m-%dT%H%M)_${LOOP_TASK}"
 echo "$RUN_ID" > .current_run_id
 DIR="runs/${RUN_ID}"
@@ -35,6 +42,7 @@ cat > "$DIR/manifest.json" <<JSON
   "task_file": "tasks/${LOOP_TASK}.md",
   "goal_condition_path": "runs/${RUN_ID}/goal.txt",
   "loop_config_snapshot": { "stage": "report-only" },
+  "isolation": { "worktree": ${WORKTREE_MODE}, "working_tree": "${ROOT}" },
   "tool_versions": { "claude_code": "${CLAUDE_VER}", "codex": "${CODEX_VER}" },
   "started_at": "$(date -Iseconds)",
   "ended_at": null,
@@ -43,4 +51,8 @@ cat > "$DIR/manifest.json" <<JSON
 }
 JSON
 
-echo "[loop] run 開始: ${RUN_ID}" >&2
+if [ "$WORKTREE_MODE" = true ]; then
+  echo "[loop] run 開始: ${RUN_ID}（worktree 分離: ${ROOT}）" >&2
+else
+  echo "[loop] run 開始: ${RUN_ID}（共有チェックアウト。並行運用は start-loop.sh を推奨）" >&2
+fi

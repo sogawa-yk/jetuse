@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# タスク開始時にブランチ feat/<task> を自動で切る/切替（人間確認不要）。
+# タスク開始時にブランチ feat/<task> を用意する（人間確認不要）。
 # - 既に feat/<task> なら何もしない
-# - 既存ブランチなら checkout、無ければ base(BASE_BRANCH 既定 feat/loop-engineering)から作成
+# - worktree 内（start-loop.sh 起動）では起動側がブランチを確定済み → 切替しない（共有汚染ゼロ）
+# - 共有チェックアウトでは: 既存ブランチなら checkout、無ければ base から作成
 # - 追跡ファイルに未コミット変更があれば中断（前タスクの変更持ち越し事故を防ぐ）。untracked(runs/ 等)は無視。
 # 依存タスクは、依存先が base にマージ済みであること。連鎖したい場合は BASE_BRANCH=feat/<dep> を渡す。
+#
+# 推奨は start-loop.sh による worktree 起動。本フックは共有チェックアウト運用の後方互換パス。
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -16,6 +19,14 @@ BR="feat/${TASK}"
 cur="$(git branch --show-current 2>/dev/null || true)"
 if [ "$cur" = "$BR" ]; then
   echo "[branch] 既に $BR" >&2
+  exit 0
+fi
+
+# worktree（linked working tree）内ではブランチは固定。共有チェックアウトの切替ロジックは適用しない。
+# 並行セッションの衝突は worktree 分離（start-loop.sh）で防ぐ前提。
+if [ "$(git rev-parse --git-dir)" != "$(git rev-parse --git-common-dir)" ]; then
+  echo "[branch] worktree 内（現在 $cur）。期待は $BR。ブランチ切替は行わない。" >&2
+  echo "[branch] 別タスクの worktree なら start-loop.sh で正しい worktree を起動してください。" >&2
   exit 0
 fi
 

@@ -52,7 +52,11 @@ infra/orm/           # Resource Managerスタック
 実装は Claude Code（maker）、レビューは Codex（checker）。別ツール・別モデルで
 maker/checker を分離し、`/goal` の完了判定モデルが停止条件を採点する三層構成。
 
-- **起動**: loop モードは `LOOP_TASK=<task> [GOAL="..."] [CODEX_MODEL=...] claude` で起動する。
+- **起動**: 推奨は worktree 分離起動 `[GOAL="..."] [CODEX_MODEL=...] .claude/loop/start-loop.sh <task>`。
+  タスクごとに独立した git worktree（既定 `../<repo名>-loops/<task>`）を作り、その中で
+  `LOOP_TASK=<task> claude` を起動する。**複数 loop の並行運用でもブランチ/作業ツリーを共有せず衝突しない**。
+  後始末は `.claude/loop/end-loop.sh <task>`。後方互換の共有チェックアウト起動
+  `LOOP_TASK=<task> [GOAL="..."] claude` も可だが**並行起動は禁止**（衝突する）。
   `LOOP_TASK` が無いセッションでは hooks は完全 no-op（通常開発に影響しない）。
   セッション内で `/goal <完了条件>` を実行してループを回す（条件は `loop-config.yml` の `goal_template`）。
 - **毎ターン**: `loop-protocol` スキルの手順を厳守（実装→`codex-review`→履歴記録→STATE 更新）。
