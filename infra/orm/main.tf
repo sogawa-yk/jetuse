@@ -74,6 +74,8 @@ module "ocir" {
   prefix           = var.prefix
   # API(Container Instance) と fn-router(Functions) の両イメージ置き場(ADR-0011)
   repositories = ["api", "fn-router"]
+  # public 化して実行時 pull に権限/シークレットを不要にする(ADR-0011, 2026-06-25 ユーザー選択)
+  is_public = true
 }
 
 module "observability" {

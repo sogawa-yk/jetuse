@@ -11,3 +11,9 @@ variable "repositories" {
   type        = list(string)
   default     = ["api"]
 }
+
+variable "is_public" {
+  description = "true で匿名 pull 可能。Container Instance/Functions が認証なしで取得できる(ADR-0011)"
+  type        = bool
+  default     = false
+}

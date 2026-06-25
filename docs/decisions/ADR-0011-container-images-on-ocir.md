@@ -26,13 +26,19 @@ GHCR を public 化しても Functions は原理的に通らない。
 - `module.ocir` の `repositories` に `fn-router` を追加（OCIRはpush前のリポジトリ事前作成必須 — Phase 0実証）。
 - スタックの `api_image_url` / `fn_router_image` の既定を OCIR パスにする
   （`ocir_namespace` / `ocir_region_key` 変数から locals で合成。override 可）。
-- OCIR は private のままでよい。Container Instance / Functions は Resource Principal で pull する。
+- **OCIR リポジトリは public にする**（`module.ocir` の `is_public=true`。2026-06-25 ユーザー選択）。
+  Container Instance / Functions は認証なしで pull でき、実行時の pull ポリシー/シークレットが不要。
+- **push 用 IAM 権限は別途必要**: release.yml が使う OCI ユーザーは `jetuse-dev` で
+  `manage repos`（既存repoのみなら `use repos`）が要る。CIアイデンティティの権限でスタック外。
+  人間がポリシーを適用する（CLAUDE.md: IAM変更は承認必須）。
 
 ## 理由
 
 - **Functions の OCIR 必須制約は回避不可**。GHCR public 化では解決しないため、OCIR 化が唯一の整合解。
-- Container Instance も同じ OCIR を参照すれば配布元が一本化でき、private のまま Resource Principal で
-  pull できる（GHCR public 露出が不要 = よりセキュア）。
+- Container Instance も同じ OCIR を参照すれば配布元が一本化できる。
+- **pull を public 化した理由**: private OCIR からの実行時 pull は、Functions に
+  `service faas to read repos`、Container Instance に image_pull_secrets(Vault) が要り構成が複雑。
+  public 化（元の GHCR public 設計と同じ発想）で pull 側を権限ゼロにし、確実性を優先（2026-06-25 選択）。
 - スタックは既に OCIR リポジトリを作る作りになっており、設計意図（OCIRネイティブ）にも合致。
 
 ## 却下した代替案
