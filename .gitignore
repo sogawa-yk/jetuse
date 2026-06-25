@@ -47,3 +47,6 @@ spikes/data/*.wav
 loop-impl.md
 # ループエンジニアリング: セッション固有の run-id（一時ファイル）
 .current_run_id
+# loop worktree をリポジトリ内に置く場合の退避先（既定はリポジトリ外の ../<repo>-loops）。
+# LOOP_WORKTREE_ROOT をリポジトリ内に向ける運用のときだけ使う。
+.loop-worktrees/

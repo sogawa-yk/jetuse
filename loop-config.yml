@@ -15,6 +15,17 @@ budget:
   max_turns: 20
   max_tokens: 2000000
 
+# 並行セッションの分離（component-map「Worktrees」/ 衝突実害を受けて導入）。
+# .claude/loop/start-loop.sh が参照する。タスク=1 worktree で、ブランチ・インデックス・作業ツリーを
+# 共有しないため、複数の loop を同時に回しても互いの変更を壊さない。
+worktree:
+  enabled: true                       # 推奨起動経路。start-loop.sh <task> で worktree 起動。
+  base_branch: feat/loop-engineering  # 既定の派生元。依存連鎖は BASE_BRANCH=feat/<dep> で上書き。
+  root: ""                            # worktree 配置先。空なら <repo>/../<repo名>-loops。
+                                      # 上書きは LOOP_WORKTREE_ROOT 環境変数（loop-config は書き換えない）。
+  bootstrap: true                     # 作成時に隔離環境を用意（api=.venv+editable / web=node_modules）。
+                                      # LOOP_SKIP_BOOTSTRAP=1 で無効化。
+
 # 本リポジトリはモノレポ。area ごとにテスト/lint コマンドが異なる。
 # /goal 完了条件には「変更した area の」コマンドを当てる（goal_template の {test_cmd}）。
 areas:
