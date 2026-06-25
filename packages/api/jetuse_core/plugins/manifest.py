@@ -3,8 +3,10 @@
 配布可能なプラグインの最小単位を pydantic モデルとして定義し、JSON Schema を提供する。
 仕様の正本は specs/16-platform.md、設計判断は docs/decisions/ADR-0013。
 
-L1 サブセット制約(本タスクの非ゴール):
-  - `kind` は `usecase` / `agent` のみ(tool/sample-app/hosted-app/bundle は後続タスク)。
+サポート範囲:
+  - `kind` は `usecase` / `agent` / `sample-app`(SBA-01 で追加)。
+    tool/hosted-app/bundle は後続タスク。
+    sample-app の contributes 詳細スキーマ(screens/datasets/aiSlots)は `sample_app.py` が担う。
   - レジストリ通信・UI は含めない。署名は「フィールドの形式検証」＋「任意の ed25519 検証関数」まで。
 
 manifest は配布時に camelCase JSON として表現される(`schemaVersion`, `jetuse.minVersion` 等)。
@@ -38,8 +40,10 @@ from pydantic import (
 #: manifest スキーマ自体の版。後方非互換な変更で繰り上げる。
 SCHEMA_VERSION = "1"
 
-#: L1 宣言型でサポートする配布種別の型。tool/sample-app/hosted-app/bundle は後続。
-PluginKind = Literal["usecase", "agent"]
+#: サポートする配布種別の型。tool(L2 MCP)/hosted-app(L3)/bundle は後続。
+#: `sample-app`(scaffold テンプレ = §6 D9)は SBA-01 で追加した。詳細スキーマは
+#: `jetuse_core.plugins.sample_app`(contributes["sample-app"] の構造検証)が担う。
+PluginKind = Literal["usecase", "agent", "sample-app"]
 PLUGIN_KINDS = get_args(PluginKind)
 
 #: Platform API ブローカー(§7)が発行するスコープの語彙。

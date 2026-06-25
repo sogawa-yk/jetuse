@@ -317,7 +317,7 @@ def test_json_schema_reflects_validator_constraints():
     schema = manifest_json_schema()
     props = schema["properties"]
     assert props["schemaVersion"].get("const") == SCHEMA_VERSION
-    assert props["kind"]["enum"] == ["usecase", "agent"]
+    assert props["kind"]["enum"] == ["usecase", "agent", "sample-app"]
     assert "pattern" in props["id"]
     assert "pattern" in props["version"]
     assert set(props["permissions"]["items"]["enum"]) == set(PLATFORM_SCOPES)
