@@ -139,7 +139,6 @@ outputs:
   demo_password:
     type: string
     title: "デモパスワード"
-    sensitive: true
 
 outputGroups:
   - title: "デプロイ結果"
