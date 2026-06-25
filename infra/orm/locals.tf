@@ -3,7 +3,8 @@ locals {
   db_name            = substr(replace(var.prefix, "-", ""), 0, 14)
 
   # コンテナイメージ(ADR-0011): 明示指定が無ければ OCIR パスを合成。
-  # repo名は module.ocir が "<prefix>-<name>" で作る(repositories と一致させる)。
+  # repo は手動管理(genu-proto)。パスはネームスペースベースでコンパートメント非依存。
+  # 名前は "<prefix>-{api,fn-router}"(release.yml の push 先と一致させる)。
   ocir_registry   = "${var.ocir_region_key}.ocir.io/${var.ocir_namespace}"
   api_image_url   = var.api_image_url != "" ? var.api_image_url : "${local.ocir_registry}/${var.prefix}-api:latest"
   fn_router_image = var.fn_router_image != "" ? var.fn_router_image : "${local.ocir_registry}/${var.prefix}-fn-router:latest"

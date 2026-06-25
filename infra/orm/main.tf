@@ -68,15 +68,12 @@ module "adb" {
   wallet_password = random_password.wallet.result
 }
 
-module "ocir" {
-  source           = "../terraform/modules/ocir"
-  compartment_ocid = var.compartment_ocid
-  prefix           = var.prefix
-  # API(Container Instance) と fn-router(Functions) の両イメージ置き場(ADR-0011)
-  repositories = ["api", "fn-router"]
-  # public 化して実行時 pull に権限/シークレットを不要にする(ADR-0011, 2026-06-25 ユーザー選択)
-  is_public = true
-}
+# OCIRリポジトリ(jetuse-api / jetuse-fn-router)はスタックでは作らない(ADR-0011, 2026-06-25)。
+# 本番用コンパートメント(genu-proto)に人間が手動で public 作成・管理する。
+# 理由: (1) OCIRのrepo名はネームスペース内で一意。stackがjetuse-devに同名repoを作ると衝突する。
+#       (2) イメージパスはネームスペースベース(kix.ocir.io/<namespace>/<repo>)でコンパートメント非依存
+#           なので、genu-proto に置いても locals.tf のイメージURLはそのまま機能する。
+#       (3) push(release.yml)は repo 事前作成済みなら通る(無いとOCIRがルートに作成を試み権限不足で失敗)。
 
 module "observability" {
   source              = "../terraform/modules/observability"
