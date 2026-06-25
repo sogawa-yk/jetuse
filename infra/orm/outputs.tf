@@ -10,8 +10,10 @@ output "demo_username" {
 
 output "demo_password" {
   description = "デモログインユーザーの初期パスワード"
-  value       = var.enable_auth ? random_password.demo.result : ""
-  sensitive   = true
+  # ログインに必要なため RM 出力で表示する。random_password は機微値なので
+  # nonsensitive() で明示的にマスクを解除する(プロト用途。本番運用ではVault等を検討)。
+  value     = var.enable_auth ? nonsensitive(random_password.demo.result) : ""
+  sensitive = false
 }
 
 output "oidc_client_id" {
