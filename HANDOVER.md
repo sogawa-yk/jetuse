@@ -9,13 +9,16 @@
 ## 0. 最重要の前提（ブランチ運用）
 - **開発のベースブランチ = `feat/loop-engineering`**。実装はすべてこのブランチを基点に行う。
 - **main へのマージは「開発がうまく行った時」だけ**。main は安定版。直接 push しない。
-- 1タスク = 1ブランチ = 1PR（`feat/loop-engineering` へ向けてPR）。例:
+- 1タスク = 1ブランチ = 1PR（`feat/loop-engineering` へ向けてPR）。
+  **ブランチはタスク開始時にループが自動で切る**（`feat/<task-id>` を base から。`ensure_task_branch.sh`）。
+  手で `git checkout -b` する必要はない。流れ:
   ```bash
-  git checkout feat/loop-engineering
-  git checkout -b feat/PLG-01           # タスクごとに base から枝分かれ
-  # …ループで実装・完了…
-  # 人間承認後にコミット → feat/loop-engineering へPR
+  # base に居て作業ツリーがクリーンな状態で起動するだけ:
+  LOOP_TASK=PLG-01 claude          # session_start が feat/PLG-01 を自動作成→run採番
+  # …ループで実装・完了…→ 人間承認後にコミット → feat/loop-engineering へPR
   ```
+  - 自動切替は追跡ファイルがクリーンな時のみ（未コミット変更が残っていると中断＝先に前タスクをコミット/マージ）。
+  - 依存タスクは依存先が base にマージ済みであること。連鎖する場合は `BASE_BRANCH=feat/<dep>` を前置。
 - ステージ1がひととおり通り、実機検証（`docs/verification/`）が揃ったら、`feat/loop-engineering` → main をPRでマージ。
 
 > 注意: ループ基盤（`.claude/` の hooks/skills・`LOOP.md`・`loop-config.yml`・`tasks/`）は `feat/loop-engineering` 上にのみ存在する。**必ずこのブランチ（またはその子）で作業する**こと。main から枝分かれするとループが動かない。
@@ -35,7 +38,7 @@
 
 ## 2. 実装の回し方（テンプレ）
 
-リポジトリルートで、タスク用ブランチを切ってから loop モードで起動する:
+リポジトリルートで、base(`feat/loop-engineering`)に居て作業ツリーがクリーンな状態で loop モードで起動する（**ブランチ `feat/<task>` は自動で切られる**）:
 
 ```bash
 LOOP_TASK=PLG-01 GOAL="$(cat <<'EOF'

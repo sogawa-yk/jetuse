@@ -10,6 +10,9 @@ cd "$ROOT"
 
 TASK="${1:?usage: begin_task.sh <task-id>}"
 
+# タスク開始時にブランチを自動で切る（失敗時は伝播させ、runner を停止させる）。
+"$ROOT/.claude/hooks/ensure_task_branch.sh" "$TASK"
+
 # 直前タスクの run を completed 扱いに（あれば）
 PREV="$(cat .current_run_id 2>/dev/null || true)"
 if [ -n "$PREV" ] && [ -f "runs/$PREV/manifest.json" ]; then

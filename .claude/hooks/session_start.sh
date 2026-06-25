@@ -12,6 +12,13 @@ if [ -z "${LOOP_TASK:-}" ]; then
   exit 0
 fi
 
+# per-task /goal モデル: LOOP_TASK が実タスク(tasks/<id>.md あり)なら、開始時にブランチを自動で切る。
+# 失敗してもセッションは続行（手動対応に委ねる）。run 採番より先に行う。
+if [ -f "tasks/${LOOP_TASK}.md" ]; then
+  "$ROOT/.claude/hooks/ensure_task_branch.sh" "$LOOP_TASK" \
+    || echo "[loop] ブランチ自動切替をスキップ（手動で feat/${LOOP_TASK} を用意してください）" >&2
+fi
+
 RUN_ID="$(date +%Y-%m-%dT%H%M)_${LOOP_TASK}"
 echo "$RUN_ID" > .current_run_id
 DIR="runs/${RUN_ID}"
