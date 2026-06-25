@@ -46,3 +46,20 @@ infra/orm/           # Resource Managerスタック
 ## タスクチケット書式
 
 `docs/plan.md` §16 を参照。
+
+## ループエンジニアリング（loop-impl.md / ADR-0012）
+
+実装は Claude Code（maker）、レビューは Codex（checker）。別ツール・別モデルで
+maker/checker を分離し、`/goal` の完了判定モデルが停止条件を採点する三層構成。
+
+- **起動**: loop モードは `LOOP_TASK=<task> [GOAL="..."] [CODEX_MODEL=...] claude` で起動する。
+  `LOOP_TASK` が無いセッションでは hooks は完全 no-op（通常開発に影響しない）。
+  セッション内で `/goal <完了条件>` を実行してループを回す（条件は `loop-config.yml` の `goal_template`）。
+- **毎ターン**: `loop-protocol` スキルの手順を厳守（実装→`codex-review`→履歴記録→STATE 更新）。
+  レビュー判定（`review_verdict`）を自分で書き換えない。採点者は Codex。
+- **単一の真実源**: 現在状態は `STATE.md`、不変の実行履歴は `runs/<run-id>/`（追記のみ）。設定は `loop-config.yml`。
+- **自己改善**: 成果物の問題は `loop-doctor` スキルに渡す。コードでなく「ループの仕組み」を直す。
+- **やってはいけないこと（人間ゲート）**: コミット / PR / push / リリースは承認なしに行わない。
+  ループの仕組み（スキル・hooks・/goal 条件・設定）の編集は `loop-doctor` 経由・承認後のみ。
+  段階引き上げ（report-only → auto-fix → auto-commit）も人間承認が必要。
+- 詳細な使い方は `docs/loop-engineering.md`。

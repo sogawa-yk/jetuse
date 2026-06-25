@@ -1,0 +1,40 @@
+# ループエンジニアリング設定（loop-impl.md A-2 を本リポジトリ向けに具体化）
+# 変更時は loop-doctor 経由・人間承認後のみ（CLAUDE.md「やってはいけないこと」参照）。
+
+stage: report-only            # report-only | auto-fix | auto-commit（引き上げは人間ゲート §7）
+
+review:
+  reviewer: codex
+  # 空文字なら codex の ~/.codex/config.toml の既定モデルを使う。
+  # 上書きは launch 時に CODEX_MODEL=... を渡す（loop-config を書き換えない）。
+  model: ""
+  diff_scope: uncommitted     # uncommitted(=git diff HEAD) | staged | worktree
+  blocker_blocks_completion: true
+
+budget:
+  max_turns: 20
+  max_tokens: 2000000
+
+# 本リポジトリはモノレポ。area ごとにテスト/lint コマンドが異なる。
+# /goal 完了条件には「変更した area の」コマンドを当てる（goal_template の {test_cmd}）。
+areas:
+  web:
+    path: packages/web
+    test_cmd: "npm --prefix packages/web run test"
+    lint_cmd: "npm --prefix packages/web run lint"
+    build_cmd: "npm --prefix packages/web run build"
+  api:
+    path: packages/api
+    test_cmd: ".venv/bin/pytest packages/api/tests"
+    lint_cmd: ".venv/bin/ruff check packages/api"
+
+# 既定（task が area を指定しない場合）。複数 area にまたがる変更では && で連結する。
+test_cmd: "npm --prefix packages/web run test"
+
+goal_template: |
+  tasks/{task}.md の受け入れ条件をすべて満たし、かつ
+  (1) {test_cmd} が全件パス、
+  (2) 該当 area の lint がクリーン、
+  (3) STATE.md の review_verdict が PASS（最新の Codex レビューが合格）
+  であること。
+  未承認のコミット・PR・push は一切行わないこと（人間ゲート）。

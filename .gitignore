@@ -44,3 +44,6 @@ spikes/data/*.wav
 
 # 個人フィードバック原文はリポジトリに含めない(ローカル管理)
 /docs/feedbacks/
+loop-impl.md
+# ループエンジニアリング: セッション固有の run-id（一時ファイル）
+.current_run_id
