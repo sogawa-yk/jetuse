@@ -50,3 +50,7 @@ loop-impl.md
 # loop worktree をリポジトリ内に置く場合の退避先（既定はリポジトリ外の ../<repo>-loops）。
 # LOOP_WORKTREE_ROOT をリポジトリ内に向ける運用のときだけ使う。
 .loop-worktrees/
+
+# ループ実環境 E2E / レビュー証跡: 実 OCID・接続情報を含みうるためコミットしない
+# (deploy.log は上の *.log で既に無視。payload.txt は .txt なので明示)
+runs/**/reviews/*.payload.txt

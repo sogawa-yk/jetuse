@@ -34,10 +34,30 @@ areas:
     test_cmd: "npm --prefix packages/web run test"
     lint_cmd: "npm --prefix packages/web run lint"
     build_cmd: "npm --prefix packages/web run build"
+    # 完了ゲートの実環境デプロイ（jetuse-dev の固定 loop 環境を再利用）。
+    deploy_cmd: "ops/dev-env-up.sh loop"
+    # E2E はデプロイURLに対する複数シナリオ。具体は tasks/<id>.md の「E2E シナリオ」に従う。
+    e2e_cmd: ""
   api:
     path: packages/api
     test_cmd: ".venv/bin/pytest packages/api/tests"
     lint_cmd: ".venv/bin/ruff check packages/api"
+    # DB系は実 ADB を起こして実マイグレーション適用までをデプロイとする。
+    deploy_cmd: "ops/start-adb-if-stopped.sh && .venv/bin/python -m jetuse_core.migrate"
+    # E2E は実 ADB への CRUD 往復・冪等再適用など。具体は tasks/<id>.md の「E2E シナリオ」に従う。
+    e2e_cmd: ""
+
+# 実環境 E2E（jetuse-dev の実リソースを使った End-to-End 検証）。
+# Codex はコードを実行できない（read-only sandbox）。よって Claude が deploy+E2E を実施して
+# 証跡を runs/<run-id>/e2e/ に残し、Codex はその「証跡＋diff」を評価する。
+e2e:
+  enabled: true
+  cadence: completion_gate      # completion_gate | every_iteration | hybrid（採用: 完了ゲートで1回）
+  compartment: jetuse-dev       # 実環境はこのコンパートメントに閉じる
+  dev_env: loop                 # 固定の再利用 dev タグ/スキーマ（むやみに増やさない。作り直しは破棄→再作成）
+  evidence_dir: "runs/<run-id>/e2e"
+  min_scenarios: 2              # 「複数シナリオ」。実施可能な範囲で最低 2 本
+  best_effort: true             # タスク依存。実施不能な範囲は e2e/SKIPPED.md に理由明記（無言スキップ禁止）
 
 # 既定（task が area を指定しない場合）。複数 area にまたがる変更では && で連結する。
 test_cmd: "npm --prefix packages/web run test"
@@ -46,6 +66,11 @@ goal_template: |
   tasks/{task}.md の受け入れ条件をすべて満たし、かつ
   (1) {test_cmd} が全件パス、
   (2) 該当 area の lint がクリーン、
-  (3) STATE.md の review_verdict が PASS（最新の Codex レビューが合格）
+  (3) STATE.md の review_verdict が PASS（最新の Codex レビューが合格）、
+  (4) 該当タスクを jetuse-dev 実環境（固定 loop 環境）へデプロイし、tasks/{task}.md の
+      「E2E シナリオ」を複数（e2e.min_scenarios 以上）実環境で実行して結果を runs/<run-id>/e2e/ に記録、
+      その証跡込みの Codex レビューが PASS であること。技術的に E2E 不能な範囲は
+      runs/<run-id>/e2e/SKIPPED.md に理由を明記する（ベストエフォート。無言スキップ禁止）
   であること。
+  E2E は完了ゲートで1回（毎イテレーションではない）。リソースはむやみに増やさず固定 loop 環境を再利用する。
   未承認のコミット・PR・push は一切行わないこと（人間ゲート）。

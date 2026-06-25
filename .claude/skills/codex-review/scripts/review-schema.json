@@ -1,7 +1,7 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["verdict", "severity_counts", "findings", "summary"],
+  "required": ["verdict", "severity_counts", "findings", "summary", "e2e"],
   "properties": {
     "verdict": {
       "type": "string",
@@ -35,6 +35,32 @@
           "line": { "type": "integer" },
           "issue": { "type": "string" },
           "suggestion": { "type": "string" }
+        }
+      }
+    },
+    "e2e": {
+      "type": "object",
+      "description": "添付された実環境 E2E 証跡(runs/<run-id>/e2e/)に対する所見。証跡が無い場合は attached=false。",
+      "additionalProperties": false,
+      "required": ["attached", "scenarios_reviewed", "adequacy", "notes"],
+      "properties": {
+        "attached": {
+          "type": "boolean",
+          "description": "実環境 E2E 証跡が入力に添付されていたか。"
+        },
+        "scenarios_reviewed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "証跡から読み取れた実行シナリオ数（無ければ 0）。"
+        },
+        "adequacy": {
+          "type": "string",
+          "enum": ["sufficient", "insufficient", "not_applicable"],
+          "description": "複数シナリオ網羅・diff の裏づけとして十分か。未実施の正当な理由があれば not_applicable。"
+        },
+        "notes": {
+          "type": "string",
+          "description": "E2E 証跡の十分性に関する所見(不足シナリオ・未検証経路など)。"
         }
       }
     }

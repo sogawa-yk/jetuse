@@ -13,8 +13,10 @@
 ## 環境・認証の扱い
 
 - OCI認証は `~/.oci/config`（DEFAULTプロファイル）。**認証情報・テナンシ/コンパートメントOCID・エンドポイント実値をリポジトリにコミットしない**。環境依存値は `.env`（gitignore済み）に置き、雛形は `.env.example`。
-- エージェントが実行してよい操作: OCI CLI/SDKでのリソース参照、検証用リソースの作成・削除（**`jetuse-spike-` プレフィックス必須**）、Terraform plan。
-- 人間の承認が必要な操作: 本番相当のTerraform apply、IAMポリシー変更、Identity Domain設定変更、スパイク用プレフィックス以外のリソース削除。
+- エージェントが実行してよい操作: OCI CLI/SDKでのリソース参照、Terraform plan、**`jetuse-dev` コンパートメント内の開発用実リソースの作成・変更・削除（ユーザー承認済み 2026-06-25）**。
+  - **jetuse-dev 内のリソース作成は必ず Terraform（IaC）で行う**（ad-hoc な CLI/SDK 作成ではなく `infra/terraform/` または ORM スタックに書いて `terraform apply`）。プレフィックスは不要（`jetuse-spike-` 制約は jetuse-dev には適用しない）。
+  - **むやみにリソースを増やさない**: 同種の用途には既存リソースを再利用する。仕様変更で作り直す場合は Terraform で破棄→再作成し、不要リソースを残さない。
+- 人間の承認が必要な操作: IAMポリシー変更、Identity Domain設定変更（テナンシレベル変更。`enable_iam=false` 維持）、本番相当のTerraform apply、`jetuse-dev` 以外のコンパートメントへの apply。
 - 既存リソース（VCN `develop`、インスタンス `dev`、バケット `jetuse-oci-source-documents`）は参照のみ。削除・変更禁止。
 
 ## 環境の確定事実（2026-06-10時点）

@@ -42,9 +42,15 @@ fi
 INSTRUCTIONS="あなたは厳格なコードレビュアーです。<stdin> に与える git 差分をレビューしてください。
 観点: 正確性 / 境界条件 / エラー処理 / 後方互換（公開シグネチャ） / テスト網羅。
 本リポジトリ固有の観点: 認証情報・テナンシ/コンパートメント OCID・エンドポイント実値を
-コミットしていないか（環境依存値は .env 管理）。既存リソースを参照のみに留めているか。
+コミットしていないか（環境依存値は .env 管理）。既存リソースを参照のみに留めているか
+（jetuse-dev への開発リソース作成は承認済み。IAM/テナンシ変更・既存リソース変更は人間ゲート）。
+<stdin> の後半に「===== 実環境 E2E 証跡 =====」がある場合、それは Claude が jetuse-dev 実環境へ
+デプロイして実施した E2E の証跡です（あなたはコードを実行できないため Claude が残したもの）。
+その証跡が diff の主張を裏づけているか、複数シナリオ（最低2本）を網羅しているか、未実施範囲に
+正当な理由（SKIPPED.md）があるかも評価し、証跡が無い/不十分なまま完了を主張していれば指摘すること。
 各指摘には severity(blocker|major|minor) と file・line・issue・suggestion を付けること。
 blocker が1件でもあれば verdict は必ず FAIL。blocker が0件なら PASS。
+e2e セクションがあれば、実行シナリオ・結果・証跡パス・十分性の所見を出力スキーマの e2e に記すこと。
 指摘の見逃しより過剰報告を許容するが、minor を blocker に格上げしないこと。
 出力は指定の JSON スキーマに厳密に従うこと。"
 
@@ -61,8 +67,27 @@ if [ -n "${CODEX_MODEL:-}" ]; then
   CODEX_ARGS+=(--model "$CODEX_MODEL")
 fi
 
+# --- Codex 入力ペイロード = diff ＋ 実環境 E2E 証跡（あれば） --------------
+# Codex は read-only でコードを実行できないため、完了ゲートで Claude が残した
+# runs/<run-id>/e2e/ の証跡を添付して「証跡＋diff」を評価させる。
+E2E_DIR="runs/${RUN_ID}/e2e"
+PAYLOAD="${REV_DIR}/review-${N}.payload.txt"
+{
+  printf '%s\n' "$DIFF"
+  printf '\n\n===== 実環境 E2E 証跡 (jetuse-dev / Codex は実行せず証跡を評価する) =====\n'
+  if [ -d "$E2E_DIR" ] && [ -n "$(ls -A "$E2E_DIR" 2>/dev/null)" ]; then
+    find "$E2E_DIR" -type f | sort | while read -r ef; do
+      printf -- '--- %s ---\n' "$ef"
+      tail -c 8000 "$ef"
+      printf '\n'
+    done
+  else
+    printf '(証跡なし: %s が空。デプロイ/E2E 未実施または対象外。完了主張ならその妥当性を厳しく見ること)\n' "$E2E_DIR"
+  fi
+} > "$PAYLOAD"
+
 set +e
-printf '%s\n' "$DIFF" | codex "${CODEX_ARGS[@]}" >"$RAW" 2>&1
+codex "${CODEX_ARGS[@]}" >"$RAW" 2>&1 < "$PAYLOAD"
 CODEX_RC=$?
 set -e
 
