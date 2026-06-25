@@ -1,40 +1,64 @@
 ---
 name: loop-runner
-description: tasks/STAGE1-PROGRESS.md のキューを依存順に1つずつ消化する上位ループ。次に実行可能なタスクを選び loop-protocol で実装→codex-review→記録し、人間ゲートで停止する。「タスクを順番に実施して」「キューを回して」等を頼まれたら使う。完全無人ではなくゲートで停止するセミオート。
+description: tasks/STAGE1-PROGRESS.md のキューを依存順に消化する上位ループ。実行可能で相互独立なタスクは Agent Teams で並列に（各エージェントが goal ループで実装→codex-review→記録）、依存があるものは順に回し、人間ゲートで停止する。「タスクを順番に実施して」「キューを回して」等を頼まれたら使う。完全無人ではなくゲートで停止するセミオート。
 ---
-# loop-runner：タスクキューの逐次実行（上位ループ）
+# loop-runner：タスクキューの実行（上位オーケストレータ）
 
-あなたは複数タスクを順に回す**オーケストレータ**。各タスクの中身は `loop-protocol` / `codex-review` に従う。
+あなたは複数タスクを回す**オーケストレータ**。各タスクの中身は `loop-protocol` / `codex-review` に従う。
 進捗の単一の真実源は `tasks/STAGE1-PROGRESS.md`（順序・依存・ゲート・status）。
 
+## 実行可能集合とその性質
+**実行可能タスク = 依存がすべて done で status=todo のもの。** STAGE1-PROGRESS の依存定義より、
+**実行可能集合の中のタスクは互いに依存しない**（A が B に依存するなら、B が done でない限り A は実行不可）。
+よって実行可能集合はそのまま**並列バッチ**にできる。
+
 ## 手順
-1. `tasks/STAGE1-PROGRESS.md` を読む。**依存がすべて done で status=todo の先頭タスク**を1つ選ぶ
-   （並行可でも、このセッションでは1つずつ）。実行可能なものが無ければ終了（全 done か、残りは blocked）。
-2. `GOAL="<完了条件>" .claude/skills/loop-runner/scripts/begin_task.sh <task-id>` を実行する。
-   このスクリプトが **タスク用ブランチ `feat/<task>` を base(`feat/loop-engineering`)から自動で切り**（`ensure_task_branch.sh`）、
-   そのタスク用の run-id を採番する（同一セッションでも履歴・ブランチがタスク単位で分かれる）。
-   - 追跡ファイルに未コミット変更が残っているとブランチ切替は中断する（前タスクの取りこぼし防止）。
-     その場合はコミット/PRゲート（手順6）が未処理ということ → 先にそれを片付ける。
-   - 依存タスクは依存先が base にマージ済みであること。連鎖したい場合は `BASE_BRANCH=feat/<dep>` を前置。
-4. `tasks/<task>.md` の受け入れ条件と `loop-config.yml` の `goal_template` から完了条件を組み、
-   STATE.md の「現在のタスク」に記入する。
-5. `loop-protocol` を回す: 実装 → `codex-review` → `runs/<id>/` と STATE.md に記録 → FAIL は次ターンで修正。
-   **review_verdict=PASS かつ 当該 area の test/lint クリーン**になるまで。review_verdict を自分で書き換えない。
-6. **人間ゲートでは必ず停止する（自動で越えない）**:
+1. `tasks/STAGE1-PROGRESS.md` を読み、**実行可能集合**を求める。空なら終了（全 done か残りは blocked）。
+2. **分岐**:
+   - 実行可能が **1 つ** → 逐次モード（その1つを「タスク実行契約」で回す）。
+   - 実行可能が **2 つ以上** → **並列モード（Agent Teams）**。同時実行は最大 **3**（超過は次の波）。
+3. 各タスクの完了後は STAGE1-PROGRESS の status を更新し、1 に戻る。
+
+## 並列モード（Agent Teams）
+実行可能集合から最大 3 タスクを選び、**`isolation: worktree` のサブエージェントを1メッセージで並列起動**する
+（各エージェント＝1タスク）。worktree 隔離によりファイル・ブランチ・インデックスを共有せず衝突しない。
+
+各サブエージェントへ渡すプロンプト（＝そのタスクの **goal を回す**指示。`/goal` はセッション固有の Stop hook で
+サブエージェントでは使えないため、**goal の完了条件をプロンプトに埋め、loop-protocol で自走**させる）:
+- タスク: `tasks/<id>.md`（受け入れ条件・E2E シナリオ）。base ブランチ: `feat/loop-engineering`
+  （依存連鎖時は `feat/<dep>`）。
+- 完了条件: `loop-config.yml` の `goal_template` を当該タスクで具体化（test_cmd/area・E2E 含む）。
+- 手順: 下記「タスク実行契約」を厳守（実装 → `codex-review` → FAIL は修正 → **review_verdict=PASS** かつ
+  test/lint クリーン かつ **実環境 E2E 通過** まで自走）。
+- **実環境 E2E の並列隔離**: 共有 loop ADB（`jetuse-loop-adb`）を再利用しつつ、**タスク専用スキーマ
+  `JETUSE_<TASK>` で隔離**する（ADMIN で `CREATE USER JETUSE_<task>` → そのスキーマへ migrate/E2E。
+  ADB は増やさない）。非 DB タスクは ADB に触れない。
+- **コミットしない**。PASS まで実装したら停止し、最終メッセージで {task, review_verdict, e2e結果,
+  証跡パス, 残る人間ゲート} を構造化して返す。
+
+オーケストレータは全エージェントの戻りを集約し、**人間ゲートをまとめて提示**する（下記ゲートで停止）。
+1 波が終わってゲートを人間が通したら、STAGE1-PROGRESS を更新し次の波へ。
+
+## 逐次モード / 各エージェントが従う「タスク実行契約」
+1. `GOAL="<完了条件>" .claude/skills/loop-runner/scripts/begin_task.sh <task-id>` を実行。
+   タスク用ブランチ `feat/<task>` を base から自動で切り、run-id を採番する。
+   - 追跡ファイルに未コミット変更が残るとブランチ切替は中断 → 先に手順4のゲートを片付ける。
+2. `tasks/<task>.md` の受け入れ条件と `goal_template` から完了条件を組み、STATE.md「現在のタスク」に記入。
+3. `loop-protocol` を回す: 実装 → `codex-review` → `runs/<id>/` と STATE.md に記録 → FAIL は次ターンで修正。
+   **review_verdict=PASS かつ area の test/lint クリーン かつ 実環境 E2E 通過**まで。verdict は自分で書き換えない。
+4. **人間ゲートで必ず停止**（自動で越えない）:
    - コミット / PR / push（全タスク共通）
    - ADR 承認（PLG-01）／ Terraform apply・課金（PLG-04）／ デモ品質（SBA-02, PLG-08）／ VLM 前提（SBA-05）
-   停止時は「**何を承認すれば次に進めるか**」を明示して待つ。
-7. 人間がゲートを通したら（コミット承認・ADR承認等）、`tasks/STAGE1-PROGRESS.md` の当該タスクを
-   `done` に更新し、**1 に戻る**。
-8. 依存未達・能力前提なし等で進めない場合は status=`blocked` にして理由を書き、次の実行可能タスクへ。
+   「**何を承認すれば次に進めるか**」を明示して待つ。
+5. 人間がゲートを通したら STAGE1-PROGRESS の当該タスクを `done` に更新。
+6. 依存未達・能力前提なし等で進めないものは status=`blocked` にして理由を書く。
 
 ## 原則
-- 一度に1タスク。並行は人間が別セッションで行う（**並行時は各タスクを `.claude/loop/start-loop.sh <task>`
-  で worktree 起動する**。共有チェックアウトで並行起動するとブランチ/作業ツリーを取り合って衝突する）。
-- Stage は `loop-config.yml` に従う（既定 report-only ＝ コミットしない）。**無人度を上げる（auto-fix/auto-commit）のは人間ゲート**。
-- 完全無人化はしない。ゲートを飛ばさないことがこの仕組みの価値。
+- 並列は**実行可能集合（相互独立）に限る**。依存があるものは依存先が base にマージされるまで回さない。
+- 同時実行は最大 3。各並列タスクは `isolation: worktree`／実環境 E2E は `JETUSE_<task>` スキーマで隔離。
+- Stage は `loop-config.yml` に従う（既定 report-only ＝ コミットしない）。無人度を上げるのは人間ゲート。
+- **完全無人化はしない。ゲートを飛ばさないことがこの仕組みの価値。** 並列でもゲートはタスクごとに必ず止める。
 
 ## 使い方の例
-`.claude/loop/start-loop.sh stage1`（worktree 起動・推奨）または後方互換の `LOOP_TASK=stage1 claude` で
-起動し、セッション内で「tasks のキューを順番に実施して」と指示するか、本スキルを起動する。
-以降、上の手順をタスクが尽きるまで繰り返す。
+`.claude/loop/start-loop.sh stage1`（worktree 起動・推奨）または `LOOP_TASK=stage1 claude` で起動し、
+「tasks のキューを回して」と指示するか本スキルを起動する。実行可能が複数あれば自動で並列、なければ逐次。

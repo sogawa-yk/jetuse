@@ -58,6 +58,11 @@ e2e:
   evidence_dir: "runs/<run-id>/e2e"
   min_scenarios: 2              # 「複数シナリオ」。実施可能な範囲で最低 2 本
   best_effort: true             # タスク依存。実施不能な範囲は e2e/SKIPPED.md に理由明記（無言スキップ禁止）
+  # 並列実行（loop-runner Agent Teams）時の隔離: 共有 loop ADB を再利用しつつ DB タスクは
+  # タスク専用スキーマ JETUSE_<task> で分離（ADB は増やさない）。同時実行は最大 3。
+  parallel:
+    max_concurrency: 3
+    db_schema_isolation: "JETUSE_<task>"
 
 # 既定（task が area を指定しない場合）。複数 area にまたがる変更では && で連結する。
 test_cmd: "npm --prefix packages/web run test"
