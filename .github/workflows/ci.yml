@@ -23,6 +23,24 @@ jobs:
       - name: Test
         run: pytest -q
 
+  registry:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/registry
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        # jetuse-registry は jetuse-api(=PLG-01 manifest)へ path 依存。editable install で解決する。
+        run: pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check .
+      - name: Test
+        run: pytest -q
+
   web:
     runs-on: ubuntu-latest
     defaults:
@@ -58,6 +76,11 @@ jobs:
           terraform validate
       - name: validate orm (ワンクリックスタック)
         working-directory: infra/orm
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+      - name: validate plugin-registry (PLG-04 / plan-check root)
+        working-directory: infra/terraform/modules/plugin-registry/examples/plan-check
         run: |
           terraform init -backend=false -input=false
           terraform validate

@@ -129,3 +129,75 @@ def delete_usecase(owner: str, uc_id: str) -> bool:
         )
         conn.commit()
         return cur.rowcount > 0
+
+
+# --- スナップショット取込(PLG-03 / D6) ---------------------------------------
+# プラグイン取込で作られる定義は出所(source_plugin_id/source_version)を刻む。版固定の
+# スナップショットであり、編集導線(create/update_usecase)とは別経路で書き込む。
+
+
+def insert_ingested(
+    owner: str,
+    definition: dict[str, Any],
+    *,
+    source_plugin_id: str,
+    source_version: str,
+    visibility: str = "private",
+) -> str:
+    """プラグイン contributes を版固定で取り込んだユースケース定義を 1 件作成し、id を返す。
+
+    通常の create_usecase と異なり source_plugin_id/source_version を刻む(出所追跡)。
+    取込のアンインストールは delete_by_source で出所キーごと除去する。
+    """
+    uc_id = _uid()
+    d = {k: v for k, v in definition.items() if k not in ("id", "owner_sub", "builtin")}
+    payload = json.dumps(d, ensure_ascii=False)
+    tags = ",".join(d.get("tags", []))[:400]
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO usecases(id, owner_sub, name, description, icon, tags,
+                                 model, definition, visibility,
+                                 source_plugin_id, source_version)
+            VALUES (:id, :o, :n, :descr, :icn, :t, :m, :payload, :v, :spid, :sver)
+            """,
+            id=uc_id, o=owner, n=d["name"][:200],
+            descr=(d.get("description") or "")[:1000],
+            icn=(d.get("icon") or "")[:16], t=tags, m=d.get("model"),
+            payload=payload, v=visibility,
+            spid=source_plugin_id, sver=source_version,
+        )
+        conn.commit()
+    return uc_id
+
+
+def delete_by_source(source_plugin_id: str, source_version: str) -> int:
+    """指定プラグイン版から取り込んだユースケース定義を全削除し、削除件数を返す。"""
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            DELETE FROM usecases
+            WHERE source_plugin_id = :spid AND source_version = :sver
+            """,
+            spid=source_plugin_id, sver=source_version,
+        )
+        conn.commit()
+        return cur.rowcount
+
+
+def delete_ingested(uc_id: str) -> bool:
+    """取込で作成したユースケース定義 1 件を id で削除する(取込失敗時の補償用)。
+
+    出所キーごとの一括削除(delete_by_source)と違い、特定の取込行だけを消す。誤って通常の
+    ユーザー定義を消さないよう、source_plugin_id が刻まれた取込行に限定する。
+    """
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM usecases WHERE id = :id AND source_plugin_id IS NOT NULL",
+            id=uc_id,
+        )
+        conn.commit()
+        return cur.rowcount > 0

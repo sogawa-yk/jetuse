@@ -1,0 +1,34 @@
+[project]
+name = "jetuse-registry"
+version = "0.1.0"
+description = "OCI版JetUse 中央プラグインレジストリ Service (PLG-04 / D2 MVP)"
+requires-python = ">=3.12"
+dependencies = [
+  # PLG-01 の manifest 仕様・署名検証(canonical_signing_payload / verify_signature)を再利用する。
+  # monorepo の path 依存(PEP 508)。CI/ローカルともこの相対参照で ../api を解決する。
+  "jetuse-api @ file:../api",
+  "fastapi>=0.115",
+  "pydantic>=2.5",
+  # 発行者公開鍵(ed25519)の検証で直接利用。manifest.verify_signature 経由でも使う。
+  "cryptography>=43",
+  # 本番 Object Storage アダプタ(storage.OciObjectStore / build_from_env)で直接 import する。
+  # put_object の if_match/if_none_match/content_type は 2.150 で安定サポート(jetuse-api の推移依存に
+  # 偶然頼らず、registry 単体パッケージとして明示する)。
+  "oci>=2.150",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov", "ruff", "httpx", "uvicorn"]
+
+[tool.setuptools]
+packages = ["jetuse_registry"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

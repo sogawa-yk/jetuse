@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     # OpenSearch RAG(ENH-05)。例 http://10.1.1.x:9200。空ならOpenSearchバックエンド無効
     opensearch_endpoint: str = ""
 
+    # プラグイン中央レジストリ(PLG-03/D2)。ベンダー運用 Object Storage の index.json を指す
+    # ベースURL(末尾スラッシュ任意。例 https://<ns>.objectstorage.<region>.oci.../jetuse-registry/)。
+    # 空ならレジストリ機能無効(取込はベースURLを明示指定したときのみ)。実値は .env で与え、
+    # コミットしない(OCID/エンドポイント実値の混入防止)。
+    plugin_registry_url: str = ""
+
     # feature flags
     auth_required: bool = False  # INFRA-02(OIDC)完了までの暫定。本番はtrue必須
 

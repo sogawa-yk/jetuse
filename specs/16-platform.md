@@ -135,6 +135,53 @@ manifest を拒否する。**manifest の構文 valid と署名の valid は別*
 
 ## 9. 非ゴール
 
-- レジストリ通信・UI・データモデル・インストール処理（PLG-02..08）。
-- `kind` の L2/L3 拡張（tool/sample-app/hosted-app/bundle）。
+- レジストリ通信・UI・インストール処理（PLG-03..08）。
+- `kind` の L2/L3 拡張（tool/hosted-app/bundle）。
 - permissions の承認フロー・短期 JWT 発行（§7 Platform API、後続ステージ）。
+
+> 注: PLG-01 当初の非ゴールだった `kind: sample-app` は SBA-01 で追加した（§10）。
+
+## 10. kind: sample-app（scaffold テンプレ / SBA-01）
+
+`kind: sample-app` は §6 D9 の「サンプル業務アプリ」を表す配布種別。`contributes["sample-app"]`
+ペイロードは **UI テンプレ（screens）＋データモデル/シード（datasets）＋AI 組込スロット（aiSlots）**
+を宣言する。実装は `jetuse_core/plugins/sample_app.py`（定義スキーマ＋合成バリデーション土台）と
+`jetuse_core/plugins/scaffold.py`（インスタンスへの展開）。
+
+### 10.1 contributes["sample-app"] スキーマ
+
+| キー | 型 | 必須 | 規則 |
+|---|---|---|---|
+| `screens` | object[] | ✓ | 1..50。`key`(小文字英数-)・`title`・`type`(list/detail/form/dashboard/board)。`dataset`(任意, datasets を参照)・`slots`(aiSlots のキー配列)。 |
+| `datasets` | object[] | – | 0..30。`name`(小文字 snake)・`fields`(1..60, name/type/required)・`seed`(行配列, dataset 毎 ≤1000・全体 ≤5000)。 |
+| `aiSlots` | object[] | – | 0..50。`key`・`title`・`capability`(下記語彙)・`permissions`(Platform スコープ部分集合)。 |
+| `summary` | string | – | 表示用説明（≤2000）。 |
+
+cross-field 規則: screen が参照する `dataset`/`slots` は実在必須。キー（screen/dataset/aiSlot）は一意。
+seed 行は宣言フィールドのみを持ち、必須フィールド非空、**値は宣言した型に整合**（number/boolean/
+date/datetime の形式を検証）。検証済み定義は正準 JSON 化可能（manifest 署名往復の前提）。
+
+### 10.2 capability 語彙（AI 組込スロット）
+
+aiSlot が要求できる JetUse コア能力（§6 のサンプルアプリ表「使う JetUse 能力」に対応）:
+`rag.search` / `summarize` / `classify` / `nl2sql` / `chart` / `agent` / `minutes` / `draft` /
+`vlm.ocr`。集合外は検証エラー。
+
+### 10.3 合成バリデーション土台（HBD-04 の前段）
+
+`validate_composition(manifest, available_capabilities=...)` が以下を判定する:
+- `missing_capabilities`: aiSlots が要求する能力のうちホストが備えないもの（致命）。
+- `undeclared_permissions`: aiSlot が要求するが manifest.permissions に宣言されていないスコープ（致命）。
+- `unused_permissions`: 宣言されたがどの aiSlot も使わないスコープ（警告）。
+
+`ok` は致命がいずれも無いとき True。`required_capabilities`/`required_permissions` は aiSlots から導出。
+許可組合せ・テナント境界等の本格的な合成検証はステージ2 HBD-04。
+
+### 10.4 scaffold 取込（インスタンスへの展開）
+
+`scaffold_sample_app(manifest, created_by=..., available_capabilities=...)` は合成バリデーションを
+通したうえで、定義を `sample_app_instances`（definition CLOB ＝ 配布表現のまま）、各 dataset の
+seed を `sample_app_seed_rows`（payload CLOB / row_index 順 / instance に ON DELETE CASCADE）へ
+展開する。`plugin_id`/`source_version` で出所追跡（installed_plugins と対応。幅は manifest の
+`MAX_ID_LEN`/`MAX_VERSION_LEN` と一致）。**合成バリデーションが致命的不足を検出した場合は DB に
+何も書かず `CompositionError` を送出**（fail-closed）。migration は `016_sample_app_instances.sql`。

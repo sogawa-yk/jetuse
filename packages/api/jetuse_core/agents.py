@@ -135,6 +135,83 @@ def delete_agent(owner: str, aid: str) -> bool:
         return cur.rowcount > 0
 
 
+# --- スナップショット取込(PLG-03 / D6) ---------------------------------------
+# プラグイン取込で作られるエージェント定義は出所(source_plugin_id/source_version)を刻む。
+# 版固定のスナップショットで、編集導線(create/update_agent)とは別経路で書き込む。
+
+
+def insert_ingested(
+    owner: str,
+    data: dict[str, Any],
+    *,
+    source_plugin_id: str,
+    source_version: str,
+    visibility: str = "private",
+) -> str:
+    """プラグイン contributes を版固定で取り込んだエージェント定義を 1 件作成し、id を返す。"""
+    aid = _uid()
+    binds = {
+        "n": data["name"][:200],
+        "descr": (data.get("description") or "")[:1000],
+        "icn": (data.get("icon") or "")[:16],
+        "ins": data["instructions"],
+        "m": data["model"],
+        "et": json.dumps(data.get("enabled_tools") or []),
+        "mcp": json.dumps(data.get("mcp_server_ids") or []),
+        "proj": data.get("project_ocid"),
+        "v": visibility,
+        "t": ",".join(data.get("tags") or [])[:400],
+        "at": 1 if data.get("auto_tools") else 0,
+        "fw": data.get("framework") or "native",
+    }
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO agents(id, owner_sub, name, description, icon, instructions,
+                               model, enabled_tools, mcp_server_ids, project_ocid,
+                               visibility, tags, auto_tools, framework,
+                               source_plugin_id, source_version)
+            VALUES (:id, :o, :n, :descr, :icn, :ins, :m, :et, :mcp, :proj, :v, :t, :at,
+                    :fw, :spid, :sver)
+            """,
+            id=aid, o=owner, spid=source_plugin_id, sver=source_version, **binds,
+        )
+        conn.commit()
+    return aid
+
+
+def delete_by_source(source_plugin_id: str, source_version: str) -> int:
+    """指定プラグイン版から取り込んだエージェント定義を全削除し、削除件数を返す。"""
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            DELETE FROM agents
+            WHERE source_plugin_id = :spid AND source_version = :sver
+            """,
+            spid=source_plugin_id, sver=source_version,
+        )
+        conn.commit()
+        return cur.rowcount
+
+
+def delete_ingested(aid: str) -> bool:
+    """取込で作成したエージェント定義 1 件を id で削除する(取込失敗時の補償用)。
+
+    出所キーごとの一括削除(delete_by_source)と違い、特定の取込行だけを消す。誤って通常の
+    ユーザー定義を消さないよう、source_plugin_id が刻まれた取込行に限定する。
+    """
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM agents WHERE id = :id AND source_plugin_id IS NOT NULL",
+            id=aid,
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
 def list_projects() -> list[dict[str, str]]:
     """Project割当の選択肢(コンパートメント内ACTIVE)。SDKで取得"""
     import os
