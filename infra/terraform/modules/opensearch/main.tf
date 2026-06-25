@@ -71,4 +71,12 @@ resource "oci_opensearch_opensearch_cluster" "this" {
   opendashboard_node_count           = 1
   opendashboard_node_host_ocpu_count = var.dashboard_ocpu
   opendashboard_node_host_memory_gb  = var.dashboard_memory_gb
+
+  # クラスタ作成は provider 既定45分を超えることがある(実機で45分タイムアウト→その後ACTIVE)。
+  # 余裕をもって延長し、false タイムアウトでの apply 失敗を防ぐ。
+  timeouts {
+    create = "90m"
+    update = "90m"
+    delete = "60m"
+  }
 }
