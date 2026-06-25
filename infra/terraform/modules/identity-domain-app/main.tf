@@ -37,6 +37,19 @@ resource "oci_identity_domains_app" "spa" {
   is_login_target           = true
   show_in_my_apps           = true
   active                    = true
+
+  # destroy前に非アクティブ化(activeなアプリは削除できず destroy が400で失敗するため)。
+  # destroy-time provisioner は self のみ参照可。oci CLI は RM 実行環境/ローカルとも利用可能。
+  provisioner "local-exec" {
+    when    = destroy
+    command = <<-CMD
+      oci identity-domains app patch \
+        --endpoint "${self.idcs_endpoint}" \
+        --app-id ${self.id} \
+        --schemas '["urn:ietf:params:scim:api:messages:2.0:PatchOp"]' \
+        --operations '[{"op": "replace", "path": "active", "value": false}]'
+    CMD
+  }
 }
 
 # デモログインユーザー(パスワード直接設定。アクティベーションメールを待たずログイン可能)
