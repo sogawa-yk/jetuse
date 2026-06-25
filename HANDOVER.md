@@ -57,6 +57,22 @@ EOF
 
 各タスクの GOAL は `loop-config.yml` の `goal_template` ＋ 当該 `tasks/<id>.md` の受け入れ条件で組む。area 別の test/lint コマンドは `loop-config.yml` の `areas`（web=vitest/eslint, api=pytest/ruff）。
 
+### 2.1 一括実行（タスクを順番に回す / `loop-runner`）
+1タスクずつ手で launch する代わりに、`loop-runner` スキルでキューを**依存順に逐次消化**できる:
+
+```bash
+LOOP_TASK=stage1 claude     # 起動後、セッション内で:
+# 「tasks のキューを順番に実施して」と指示（loop-runner スキルが起動する）
+```
+
+- 進捗の正は [`tasks/STAGE1-PROGRESS.md`](tasks/STAGE1-PROGRESS.md)。loop-runner が「依存が満たされた todo の先頭」を1つ選び、
+  `begin_task.sh` でタスク用 run-id を採番 → `loop-protocol` で実装→`codex-review`→記録、を回す。
+- **人間ゲート（コミット/PR・ADR承認・apply・デモ品質・VLM前提）で必ず停止**し、何を承認すれば次へ進めるかを提示する。
+  承認後に当該タスクを `done` にして次へ。
+- **完全無人にはならない**（Stage=report-only ＋ 人間ゲート）。無人度を上げたい場合は `loop-config.yml` の
+  `stage` を `auto-fix`/`auto-commit` に上げる＝**人間の判断**（loop-impl §8）。それでも apply・ADR・デモ品質ゲートは残す想定。
+- 1セッション=逐次1本。**並行**したい場合は別セッションを人間が複数立てる（PROGRESS の「並行可」注記参照）。
+
 ---
 
 ## 3. タスクと推奨実行順
