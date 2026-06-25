@@ -22,20 +22,27 @@ GHCR を public 化しても Functions は原理的に通らない。
 **API・fn-router の両イメージを OCIR(ap-osaka-1, `kix.ocir.io`) に push し、スタックは OCIR を参照する。**
 
 - レジストリ: `kix.ocir.io/<namespace>/jetuse-{api,fn-router}:latest`（namespace は tenancy 固有）。
+  パスはネームスペースベースで**コンパートメント非依存**。
 - `release.yml` の `images` ジョブで GHCR に加えて OCIR にも push（OCIR ログイン + タグ追加）。
-- `module.ocir` の `repositories` に `fn-router` を追加（OCIRはpush前のリポジトリ事前作成必須 — Phase 0実証）。
 - スタックの `api_image_url` / `fn_router_image` の既定を OCIR パスにする
   （`ocir_namespace` / `ocir_region_key` 変数から locals で合成。override 可）。
-- **OCIR リポジトリは public にする**（`module.ocir` の `is_public=true`。2026-06-25 ユーザー選択）。
-  Container Instance / Functions は認証なしで pull でき、実行時の pull ポリシー/シークレットが不要。
-- **push 用 IAM 権限は別途必要**: release.yml が使う OCI ユーザーは `jetuse-dev` で
-  `manage repos`（既存repoのみなら `use repos`）が要る。CIアイデンティティの権限でスタック外。
-  人間がポリシーを適用する（CLAUDE.md: IAM変更は承認必須）。
+- **OCIR リポジトリはスタックでは作らず、人間が手動で作成・管理する**（2026-06-25 改訂）。
+  本番用コンパートメント `genu-proto` に `jetuse-api` / `jetuse-fn-router` を **public** で作成済み。
+  当初は `module.ocir` で `jetuse-dev` に作る設計だったが、OCIRのrepo名はネームスペース内で一意のため
+  同名repoの二重作成が衝突する。→ `module.ocir` を ORM スタックから除外。
+- **OCIR リポジトリは public**。Container Instance / Functions は認証なしで pull でき、
+  実行時の pull ポリシー/シークレットが不要。
+- **push 認可の要点**: OCIRはrepoが無いと push 時に**ルートコンパートメントへの自動作成**を試み、
+  権限不足で `not authorized` になる。**repoを事前作成しておけば**既存repoへの push として通る
+  （repoの存在するコンパートメントで `use/manage repos`）。IAMは人間が付与（CLAUDE.md: IAM変更は承認必須）。
 
 ## 理由
 
 - **Functions の OCIR 必須制約は回避不可**。GHCR public 化では解決しないため、OCIR 化が唯一の整合解。
 - Container Instance も同じ OCIR を参照すれば配布元が一本化できる。
+- **repoを手動管理にした理由**: jetuse-dev は開発用、コンテナイメージは本番用 `genu-proto` に置く
+  という運用方針（2026-06-25）。stackがIAMやrepoのようなテナンシ/本番リソースに踏み込まず、
+  人間が管理する境界を明確化（[[agent-no-tenancy-perms]] と同方針）。
 - **pull を public 化した理由**: private OCIR からの実行時 pull は、Functions に
   `service faas to read repos`、Container Instance に image_pull_secrets(Vault) が要り構成が複雑。
   public 化（元の GHCR public 設計と同じ発想）で pull 側を権限ゼロにし、確実性を優先（2026-06-25 選択）。
