@@ -156,8 +156,11 @@ module "identity_domain_app" {
 }
 
 module "iam" {
-  count            = var.enable_iam ? 1 : 0
-  source           = "../terraform/modules/iam"
+  count  = var.enable_iam ? 1 : 0
+  source = "../terraform/modules/iam"
+  # IAM(dynamic group / policy)の作成はホームリージョン必須。既定(大阪)プロバイダだと
+  # 403 "Please go to your home region" になる。identity_domain と同様 oci.home を渡す。
+  providers        = { oci = oci.home }
   tenancy_ocid     = var.tenancy_ocid
   compartment_ocid = var.compartment_ocid
   prefix           = var.prefix
