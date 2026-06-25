@@ -62,13 +62,36 @@ Success! The configuration is valid.
 $ python3 -c "yaml.safe_load(...)"  release.yml / schema.yaml   # OK
 ```
 
-## 5. 残作業(実デプロイ通過に必要 — 未完)
+## 5. 実機検証の経過と結果(2026-06-25 完了)
 
-1. **GitHub Secrets 設定**(`release.yml` の OCIR push 用):
-   - `OCIR_USERNAME` = `idqcucnenh88/<user>`(Identity Domain時は `idqcucnenh88/oracleidentitycloudservice/<user>`)
-   - `OCIR_TOKEN` = OCI Auth Token
-2. **イメージを OCIR へ publish**: 本PRが main にマージされ `release.yml` が成功 → OCIR に
-   `jetuse-api` / `jetuse-fn-router` の `latest` が入る。
-   (リポジトリは push 前に存在が必要。`jetuse-fn-router` は先にスタックの ocir 部分を apply して作成。)
-3. **ORM 再 APPLY**: 新スタック zip(本変更込み)で再デプロイ → 原因①②の解消を確認。
-4. 結果を本レポートに追記して完了とする(実機検証主義)。
+### 判明した追加の落とし穴
+1. **GitHub Secrets**: `OCIR_USERNAME` / `OCIR_TOKEN` を設定。ログイン(認証)は成功するが push が拒否。
+2. **push が `not authorized`**: OCIRは**repoが無いと push 時にルートコンパートメントへ自動作成**を試み、
+   その権限が無く拒否されていた(repo不在が真因。push権限そのものではない)。
+   → コンテナイメージは本番用コンパートメント **`genu-proto`** に `jetuse-api` / `jetuse-fn-router` を
+   **public** で手動作成(ADR-0011)。repo存在後は push 成功。
+3. **イメージパスはネームスペースベース**(`kix.ocir.io/idqcucnenh88/<repo>`)でコンパートメント非依存
+   のため、genu-proto に置いても terraform のイメージURLはそのまま機能。
+4. **`module.ocir` を ORM から除外**(repo名はネームスペース内で一意。stackがjetuse-devに同名repoを
+   作ると衝突)。
+5. **state の幽霊 Identity Domain**: 過去の `enable_auth=true` apply で作られた Identity Domain を
+   人手で削除 → state に残った参照の refresh が 403 になり RM が機能停止。RMはstate編集APIが無いため、
+   ローカルterraformで `state rm` → `destroy` で全リソース撤去 → スタック削除 → 新規スタックで再構築。
+
+### 最終 apply(新規スタック `jetuse-ocir-applytest`, `enable_auth=false`/`enable_iam=false`)
+```
+Plan: 164 to add, 0 to change, 0 to destroy.
+  image_url = "kix.ocir.io/idqcucnenh88/jetuse-api:latest"        # Container Instance
+  image     = "kix.ocir.io/idqcucnenh88/jetuse-fn-router:latest"  # Functions
+Apply complete! Resources: 164 added, 0 changed, 0 destroyed.
+```
+作成後の状態確認:
+- Container Instance `jetuse-api` → **ACTIVE**(当初「image could not be pulled」が解消)
+- Functions `jetuse-fn-router` → **ACTIVE**(当初「must be an OCIR image」が解消)
+- app_url: API Gateway 経由で払い出し済み(`enable_auth=false` のため dev-user モード)
+
+→ **原因①②(コンテナイメージ取得)はOCIR化+repo手動public作成で解消。実機で確認済み。**
+
+### 未了(人間の作業)
+- `enable_auth=true` の OIDC込み E2E テストは、テナンシ権限を持つ人間が別途実施([[agent-no-tenancy-perms]])。
+- IAM(`enable_iam`)は false 維持。実行時の最小権限ポリシーは人間が手動付与。
