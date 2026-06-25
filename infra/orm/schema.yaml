@@ -25,6 +25,8 @@ variableGroups:
       - enable_iam
       - enable_opensearch
       - rate_limit_rps
+      - ocir_namespace
+      - ocir_region_key
       - api_image_url
       - fn_router_image
   - title: "Hidden"
@@ -85,17 +87,31 @@ variables:
     description: "0で無効"
     default: 20
 
+  ocir_namespace:
+    type: string
+    title: "OCIR ネームスペース"
+    description: "コンテナイメージを置くOCIRのネームスペース（= Object Storage namespace）"
+    default: "idqcucnenh88"
+    required: true
+
+  ocir_region_key:
+    type: string
+    title: "OCIR リージョンキー"
+    description: "OCIRレジストリのリージョンキー（ap-osaka-1 は kix）"
+    default: "kix"
+    required: true
+
   api_image_url:
     type: string
-    title: "API コンテナイメージ"
-    description: "通常は変更不要（公開GHCRイメージ）"
-    default: "ghcr.io/sogawa-yk/jetuse-api:latest"
+    title: "API コンテナイメージ（上書き）"
+    description: "通常は空欄。空ならOCIRパスを自動合成（kix.ocir.io/<namespace>/<prefix>-api:latest）"
+    required: false
 
   fn_router_image:
     type: string
-    title: "Functions ルーターイメージ"
-    description: "通常は変更不要（公開GHCRイメージ）"
-    default: "ghcr.io/sogawa-yk/jetuse-fn-router:latest"
+    title: "Functions ルーターイメージ（上書き）"
+    description: "通常は空欄。空ならOCIRパスを自動合成（kix.ocir.io/<namespace>/<prefix>-fn-router:latest）"
+    required: false
 
   tenancy_ocid:
     type: oci:identity:tenancy:id

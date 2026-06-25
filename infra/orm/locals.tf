@@ -2,6 +2,12 @@ locals {
   adb_admin_password = var.adb_admin_password != "" ? var.adb_admin_password : random_password.adb_admin.result
   db_name            = substr(replace(var.prefix, "-", ""), 0, 14)
 
+  # コンテナイメージ(ADR-0011): 明示指定が無ければ OCIR パスを合成。
+  # repo名は module.ocir が "<prefix>-<name>" で作る(repositories と一致させる)。
+  ocir_registry   = "${var.ocir_region_key}.ocir.io/${var.ocir_namespace}"
+  api_image_url   = var.api_image_url != "" ? var.api_image_url : "${local.ocir_registry}/${var.prefix}-api:latest"
+  fn_router_image = var.fn_router_image != "" ? var.fn_router_image : "${local.ocir_registry}/${var.prefix}-fn-router:latest"
+
   # OIDC: enable_auth=false の間は空(SPAはdev-userモード)
   domain_url     = var.enable_auth ? module.identity_domain[0].domain_url : ""
   oidc_client_id = var.enable_auth ? module.identity_domain_app[0].client_id : ""
