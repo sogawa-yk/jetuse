@@ -7,8 +7,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from jetuse_core import presets as preset_repo
 from jetuse_core import usecases as uc_repo
 from jetuse_core.auth import AuthContext, require_user
+from jetuse_core.plugins import loader as contrib_loader
 
-from ..schemas import PresetCreate, UsecaseDefinition
+from ..schemas import PluginPublishRequest, PresetCreate, UsecaseDefinition
+from .plugin_publish import publish_entity
 
 router = APIRouter()
 
@@ -17,7 +19,8 @@ router = APIRouter()
 
 @router.get("/api/usecases")
 def list_usecases(user: Annotated[AuthContext, Depends(require_user)]):
-    return {"usecases": uc_repo.list_usecases(user.subject)}
+    # 組み込み + ユーザー + インストール済みを合算し、出所バッジ・名前衝突解決(PLG-07)。
+    return {"usecases": contrib_loader.list_usecases(user.subject)}
 
 
 @router.post("/api/usecases")
@@ -32,6 +35,8 @@ def get_usecase(uc_id: str, user: Annotated[AuthContext, Depends(require_user)])
     uc = uc_repo.get_usecase(user.subject, uc_id)
     if not uc:
         raise HTTPException(status_code=404, detail="usecase not found")
+    # 出所バッジ(plugin名/版)を付与(PLG-07)。組み込み/ユーザー定義は追加 I/O なし。
+    contrib_loader.enrich_one(uc)
     return {**uc, "mine": uc.get("owner_sub") == user.subject}
 
 
@@ -52,6 +57,19 @@ def delete_usecase(uc_id: str, user: Annotated[AuthContext, Depends(require_user
     if not uc_repo.delete_usecase(user.subject, uc_id):
         raise HTTPException(status_code=404, detail="usecase not found")
     return {"deleted": True}
+
+
+@router.post("/api/usecases/{uc_id}/publish")
+def publish_usecase(
+    uc_id: str,
+    req: PluginPublishRequest,
+    user: Annotated[AuthContext, Depends(require_user)],
+):
+    """ユースケース定義を manifest 化・署名してマーケット(中央レジストリ)へ公開する(PLG-05)。"""
+    uc = uc_repo.get_usecase(user.subject, uc_id)
+    if not uc:
+        raise HTTPException(status_code=404, detail="usecase not found")
+    return publish_entity(kind="usecase", definition=uc, entity_id=uc_id, version=req.version)
 
 
 @router.get("/api/presets")

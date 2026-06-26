@@ -20,6 +20,9 @@ def _row_to_summary(r) -> dict[str, Any]:
         "id": r[0], "name": r[1], "description": r[2], "icon": r[3],
         "tags": [t for t in (r[4] or "").split(",") if t],
         "visibility": r[5], "owner_sub": r[6], "builtin": False,
+        # 出所追跡(PLG-02/03)。プラグイン取込でない通常定義は None。
+        # コントリビューションローダー(PLG-07)が出所バッジ生成・名前衝突解決に使う。
+        "source_plugin_id": r[7], "source_version": r[8],
     }
 
 
@@ -37,7 +40,8 @@ def list_usecases(owner: str) -> list[dict[str, Any]]:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT id, name, description, icon, tags, visibility, owner_sub
+            SELECT id, name, description, icon, tags, visibility, owner_sub,
+                   source_plugin_id, source_version
             FROM usecases
             WHERE owner_sub = :o OR visibility = 'public'
             ORDER BY updated_at DESC
@@ -61,7 +65,8 @@ def get_usecase(owner: str, uc_id: str) -> dict[str, Any] | None:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT definition, owner_sub, visibility FROM usecases
+            SELECT definition, owner_sub, visibility,
+                   source_plugin_id, source_version FROM usecases
             WHERE id = :id AND (owner_sub = :o OR visibility = 'public')
             """,
             id=uc_id, o=owner,
@@ -70,7 +75,11 @@ def get_usecase(owner: str, uc_id: str) -> dict[str, Any] | None:
         if not row:
             return None
         d = json.loads(row[0])
-        return {**d, "id": uc_id, "owner_sub": row[1], "visibility": row[2], "builtin": False}
+        return {
+            **d, "id": uc_id, "owner_sub": row[1], "visibility": row[2],
+            "builtin": False,
+            "source_plugin_id": row[3], "source_version": row[4],
+        }
 
 
 def create_usecase(owner: str, definition: dict[str, Any]) -> dict[str, Any]:

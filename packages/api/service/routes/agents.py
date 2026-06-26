@@ -12,9 +12,16 @@ from jetuse_core import select_ai_agent
 from jetuse_core import tools as tool_registry
 from jetuse_core.auth import AuthContext, require_user
 from jetuse_core.logging import log_with
+from jetuse_core.plugins import loader as contrib_loader
 from jetuse_core.webtools import SsrfBlockedError
 
-from ..schemas import AgentDefinition, McpServerCreate, ToolExecuteRequest
+from ..schemas import (
+    AgentDefinition,
+    McpServerCreate,
+    PluginPublishRequest,
+    ToolExecuteRequest,
+)
+from .plugin_publish import publish_entity
 
 logger = logging.getLogger("jetuse.service")
 router = APIRouter()
@@ -24,7 +31,8 @@ router = APIRouter()
 
 @router.get("/api/agents")
 def list_agents(user: Annotated[AuthContext, Depends(require_user)]):
-    return {"agents": agents_repo.list_agents(user.subject)}
+    # ユーザー + インストール済みを合算し、出所バッジ・名前衝突解決(PLG-07)。
+    return {"agents": contrib_loader.list_agents(user.subject)}
 
 
 @router.get("/api/agents/projects")
@@ -48,6 +56,8 @@ def get_agent(aid: str, user: Annotated[AuthContext, Depends(require_user)]):
     a = agents_repo.get_agent(user.subject, aid)
     if not a:
         raise HTTPException(status_code=404, detail="agent not found")
+    # 出所バッジ(plugin名/版)を付与(PLG-07)。通常定義は追加 I/O なし。
+    contrib_loader.enrich_one(a)
     return a
 
 
@@ -71,6 +81,19 @@ def delete_agent(aid: str, user: Annotated[AuthContext, Depends(require_user)]):
     except Exception:
         logger.exception("select_ai drop failed (ignored)")
     return {"deleted": True}
+
+
+@router.post("/api/agents/{aid}/publish")
+def publish_agent(
+    aid: str,
+    req: PluginPublishRequest,
+    user: Annotated[AuthContext, Depends(require_user)],
+):
+    """エージェント定義を manifest 化・署名してマーケット(中央レジストリ)へ公開する(PLG-05)。"""
+    a = agents_repo.get_agent(user.subject, aid)
+    if not a:
+        raise HTTPException(status_code=404, detail="agent not found")
+    return publish_entity(kind="agent", definition=a, entity_id=aid, version=req.version)
 
 
 @router.get("/api/agent/mcp-servers")

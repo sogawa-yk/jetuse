@@ -117,6 +117,12 @@ class AgentDefinition(BaseModel):
         return validate_agent_definition(self, owner)
 
 
+class PluginPublishRequest(BaseModel):
+    """マーケット公開リクエスト(PLG-05)。version は semver(manifest 検証で最終確認)。"""
+
+    version: str = Field(default="1.0.0", min_length=1, max_length=64)
+
+
 class McpServerCreate(BaseModel):
     label: str = Field(min_length=1, max_length=100)
     url: str = Field(min_length=12, max_length=1000)
