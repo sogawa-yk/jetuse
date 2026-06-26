@@ -41,6 +41,8 @@ export default function Builder() {
   const [previewValues, setPreviewValues] = useState<Record<string, string>>({})
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [publishMsg, setPublishMsg] = useState<string | null>(null)
+  const [publishing, setPublishing] = useState(false)
 
   useEffect(() => {
     fetch('/api/chat/models', { headers: authHeaders(user) })
@@ -123,6 +125,30 @@ export default function Builder() {
     nav('/')
   }
 
+  // PLG-05: マーケットに公開(export→署名→publish はサーバー側 /publish が担う)
+  const publish = async () => {
+    if (!id) return
+    const version = window.prompt(t('market.publish.prompt'), '1.0.0')
+    if (!version) return
+    setPublishing(true)
+    setPublishMsg(null)
+    try {
+      const res = await fetch(`/api/usecases/${id}/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders(user) },
+        body: JSON.stringify({ version: version.trim() }),
+      })
+      const data = await res.json()
+      if (!res.ok)
+        throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))
+      setPublishMsg(`${t('market.publish.ok')}: ${data.id}@${data.version}`)
+    } catch (e) {
+      setPublishMsg(`${t('market.publish.fail')}: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setPublishing(false)
+    }
+  }
+
   return (
     <PageContainer
       wide
@@ -131,12 +157,21 @@ export default function Builder() {
       subtitle={t('uc.builder.lead')}
       action={
         id ? (
-          <button
-            onClick={() => void remove()}
-            className="rounded-rw border border-primary px-3 py-1.5 text-sm text-primary hover:bg-primary-strong hover:text-white"
-          >
-            {t('chat.preset.delete')}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => void publish()}
+              disabled={publishing}
+              className="rounded-rw border border-action px-3 py-1.5 text-sm text-action hover:bg-action hover:text-white disabled:opacity-40"
+            >
+              {t('market.publish')}
+            </button>
+            <button
+              onClick={() => void remove()}
+              className="rounded-rw border border-primary px-3 py-1.5 text-sm text-primary hover:bg-primary-strong hover:text-white"
+            >
+              {t('chat.preset.delete')}
+            </button>
+          </div>
         ) : undefined
       }
     >
@@ -333,6 +368,7 @@ export default function Builder() {
               {t('uc.builder.save')}
             </button>
             {error && <span className="text-xs text-primary-strong">⚠ {error}</span>}
+            {publishMsg && <span className="text-xs text-ink-muted">{publishMsg}</span>}
           </div>
         </div>
 

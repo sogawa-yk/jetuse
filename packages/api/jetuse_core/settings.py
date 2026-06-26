@@ -21,6 +21,17 @@ class Settings(BaseSettings):
     # コミットしない(OCID/エンドポイント実値の混入防止)。
     plugin_registry_url: str = ""
 
+    # プラグイン公開(PLG-05/D7)。インスタンスが「発行者」として中央レジストリへ publish するための
+    # 資格情報。すべて .env / Vault で注入し、コミットしない(鍵・トークン実値の混入防止)。いずれかが
+    # 空なら publish 機能は無効(/api/.../publish は 503 を返す)。
+    registry_publish_url: str = ""        # publish API のベースURL(例 https://registry.example)
+    registry_publisher_id: str = ""       # 発行者ID(manifest.publisher・レジストリ認証と対応)
+    registry_publisher_token: str = ""    # publish 用 Bearer トークン(平文。Vault/.env 管理)
+    registry_signing_key: str = ""        # base64(32バイト ed25519 秘密シード)。manifest 署名鍵
+    registry_public_key_id: str = ""      # 署名鍵に対応する公開鍵ID(レジストリ登録名)
+    registry_namespace: str = ""          # plugin id の名前空間。空なら publisher_id を使う
+    registry_min_version: str = ""        # manifest.jetuse.minVersion。空なら publisher 既定(0.3.0)
+
     # feature flags
     auth_required: bool = False  # INFRA-02(OIDC)完了までの暫定。本番はtrue必須
 

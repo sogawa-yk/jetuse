@@ -9,7 +9,8 @@ from jetuse_core import usecases as uc_repo
 from jetuse_core.auth import AuthContext, require_user
 from jetuse_core.plugins import loader as contrib_loader
 
-from ..schemas import PresetCreate, UsecaseDefinition
+from ..schemas import PluginPublishRequest, PresetCreate, UsecaseDefinition
+from .plugin_publish import publish_entity
 
 router = APIRouter()
 
@@ -56,6 +57,19 @@ def delete_usecase(uc_id: str, user: Annotated[AuthContext, Depends(require_user
     if not uc_repo.delete_usecase(user.subject, uc_id):
         raise HTTPException(status_code=404, detail="usecase not found")
     return {"deleted": True}
+
+
+@router.post("/api/usecases/{uc_id}/publish")
+def publish_usecase(
+    uc_id: str,
+    req: PluginPublishRequest,
+    user: Annotated[AuthContext, Depends(require_user)],
+):
+    """ユースケース定義を manifest 化・署名してマーケット(中央レジストリ)へ公開する(PLG-05)。"""
+    uc = uc_repo.get_usecase(user.subject, uc_id)
+    if not uc:
+        raise HTTPException(status_code=404, detail="usecase not found")
+    return publish_entity(kind="usecase", definition=uc, entity_id=uc_id, version=req.version)
 
 
 @router.get("/api/presets")
