@@ -11,6 +11,11 @@ from .db import get_pool
 
 MIGRATIONS_DIR = pathlib.Path(__file__).parent / "migrations"
 
+# 冪等性は version スキップ(migrate 内の `if version in done: continue`)で担保する。
+# 適用済み migration は再実行で実行されず `python -m jetuse_core.migrate` の再実行は no-op になる。
+# (重複作成エラーを無条件に握ると互換性のない既存オブジェクトを見逃すため握らない。部分適用の
+#  途中失敗からの復旧は、隔離スキーマを破棄→再作成する運用に委ねる。)
+
 
 def _statements(sql: str) -> list[str]:
     return [s.strip() for s in sql.split(";") if s.strip()]
