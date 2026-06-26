@@ -47,6 +47,96 @@ def test_execute_endpoint_guards(monkeypatch):
     assert res.json()["columns"] == ["C"]
 
 
+def test_execute_readonly_rejects_bad_schema_identifier():
+    """B1: current_schema は厳格な識別子検証。不正値は DB に触れず拒否(注入防止)。"""
+    for bad in ("SBA; DROP TABLE T", "A B", "1ABC", '"X"', "JETUSE_SBA03--", ""):
+        with pytest.raises(SqlRejectedError):
+            nl2sql.execute_readonly("SELECT 1 FROM dual", current_schema=bad)
+
+
+def _fake_pool(executed, *, fail_on=None, fail_restore=False):
+    """execute_readonly 用の最小プール偽装。pool.acquire()/conn.close()/pool.drop() を再現する。
+
+    fail_on: 実行 SQL の接頭辞に一致したら本文実行で例外を投げる(本文失敗の検証)。
+    fail_restore: 復元 ALTER(=接続ユーザへ戻す)で例外を投げる(汚染接続破棄の検証)。
+    返り値クラスは closed / dropped を記録する。
+    """
+    restore_sql = "ALTER SESSION SET CURRENT_SCHEMA = JETUSE_SBA03_Q"
+
+    class _Cur:
+        description = [("C",)]
+
+        def execute(self, sql):
+            executed.append(sql)
+            if fail_restore and sql == restore_sql:
+                raise RuntimeError("restore failed")
+            if fail_on and sql.strip().upper().startswith(fail_on):
+                raise RuntimeError("boom")
+
+        def fetchmany(self, n):
+            return [["1"]]
+
+    class _Conn:
+        call_timeout = 0
+        username = "JETUSE_SBA03_Q"
+
+        def cursor(self):
+            return _Cur()
+
+        def close(self):
+            _Pool.closed.append(self)
+
+    class _Pool:
+        closed: list = []
+        dropped: list = []
+        _conn = _Conn()
+
+        def acquire(self):
+            return _Pool._conn
+
+        def drop(self, conn):
+            _Pool.dropped.append(conn)
+
+    return _Pool
+
+
+def test_execute_readonly_pins_schema(monkeypatch):
+    """B1: 正当な current_schema は ALTER SESSION SET CURRENT_SCHEMA を発行してから本文を実行。"""
+    executed: list[str] = []
+    pool = _fake_pool(executed)
+    monkeypatch.setattr(nl2sql, "_get_query_pool", lambda: pool())
+    out = nl2sql.execute_readonly("SELECT 1 FROM dual", current_schema="JETUSE_SBA03")
+    assert out["columns"] == ["C"]
+    assert executed[0] == "ALTER SESSION SET CURRENT_SCHEMA = JETUSE_SBA03"
+    assert executed[1].startswith("SELECT")
+    # 実行後は接続ユーザ自身のスキーマへ戻し、クリーンに close で返却。drop はしない。
+    assert executed[-1] == "ALTER SESSION SET CURRENT_SCHEMA = JETUSE_SBA03_Q"
+    assert len(pool.closed) == 1 and pool.dropped == []
+
+
+def test_execute_readonly_restores_schema_on_error(monkeypatch):
+    """B1 後方互換: 本文 SQL が失敗しても CURRENT_SCHEMA を接続ユーザへ戻し close で返却する。"""
+    executed: list[str] = []
+    pool = _fake_pool(executed, fail_on="SELECT")
+    monkeypatch.setattr(nl2sql, "_get_query_pool", lambda: pool())
+    with pytest.raises(RuntimeError):
+        nl2sql.execute_readonly("SELECT 1 FROM dual", current_schema="JETUSE_SBA03")
+    assert executed[-1] == "ALTER SESSION SET CURRENT_SCHEMA = JETUSE_SBA03_Q"
+    # 復元は成功しているので汚染ではない → close で返却、drop しない。
+    assert len(pool.closed) == 1 and pool.dropped == []
+
+
+def test_execute_readonly_drops_connection_when_restore_fails(monkeypatch):
+    """B1 残留防止: CURRENT_SCHEMA 復元に失敗したら汚染接続を close せず drop で破棄する。"""
+    executed: list[str] = []
+    pool = _fake_pool(executed, fail_restore=True)
+    monkeypatch.setattr(nl2sql, "_get_query_pool", lambda: pool())
+    # 本文は成功するが復元 ALTER が失敗 → 例外は握りつぶし結果は返るが接続はプールへ戻さない。
+    out = nl2sql.execute_readonly("SELECT 1 FROM dual", current_schema="JETUSE_SBA03")
+    assert out["columns"] == ["C"]
+    assert pool.dropped and pool.closed == []
+
+
 def test_nl2sql_generate_stream(monkeypatch):
     monkeypatch.setattr(
         service_main.nl2sql, "generate_sql", lambda q: "SELECT 1 FROM dual"

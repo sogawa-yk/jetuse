@@ -19,7 +19,8 @@ sample-app の `aiSlot` は「画面のどこに JetUse のどの能力(capabili
     スコア(日本語は文字バイグラム併用)で、実環境では GenAI 推論のみで安定して動く。
 
 SBA-02 が束縛する能力: `rag.search`(FAQ-RAG 回答) / `summarize`(要約) / `classify`(自動分類) /
-`draft`(返信ドラフト)。`nl2sql`/`chart`/`agent`/`minutes`/`vlm.ocr` は SBA-03..05 で束縛する。
+`draft`(返信ドラフト)。SBA-03(SBA-B 在庫・受発注照会)で `nl2sql`(自然言語DB照会) /
+`chart`(結果グラフ化)を束縛する。`agent`/`minutes`/`vlm.ocr` は SBA-04..05 で束縛する。
 """
 
 from __future__ import annotations
@@ -28,6 +29,14 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+
+from jetuse_shared.charting import propose_chart
+from jetuse_shared.sqlguard import (
+    SqlRejectedError,
+    assert_tables_allowed,
+    sanitize_sql,
+    strip_code_fences,
+)
 
 from .manifest import PluginManifest
 from .sample_app import (
@@ -58,6 +67,13 @@ MAX_ANSWER_CHARS = 4000
 MAX_DRAFT_CHARS = 4000
 MAX_SUMMARY_CHARS = 2000
 MAX_CATEGORY_CHARS = 200
+#: nl2sql 生成 SQL の文字数上限(暴走生成の予防)。
+MAX_SQL_CHARS = 4000
+#: chart 提案へ渡す結果列・行の上限(プロンプト肥大の予防)。
+MAX_CHART_COLUMNS = 50
+MAX_CHART_ROWS = 50
+#: chart へ渡す 1 セルの文字数上限(巨大セルによるプロンプト膨張/コスト暴走の予防)。
+MAX_CHART_CELL_CHARS = 200
 #: classify の候補カテゴリの件数上限と1ラベルの長さ上限(プロンプト肥大/コスト暴走の予防)。
 MAX_CATEGORIES = 30
 MAX_CATEGORY_LABEL = 100
@@ -436,6 +452,116 @@ def handle_draft(ctx: SlotContext, payload: dict[str, Any]) -> dict[str, Any]:
         {"index": h["index"], "label": h["label"], "score": h["score"]} for h in hits
     ]
     return {"capability": "draft", "draft": draft, "citations": citations}
+
+
+# --- ハンドラ: nl2sql(自然言語DB照会 / SBA-B) -----------------------------
+
+#: FieldType → 表示用 SQL 型(プロンプトの schema 文脈。実 DDL ではなく LLM への手掛かり)。
+_SQL_TYPE = {
+    "string": "VARCHAR2",
+    "text": "CLOB",
+    "number": "NUMBER",
+    "boolean": "NUMBER(1)",
+    "date": "DATE",
+    "datetime": "TIMESTAMP",
+}
+
+_NL2SQL_SYSTEM = (
+    "あなたは熟練のデータアナリストです。提示されたテーブルスキーマだけを根拠に、"
+    "ユーザーの日本語の質問に答える Oracle SQL の SELECT 文を1つだけ生成します。\n"
+    "規則: (1) 読取専用の SELECT(または WITH …) 文のみ。INSERT/UPDATE/DELETE/DDL など"
+    "更新系は一切禁止。(2) スキーマに存在するテーブル名・列名のみ使用する。"
+    "(3) 説明・コメント・コードフェンスを付けず、SQL 本文だけを返す。"
+    "(4) 集計(SUM/COUNT/AVG)・グループ化・並べ替え・期間絞り込みは質問に応じて適切に行う。"
+    "(5) 文末にセミコロンを付けない。"
+)
+
+
+def _schema_context(definition: SampleAppDefinition) -> str:
+    """sample-app の datasets を NL2SQL プロンプト用のテーブルスキーマ記述へ変換する。
+
+    テーブル名 = dataset 名(大文字)、列 = field 名(大文字)+型+ラベル。実行時の対象 DB
+    (E2E では JETUSE_SBA03)は同名のテーブルを持つ前提。スキーマ記述は LLM への文脈であり、
+    生成 SQL は実行前に sanitize_sql と読取専用接続で多層ガードされる(SQL-02 を緩めない)。
+    """
+    lines: list[str] = []
+    for ds in definition.datasets:
+        cols = ", ".join(_column_desc(f) for f in ds.fields)
+        label = f"  -- {ds.label}" if ds.label else ""
+        lines.append(f"TABLE {ds.name.upper()} ({cols}){label}")
+    return "\n".join(lines)
+
+
+def _column_desc(field_def: Any) -> str:
+    sql_type = _SQL_TYPE.get(field_def.type, "VARCHAR2")
+    label = f' /* {field_def.label} */' if field_def.label else ""
+    return f"{field_def.name.upper()} {sql_type}{label}"
+
+
+@register_capability("nl2sql")
+def handle_nl2sql(ctx: SlotContext, payload: dict[str, Any]) -> dict[str, Any]:
+    """自然言語の質問から、sample-app の datasets スキーマに対する読取専用 SELECT を生成する。
+
+    生成だけを担い実行はしない(実行は読取専用ユーザー経由の別経路 = SQL-02 のガードを流用)。
+    生成 SQL は返す前に sanitize_sql で SELECT 限定ガードに通し、適合しなければ成功偽装せず
+    推論失敗として扱う(SqlRejectedError → SlotInferenceError)。
+    """
+    question = _require_input(payload)
+    if not ctx.definition.datasets:
+        raise SlotInputError("nl2sql: 照会対象の dataset が定義に無い")
+    schema = _schema_context(ctx.definition)
+    raw = _complete(
+        ctx,
+        _NL2SQL_SYSTEM,
+        f"テーブルスキーマ:\n{schema}\n\n質問: {question}\n\nSELECT文のみを返してください。",
+        max_chars=MAX_SQL_CHARS,
+    )
+    sql = strip_code_fences(raw)
+    if not sql:
+        raise SlotInferenceError("nl2sql: LLM が空応答を返した")
+    allowed = {ds.name.upper() for ds in ctx.definition.datasets}
+    try:
+        cleaned = sanitize_sql(sql)
+        # 生成 SQL を sample-app の定義スキーマ(datasets)内に閉じる。別スキーマ/辞書ビュー
+        # (例 SYS.DBA_USERS)への SELECT を、読取専用ユーザー権限に加えてコード側でも拒否する。
+        # 列スコープは「テーブル粒度」で閉じる: 対象 DB のテーブルは dataset.fields から 1:1 で
+        # 生成され(scaffold / E2E setup)、定義外の列が物理的に存在しない。よって許可テーブル内に
+        # 留めれば定義外の列は露出しない(列単位の SQL パースは誤判定が多く採らない / M2)。
+        assert_tables_allowed(cleaned, allowed)
+    except SqlRejectedError as e:
+        # 生成 SQL がガード(SELECT 以外/複数文/更新系/許可外テーブル)に反した。
+        # 成功偽装せず推論失敗にする。
+        raise SlotInferenceError(f"nl2sql: 生成SQLがガードに適合しない: {e}") from e
+    return {"capability": "nl2sql", "sql": cleaned}
+
+
+# --- ハンドラ: chart(結果のグラフ化 / SBA-B) ------------------------------
+
+
+@register_capability("chart")
+def handle_chart(ctx: SlotContext, payload: dict[str, Any]) -> dict[str, Any]:
+    """SQL 実行結果(columns/rows)に最適なグラフ仕様(ChartSpec)を提案する。
+
+    提案・検証ロジックは jetuse_shared.charting.propose_chart に一本化(DBチャット
+    /api/dbchat/chart と同一)。列名の実在チェックで不適な提案は type="none" に落とす。
+    """
+    question = (payload.get("question") or payload.get("input") or "").strip()
+    # 列数・行数・行幅・1セル長をすべて上限で切り、プロンプト規模を入力に依らず有界化する。
+    columns = [
+        str(c)[:MAX_CHART_CELL_CHARS] for c in (payload.get("columns") or [])
+    ][:MAX_CHART_COLUMNS]
+    rows = [
+        [str(c)[:MAX_CHART_CELL_CHARS] for c in r[:MAX_CHART_COLUMNS]]
+        for r in (payload.get("rows") or [])
+        if isinstance(r, list)
+    ][:MAX_CHART_ROWS]
+    spec = propose_chart(
+        lambda prompt: _completer(ctx.model_key, [{"role": "user", "content": prompt}], 1000),
+        question,
+        columns,
+        rows,
+    )
+    return {"capability": "chart", **spec}
 
 
 # --- 公開 API: 束縛と実行 -------------------------------------------------

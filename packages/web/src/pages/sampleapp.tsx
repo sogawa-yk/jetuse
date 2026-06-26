@@ -15,6 +15,7 @@ import { authHeaders, reauthenticate, useUser } from '../auth'
 import { PageContainer } from '../components/layout'
 import { DataTable, OciButton, Panel, StatusBadge, type Column } from '../components/oci'
 import { usePrefs } from '../prefs'
+import { Nl2SqlApp } from './sampleapp-sba-b'
 
 type Field = { name: string; type: string; label?: string | null; required?: boolean }
 type Dataset = { name: string; label?: string | null; fields: Field[]; seed: Record<string, unknown>[] }
@@ -263,6 +264,17 @@ export default function SampleApp() {
     )
   }
   if (!app) return null
+
+  // NL2SQL 系の sample-app(SBA-B 在庫・受発注照会)は専用の照会コンソールを描画する。
+  // capability で分岐し、SBA-A(サポートデスク)はこの下の既存 UI のまま。
+  const caps = new Set((app.definition?.aiSlots ?? []).map((s) => s.capability))
+  if (caps.has('nl2sql')) {
+    return (
+      <PageContainer wide icon={app.icon || '📦'} title={app.name} subtitle={app.description}>
+        <Nl2SqlApp app={app} />
+      </PageContainer>
+    )
+  }
 
   const selected = inquiries.find((q) => q.id === selectedId) ?? null
   const openDetail = (iid: string) => {

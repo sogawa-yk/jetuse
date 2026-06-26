@@ -12,6 +12,7 @@ from jetuse_core.plugins.sample_app_builtin import (
     knowledge_corpus,
     sba_a_definition,
 )
+from jetuse_core.plugins.sample_app_builtin_sba_b import sba_b_definition
 
 
 @pytest.fixture
@@ -356,3 +357,120 @@ def test_input_truncated_to_limit(monkeypatch):
     )
     # 入力上限で切り詰められている(MAX_INPUT_CHARS を超えない)。
     assert ("あ" * (ai_runtime.MAX_INPUT_CHARS + 1)) not in seen["user"]
+
+
+# --- nl2sql / chart ハンドラ(SBA-03 / SBA-B) -------------------------------
+
+
+def test_sba_b_slots_all_bound():
+    """SBA-B の全 aiSlot(nl2sql / chart)が実行時フレームワークで束縛済み。"""
+    assert ai_runtime.unbound_capabilities(sba_b_definition()) == []
+
+
+def test_nl2sql_generates_select(monkeypatch):
+    """nl2sql ハンドラはスキーマ文脈付きで LLM を呼び、生成 SELECT を返す。"""
+    seen = {}
+    monkeypatch.setattr(
+        ai_runtime,
+        "_completer",
+        lambda m, msgs, mc: seen.update(user=msgs[-1]["content"]) or
+        "SELECT warehouse, SUM(quantity) FROM INVENTORY GROUP BY warehouse",
+    )
+    out = ai_runtime.invoke_slot(
+        sba_b_definition(), "nl2sql-query",
+        {"input": "倉庫別の在庫数を教えて"}, owner="u1",
+    )
+    assert out["capability"] == "nl2sql"
+    assert out["sql"].upper().startswith("SELECT")
+    # スキーマ文脈(テーブル名)がプロンプトに含まれること。
+    assert "INVENTORY" in seen["user"] and "ORDERS" in seen["user"]
+
+
+def test_nl2sql_strips_code_fences(monkeypatch):
+    monkeypatch.setattr(
+        ai_runtime,
+        "_completer",
+        lambda m, msgs, mc: "```sql\nSELECT * FROM ORDERS\n```",
+    )
+    out = ai_runtime.invoke_slot(
+        sba_b_definition(), "nl2sql-query", {"input": "全件"}, owner="u1",
+    )
+    assert out["sql"] == "SELECT * FROM ORDERS"
+
+
+def test_nl2sql_rejects_non_select_as_inference_failure(monkeypatch):
+    """生成 SQL が更新系ならガードで弾き、成功偽装せず SlotInferenceError。"""
+    monkeypatch.setattr(
+        ai_runtime, "_completer", lambda m, msgs, mc: "DELETE FROM INVENTORY",
+    )
+    with pytest.raises(ai_runtime.SlotInferenceError):
+        ai_runtime.invoke_slot(
+            sba_b_definition(), "nl2sql-query", {"input": "全部消して"}, owner="u1",
+        )
+
+
+def test_nl2sql_empty_response_is_inference_failure(monkeypatch):
+    monkeypatch.setattr(ai_runtime, "_completer", lambda m, msgs, mc: "")
+    with pytest.raises(ai_runtime.SlotInferenceError):
+        ai_runtime.invoke_slot(
+            sba_b_definition(), "nl2sql-query", {"input": "x"}, owner="u1",
+        )
+
+
+def test_chart_proposes_spec(monkeypatch):
+    """chart ハンドラは columns/rows を文脈に ChartSpec を返す(列名検証込み)。"""
+    monkeypatch.setattr(
+        ai_runtime,
+        "_completer",
+        lambda m, msgs, mc: '{"type":"bar","x":"warehouse","y":["qty"],'
+        '"title":"倉庫別在庫","reason":"カテゴリ比較"}',
+    )
+    out = ai_runtime.invoke_slot(
+        sba_b_definition(), "result-chart",
+        {
+            "question": "倉庫別の在庫数",
+            "columns": ["warehouse", "qty"],
+            "rows": [["東京DC", "320"], ["大阪DC", "140"]],
+        },
+        owner="u1",
+    )
+    assert out["capability"] == "chart"
+    assert out["type"] == "bar"
+    assert out["x"] == "warehouse" and out["y"] == ["qty"]
+
+
+def test_chart_none_when_no_data(monkeypatch):
+    """columns/rows が空なら LLM を呼ばず type=none(成功偽装しない)。"""
+    called = {"n": 0}
+
+    def fake(m, msgs, mc):
+        called["n"] += 1
+        return "{}"
+
+    monkeypatch.setattr(ai_runtime, "_completer", fake)
+    out = ai_runtime.invoke_slot(
+        sba_b_definition(), "result-chart", {"question": "x"}, owner="u1",
+    )
+    assert out["type"] == "none"
+    assert called["n"] == 0
+
+
+def test_nl2sql_rejects_out_of_schema_table(monkeypatch):
+    """生成 SQL が定義スキーマ外(別スキーマ/辞書ビュー)を参照したら成功偽装せず拒否。"""
+    monkeypatch.setattr(
+        ai_runtime, "_completer", lambda m, msgs, mc: "SELECT * FROM SYS.DBA_USERS",
+    )
+    with pytest.raises(ai_runtime.SlotInferenceError):
+        ai_runtime.invoke_slot(
+            sba_b_definition(), "nl2sql-query", {"input": "ユーザー一覧"}, owner="u1",
+        )
+
+
+def test_nl2sql_rejects_unknown_bare_table(monkeypatch):
+    monkeypatch.setattr(
+        ai_runtime, "_completer", lambda m, msgs, mc: "SELECT * FROM secret_table",
+    )
+    with pytest.raises(ai_runtime.SlotInferenceError):
+        ai_runtime.invoke_slot(
+            sba_b_definition(), "nl2sql-query", {"input": "秘密"}, owner="u1",
+        )

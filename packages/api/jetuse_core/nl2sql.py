@@ -19,7 +19,13 @@ import oracledb
 
 # SQLサニタイズ(_BANNED / sanitize_sql / SqlRejectedError)は jetuse_shared に一本化(P1b)。
 # 後方互換: 同名で再エクスポートし、既存の except SqlRejectedError / import を維持する。
-from jetuse_shared.sqlguard import _BANNED, SqlRejectedError, sanitize_sql  # noqa: F401
+from jetuse_shared.charting import propose_chart
+from jetuse_shared.sqlguard import (  # noqa: F401
+    _BANNED,
+    SqlRejectedError,
+    sanitize_sql,
+    strip_code_fences,
+)
 
 from .db import _wallet_dir  # ウォレット取得を共用
 from .genai import _signer
@@ -172,8 +178,8 @@ def generate_sql_select_ai(
             q=question, p=prof,
         )
         raw = cur.fetchone()[0] or ""
-    # コードフェンス等の除去
-    sql = re.sub(r"^```(sql)?\s*|\s*```$", "", raw.strip(), flags=re.I | re.M).strip()
+    # コードフェンス等の除去(jetuse_shared に一本化)
+    sql = strip_code_fences(raw)
     if not sql:
         raise RuntimeError("Select AIがSQLを返しませんでした")
     return sql
@@ -206,52 +212,24 @@ def _get_query_pool() -> oracledb.ConnectionPool:
 
 TARGET_SCHEMA = "SH"
 
-CHART_TYPES = ("bar", "line", "pie", "none")
-
 
 def suggest_chart(question: str, columns: list[str], rows: list[list[str]]) -> dict[str, Any]:
     """結果表に適したチャートをLLM(llama=高速)に提案させる(SQL-03)。
 
     返り値: {type, x, y, title, reason}。不適なら type="none"。
-    LLM出力はJSONで受け、列名の実在チェックで検証する。
+    提案・検証ロジックは jetuse_shared.charting.propose_chart に一本化(sample-app の chart
+    capability と共有)。ここではモデル/接続を束ねた generate コールバックを渡すだけ。
     """
     from .chat import complete_once
 
-    sample = "\n".join(",".join(r) for r in rows[:15])
-    prompt = (
-        "あなたはデータ可視化アシスタントです。以下のSQL実行結果に最適なグラフを"
-        "JSONだけで提案してください。説明文は不要です。\n"
-        f'形式: {{"type": "bar|line|pie|none", "x": "X軸の列名", '
-        f'"y": ["数値列名"], "title": "グラフタイトル(日本語)", "reason": "選定理由(短く)"}}\n'
-        "ルール: 時系列はline、カテゴリ比較はbar、構成比(5件程度まで)はpie、"
-        'グラフ化に不適(数値列がない等)なら {"type": "none", "reason": "..."}。\n\n'
-        f"元の質問: {question}\n列: {', '.join(columns)}\n"
-        f"データ(先頭{min(len(rows), 15)}行):\n{sample}"
+    return propose_chart(
+        lambda prompt: complete_once(
+            "llama-3.3-70b", [{"role": "user", "content": prompt}], max_chars=1000
+        ),
+        question,
+        columns,
+        rows,
     )
-    raw = complete_once("llama-3.3-70b", [{"role": "user", "content": prompt}], max_chars=1000)
-    m = re.search(r"\{.*\}", raw, re.S)
-    if not m:
-        return {"type": "none", "reason": "提案の解析に失敗しました"}
-    try:
-        spec = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return {"type": "none", "reason": "提案の解析に失敗しました"}
-    if spec.get("type") not in CHART_TYPES:
-        return {"type": "none", "reason": "未対応のグラフ種別が提案されました"}
-    if spec["type"] != "none":
-        if spec.get("x") not in columns:
-            return {"type": "none", "reason": "提案されたX軸列が結果に存在しません"}
-        ys = [c for c in (spec.get("y") or []) if c in columns]
-        if not ys:
-            return {"type": "none", "reason": "提案された数値列が結果に存在しません"}
-        spec["y"] = ys
-    return {
-        "type": spec["type"],
-        "x": spec.get("x"),
-        "y": spec.get("y", []),
-        "title": str(spec.get("title") or "")[:100],
-        "reason": str(spec.get("reason") or "")[:200],
-    }
 
 # SHサンプルにはコメントが薄いため日本語説明を補完(デモ用キュレーション — SQL-02b)
 _TABLE_DESCRIPTIONS_JA = {
@@ -330,22 +308,66 @@ def preview_table(table: str, limit: int = 20) -> dict[str, Any]:
     return execute_readonly(f'SELECT * FROM "{TARGET_SCHEMA}"."{name}" FETCH FIRST {n} ROWS ONLY')
 
 
-def execute_readonly(sql: str) -> dict[str, Any]:
-    """読取専用ユーザーで実行し、行数上限・タイムアウト付きで結果を返す"""
+_SCHEMA_IDENT_RE = re.compile(r"[A-Za-z][A-Za-z0-9_$#]*")
+
+
+def execute_readonly(sql: str, current_schema: str | None = None) -> dict[str, Any]:
+    """読取専用ユーザーで実行し、行数上限・タイムアウト付きで結果を返す。
+
+    current_schema を渡すと実行接続の CURRENT_SCHEMA を当該スキーマへ固定し、非修飾
+    テーブル名を確実にそのスキーマの物理表へ解決させる(synonym 依存や読取ユーザ側の
+    同名オブジェクトに左右されない / SBA-03 B1)。識別子は厳格に検証し、不正値は拒否。
+
+    プールは既存 `/api/dbchat/execute` 等と共有のため、固定は当該実行に限定する。本文実行後は
+    必ず接続ユーザ自身のスキーマへ戻し、後続の current_schema 未指定呼び出しに JETUSE_SBA03 等の
+    解決が残留しないようにする(プール接続の状態漏れ防止 / 後方互換)。復元に失敗した接続は汚染
+    状態のままプールへ戻さず破棄する(`pool.drop`)。これにより固定が残留した接続が再利用される経路を
+    断つ。`with ... acquire()` ではなく明示 acquire/close なのは、復元失敗時に close(返却)ではなく
+    drop(破棄)へ分岐するため。
+    """
     cleaned = sanitize_sql(sql)
-    with _get_query_pool().acquire() as conn:
+    if current_schema is not None:
+        if not _SCHEMA_IDENT_RE.fullmatch(current_schema):
+            raise SqlRejectedError(f"不正なスキーマ識別子: {current_schema}")
+    pool = _get_query_pool()
+    conn = pool.acquire()
+    tainted = False
+    try:
         conn.call_timeout = EXECUTE_TIMEOUT_MS
         cur = conn.cursor()
-        cur.execute(cleaned)
-        columns = [d[0] for d in cur.description]
-        rows = cur.fetchmany(MAX_ROWS + 1)
-        truncated = len(rows) > MAX_ROWS
-        return {
-            "columns": columns,
-            "rows": [
-                ["" if c is None else str(c)[:MAX_CELL_CHARS] for c in r]
-                for r in rows[:MAX_ROWS]
-            ],
-            "row_count": min(len(rows), MAX_ROWS),
-            "truncated": truncated,
-        }
+        if current_schema is not None:
+            cur.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {current_schema}")
+        try:
+            cur.execute(cleaned)
+            columns = [d[0] for d in cur.description]
+            rows = cur.fetchmany(MAX_ROWS + 1)
+            truncated = len(rows) > MAX_ROWS
+            return {
+                "columns": columns,
+                "rows": [
+                    ["" if c is None else str(c)[:MAX_CELL_CHARS] for c in r]
+                    for r in rows[:MAX_ROWS]
+                ],
+                "row_count": min(len(rows), MAX_ROWS),
+                "truncated": truncated,
+            }
+        finally:
+            # 固定した CURRENT_SCHEMA を接続ユーザ自身へ戻してからプールへ返す(残留防止)。
+            # call_timeout は固定 SQL のため超過しない。username は接続ユーザ=有効な識別子。
+            if current_schema is not None:
+                try:
+                    cur.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {conn.username}")
+                except Exception:  # 復旧失敗 → 本来の結果/例外は覆い隠さず、接続は破棄対象に印
+                    tainted = True
+                    logger.exception(
+                        "failed to restore CURRENT_SCHEMA; dropping tainted pooled connection"
+                    )
+    finally:
+        # 復元成功 → close でプールへ返却。復元失敗(汚染)→ drop でプールから破棄。
+        if tainted:
+            try:
+                pool.drop(conn)
+            except Exception:
+                logger.exception("failed to drop tainted pooled connection")
+        else:
+            conn.close()

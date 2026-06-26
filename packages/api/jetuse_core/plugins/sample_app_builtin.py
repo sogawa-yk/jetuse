@@ -410,24 +410,27 @@ def knowledge_corpus(definition: SampleAppDefinition | None = None) -> list[dict
     return []
 
 
-def builtin_sample_apps() -> list[dict[str, Any]]:
-    """home/実行導線が一覧表示するためのコア同梱 sample-app 要約リスト。"""
+def sba_a_summary() -> dict[str, Any]:
+    """home/実行導線が一覧表示するための SBA-A 要約(1 アプリ分)。"""
     m = sba_a_manifest()
     d = sba_a_definition()
-    return [
-        {
-            "id": SBA_A_INSTANCE_ID,
-            "plugin_id": m.id,
-            "version": m.version,
-            "name": m.name,
-            "description": m.description,
-            "icon": m.icon or "💬",
-            "tags": list(m.tags),
-            "builtin": True,
-            "capabilities": sorted({s.capability for s in d.ai_slots}),
-            "screens": [s.key for s in d.screens],
-        }
-    ]
+    return {
+        "id": SBA_A_INSTANCE_ID,
+        "plugin_id": m.id,
+        "version": m.version,
+        "name": m.name,
+        "description": m.description,
+        "icon": m.icon or "💬",
+        "tags": list(m.tags),
+        "builtin": True,
+        "capabilities": sorted({s.capability for s in d.ai_slots}),
+        "screens": [s.key for s in d.screens],
+    }
+
+
+def builtin_sample_apps() -> list[dict[str, Any]]:
+    """SBA-A 単体の要約リスト(後方互換)。全アプリ集約は sample_app_registry を使う。"""
+    return [sba_a_summary()]
 
 
 def get_builtin_sample_app(app_id: str) -> dict[str, Any] | None:

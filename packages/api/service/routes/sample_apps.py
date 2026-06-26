@@ -15,23 +15,26 @@ import logging
 from typing import Annotated, Any
 
 import httpx
+import oracledb
 from fastapi import APIRouter, Body, Depends, HTTPException
+from jetuse_shared.sqlguard import SqlRejectedError, assert_tables_allowed, sanitize_sql
 from openai import APIError
 from pydantic import BaseModel, Field, field_validator
 
-from jetuse_core import audit, guardrails, moderation
+from jetuse_core import audit, guardrails, moderation, nl2sql
 from jetuse_core.auth import AuthContext, require_user
+from jetuse_core.logging import log_with
 from jetuse_core.models import MODELS
 from jetuse_core.plugins import ai_runtime
 from jetuse_core.plugins.sample_app import SampleAppDefinition, SampleAppError
-from jetuse_core.plugins.sample_app_builtin import (
-    SBA_A_KNOWLEDGE_DATASET,
-    builtin_sample_apps,
-    get_builtin_sample_app,
-    knowledge_corpus,
-    sba_a_definition,
+from jetuse_core.plugins.sample_app_registry import (
+    get_sample_app,
+    list_sample_apps,
+    resolve_app,
 )
 from jetuse_core.settings import get_settings
+
+from ..schemas import ExecuteSqlRequest
 
 logger = logging.getLogger("jetuse.service")
 router = APIRouter()
@@ -44,6 +47,9 @@ class SlotInvokeRequest(BaseModel):
     categories: list[str] | None = Field(default=None, max_length=ai_runtime.MAX_CATEGORIES)
     top_k: int | None = Field(default=None, ge=1, le=ai_runtime.MAX_TOP_K)
     model: str | None = Field(default=None, max_length=64)
+    # chart capability(SBA-B)用: 実行結果の列名・行データを渡す(上限付き)。
+    columns: list[str] | None = Field(default=None, max_length=ai_runtime.MAX_CHART_COLUMNS)
+    rows: list[list[str]] | None = Field(default=None, max_length=ai_runtime.MAX_CHART_ROWS)
 
     @field_validator("input")
     @classmethod
@@ -67,38 +73,59 @@ class SlotInvokeRequest(BaseModel):
                 )
         return cleaned or None
 
+    @field_validator("columns", "rows")
+    @classmethod
+    def _bound_chart_payload(cls, v: list | None) -> list | None:
+        """chart の列名/行(各セル)を行幅・セル長で制限する(行数は max_length が担う)。
 
-def _resolve_app(app_id: str) -> dict[str, Any]:
-    app = get_builtin_sample_app(app_id)
+        巨大セル・極端に横長の行で prompt とメモリを膨らませられないよう、入力段で 422 にする。
+        """
+        if v is None:
+            return None
+        for row in v:
+            cells = row if isinstance(row, list) else [row]
+            if len(cells) > ai_runtime.MAX_CHART_COLUMNS:
+                raise ValueError(
+                    f"1行のセル数は {ai_runtime.MAX_CHART_COLUMNS} 以内"
+                )
+            for cell in cells:
+                if isinstance(cell, str) and len(cell) > ai_runtime.MAX_CHART_CELL_CHARS:
+                    raise ValueError(
+                        f"セルは {ai_runtime.MAX_CHART_CELL_CHARS} 文字以内"
+                    )
+        return v
+
+
+def _resolve_full(app_id: str) -> dict[str, Any]:
+    app = get_sample_app(app_id)
     if app is None:
         raise HTTPException(status_code=404, detail="sample-app not found")
     return app
 
 
 def _definition_and_corpus(app_id: str) -> tuple[SampleAppDefinition, list[dict[str, Any]]]:
-    """app_id から検証済み定義と知識コーパス(FAQ シード)を返す。"""
-    # 現状コア同梱は SBA-A のみ。将来 scaffold 済みインスタンス対応時はここで分岐する。
-    _resolve_app(app_id)
-    definition = sba_a_definition()
-    corpus = knowledge_corpus(definition)
-    return definition, corpus
+    """app_id から検証済み定義と知識コーパスを返す(コア同梱レジストリから解決)。"""
+    resolved = resolve_app(app_id)
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="sample-app not found")
+    return resolved.definition, resolved.corpus
 
 
 @router.get("/api/sample-apps")
-async def list_sample_apps(user: Annotated[AuthContext, Depends(require_user)]):
+async def list_sample_apps_route(user: Annotated[AuthContext, Depends(require_user)]):
     """コア同梱 sample-app の一覧を返す(home カード/実行導線用)。"""
-    return {"sample_apps": builtin_sample_apps()}
+    return {"sample_apps": list_sample_apps()}
 
 
 @router.get("/api/sample-apps/{app_id}")
-async def get_sample_app(
+async def get_sample_app_route(
     app_id: str, user: Annotated[AuthContext, Depends(require_user)]
 ):
     """sample-app の完全定義(screens/datasets/aiSlots と seed)を返す。
 
     各 aiSlot には、実行時フレームワークでハンドラが束縛されているか(`bound`)を付ける。
     """
-    app = _resolve_app(app_id)
+    app = _resolve_full(app_id)
     bound = ai_runtime.bound_capabilities()
     # definition は配布表現のまま(再検証可能)に保ち、束縛状況は別フィールドで返す
     # (definition.aiSlots に余分なキーを足すと extra=forbid の再検証が壊れるため)。
@@ -106,7 +133,9 @@ async def get_sample_app(
         slot["key"]: slot.get("capability") in bound
         for slot in app["definition"].get("aiSlots", [])
     }
-    app["knowledge_dataset"] = SBA_A_KNOWLEDGE_DATASET
+    # knowledge_dataset はレジストリの完全定義 dict に含まれる(SBA-A=faqs / SBA-B=None)。
+    # 後方互換: 万一 dict に無くてもキーを保証する(既存 SBA-A レスポンス契約の回帰防止 / M1)。
+    app.setdefault("knowledge_dataset", None)
     return app
 
 
@@ -175,6 +204,12 @@ async def invoke_slot(
         payload["categories"] = req.categories
     if req.top_k is not None:
         payload["top_k"] = req.top_k
+    # chart(SBA-B): 結果表の列・行を文脈として渡す(input は元の質問)。
+    if req.columns is not None:
+        payload["columns"] = req.columns
+        payload["question"] = req.input
+    if req.rows is not None:
+        payload["rows"] = req.rows
     try:
         result = await asyncio.to_thread(
             ai_runtime.invoke_slot,
@@ -210,4 +245,54 @@ async def invoke_slot(
         audit.log_event, user.subject, "sample_app_slot",
         model=model_key, status="ok", meta=slot_key,
     )
+    return result
+
+
+@router.post("/api/sample-apps/{app_id}/dbchat/execute")
+async def sample_app_execute(
+    app_id: str,
+    req: ExecuteSqlRequest,
+    user: Annotated[AuthContext, Depends(require_user)],
+):
+    """sample-app(NL2SQL)の読取専用実行。SQL-02 ガード + 当該 sample-app のテーブル許可リストを
+    強制してから execute_readonly に渡す。
+
+    汎用 /api/dbchat/execute は対象スキーマ(SH/データセット)向けで sample-app のテーブル境界を
+    知らない。UI で編集された SQL がこの境界を越えないよう、専用経路で sanitize_sql +
+    assert_tables_allowed(datasets) を必ず適用する(SELECT 以外・別スキーマ・許可外テーブルを拒否)。
+
+    この execute は NL2SQL 能力(`nl2sql` capability)を束縛した sample-app 専用。SBA-A など
+    DB 照会を持たない sample-app では 404 とし、DB 照会経路の到達範囲を最小化する。さらに
+    `DUAL` の暗黙許可を切り、業務テーブルを最低1つ参照しない SQL(スカラ/関数呼び出しのみ)も
+    拒否して、dataset 境界外への露出を塞ぐ。
+    """
+    resolved = resolve_app(app_id)
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="sample-app not found")
+    if not any(s.capability == "nl2sql" for s in resolved.definition.ai_slots):
+        # NL2SQL を持たない sample-app には DB 照会 execute を提供しない(到達範囲の最小化)。
+        raise HTTPException(status_code=404, detail="sample-app has no nl2sql capability")
+    allowed = {ds.name.upper() for ds in resolved.definition.datasets}
+    try:
+        cleaned = sanitize_sql(req.sql)
+        assert_tables_allowed(cleaned, allowed, allow_dual=False, require_table=True)
+    except SqlRejectedError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    # B1: 専用 execute は CURRENT_SCHEMA を SBA-B の照会スキーマへ固定し、非修飾テーブル名が
+    # 当該スキーマの物理表へ確定解決するようにする(synonym 依存・読取ユーザ側の同名オブジェクト
+    # に左右されない)。未設定なら従来どおり既定解決。
+    current_schema = get_settings().sample_db_schema or None
+    try:
+        result = await asyncio.to_thread(
+            nl2sql.execute_readonly, cleaned, current_schema
+        )
+    except SqlRejectedError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except oracledb.DatabaseError as e:
+        msg = str(e).splitlines()[0][:300]
+        if "DPY-" in msg:  # 接続系は DB 停止扱い(503 ハンドラへ)
+            raise
+        raise HTTPException(status_code=400, detail=f"SQL実行エラー: {msg}") from e
+    log_with(logger, logging.INFO, "sample-app dbchat executed",
+             user=user.subject, app=app_id, rows=result["row_count"])
     return result

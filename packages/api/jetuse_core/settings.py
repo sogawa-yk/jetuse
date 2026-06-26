@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     # NL2SQL(SQL-02): SemanticStore + 読取専用ユーザー
     semstore_ocid: str = ""
     adb_query_password: str = ""
+    # SBA-B(SBA-03): sample-app NL2SQL の照会対象スキーマ。設定時、専用 execute は実行接続の
+    # CURRENT_SCHEMA をこの値に固定し、非修飾テーブル名が当該スキーマの物理表へ確定解決する
+    # (synonym 依存や読取ユーザ側の同名オブジェクトに左右されない)。空なら従来どおり既定解決。
+    sample_db_schema: str = ""
     # Select AI クレデンシャル名。ORM/RP環境は OCI$RESOURCE_PRINCIPAL(INFRA-03)
     select_ai_credential: str = "JETUSE_OCI_CRED"
 
