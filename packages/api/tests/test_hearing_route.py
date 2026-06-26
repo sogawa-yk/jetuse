@@ -214,6 +214,32 @@ def test_recommend_happy_path(repo):
     assert client.get(f"/api/hearing/sessions/{sid}").json()["recommendation"]["ui"] == "chat"
 
 
+def test_preview_composes_from_saved_recommendation(repo):
+    """推薦→/preview で合成したデモ構成(画面・組込点・使うAI・データ)が返る(HBD-03)。"""
+    sid = _create()
+    for qid, val in FULL.items():
+        client.put(f"/api/hearing/sessions/{sid}/answers/{qid}", json={"value": val})
+    client.post(f"/api/hearing/sessions/{sid}/recommend")
+    r = client.post(f"/api/hearing/sessions/{sid}/preview")
+    assert r.status_code == 200, r.text
+    comp = r.json()
+    assert comp["ok"] is True
+    assert comp["sample_app"] == "SBA-A"
+    assert comp["instance_id"] == "builtin-sba-a"
+    assert "rag.search" in comp["active_parts"]
+    assert {s["key"] for s in comp["screens"]} >= {"faq", "inbox", "console"}
+    assert comp["composition_report"]["ok"] is True  # 配布表現は再検証可能
+
+
+def test_preview_without_recommendation_409(repo):
+    sid = _create()
+    assert client.post(f"/api/hearing/sessions/{sid}/preview").status_code == 409
+
+
+def test_preview_unknown_session_404(repo):
+    assert client.post("/api/hearing/sessions/nope/preview").status_code == 404
+
+
 def test_recommend_incomplete_answers_422(repo):
     sid = _create()
     client.put(f"/api/hearing/sessions/{sid}/answers/Q1", json={"value": "support"})

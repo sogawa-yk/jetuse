@@ -27,9 +27,24 @@ from jetuse_core.hearing_schema import (
     HearingSchemaError,
     question_schema,
 )
-from jetuse_core.recommend import recommend
+from jetuse_core.recommend import Recommendation, recommend
+from jetuse_core.synth import synthesize
 
 router = APIRouter()
+
+
+def _recommendation_from_detail(detail: dict[str, Any]) -> Recommendation:
+    """保存済み推薦の detail(`rec.model_dump()` ＋付随キー)から Recommendation を復元する。
+
+    `confirmed_at`(保存メタ)や `genai_nearest_sample_app`(/recommend が添える助言)は
+    Recommendation のフィールドではないので取り除いてから検証する(extra=forbid)。
+    """
+    payload = {
+        k: v
+        for k, v in detail.items()
+        if k not in ("confirmed_at", "genai_nearest_sample_app")
+    }
+    return Recommendation.model_validate(payload)
 
 
 class SessionCreate(BaseModel):
@@ -213,3 +228,26 @@ async def confirm_recommendation(
             detail="主SBAが未確定です(Q1=その他)。最近傍を反映して再推薦してから確定してください",
         )
     return {"confirmed": True}
+
+
+@router.post("/api/hearing/sessions/{sid}/preview")
+async def preview_composition(
+    sid: str, user: Annotated[AuthContext, Depends(require_user)]
+):
+    """保存済み推薦から**デモ構成を合成**し、プレビュー定義を返す(HBD-03)。
+
+    実行はしない(宣言定義のレンダリング)。AI 部品は ai_runtime の束縛レジストリから束縛し、
+    未束縛/組込点なしは active から外して理由を残す。主SBA を解決できない推薦は ok=False の
+    構成を 200 で返す(プレビューで「合成不能」を安全に描画。HBD-04 の前段に渡せる形)。
+    """
+    session = hearing_repo.get_session(user.subject, sid)
+    if session is None:
+        raise HTTPException(status_code=404, detail="hearing session not found")
+    detail = session.get("recommendation")
+    if not detail:
+        raise HTTPException(
+            status_code=409, detail="推薦がまだありません。先に /recommend を実行してください"
+        )
+    rec = _recommendation_from_detail(detail)
+    composition = synthesize(rec)
+    return composition.model_dump()
