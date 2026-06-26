@@ -22,6 +22,7 @@ const Rag = lazy(() => import('./pages/rag'))
 const Settings = lazy(() => import('./pages/settings'))
 const UsecaseRun = lazy(() => import('./pages/usecase'))
 const Marketplace = lazy(() => import('./pages/marketplace'))
+const SampleApp = lazy(() => import('./pages/sampleapp'))
 
 /** ルート遅延ロード中の軽量フォールバック(中央スピナー) */
 function PageFallback() {
@@ -59,6 +60,7 @@ export default function App() {
           <Route path="video" element={<Video />} />
           <Route path="ocr" element={<Ocr />} />
           <Route path="uc/:id" element={<UsecaseRun />} />
+          <Route path="sba/:id" element={<SampleApp />} />
           <Route path="marketplace" element={<Marketplace />} />
           <Route path="builder" element={<Builder />} />
           <Route path="agents" element={<Agents />} />

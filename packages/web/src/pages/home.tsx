@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import featureChat from '../assets/feature-chat.webp'
 import featureDb from '../assets/feature-db.webp'
 import featureRag from '../assets/feature-rag.webp'
-import { authHeaders, useUser } from '../auth'
+import { authHeaders, reauthenticate, useUser } from '../auth'
 import { NavIcon, isIconName } from '../components/icons'
 import { PageContainer } from '../components/layout'
 import { FeatureCard, LinkCard } from '../components/oci'
@@ -32,6 +32,14 @@ type AgentSummary = {
   visibility?: string
   origin?: 'builtin' | 'user' | 'plugin'
   source?: PluginSource
+}
+// コア同梱 sample-app(業務アプリ+AI デモ。SBA-02)
+type SampleAppSummary = {
+  id: string
+  name: string
+  description?: string | null
+  icon?: string | null
+  capabilities?: string[]
 }
 
 /** 出所バッジ: インストール済みプラグイン由来の定義に plugin名/版 を表示する(PLG-07) */
@@ -67,6 +75,7 @@ export default function Home() {
   const user = useUser()
   const [usecases, setUsecases] = useState<UcSummary[]>([])
   const [agents, setAgents] = useState<AgentSummary[]>([])
+  const [sampleApps, setSampleApps] = useState<SampleAppSummary[]>([])
   const [tag, setTag] = useState('')
   const [reorder, setReorder] = useState(false)
   const [order, setOrder] = useState<string[]>(loadOrder)
@@ -79,14 +88,29 @@ export default function Home() {
     !q || name.toLowerCase().includes(q) || (description ?? '').toLowerCase().includes(q)
 
   useEffect(() => {
+    // DB ダウン(503 {detail})・401・想定外の非配列ボディでもホームがクラッシュしないよう、
+    // 取得結果は必ず配列に正規化する(非 2xx は本文を読まず空配列扱い)。これにより
+    // 一部 API が落ちても他の導線(業務アプリデモ=SBA-A 等)は表示され続ける。
+    const asArray = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : [])
     fetch('/api/usecases', { headers: authHeaders(user) })
-      .then((r) => r.json())
-      .then((d) => setUsecases(d.usecases))
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setUsecases(asArray<UcSummary>(d?.usecases)))
       .catch(() => setUsecases([]))
     fetch('/api/agents', { headers: authHeaders(user) })
-      .then((r) => r.json())
-      .then((d) => setAgents(d.agents ?? []))
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setAgents(asArray<AgentSummary>(d?.agents)))
       .catch(() => setAgents([]))
+    fetch('/api/sample-apps', { headers: authHeaders(user) })
+      .then((r) => {
+        // セッション切れ(401)で導線が静かに消えないよう、明示的に再認証へ遷移する。
+        if (r.status === 401) {
+          reauthenticate()
+          throw new Error('unauthorized')
+        }
+        return r.ok ? r.json() : null
+      })
+      .then((d) => setSampleApps(asArray<SampleAppSummary>(d?.sample_apps)))
+      .catch(() => setSampleApps([]))
   }, [user])
 
   const tags = [...new Set(usecases.flatMap((u) => u.tags ?? []))]
@@ -202,6 +226,28 @@ export default function Home() {
           ))}
         </div>
       )}
+
+      {/* 業務アプリデモ(コア同梱 sample-app + AI 組込。SBA-02) */}
+      {!reorder &&
+        sampleApps.filter((a) => matchQ(a.name, a.description)).length > 0 && (
+          <div className="mt-6">
+            <h2 className="mb-2 text-sm font-bold text-ink-muted">{t('sba.section')}</h2>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+              {sampleApps
+                .filter((a) => matchQ(a.name, a.description))
+                .map((a) => (
+                  <LinkCard
+                    key={a.id}
+                    to={`/sba/${a.id}`}
+                    icon={a.icon || '🧩'}
+                    title={a.name}
+                    desc={a.description ?? undefined}
+                    badge={t('sba.demo')}
+                  />
+                ))}
+            </div>
+          </div>
+        )}
 
       {/* ユースケース・エージェント・作成(小カード) */}
       <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">

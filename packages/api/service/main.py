@@ -72,6 +72,7 @@ from .routes import (
     dbchat,
     marketplace,
     minutes,
+    sample_apps,
     usecases,
     voice,
 )
@@ -122,6 +123,7 @@ def create_app() -> FastAPI:
     app.include_router(voice.router)
     app.include_router(usecases.router)
     app.include_router(marketplace.router)
+    app.include_router(sample_apps.router)
 
     return app
 
