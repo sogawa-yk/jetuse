@@ -18,6 +18,7 @@ type Me = { name: string; email: string | null; is_admin: boolean }
 
 const NAV: { to: string; key: string; icon: IconName }[] = [
   { to: '/', key: 'nav.home', icon: 'home' },
+  { to: '/hearing', key: 'nav.hearing', icon: 'checklist' },
   { to: '/chat', key: 'nav.chat', icon: 'chat' },
   { to: '/agents', key: 'nav.agents', icon: 'agents' },
   { to: '/rag', key: 'nav.rag', icon: 'rag' },
