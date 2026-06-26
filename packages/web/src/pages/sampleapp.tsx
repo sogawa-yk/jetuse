@@ -15,6 +15,7 @@ import { authHeaders, reauthenticate, useUser } from '../auth'
 import { PageContainer } from '../components/layout'
 import { DataTable, OciButton, Panel, StatusBadge, type Column } from '../components/oci'
 import { usePrefs } from '../prefs'
+import SalesDealApp from './sampleappc'
 
 type Field = { name: string; type: string; label?: string | null; required?: boolean }
 type Dataset = { name: string; label?: string | null; fields: Field[]; seed: Record<string, unknown>[] }
@@ -137,7 +138,15 @@ function parseThread(
   ]
 }
 
+/** /sba/:id のディスパッチャ。コア同梱 sample-app は業務UIが大きく異なるため、id ごとに専用
+ *  ページへ振り分ける(SBA-C は営業案件管理、それ以外は既定のサポートデスク)。 */
 export default function SampleApp() {
+  const { id } = useParams()
+  if (id === 'builtin-sba-c') return <SalesDealApp />
+  return <SupportDeskApp />
+}
+
+function SupportDeskApp() {
   const { id } = useParams()
   const { t } = usePrefs()
   const user = useUser()

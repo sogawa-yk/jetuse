@@ -25,11 +25,19 @@ from jetuse_core.models import MODELS
 from jetuse_core.plugins import ai_runtime
 from jetuse_core.plugins.sample_app import SampleAppDefinition, SampleAppError
 from jetuse_core.plugins.sample_app_builtin import (
+    SBA_A_INSTANCE_ID,
     SBA_A_KNOWLEDGE_DATASET,
     builtin_sample_apps,
     get_builtin_sample_app,
     knowledge_corpus,
     sba_a_definition,
+)
+from jetuse_core.plugins.sample_app_builtin_c import (
+    SBA_C_INSTANCE_ID,
+    SBA_C_NL2SQL_SCHEMA,
+    builtin_sample_apps_c,
+    get_builtin_sample_app_c,
+    sba_c_definition,
 )
 from jetuse_core.settings import get_settings
 
@@ -69,25 +77,31 @@ class SlotInvokeRequest(BaseModel):
 
 
 def _resolve_app(app_id: str) -> dict[str, Any]:
-    app = get_builtin_sample_app(app_id)
+    app = get_builtin_sample_app(app_id) or get_builtin_sample_app_c(app_id)
     if app is None:
         raise HTTPException(status_code=404, detail="sample-app not found")
     return app
 
 
-def _definition_and_corpus(app_id: str) -> tuple[SampleAppDefinition, list[dict[str, Any]]]:
-    """app_id から検証済み定義と知識コーパス(FAQ シード)を返す。"""
-    # 現状コア同梱は SBA-A のみ。将来 scaffold 済みインスタンス対応時はここで分岐する。
+def _runtime_for(
+    app_id: str,
+) -> tuple[SampleAppDefinition, list[dict[str, Any]], str | None]:
+    """app_id から (検証済み定義, 知識コーパス, nl2sql 照会先スキーマ) を返す。
+
+    SBA-A は FAQ コーパスを根拠にする(nl2sql なし)。SBA-C は売上集計が専用スキーマ
+    (JETUSE_SBA04)を照会する(FAQ コーパスは持たない)。
+    """
     _resolve_app(app_id)
+    if app_id == SBA_C_INSTANCE_ID:
+        return sba_c_definition(), [], SBA_C_NL2SQL_SCHEMA
     definition = sba_a_definition()
-    corpus = knowledge_corpus(definition)
-    return definition, corpus
+    return definition, knowledge_corpus(definition), None
 
 
 @router.get("/api/sample-apps")
 async def list_sample_apps(user: Annotated[AuthContext, Depends(require_user)]):
     """コア同梱 sample-app の一覧を返す(home カード/実行導線用)。"""
-    return {"sample_apps": builtin_sample_apps()}
+    return {"sample_apps": builtin_sample_apps() + builtin_sample_apps_c()}
 
 
 @router.get("/api/sample-apps/{app_id}")
@@ -106,7 +120,9 @@ async def get_sample_app(
         slot["key"]: slot.get("capability") in bound
         for slot in app["definition"].get("aiSlots", [])
     }
-    app["knowledge_dataset"] = SBA_A_KNOWLEDGE_DATASET
+    # 知識コーパス由来の能力(RAG)を持つ SBA-A のみ knowledge_dataset を付ける。
+    if app_id == SBA_A_INSTANCE_ID:
+        app["knowledge_dataset"] = SBA_A_KNOWLEDGE_DATASET
     return app
 
 
@@ -118,7 +134,7 @@ async def invoke_slot(
     req: Annotated[SlotInvokeRequest, Body()],
 ):
     """aiSlot を実行時バインドして実行し、結果を JSON で返す。"""
-    definition, corpus = _definition_and_corpus(app_id)
+    definition, corpus, nl2sql_schema = _runtime_for(app_id)
     settings = get_settings()
     # Web UI は model を送らない → 既定実行経路。project_ocid 不要なモデルを既定にして、
     # 追加設定なしでデモが動くようにする(settings.sample_app_model)。
@@ -184,6 +200,7 @@ async def invoke_slot(
             owner=user.subject,
             corpus=corpus,
             model_key=model_key,
+            nl2sql_schema=nl2sql_schema,
         )
     except ai_runtime.UnboundCapabilityError as e:
         raise HTTPException(status_code=501, detail=str(e)) from e
@@ -193,6 +210,10 @@ async def invoke_slot(
         # LLM 空応答など推論結果が成立しない場合。成功偽装せず 502 に正規化する。
         logger.warning("sample-app slot inference empty: %s", str(e)[:200])
         raise HTTPException(status_code=502, detail="AI inference failed") from e
+    except ai_runtime.SlotBackendUnavailableError as e:
+        # DB 接続/可用性障害(一過性)。SampleAppError サブクラスなので 404 の前に捕捉する。
+        logger.warning("sample-app slot backend unavailable: %s", str(e)[:200])
+        raise HTTPException(status_code=503, detail="backend temporarily unavailable") from e
     except SampleAppError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except (APIError, httpx.HTTPError) as e:
