@@ -10,7 +10,7 @@
  *
  *  本タスクは Q&A→推薦提示まで(構成生成・プレビューは HBD-03、合成バリデーションは HBD-04)。 */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { authHeaders, reauthenticate, useUser } from '../auth'
 import { PageContainer } from '../components/layout'
 import { OciButton, Panel, StatusBadge } from '../components/oci'
@@ -450,6 +450,7 @@ export default function Hearing() {
         <ResultStep
           t={t}
           rec={rec}
+          sid={session?.id ?? null}
           confirmed={confirmed}
           busy={busy}
           onConfirm={confirm}
@@ -662,6 +663,7 @@ function QaStep({
 function ResultStep({
   t,
   rec,
+  sid,
   confirmed,
   busy,
   onConfirm,
@@ -670,6 +672,7 @@ function ResultStep({
 }: {
   t: T
   rec: Recommendation
+  sid: string | null
   confirmed: boolean
   busy: string
   onConfirm: () => void
@@ -780,6 +783,17 @@ function ResultStep({
           {t('hearing.result.restart')}
         </OciButton>
       </div>
+
+      {/* 確定後は一気通貫の次工程(プレビュー→検証→起動→サマリ)へ誘導する。 */}
+      {confirmed && sid && (
+        <Link
+          to={`/preview/${sid}`}
+          className="inline-flex items-center gap-1.5 rounded-rw bg-cta px-3.5 py-1.5 text-sm font-medium text-cta-ink hover:bg-cta-strong"
+          data-testid="to-preview"
+        >
+          {t('hearing.result.toPreview')} →
+        </Link>
+      )}
     </div>
   )
 }

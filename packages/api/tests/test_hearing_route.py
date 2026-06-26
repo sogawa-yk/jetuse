@@ -30,6 +30,7 @@ class FakeHearingRepo:
         self.sessions: dict[str, dict] = {}
         self.answers: dict[str, dict[str, Any]] = {}
         self.recs: dict[str, dict] = {}
+        self.launches: dict[str, dict] = {}
         self._n = 0
 
     def _own(self, owner, sid):
@@ -89,8 +90,9 @@ class FakeHearingRepo:
             return None
         normalized = validate_answer(qid, value)  # 実検証(未知選択肢を弾く)
         self.answers[sid][qid] = {"value": normalized, "source": source}
-        # 回答変更で陳腐化推薦を削除し、確定済みなら status を ready へ戻す(実 repo 契約)。
+        # 回答変更で陳腐化推薦＋起動記録を削除し、確定済みなら status を ready へ(実 repo 契約)。
         self.recs.pop(sid, None)
+        self.launches.pop(sid, None)
         if self.sessions[sid]["status"] == "confirmed":
             self.sessions[sid]["status"] = "ready"
         return {"question_id": qid, "value": normalized, "source": source}
@@ -108,6 +110,8 @@ class FakeHearingRepo:
         # 推薦保存で status を整える(実 repo 契約): draft→ready へ進め、confirmed→ready へ戻す。
         if self.sessions[sid]["status"] in ("draft", "confirmed"):
             self.sessions[sid]["status"] = "ready"
+        # 再推薦は確定を解除(confirmed_at=None)するので、旧推薦に基づく起動記録も無効化する。
+        self.launches.pop(sid, None)
         return detail
 
     def confirm_recommendation(self, owner, sid):
@@ -119,6 +123,23 @@ class FakeHearingRepo:
         self.sessions[sid]["status"] = "confirmed"
         return "confirmed"
 
+    def record_launch(self, owner, sid, *, sample_app, instance_id, entry_slot,
+                      demo_url, composition):
+        if not self._own(owner, sid):
+            return None
+        self.launches[sid] = {
+            "id": f"l-{sid}", "session_id": sid, "sample_app": sample_app,
+            "instance_id": instance_id, "entry_slot": entry_slot, "demo_url": demo_url,
+            "composition": composition, "status": "launched",
+            "launched_at": "2026-01-01T00:00:00",
+        }
+        return self.launches[sid]
+
+    def get_launch(self, owner, sid):
+        if not self._own(owner, sid):
+            return None
+        return self.launches.get(sid)
+
 
 @pytest.fixture
 def repo(monkeypatch):
@@ -126,7 +147,7 @@ def repo(monkeypatch):
     for name in (
         "create_session", "list_sessions", "get_session", "update_session",
         "delete_session", "save_answer", "get_answers", "save_recommendation",
-        "confirm_recommendation",
+        "confirm_recommendation", "record_launch", "get_launch",
     ):
         monkeypatch.setattr(service_main.hearing_repo, name, getattr(fake, name))
     # 実DBへ触れないことを保証する: 万一 fake 未差し替えの repo 関数が呼ばれても
@@ -470,3 +491,160 @@ def test_input_notes_bound_rejected_by_repo():
 
     with pytest.raises(HearingSchemaError):
         real_repo._bound_notes("x" * 9000)
+
+
+# --- HBD-05: デモ起動 + 構成サマリ -----------------------------------------
+
+
+def _confirm_full(sid, answers=None):
+    """FULL 回答→recommend→confirm までを通す(launch/summary の前提)。"""
+    for qid, val in (answers or FULL).items():
+        client.put(f"/api/hearing/sessions/{sid}/answers/{qid}", json={"value": val})
+    client.post(f"/api/hearing/sessions/{sid}/recommend")
+    assert client.post(f"/api/hearing/sessions/{sid}/recommend/confirm").status_code == 200
+
+
+def test_launch_happy_path_persists_and_returns_run_target(repo):
+    """確定→/launch でガバナンス PASS の構成が起動記録され、主役 AI 実行導線が返る(一気通貫)。"""
+    sid = _create()
+    _confirm_full(sid)
+    r = client.post(f"/api/hearing/sessions/{sid}/launch")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["governance"]["ok"] is True
+    launch = body["launch"]
+    assert launch["instance_id"] == "builtin-sba-a"
+    assert launch["demo_url"] == "/sba/builtin-sba-a"
+    # 主役(rag.search)の active スロットが実行起点に選ばれる。
+    assert launch["entry_slot"]
+    assert launch["status"] == "launched"
+    # 永続: GET /launch で再取得できる。
+    got = client.get(f"/api/hearing/sessions/{sid}/launch")
+    assert got.status_code == 200
+    assert got.json()["instance_id"] == "builtin-sba-a"
+
+
+def test_launch_requires_confirmation_409(repo):
+    """未確定の推薦は起動できない(409。一気通貫は確定を経由する)。"""
+    sid = _create()
+    for qid, val in FULL.items():
+        client.put(f"/api/hearing/sessions/{sid}/answers/{qid}", json={"value": val})
+    client.post(f"/api/hearing/sessions/{sid}/recommend")
+    assert client.post(f"/api/hearing/sessions/{sid}/launch").status_code == 409
+
+
+def test_launch_blocked_when_governance_fails(repo):
+    """境界: バリデーション FAIL 構成は起動に進めず、代替提案つき違反が返る。"""
+    sid = _create()
+    # SBA-A + 業務DB → nl2sql は組込点なし(許可外組合せ)で governance FAIL。
+    _confirm_full(sid, {**FULL, "Q2": ["business_db", "docs"]})
+    r = client.post(f"/api/hearing/sessions/{sid}/launch")
+    assert r.status_code == 409, r.text
+    detail = r.json()["detail"]
+    assert detail["governance"]["ok"] is False
+    nl = next(
+        v for v in detail["governance"]["violations"]
+        if v["kind"] == "disallowed_combination" and v["element"] == "nl2sql"
+    )
+    assert nl["alternative"]  # 外させない代替提案
+    # 起動記録は作られない。
+    assert client.get(f"/api/hearing/sessions/{sid}/launch").status_code == 404
+
+
+def test_launch_unknown_session_404(repo):
+    assert client.post("/api/hearing/sessions/nope/launch").status_code == 404
+
+
+def test_answer_change_invalidates_launch(repo):
+    """起動後に回答を変えると陳腐化した起動記録は無効化され GET /launch が 404 に戻る(F-002)。"""
+    sid = _create()
+    _confirm_full(sid)
+    assert client.post(f"/api/hearing/sessions/{sid}/launch").status_code == 200
+    assert client.get(f"/api/hearing/sessions/{sid}/launch").status_code == 200
+    # 回答変更 → 推薦も起動記録も陳腐化 → GET /launch は 404。
+    client.put(f"/api/hearing/sessions/{sid}/answers/Q1", json={"value": "sales"})
+    assert client.get(f"/api/hearing/sessions/{sid}/launch").status_code == 404
+
+
+def test_re_recommend_invalidates_launch(repo):
+    """再推薦(確定解除)で旧起動記録が無効化される(F-002)。"""
+    sid = _create()
+    _confirm_full(sid)
+    assert client.post(f"/api/hearing/sessions/{sid}/launch").status_code == 200
+    client.post(f"/api/hearing/sessions/{sid}/recommend")  # 再推薦 → confirmed_at=None
+    assert client.get(f"/api/hearing/sessions/{sid}/launch").status_code == 404
+
+
+def test_get_launch_before_launch_404(repo):
+    sid = _create()
+    _confirm_full(sid)
+    assert client.get(f"/api/hearing/sessions/{sid}/launch").status_code == 404
+
+
+def test_summary_genai_narrative(repo, monkeypatch):
+    """確定→/summary で 4 項目(構成図/OCIサービス/手順/効果)が返り、効果は GenAI 文章化される。"""
+    monkeypatch.setattr(
+        hg, "summary_narrative", lambda comp, *, model_key: "顧客提示用の効果文（GenAI）。"
+    )
+    sid = _create()
+    _confirm_full(sid)
+    r = client.post(f"/api/hearing/sessions/{sid}/summary")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["sample_app"] == "SBA-A"
+    assert body["diagram"]  # ①構成図(どのデータに何のAIが効くか)
+    assert body["oci_services"]  # ②使うOCIサービス
+    assert body["steps"]  # ③デモ手順
+    assert body["impact_source"] == "genai"
+    assert "GenAI" in body["impact"]
+    # active な主役 rag.search が構成図に現れる。
+    assert any(f["capability"] == "rag.search" for f in body["diagram"])
+    assert body["markdown"].startswith("# 構成サマリ")
+
+
+def test_summary_falls_back_when_genai_unavailable(repo, monkeypatch):
+    """GenAI 不在/失敗でも決定的フォールバックでサマリは成立する(構成図/手順は常に決定的)。"""
+    monkeypatch.setattr(hg, "summary_narrative", lambda comp, *, model_key: None)
+    sid = _create()
+    _confirm_full(sid)
+    body = client.post(f"/api/hearing/sessions/{sid}/summary").json()
+    assert body["impact_source"] == "deterministic"
+    assert body["impact"]
+    assert body["oci_services"]
+
+
+def test_summary_blocked_when_governance_fails(repo):
+    """境界: ガバナンス FAIL の構成では構成サマリを生成できない(409＋代替提案 / F-003)。"""
+    sid = _create()
+    _confirm_full(sid, {**FULL, "Q2": ["business_db", "docs"]})  # nl2sql 許可外 → governance FAIL
+    r = client.post(f"/api/hearing/sessions/{sid}/summary")
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"]["governance"]["ok"] is False
+    # エクスポートも同様に拒否される。
+    assert client.get(f"/api/hearing/sessions/{sid}/summary/export").status_code == 409
+
+
+def test_summary_requires_confirmation_409(repo):
+    sid = _create()
+    for qid, val in FULL.items():
+        client.put(f"/api/hearing/sessions/{sid}/answers/{qid}", json={"value": val})
+    client.post(f"/api/hearing/sessions/{sid}/recommend")
+    assert client.post(f"/api/hearing/sessions/{sid}/summary").status_code == 409
+
+
+def test_summary_export_markdown(repo):
+    """エクスポートは text/markdown を添付ダウンロードで返す(プリセールス転用)。"""
+    sid = _create()
+    _confirm_full(sid)
+    r = client.get(f"/api/hearing/sessions/{sid}/summary/export")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("text/markdown")
+    assert "attachment" in r.headers.get("content-disposition", "")
+    assert "## ① 構成図" in r.text
+    assert "## ② 使う OCI サービス" in r.text
+    assert "## ④ 想定効果" in r.text
+
+
+def test_summary_unknown_session_404(repo):
+    assert client.post("/api/hearing/sessions/nope/summary").status_code == 404
+    assert client.get("/api/hearing/sessions/nope/summary/export").status_code == 404
