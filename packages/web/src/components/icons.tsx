@@ -6,7 +6,7 @@ import type { ReactElement, SVGProps } from 'react'
 
 export type IconName =
   | 'home' | 'chat' | 'rag' | 'dbchat' | 'minutes' | 'realtime'
-  | 'voicechat' | 'video' | 'ocr' | 'agents' | 'admin' | 'settings' | 'design'
+  | 'voicechat' | 'video' | 'ocr' | 'agents' | 'admin' | 'settings' | 'design' | 'market'
   // 汎用(ユースケース/エージェントのアイコン選択用)
   | 'document' | 'edit' | 'translate' | 'link' | 'diagram' | 'search'
   | 'idea' | 'mail' | 'code' | 'image' | 'star' | 'tag' | 'checklist'
@@ -59,6 +59,12 @@ const PATHS: Record<IconName, ReactElement> = {
       <rect x="13" y="4" width="7" height="7" rx="1" />
       <rect x="4" y="13" width="7" height="7" rx="1" />
       <rect x="13" y="13" width="7" height="7" rx="1" />
+    </>
+  ),
+  market: (
+    <>
+      <path d="M4 9h16l-1 2.5a2.5 2.5 0 0 1-4.7 0 2.5 2.5 0 0 1-4.6 0 2.5 2.5 0 0 1-4.7 0z" />
+      <path d="M5 4h14l1 5M5 4 4 9M5.5 12v8h13v-8M9.5 20v-4h5v4" />
     </>
   ),
   document: <path d="M6 3h8l4 4v14H6zM14 3v4h4M9 12h6M9 16h6" />,
