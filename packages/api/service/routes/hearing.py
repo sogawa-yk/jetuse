@@ -17,6 +17,7 @@ import asyncio
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from jetuse_core import hearing as hearing_repo
@@ -29,7 +30,8 @@ from jetuse_core.hearing_schema import (
     question_schema,
 )
 from jetuse_core.recommend import Recommendation, recommend
-from jetuse_core.synth import synthesize
+from jetuse_core.summary import build_summary
+from jetuse_core.synth import DemoComposition, synthesize
 
 router = APIRouter()
 
@@ -279,3 +281,163 @@ async def validate_composition_gate(
         "composition": composition.model_dump(),
         "governance": report.model_dump(),
     }
+
+
+def _entry_slot(composition: DemoComposition) -> str | None:
+    """起動デモの実行起点となる aiSlot キー(主役 active を優先、無ければ最初の active)。
+
+    `/api/sample-apps/{instance_id}/slots/{slot_key}/invoke` で主役 AI 機能を実行する導線に使う。
+    """
+    actives = [b for b in composition.bindings if b.status == "active" and b.slot_keys]
+    if not actives:
+        return None
+    highlight = next((b for b in actives if b.highlight), None)
+    chosen = highlight or actives[0]
+    return chosen.slot_keys[0]
+
+
+def _governance_gate(composition: DemoComposition):
+    """合成成立＋ガバナンス4制約 PASS を要求する(launch/summary 共通のデプロイ前ゲート)。
+
+    起動できない(ガバナンス FAIL)構成では顧客提示サマリも生成させない(「起動済みデモのサマリ」の
+    整合: 外れた構成を顧客資料に載せない)。違反は機械可読＋代替提案つきで 409 にする。
+    """
+    if not composition.ok:
+        raise HTTPException(
+            status_code=409,
+            detail="デモ構成が成立していません。先に /validate で構成を確認してください",
+        )
+    report = validate_governance(composition)
+    if not report.ok:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "バリデーション未通過の構成ではサマリを生成できません",
+                "governance": report.model_dump(),
+                "composition": composition.model_dump(),
+            },
+        )
+    return report
+
+
+def _synth_confirmed(session: dict[str, Any]) -> tuple[DemoComposition, dict[str, Any]]:
+    """確定済み推薦から合成する。未推薦/未確定/合成不能は HTTPException で弾く。"""
+    detail = session.get("recommendation")
+    if not detail:
+        raise HTTPException(
+            status_code=409, detail="推薦がまだありません。先に /recommend を実行してください"
+        )
+    if not detail.get("confirmed_at"):
+        raise HTTPException(
+            status_code=409,
+            detail="推薦が未確定です。先に /recommend/confirm で確定してください",
+        )
+    rec = _recommendation_from_detail(detail)
+    composition = synthesize(rec)
+    return composition, detail
+
+
+@router.post("/api/hearing/sessions/{sid}/launch")
+async def launch_demo(sid: str, user: Annotated[AuthContext, Depends(require_user)]):
+    """確定済み推薦のデモ構成を**デプロイ前ゲート(ガバナンス4制約)に通してから起動**する(HBD-05)。
+
+    一気通貫の出口: ヒアリング確定→合成→バリデーション PASS→起動。バリデーション未通過の構成は
+    409 で「起動」を拒否し、機械可読な違反＋代替提案を返す(外れたデモを起動させない=境界)。
+    PASS なら起動記録を永続し、主役 AI 機能の実行導線(instance_id / entry_slot / demo_url)を返す。
+    本タスクの「起動」は既存 loop 基盤上のデモ(コンテナ配備は S4)。
+    """
+    session = hearing_repo.get_session(user.subject, sid)
+    if session is None:
+        raise HTTPException(status_code=404, detail="hearing session not found")
+    composition, _ = _synth_confirmed(session)
+    report = validate_governance(composition)
+    if not report.ok:
+        # 境界: バリデーション FAIL 構成は起動に進めない。代替提案つきの違反を返して誘導する。
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "バリデーション未通過のため起動できません。代替提案に従って構成を直す",
+                "governance": report.model_dump(),
+                "composition": composition.model_dump(),
+            },
+        )
+    entry_slot = _entry_slot(composition)
+    demo_url = f"/sba/{composition.instance_id}"
+    launch = hearing_repo.record_launch(
+        user.subject,
+        sid,
+        sample_app=composition.sample_app,
+        instance_id=composition.instance_id,
+        entry_slot=entry_slot,
+        demo_url=demo_url,
+        composition=composition.model_dump(),
+    )
+    if launch is None:  # 直前に削除された等のレース
+        raise HTTPException(status_code=404, detail="hearing session not found")
+    return {
+        "launch": launch,
+        "composition": composition.model_dump(),
+        "governance": report.model_dump(),
+    }
+
+
+@router.get("/api/hearing/sessions/{sid}/launch")
+async def get_launch(sid: str, user: Annotated[AuthContext, Depends(require_user)]):
+    """起動済みデモの記録を返す。未起動なら 404。"""
+    session = hearing_repo.get_session(user.subject, sid)
+    if session is None:
+        raise HTTPException(status_code=404, detail="hearing session not found")
+    launch = hearing_repo.get_launch(user.subject, sid)
+    if launch is None:
+        raise HTTPException(status_code=404, detail="demo not launched")
+    return launch
+
+
+async def _build_summary(session: dict[str, Any]):
+    """確定済み推薦→合成→ガバナンス PASS→構成サマリ(想定効果は GenAI 文章化、失敗時は決定的)。"""
+    composition, _ = _synth_confirmed(session)
+    _governance_gate(composition)
+    model_key = hearing_genai._resolve_model(None)
+    narrative = await asyncio.to_thread(
+        hearing_genai.summary_narrative, composition, model_key=model_key
+    )
+    return build_summary(composition, narrative=narrative)
+
+
+@router.post("/api/hearing/sessions/{sid}/summary")
+async def demo_summary(sid: str, user: Annotated[AuthContext, Depends(require_user)]):
+    """起動可能なデモ構成から顧客提示用の構成サマリを生成する(HBD-05 / hearing-flow §5)。
+
+    ①構成図(どのデータに何の AI が効くか)②使う OCI サービス ③デモ手順 ④想定効果。①〜③は合成
+    結果から決定的に導出し(捏造しない)、④の文章化のみ GenAI 補助(不在/失敗は決定的フォールバック)。
+    プリセールス転用の下敷きとして Markdown も同梱する。
+    """
+    session = hearing_repo.get_session(user.subject, sid)
+    if session is None:
+        raise HTTPException(status_code=404, detail="hearing session not found")
+    summary = await _build_summary(session)
+    return summary.model_dump()
+
+
+@router.get(
+    "/api/hearing/sessions/{sid}/summary/export", response_class=PlainTextResponse
+)
+async def export_summary(sid: str, user: Annotated[AuthContext, Depends(require_user)]):
+    """構成サマリを Markdown(text/markdown)でエクスポートする(顧客提示資料の下敷き)。
+
+    再現可能なエクスポートにするため想定効果は決定的テンプレ文を使う(GenAI 非依存)。画面表示の
+    サマリ(POST /summary)は GenAI 文章化を含むが、ダウンロード成果物は決定的に固定する。
+    """
+    session = hearing_repo.get_session(user.subject, sid)
+    if session is None:
+        raise HTTPException(status_code=404, detail="hearing session not found")
+    composition, _ = _synth_confirmed(session)
+    _governance_gate(composition)
+    summary = build_summary(composition, narrative=None)
+    return PlainTextResponse(
+        summary.markdown,
+        media_type="text/markdown; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="demo-summary-{sid}.md"'
+        },
+    )

@@ -495,6 +495,7 @@ export const en: Record<keyof typeof ja, string> = {
   'hearing.result.confirmed': 'Confirmed',
   'hearing.result.editAnswers': 'Edit answers',
   'hearing.result.restart': 'Start over',
+  'hearing.result.toPreview': 'Build this demo (preview)',
   // Recommendation material keys → display labels
   'hearing.part.rag.search': 'RAG search',
   'hearing.part.nl2sql': 'NL2SQL (natural-language DB query)',

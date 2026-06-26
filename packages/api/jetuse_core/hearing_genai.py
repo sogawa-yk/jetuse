@@ -126,6 +126,28 @@ def nearest_sample_app(notes: str, *, model_key: str) -> str | None:
     return None
 
 
+def summary_narrative(composition: Any, *, model_key: str) -> str | None:
+    """構成サマリの「想定効果」(§5 ④/§6 ④ サマリ文章化)を GenAI で文章化する。
+
+    合成済みデモ構成(`synth.DemoComposition`)を入力に、顧客提示用の想定効果文(散文)を返す。
+    GenAI 不在/失敗/空応答なら None(呼び出し側は決定的テンプレ文へフォールバック=サマリは成立)。
+    例外は投げない(suggest/nearest と同じフォールバック設計)。
+    """
+    from .summary import impact_prompt
+
+    system = (
+        "あなたは OCI のプリセールス担当。デモ構成の想定効果を、誇張せず日本語の散文で"
+        "簡潔に述べる。未実装機能を約束しない。箇条書きにしない。"
+    )
+    try:
+        raw = _completer(model_key, system, impact_prompt(composition), max_chars=600)
+    except Exception as e:  # noqa: BLE001 - GenAI 失敗は握ってフォールバック(サマリは成立)
+        logger.warning("hearing genai summary failed: %s", str(e).splitlines()[0][:200])
+        return None
+    text = (raw or "").strip()
+    return text or None
+
+
 def _resolve_model(model_key: str | None) -> str:
     """既定モデル(sample_app_model)へ解決する。未知モデルは既定にフォールバック。"""
     from .settings import get_settings

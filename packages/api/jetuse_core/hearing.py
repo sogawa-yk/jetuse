@@ -267,6 +267,9 @@ def save_answer(
         # **推薦行ごと削除**する(SA は再 recommend してから confirm する)。confirm は推薦不在を
         # not_found として弾く=陳腐化した推薦の再確定を構造的に不能にする。
         cur.execute("DELETE FROM recommendation WHERE session_id = :s", s=session_id)
+        # 推薦が陳腐化したら、それを基に起動した demo_launch も陳腐化する。古い起動記録を残すと
+        # GET /launch が陳腐な構成を返し続けるため**起動記録も削除**する(回答変更で起動は無効化)。
+        cur.execute("DELETE FROM demo_launch WHERE session_id = :s", s=session_id)
         conn.commit()
     return {"question_id": question_id, "value": normalized, "source": source}
 
@@ -360,8 +363,113 @@ def save_recommendation(
             "WHERE id = :s AND status IN ('draft', 'confirmed')",
             s=session_id,
         )
+        # 推薦を差し替えると confirmed_at は NULL に戻る(未確定)。既存の起動記録は旧推薦に基づく
+        # 陳腐な構成なので削除する(再確定→再起動するまで GET /launch を 404 に戻す)。
+        cur.execute("DELETE FROM demo_launch WHERE session_id = :s", s=session_id)
         conn.commit()
     return {**detail, "confirmed_at": None}
+
+
+# --- デモ起動記録(HBD-05) --------------------------------------------------
+
+
+def _launch_to_record(row) -> dict[str, Any]:
+    return {
+        "id": row[0],
+        "session_id": row[1],
+        "sample_app": row[2],
+        "instance_id": row[3],
+        "entry_slot": row[4],
+        "demo_url": row[5],
+        "composition": json.loads(_clob(row[6])),
+        "status": row[7],
+        "launched_at": row[8].isoformat() if row[8] else None,
+    }
+
+
+_LAUNCH_COLS = (
+    "id, session_id, sample_app, instance_id, entry_slot, demo_url, "
+    "composition, status, launched_at"
+)
+
+
+def record_launch(
+    owner: str,
+    session_id: str,
+    *,
+    sample_app: str,
+    instance_id: str,
+    entry_slot: str | None,
+    demo_url: str,
+    composition: dict[str, Any],
+) -> dict[str, Any] | None:
+    """デモ起動を記録(差し替え)する。所有者でなければ None。1 セッション 1 起動(upsert)。
+
+    呼び出し側(ルート)が合成＋ガバナンス検証 PASS を確認してから呼ぶ前提。本関数は永続のみ。
+    """
+    comp_json = json.dumps(composition, ensure_ascii=False)
+    with connect() as conn:
+        cur = conn.cursor()
+        if not _owns_session(cur, owner, session_id):
+            return None
+        # 所有者境界を UPDATE 条件にも明示する(demo_launch は owner_sub を持つ)。先頭の
+        # _owns_session で確認済みだが、万一 session_id が再利用/衝突しても他オーナーの起動記録を
+        # 上書きしない多層防御にする(F-003)。
+        binds = {
+            "s": session_id, "o": owner, "app": sample_app, "inst": instance_id,
+            "slot": entry_slot, "url": demo_url, "comp": comp_json,
+        }
+        _clob_inputsizes(cur, "comp")
+        cur.execute(
+            """
+            UPDATE demo_launch
+            SET sample_app = :app, instance_id = :inst, entry_slot = :slot,
+                demo_url = :url, composition = :comp, status = 'launched',
+                launched_at = SYSTIMESTAMP
+            WHERE session_id = :s AND owner_sub = :o
+            """,
+            binds,
+        )
+        if cur.rowcount == 0:
+            _clob_inputsizes(cur, "comp")
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO demo_launch(id, session_id, owner_sub, sample_app,
+                                            instance_id, entry_slot, demo_url, composition)
+                    VALUES (:id, :s, :o, :app, :inst, :slot, :url, :comp)
+                    """,
+                    {**binds, "id": _uid()},
+                )
+            except oracledb.IntegrityError:
+                # 並行初回起動の競合(uq_demo_launch_session)。先に入った行を上書きする(冪等)。
+                _clob_inputsizes(cur, "comp")
+                cur.execute(
+                    """
+                    UPDATE demo_launch
+                    SET sample_app = :app, instance_id = :inst, entry_slot = :slot,
+                        demo_url = :url, composition = :comp, status = 'launched',
+                        launched_at = SYSTIMESTAMP
+                    WHERE session_id = :s AND owner_sub = :o
+                    """,
+                    binds,
+                )
+        conn.commit()
+    return get_launch(owner, session_id)
+
+
+def get_launch(owner: str, session_id: str) -> dict[str, Any] | None:
+    """セッションの起動記録を返す。所有者でなければ/未起動なら None。"""
+    with connect() as conn:
+        cur = conn.cursor()
+        if not _owns_session(cur, owner, session_id):
+            return None
+        cur.execute(
+            f"SELECT {_LAUNCH_COLS} FROM demo_launch WHERE session_id = :s",
+            s=session_id,
+        )
+        row = cur.fetchone()
+        return _launch_to_record(row) if row else None
 
 
 def confirm_recommendation(owner: str, session_id: str) -> str:

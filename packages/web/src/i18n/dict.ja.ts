@@ -493,6 +493,7 @@ export const ja = {
   'hearing.result.confirmed': '確定済み',
   'hearing.result.editAnswers': '回答を修正',
   'hearing.result.restart': 'やり直す',
+  'hearing.result.toPreview': 'このデモを構築する（プレビューへ）',
   // 推薦素材キー → 表示文言
   'hearing.part.rag.search': 'RAG検索',
   'hearing.part.nl2sql': 'NL2SQL（自然言語DB照会）',
