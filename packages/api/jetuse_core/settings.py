@@ -12,6 +12,11 @@ class Settings(BaseSettings):
     compartment_ocid: str = ""
     project_ocid: str = ""
 
+    # sample-app(SBA)スロット実行の既定モデル(SBA-02)。Web UI は model を送らないため、
+    # ここが既定実行経路。追加設定なしでデモが動くよう **project_ocid 不要な chat completions 系**
+    # を既定にする(Responses 系 gpt-oss-120b は project_ocid 必須)。env で上書き可。
+    sample_app_model: str = "llama-3.3-70b"
+
     # OpenSearch RAG(ENH-05)。例 http://10.1.1.x:9200。空ならOpenSearchバックエンド無効
     opensearch_endpoint: str = ""
 
