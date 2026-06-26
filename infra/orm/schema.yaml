@@ -27,6 +27,7 @@ variableGroups:
       - rate_limit_rps
       - ocir_namespace
       - ocir_region_key
+      - image_repo_prefix
       - api_image_url
       - fn_router_image
   - title: "Hidden"
@@ -99,6 +100,13 @@ variables:
     title: "OCIR リージョンキー"
     description: "OCIRレジストリのリージョンキー（ap-osaka-1 は kix）"
     default: "kix"
+    required: true
+
+  image_repo_prefix:
+    type: string
+    title: "OCIRイメージ repo プレフィックス"
+    description: "イメージrepo名の接頭辞。release.ymlのpush先(jetuse-api/jetuse-fn-router)に合わせる。通常変更不要"
+    default: "jetuse"
     required: true
 
   api_image_url:

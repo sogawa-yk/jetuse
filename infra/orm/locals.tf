@@ -4,10 +4,11 @@ locals {
 
   # コンテナイメージ(ADR-0011): 明示指定が無ければ OCIR パスを合成。
   # repo は手動管理(genu-proto)。パスはネームスペースベースでコンパートメント非依存。
-  # 名前は "<prefix>-{api,fn-router}"(release.yml の push 先と一致させる)。
+  # repo名は image_repo_prefix(既定 jetuse)で合成し、リソース名の var.prefix とは分離する。
+  # → prefix を変えてもイメージ参照(release.yml が push する jetuse-*)が壊れない。
   ocir_registry   = "${var.ocir_region_key}.ocir.io/${var.ocir_namespace}"
-  api_image_url   = var.api_image_url != "" ? var.api_image_url : "${local.ocir_registry}/${var.prefix}-api:latest"
-  fn_router_image = var.fn_router_image != "" ? var.fn_router_image : "${local.ocir_registry}/${var.prefix}-fn-router:latest"
+  api_image_url   = var.api_image_url != "" ? var.api_image_url : "${local.ocir_registry}/${var.image_repo_prefix}-api:latest"
+  fn_router_image = var.fn_router_image != "" ? var.fn_router_image : "${local.ocir_registry}/${var.image_repo_prefix}-fn-router:latest"
 
   # OIDC: enable_auth=false の間は空(SPAはdev-userモード)
   domain_url     = var.enable_auth ? module.identity_domain[0].domain_url : ""
