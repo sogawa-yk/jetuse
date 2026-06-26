@@ -16,7 +16,7 @@ def _uid() -> str:
 
 _COLS = """id, owner_sub, name, description, icon, instructions, model,
            enabled_tools, mcp_server_ids, project_ocid, visibility, tags, auto_tools,
-           framework"""
+           framework, source_plugin_id, source_version"""
 
 
 def _row_to_agent(r) -> dict[str, Any]:
@@ -29,6 +29,9 @@ def _row_to_agent(r) -> dict[str, Any]:
         "tags": [t for t in (r[11] or "").split(",") if t],
         "auto_tools": bool(r[12]),
         "framework": r[13] or "native",  # FW-01
+        # 出所追跡(PLG-02/03)。プラグイン取込でなければ None。
+        # コントリビューションローダー(PLG-07)が出所バッジ・名前衝突解決に使う。
+        "source_plugin_id": r[14], "source_version": r[15],
     }
 
 

@@ -105,6 +105,7 @@ export const en: Record<keyof typeof ja, string> = {
   'home.allTags': 'All',
   'home.builtin': 'built-in',
   'home.shared': 'shared',
+  'home.fromPlugin': 'plugin',
   'home.chat.desc': 'Free-form chat with history, params and presets',
   'home.newUsecase': 'Create use case',
   'home.newUsecase.desc': 'Define a form + prompt template, save and share',

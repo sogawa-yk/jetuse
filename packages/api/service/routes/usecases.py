@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from jetuse_core import presets as preset_repo
 from jetuse_core import usecases as uc_repo
 from jetuse_core.auth import AuthContext, require_user
+from jetuse_core.plugins import loader as contrib_loader
 
 from ..schemas import PresetCreate, UsecaseDefinition
 
@@ -17,7 +18,8 @@ router = APIRouter()
 
 @router.get("/api/usecases")
 def list_usecases(user: Annotated[AuthContext, Depends(require_user)]):
-    return {"usecases": uc_repo.list_usecases(user.subject)}
+    # 組み込み + ユーザー + インストール済みを合算し、出所バッジ・名前衝突解決(PLG-07)。
+    return {"usecases": contrib_loader.list_usecases(user.subject)}
 
 
 @router.post("/api/usecases")
@@ -32,6 +34,8 @@ def get_usecase(uc_id: str, user: Annotated[AuthContext, Depends(require_user)])
     uc = uc_repo.get_usecase(user.subject, uc_id)
     if not uc:
         raise HTTPException(status_code=404, detail="usecase not found")
+    # 出所バッジ(plugin名/版)を付与(PLG-07)。組み込み/ユーザー定義は追加 I/O なし。
+    contrib_loader.enrich_one(uc)
     return {**uc, "mine": uc.get("owner_sub") == user.subject}
 
 

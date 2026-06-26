@@ -103,6 +103,7 @@ export const ja = {
   'home.allTags': 'すべて',
   'home.builtin': '標準',
   'home.shared': '共有',
+  'home.fromPlugin': 'プラグイン',
   'home.chat.desc': '自由対話。履歴・パラメータ・プリセット対応',
   'home.newUsecase': 'ユースケースを作る',
   'home.newUsecase.desc': 'フォームとプロンプトを定義して保存・共有',

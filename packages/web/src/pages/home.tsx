@@ -9,6 +9,8 @@ import { PageContainer } from '../components/layout'
 import { FeatureCard, LinkCard } from '../components/oci'
 import { usePrefs } from '../prefs'
 
+// インストール済みプラグイン由来の出所バッジ(PLG-07)
+type PluginSource = { plugin_id: string; plugin_name: string; version: string }
 type UcSummary = {
   id: string
   name: string
@@ -18,6 +20,8 @@ type UcSummary = {
   builtin?: boolean
   visibility?: string
   mine?: boolean
+  origin?: 'builtin' | 'user' | 'plugin'
+  source?: PluginSource
 }
 type AgentSummary = {
   id: string
@@ -26,6 +30,21 @@ type AgentSummary = {
   icon?: string | null
   mine?: boolean
   visibility?: string
+  origin?: 'builtin' | 'user' | 'plugin'
+  source?: PluginSource
+}
+
+/** 出所バッジ: インストール済みプラグイン由来の定義に plugin名/版 を表示する(PLG-07) */
+function PluginBadge({ source, label }: { source?: PluginSource; label: string }) {
+  if (!source) return null
+  return (
+    <span
+      className="ml-1.5 rounded-full border border-line px-1.5 py-0.5 text-[10px] text-ink-muted"
+      title={`${source.plugin_id} v${source.version}`}
+    >
+      {label}: {source.plugin_name} v{source.version}
+    </span>
+  )
 }
 
 // 並び替え順の永続化(この端末のみ。プロトタイプ範囲・DB移行不要)
@@ -211,6 +230,7 @@ export default function Home() {
                     : it.uc.visibility === 'public'
                       ? t('home.shared')
                       : ''}
+                  <PluginBadge source={it.uc.source} label={t('home.fromPlugin')} />
                   {it.uc.mine && (
                     <Link
                       to={`/builder/${it.uc.id}`}
@@ -237,6 +257,7 @@ export default function Home() {
                       ? t('home.shared')
                       : ''
                     : t('home.shared')}
+                  <PluginBadge source={it.agent.source} label={t('home.fromPlugin')} />
                   {it.agent.mine && (
                     <Link
                       to={`/agents/${it.agent.id}`}
