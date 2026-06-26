@@ -26,6 +26,15 @@ from .sample_app_builtin import (
 from .sample_app_builtin import (
     knowledge_corpus as _sba_a_corpus,
 )
+from .sample_app_builtin_c import (
+    SBA_C_INSTANCE_ID,
+    SBA_C_NL2SQL_SCHEMA,
+    builtin_sample_apps_c,
+    sba_c_definition,
+)
+from .sample_app_builtin_c import (
+    get_builtin_sample_app_c as _get_sba_c,
+)
 from .sample_app_builtin_sba_b import (
     SBA_B_INSTANCE_ID,
     sba_b_definition,
@@ -46,16 +55,18 @@ class ResolvedApp:
     corpus: list[dict[str, Any]] = field(default_factory=list)
     #: 知識コーパスの元データセット名(無ければ None)。
     knowledge_dataset: str | None = None
+    #: nl2sql スロットが照会する実 DB スキーマ名(SBA-C のみ。生成のみの SBA-B は None)。
+    nl2sql_schema: str | None = None
 
 
 def list_sample_apps() -> list[dict[str, Any]]:
     """全コア同梱 sample-app の一覧要約(home カード/実行導線用)。"""
-    return [sba_a_summary(), sba_b_summary()]
+    return [sba_a_summary(), sba_b_summary(), *builtin_sample_apps_c()]
 
 
 def get_sample_app(app_id: str) -> dict[str, Any] | None:
     """app_id から完全定義(screens/datasets/aiSlots + seed + knowledge_dataset)を返す。"""
-    return _get_sba_a(app_id) or _get_sba_b(app_id)
+    return _get_sba_a(app_id) or _get_sba_b(app_id) or _get_sba_c(app_id)
 
 
 def resolve_app(app_id: str) -> ResolvedApp | None:
@@ -76,5 +87,15 @@ def resolve_app(app_id: str) -> ResolvedApp | None:
             definition=sba_b_definition(),
             corpus=[],
             knowledge_dataset=None,
+        )
+    if app_id == SBA_C_INSTANCE_ID:
+        # SBA-C(営業案件管理)。売上集計の nl2sql は専用スキーマ(JETUSE_SBA04)を実行照会する。
+        # 知識コーパスは持たない(議事録/案件データを文脈にする)。
+        return ResolvedApp(
+            instance_id=SBA_C_INSTANCE_ID,
+            definition=sba_c_definition(),
+            corpus=[],
+            knowledge_dataset=None,
+            nl2sql_schema=SBA_C_NL2SQL_SCHEMA,
         )
     return None

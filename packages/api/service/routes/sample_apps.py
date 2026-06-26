@@ -103,12 +103,19 @@ def _resolve_full(app_id: str) -> dict[str, Any]:
     return app
 
 
-def _definition_and_corpus(app_id: str) -> tuple[SampleAppDefinition, list[dict[str, Any]]]:
-    """app_id から検証済み定義と知識コーパスを返す(コア同梱レジストリから解決)。"""
+def _runtime_for(
+    app_id: str,
+) -> tuple[SampleAppDefinition, list[dict[str, Any]], str | None]:
+    """app_id から (検証済み定義, 知識コーパス, nl2sql 照会先スキーマ) を返す。
+
+    解決はコア同梱レジストリ(resolve_app)に一本化する。SBA-A は FAQ コーパスを根拠にする
+    (nl2sql なし)。SBA-B は datasets を文脈に NL2SQL を生成のみ(schema=None)。SBA-C は売上集計が
+    専用スキーマ(JETUSE_SBA04)を実行照会する。
+    """
     resolved = resolve_app(app_id)
     if resolved is None:
         raise HTTPException(status_code=404, detail="sample-app not found")
-    return resolved.definition, resolved.corpus
+    return resolved.definition, resolved.corpus, resolved.nl2sql_schema
 
 
 @router.get("/api/sample-apps")
@@ -133,9 +140,10 @@ async def get_sample_app_route(
         slot["key"]: slot.get("capability") in bound
         for slot in app["definition"].get("aiSlots", [])
     }
-    # knowledge_dataset はレジストリの完全定義 dict に含まれる(SBA-A=faqs / SBA-B=None)。
-    # 後方互換: 万一 dict に無くてもキーを保証する(既存 SBA-A レスポンス契約の回帰防止 / M1)。
-    app.setdefault("knowledge_dataset", None)
+    # knowledge_dataset はレジストリの完全定義 dict が**アプリ単位の契約**として持つ:
+    #   SBA-A = "faqs"(RAGコーパスあり) / SBA-B = None(NL2SQL・コーパス無しを明示) /
+    #   SBA-C = キー自体を持たない(RAGコーパス概念が無い)。
+    # 一律 setdefault は SBA-C の「キーを付けない」契約を壊すため、dict の値をそのまま返す。
     return app
 
 
@@ -147,7 +155,7 @@ async def invoke_slot(
     req: Annotated[SlotInvokeRequest, Body()],
 ):
     """aiSlot を実行時バインドして実行し、結果を JSON で返す。"""
-    definition, corpus = _definition_and_corpus(app_id)
+    definition, corpus, nl2sql_schema = _runtime_for(app_id)
     settings = get_settings()
     # Web UI は model を送らない → 既定実行経路。project_ocid 不要なモデルを既定にして、
     # 追加設定なしでデモが動くようにする(settings.sample_app_model)。
@@ -219,6 +227,7 @@ async def invoke_slot(
             owner=user.subject,
             corpus=corpus,
             model_key=model_key,
+            nl2sql_schema=nl2sql_schema,
         )
     except ai_runtime.UnboundCapabilityError as e:
         raise HTTPException(status_code=501, detail=str(e)) from e
@@ -228,6 +237,10 @@ async def invoke_slot(
         # LLM 空応答など推論結果が成立しない場合。成功偽装せず 502 に正規化する。
         logger.warning("sample-app slot inference empty: %s", str(e)[:200])
         raise HTTPException(status_code=502, detail="AI inference failed") from e
+    except ai_runtime.SlotBackendUnavailableError as e:
+        # DB 接続/可用性障害(一過性)。SampleAppError サブクラスなので 404 の前に捕捉する。
+        logger.warning("sample-app slot backend unavailable: %s", str(e)[:200])
+        raise HTTPException(status_code=503, detail="backend temporarily unavailable") from e
     except SampleAppError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except (APIError, httpx.HTTPError) as e:

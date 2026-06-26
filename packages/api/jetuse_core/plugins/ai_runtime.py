@@ -19,8 +19,10 @@ sample-app の `aiSlot` は「画面のどこに JetUse のどの能力(capabili
     スコア(日本語は文字バイグラム併用)で、実環境では GenAI 推論のみで安定して動く。
 
 SBA-02 が束縛する能力: `rag.search`(FAQ-RAG 回答) / `summarize`(要約) / `classify`(自動分類) /
-`draft`(返信ドラフト)。SBA-03(SBA-B 在庫・受発注照会)で `nl2sql`(自然言語DB照会) /
-`chart`(結果グラフ化)を束縛する。`agent`/`minutes`/`vlm.ocr` は SBA-04..05 で束縛する。
+`draft`(返信・メール下書き)。SBA-03(SBA-B 在庫・受発注照会)で `nl2sql`(自然言語DB照会) /
+`chart`(結果グラフ化)を束縛する。SBA-04(SBA-C 営業案件管理)で `minutes`(議事録要約) /
+`agent`(次アクション提案エージェント)を追加束縛する(`nl2sql` は売上集計でも使用)。
+`vlm.ocr` は SBA-05 で束縛する。
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, NoReturn
 
 from jetuse_shared.charting import propose_chart
 from jetuse_shared.sqlguard import (
@@ -77,6 +79,13 @@ MAX_CHART_CELL_CHARS = 200
 #: classify の候補カテゴリの件数上限と1ラベルの長さ上限(プロンプト肥大/コスト暴走の予防)。
 MAX_CATEGORIES = 30
 MAX_CATEGORY_LABEL = 100
+#: minutes(議事録要約)・agent(次アクション提案)の出力上限。
+MAX_MINUTES_CHARS = 4000
+MAX_AGENT_CHARS = 3000
+#: agent が返す次アクションの最大件数(暴走出力の抑制)。
+MAX_AGENT_ACTIONS = 12
+#: nl2sql 結果プレビューの行/セル上限(過大応答の抑制。実行層 nl2sql.py の上限とは別の表示制約)。
+MAX_NL2SQL_PREVIEW_ROWS = 50
 
 
 class UnboundCapabilityError(SampleAppError):
@@ -91,12 +100,22 @@ class SlotInferenceError(SampleAppError):
     """LLM が空応答を返す等、推論結果が成立しないときに送出する(成功偽装を防ぐ)。"""
 
 
+class SlotBackendUnavailableError(SampleAppError):
+    """DB 等のバックエンドが一時的に利用不可のときに送出する(ルートで 503 に写像)。
+
+    生成SQLの不正(列不正等)や推論失敗(502)とは区別する——前者はリトライで回復しうる
+    一過性の障害なので、利用者に「一時的に利用不可」(503)として伝える。
+    """
+
+
 @dataclass
 class SlotContext:
     """1 回のスロット実行の文脈。
 
     `corpus` はこのスロットが根拠にできる知識行(sample-app のシード由来。例: FAQ 行)。
     RAG/draft はこれを検索して根拠にする。classify/summarize は入力本文を主に使う。
+    `nl2sql_schema` は nl2sql スロットが照会する実 DB スキーマ名(例: JETUSE_SBA04)。
+    sample-app が業務データを実 ADB の専用スキーマに隔離して持つ場合に与える(SBA-C 売上集計)。
     """
 
     owner: str
@@ -104,6 +123,7 @@ class SlotContext:
     definition: SampleAppDefinition
     corpus: list[dict[str, Any]] = field(default_factory=list)
     model_key: str = DEFAULT_MODEL
+    nl2sql_schema: str | None = None
 
 
 CapabilityHandler = Callable[[SlotContext, dict[str, Any]], dict[str, Any]]
@@ -430,22 +450,44 @@ def handle_summarize(ctx: SlotContext, payload: dict[str, Any]) -> dict[str, Any
 
 @register_capability("draft")
 def handle_draft(ctx: SlotContext, payload: dict[str, Any]) -> dict[str, Any]:
-    """問い合わせに対する返信ドラフトを、FAQ を根拠にしつつ生成する。"""
-    inquiry = _require_input(payload)
-    # 返信ドラフトも関連度の低い偶発一致・弱い随伴一致は根拠にしない(無関係 FAQ を引用しない)。
-    hits = _relevant_hits(retrieve(inquiry, ctx.corpus, top_k=_top_k(payload)))
-    context = (
-        "\n\n".join(f"[{i + 1}] {h['label']}\n{_row_text(h['row'])}" for i, h in enumerate(hits))
-        or "(該当する参考FAQはありません)"
+    """ドラフト(返信/メール下書き)を生成する。
+
+    知識コーパス(FAQ 等)がある場合(SBA-A サポート返信)は FAQ を根拠にしたカスタマーサポート
+    返信を生成する。コーパスが空の場合(SBA-C 営業フォローメール)は **FAQ を前提にしない**中立な
+    ビジネスメール下書きとして、入力(案件情報・次アクション・売上参考等)だけを根拠に作成する
+    ——営業メールに「参考FAQはございません」のような不適切な文言が混入しないようにする。
+    """
+    body = _require_input(payload)
+    # コーパスがある時だけ FAQ 根拠を引く(関連度の低い偶発一致は除外)。空コーパスでは検索しない。
+    hits = (
+        _relevant_hits(retrieve(body, ctx.corpus, top_k=_top_k(payload)))
+        if ctx.corpus
+        else []
     )
-    draft = _complete(
-        ctx,
-        "あなたはカスタマーサポート担当です。丁寧な日本語で、問い合わせへの返信文の下書きを"
-        "作成します。参考FAQに根拠がある場合はそれに沿い、無い場合は確認する旨を書きます。"
-        "宛名・挨拶・本文・結びを含めること。",
-        f"参考FAQ:\n{context}\n\nお客様からの問い合わせ:\n{inquiry}\n\n返信ドラフトを作成してください。",
-        max_chars=MAX_DRAFT_CHARS,
-    )
+    if ctx.corpus:
+        context = (
+            "\n\n".join(
+                f"[{i + 1}] {h['label']}\n{_row_text(h['row'])}" for i, h in enumerate(hits)
+            )
+            or "(該当する参考FAQはありません)"
+        )
+        draft = _complete(
+            ctx,
+            "あなたはカスタマーサポート担当です。丁寧な日本語で、問い合わせへの返信文の下書きを"
+            "作成します。参考FAQに根拠がある場合はそれに沿い、無い場合は確認する旨を書きます。"
+            "宛名・挨拶・本文・結びを含めること。",
+            f"参考FAQ:\n{context}\n\nお客様からの問い合わせ:\n{body}\n\n返信ドラフトを作成してください。",
+            max_chars=MAX_DRAFT_CHARS,
+        )
+    else:
+        draft = _complete(
+            ctx,
+            "あなたは法人営業の担当者です。丁寧な日本語のビジネスメール下書きを作成します。"
+            "提示された案件情報・次アクション・参考データのみを根拠にし、無い情報は創作しないこと。"
+            "件名・宛名・挨拶・本文(次アクションを自然に織り込む)・結びを含め、過度な約束はしないこと。",
+            f"以下をもとに、顧客向けフォローメールの下書きを作成してください。\n\n{body}",
+            max_chars=MAX_DRAFT_CHARS,
+        )
     if not draft:
         raise SlotInferenceError("draft: LLM が空応答を返した")
     citations = [
@@ -498,15 +540,281 @@ def _column_desc(field_def: Any) -> str:
     return f"{field_def.name.upper()} {sql_type}{label}"
 
 
+# --- ハンドラ: minutes(議事録要約) ---------------------------------------
+
+_MINUTES_SYSTEM = (
+    "あなたは会議内容を正確に整理する日本語アシスタントです。"
+    "議事録の生テキスト(発言録・メモ)から、決定事項・課題・次アクション材料を"
+    "後工程(次アクション提案・メール下書き)が使いやすい形で構造化して要約します。"
+    "テキストに無い事実を創作しないこと。"
+)
+
+
+@register_capability("minutes")
+def handle_minutes(ctx: SlotContext, payload: dict[str, Any]) -> dict[str, Any]:
+    """議事録の生テキストを構造化要約する(VOICE-01 の整形プロンプトを業務文脈へ流用)。
+
+    出力は次アクション提案(agent)・メール下書き(draft)が連動して使える Markdown 要約。
+    """
+    text = _require_input(payload)
+    summary = _complete(
+        ctx,
+        _MINUTES_SYSTEM,
+        "次の会議メモ/発言録を Markdown で要約してください。"
+        "構成: ## 要点 / ## 決定事項 / ## 懸念・論点 / "
+        "## 次アクション候補(担当/期限が読み取れれば付記)。\n\n"
+        f"{text}",
+        max_chars=MAX_MINUTES_CHARS,
+    )
+    if not summary:
+        raise SlotInferenceError("minutes: LLM が空応答を返した")
+    return {"capability": "minutes", "summary": summary}
+
+
+# --- ハンドラ: agent(次アクション提案エージェント) -----------------------
+
+_AGENT_SYSTEM = (
+    "あなたは営業案件の担当者を支援する次アクション提案エージェントです。"
+    "案件情報と議事録要約から、案件を前進させるための具体的な次アクションを"
+    "優先度順に提案します。各アクションは1行で、可能なら「[期限] 行動 — 狙い」の形式にし、"
+    "実在の情報のみに基づくこと(創作しない)。"
+    "**期限は入力に明示された場合のみ書き、勝手に絶対日付(YYYY-MM-DD 等)を作らないこと。"
+    "明示が無ければ「次回会議まで」「今週中」「期限未定」など相対表現か未定とする。**"
+)
+
+
+#: 日付トークンの **単一パス** 検出。年あり(YYYY-MM-DD / YYYY/MM/DD / YYYY年M月D日)→
+#: 年なし和式(M月D日)の順で alternation し、各位置で年ありを先に試すことで年あり日付の内部に
+#: 年なしが二重マッチしないようにする。**年なし slash(`1/2`)は分数・比率・数量表現(「3/4ライン」
+#: 「10/12件」等)と曖昧なため対象にしない**(誤って期限未定へ中和してアクションの意味を壊さない)。
+_DATE_ANY_RE = re.compile(
+    r"(\d{4})\s*[-/年]\s*(\d{1,2})\s*[-/月]\s*(\d{1,2})\s*日?"  # 年あり
+    r"|(\d{1,2})\s*月\s*(\d{1,2})\s*日"                          # 年なし(和式)
+)
+
+
+def _norm_date_match(m: re.Match) -> str:
+    """日付マッチを比較用キーへ正規化(年あり=`YYYY-MM-DD`、年なし和式=`MM-DD`、ゼロ埋め)。"""
+    g = m.groups()
+    if g[0] is not None:  # 年あり
+        return f"{g[0]}-{int(g[1]):02d}-{int(g[2]):02d}"
+    return f"{int(g[3]):02d}-{int(g[4]):02d}"  # 年なし(和式)
+
+
+def _allowed_date_keys(source: str) -> set[str]:
+    """入力に出現する日付の正規化キー集合(これらは創作でないので保持を許す)。"""
+    return {_norm_date_match(m) for m in _DATE_ANY_RE.finditer(source)}
+
+
+def _strip_invented_dates(actions: list[str], source: str) -> list[str]:
+    """入力に存在しない日付(年あり/年なし)を次アクションから除去する(LLM の期限創作を防ぐ)。
+
+    入力(案件情報＋議事録要約)に出現する日付は許可し、それ以外の日付トークンは「(期限未定)」に
+    置換する(単一パス・非重複の span 処理)。相対表現(今週中/次回会議まで 等)は対象外。「創作しない」
+    主張を決定的に裏づける後処理ガード(プロンプト指示と二重化)。表記揺れはゼロ埋め正規化で同一視。
+    """
+    allowed = _allowed_date_keys(source)
+    return [
+        _DATE_ANY_RE.sub(
+            lambda m: m.group(0) if _norm_date_match(m) in allowed else "(期限未定)", a
+        )
+        for a in actions
+    ]
+
+
+def _parse_actions(raw: str) -> list[str]:
+    """LLM 出力(箇条書き/番号付き)を次アクション行の配列へ寛容にパースする。
+
+    先頭の番号・記号(`1.` `-` `・` `*`)を除いた非空行を上限件数まで採る。1 行も取れなければ
+    全体を 1 アクションとして返す(空応答は handle_agent 側が推論失敗として扱う)。
+    """
+    actions: list[str] = []
+    for line in raw.splitlines():
+        s = re.sub(r"^\s*(?:\d+[.)]|[-*・●▪])\s*", "", line).strip()
+        if s:
+            actions.append(s[:300])
+        if len(actions) >= MAX_AGENT_ACTIONS:
+            break
+    if not actions:
+        flat = raw.strip()
+        return [flat[:300]] if flat else []
+    return actions
+
+
+@register_capability("agent")
+def handle_agent(ctx: SlotContext, payload: dict[str, Any]) -> dict[str, Any]:
+    """案件情報＋議事録要約から次アクションを提案する(AGT 系の宣言型エージェントを組込点に流用)。"""
+    context = _require_input(payload)
+    raw = _complete(
+        ctx,
+        _AGENT_SYSTEM,
+        "次の案件情報・議事録要約をもとに、優先度の高い順に次アクションを箇条書き"
+        f"(最大{MAX_AGENT_ACTIONS}件)で提案してください。提案のみ出力:\n\n{context}",
+        max_chars=MAX_AGENT_CHARS,
+    )
+    if not raw:
+        raise SlotInferenceError("agent: LLM が空応答を返した")
+    actions = _strip_invented_dates(_parse_actions(raw), context)
+    # 公開レスポンスは **sanitize 済み actions のみ**。`text` も actions から再構成する(raw を
+    # そのまま返すと創作絶対日付が date-strip を素通りして表に出るため)。raw は公開面に載せない
+    # (必要ならサーバ側 audit/log にだけ残す設計とし、外部応答には含めない)。
+    return {
+        "capability": "agent",
+        "actions": actions,
+        "text": "\n".join(actions),
+    }
+
+
+# --- ハンドラ: nl2sql(売上集計 自然言語DB照会) ---------------------------
+
+
+def _default_nl2sql(
+    question: str, *, schema: str, tables: list[str], model_key: str
+) -> dict[str, Any]:
+    """既定の NL2SQL 実行器。実 ADB の指定スキーマに対し Select AI で SQL 生成→読取専用実行。
+
+    遅延 import(oracledb/httpx 依存を import 時に持ち込まない)。単体テストは
+    `ai_runtime._nl2sql_runner` を差し替えて DB に出ずに検証する。`tables` で参照可能表を絞る。
+    `model_key`(スロットのモデル選択)は Select AI へ伝播する(NL2SQL だけモデル指定を無視しない。
+    Select AI 側は `resolve_select_ai_model` で自前 allowlist に正規化し、未知キーは既定へ戻す)。
+    """
+    from .. import nl2sql
+
+    return nl2sql.run_nl2sql_for_schema(
+        question, schema=schema, tables=tables, model=model_key
+    )
+
+
+#: テストは `ai_runtime._nl2sql_runner = fake` で差し替える。
+_nl2sql_runner: Callable[..., dict[str, Any]] = _default_nl2sql
+
+#: DB 接続/可用性に起因するエラーの目印(これは隔離破りでなく一過性のため 503 へ通す)。
+_DB_CONNECTION_MARKERS = (
+    "DPY-6005", "DPY-4011", "DPY-4005", "ORA-12541", "ORA-12170",
+    "ORA-03113", "ORA-03114", "ORA-01017", "ORA-12514", "ORA-12537",
+)
+
+
+def _slot_tables(ctx: SlotContext) -> list[str]:
+    """このスロットが参照を許可される dataset(テーブル)名を、載っている screen から導出する。
+
+    スロット別に面を絞る(売上集計スロットは売上 dataset のみ等)。複数 screen に載る場合は和集合。
+    """
+    names: list[str] = []
+    for screen in ctx.definition.screens:
+        if ctx.slot.key in screen.slots and screen.dataset:
+            if screen.dataset not in names:
+                names.append(screen.dataset)
+    return names
+
+
+def _is_oracledb_error(e: BaseException) -> bool:
+    """oracledb 由来の例外か(モジュール名で判定)。oracledb を import 時依存にしないための proxy。"""
+    return (type(e).__module__ or "").startswith("oracledb")
+
+
+def _has_connection_marker(msg: str) -> bool:
+    """DB 接続/可用性に起因する一過性エラーの目印を含むか。"""
+    return any(mark in msg for mark in _DB_CONNECTION_MARKERS)
+
+
+def _is_backend_unavailable_oracle(e: BaseException, msg: str) -> bool:
+    """oracledb の **DB 不可用** 例外か(503 相当)。
+
+    marker 付き(DPY-/ORA-12541 等)に加え、`oracledb.OperationalError`(プール初期化失敗・
+    ウォレット取得失敗 `db init failed` 等)も一過性のバックエンド不可用として 503 に倒す。
+    列不正・構文(`DatabaseError`/ORA-00942 等)は実行失敗(502)のままにする。
+    """
+    if _has_connection_marker(msg):
+        return True
+    return type(e).__name__ == "OperationalError" or "db init failed" in msg
+
+
+#: Select AI が SQL を生成しなかった想定内の失敗を示すメッセージ目印(差し替え runner が
+#: 専用例外でなく素の RuntimeError を投げても 502 に正規化できるようにする保険)。
+_SQLGEN_FAILURE_MARKERS = ("SQLを返しませんでした", "sql generation", "no SQL")
+
+
+def _is_select_ai_no_sql(e: BaseException) -> bool:
+    """Select AI の SQL 未生成専用例外(nl2sql.SelectAiNoSqlError)か。遅延 import で判定。"""
+    try:
+        from ..nl2sql import SelectAiNoSqlError
+    except Exception:  # noqa: BLE001
+        return False
+    return isinstance(e, SelectAiNoSqlError)
+
+
+def _reraise_nl2sql_error(e: BaseException) -> NoReturn:
+    """NL2SQL 実行で起きた **想定する** 例外だけを HTTP 意味へ正規化する(想定外は握りつぶさない)。
+
+    - 生成SQL拒否(SqlRejectedError) → `SlotInferenceError`(ルートで 502)。
+    - oracledb のエラー: 接続/可用性マーカー付きは `SlotBackendUnavailableError`(503)、
+      それ以外(生成SQLの列不正・ORA-00942 等の実行失敗)は `SlotInferenceError`(502)。
+    - Select AI が SQL を返さない等の `RuntimeError`: 接続マーカー付きなら 503、無ければ 502。
+    - 上記以外(`TypeError`/`ValueError` 等の実装バグ)は **そのまま再送出** し、ルートで 500 に
+      露出させる——本物のバグを 502 に丸めて隠さない(以前は `*Error` 全捕捉で隠蔽していた)。
+    """
+    from jetuse_shared.sqlguard import SqlRejectedError
+
+    if isinstance(e, SqlRejectedError):
+        raise SlotInferenceError(f"nl2sql: 生成SQLが許可範囲外: {e}") from e
+    msg = str(e)
+    if _is_oracledb_error(e):
+        if _is_backend_unavailable_oracle(e, msg):
+            raise SlotBackendUnavailableError(
+                f"nl2sql: DB が一時的に利用できません: {msg[:200]}"
+            ) from e
+        # 列不正・構文・権限不足(ORA-00942)等は生成SQL起因の実行失敗 → 推論失敗扱い。
+        raise SlotInferenceError(f"nl2sql: SQL 実行に失敗: {msg[:200]}") from e
+    if isinstance(e, RuntimeError):
+        if _has_connection_marker(msg):
+            raise SlotBackendUnavailableError(
+                f"nl2sql: DB が一時的に利用できません: {msg[:200]}"
+            ) from e
+        # Select AI の SQL 未生成という **想定内** の失敗だけを推論失敗(502)に正規化する。
+        # 専用例外 SelectAiNoSqlError(型)か既知メッセージに限定し、未知の RuntimeError は
+        # 握りつぶさず再送出する(実装バグを 502 に丸めない)。
+        if _is_select_ai_no_sql(e) or any(m in msg for m in _SQLGEN_FAILURE_MARKERS):
+            raise SlotInferenceError(f"nl2sql: SQL 生成に失敗: {e}") from e
+        raise e
+    # 想定外(実装バグ)は正規化せず再送出 → ルートで 500。502 で握りつぶさない。
+    raise e
+
+
 @register_capability("nl2sql")
 def handle_nl2sql(ctx: SlotContext, payload: dict[str, Any]) -> dict[str, Any]:
-    """自然言語の質問から、sample-app の datasets スキーマに対する読取専用 SELECT を生成する。
+    """自然言語の質問から読取専用 SQL を扱う。sample-app により 2 つのモード:
 
-    生成だけを担い実行はしない(実行は読取専用ユーザー経由の別経路 = SQL-02 のガードを流用)。
-    生成 SQL は返す前に sanitize_sql で SELECT 限定ガードに通し、適合しなければ成功偽装せず
-    推論失敗として扱う(SqlRejectedError → SlotInferenceError)。
+    - SBA-C(売上集計): `ctx.nl2sql_schema` が設定されている場合、専用スキーマ＋このスロットの
+      許可表に限定して生成 SQL を実行し、結果(columns/rows)まで返す。
+    - SBA-B(在庫・受発注照会): スキーマ未設定の場合、sample-app の datasets スキーマに対する
+      SELECT を生成して返すのみ(実行は読取専用ユーザー経由の別経路 = SQL-02 のガードを流用)。
+
+    いずれも生成だけの成功偽装はせず、ガード不適合は推論失敗(SlotInferenceError)として扱う。
     """
     question = _require_input(payload)
+    # SBA-C: 専用スキーマ宣言あり → 生成＋実行(スロット許可表に制限)。
+    if ctx.nl2sql_schema:
+        tables = _slot_tables(ctx)
+        if not tables:
+            raise SlotInputError("nl2sql: このスロットが参照できる dataset(screen 経由)が無い")
+        try:
+            result = _nl2sql_runner(
+                question, schema=ctx.nl2sql_schema, tables=tables, model_key=ctx.model_key
+            )
+        except Exception as e:  # noqa: BLE001
+            _reraise_nl2sql_error(e)
+        rows = result.get("rows") or []
+        return {
+            "capability": "nl2sql",
+            "schema": ctx.nl2sql_schema,
+            "sql": result.get("sql", ""),
+            "columns": result.get("columns") or [],
+            "rows": rows[:MAX_NL2SQL_PREVIEW_ROWS],
+            "row_count": result.get("row_count", len(rows)),
+            "truncated": bool(result.get("truncated")) or len(rows) > MAX_NL2SQL_PREVIEW_ROWS,
+        }
+    # SBA-B: datasets スキーマに対する SELECT を生成のみ(実行は別経路)。
     if not ctx.definition.datasets:
         raise SlotInputError("nl2sql: 照会対象の dataset が定義に無い")
     schema = _schema_context(ctx.definition)
@@ -594,11 +902,13 @@ def invoke_slot(
     owner: str,
     corpus: list[dict[str, Any]] | None = None,
     model_key: str = DEFAULT_MODEL,
+    nl2sql_schema: str | None = None,
 ) -> dict[str, Any]:
     """aiSlot を実行時バインドして実行し、結果 dict を返す。
 
     呼び出し側(ルート層)は `corpus`(知識行=シード由来)を与える。本関数はハンドラを解決して
     `SlotContext` を組み立て、ハンドラを実行するだけの薄い実行器(maker/checker 分離の maker 側)。
+    `nl2sql_schema` は nl2sql スロットの照会先実 DB スキーマ(SBA-C の JETUSE_SBA04 等)。
     """
     slot, handler = bind_slot(definition, slot_key)
     ctx = SlotContext(
@@ -607,6 +917,7 @@ def invoke_slot(
         definition=definition,
         corpus=list(corpus or []),
         model_key=model_key,
+        nl2sql_schema=nl2sql_schema,
     )
     result = handler(ctx, payload)
     result.setdefault("slot", slot_key)
