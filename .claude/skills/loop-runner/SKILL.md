@@ -20,11 +20,39 @@ description: tasks/STAGE1-PROGRESS.md のキューを依存順に消化する上
 3. 各タスクの完了後は STAGE1-PROGRESS の status を更新し、1 に戻る。
 
 ## 並列モード（Agent Teams）
-実行可能集合から最大 3 タスクを選び、**`isolation: worktree` のサブエージェントを1メッセージで並列起動**する
-（各エージェント＝1タスク）。worktree 隔離によりファイル・ブランチ・インデックスを共有せず衝突しない。
+実行可能集合から最大 3 タスクを選び、**各エージェント＝1タスク**で並列起動する。
+worktree 隔離によりファイル・ブランチ・インデックスを共有せず衝突しない。
 
-各サブエージェントへ渡すプロンプト（＝そのタスクの **goal を回す**指示。`/goal` はセッション固有の Stop hook で
-サブエージェントでは使えないため、**goal の完了条件をプロンプトに埋め、loop-protocol で自走**させる）:
+**起動方式は実行環境で分岐する（`echo $HERDR_ENV` で判定）:**
+
+### 方式B（`HERDR_ENV=1` のとき・推奨）— herdr ペインで可視化起動
+herdr 内で回っている場合は、各タスクを**専用ペインで起動した実 claude** として走らせる。
+各エージェントが何をしているかが herdr サイドバーに `working`/`blocked`/`done` で見え、
+`herdr pane read` でいつでも作業内容を覗ける（`herdr` スキル参照）。
+
+タスクごとに（最大3、`--no-focus` で自分のフォーカスは保つ）:
+1. `PANE=$(herdr pane split <自分のpane> --direction <right|down> --no-focus | \
+   python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')`
+   でペインを作り、`herdr pane rename` 相当が無いので**ペイン内の最初のコマンドでタスク名を表示**しておく
+   （例: `herdr pane run "$PANE" "echo '=== <task> ==='"`）。
+2. そのペインで worktree 隔離込みの公式ランチャを起動:
+   `herdr pane run "$PANE" "GOAL='<完了条件>' .claude/loop/start-loop.sh <task>"`。
+   start-loop.sh がタスク専用 worktree を切り `claude` を起動する。
+3. プロンプト待ちを待ってから goal プロンプトを流し込む:
+   `herdr wait output "$PANE" --match '>' --timeout 60000` →
+   `herdr pane run "$PANE" "<下記『各エージェントへ渡すプロンプト』>"`。
+4. 全ペイン起動後、**完了を待ち合わせて回収**:
+   各 `$PANE` について `herdr wait agent-status "$PANE" --status done --timeout <十分大>` →
+   `herdr pane read "$PANE" --source recent --lines 120` で最終の構造化メッセージを取得。
+   `blocked` で止まったペインは人間ゲート待ちとして拾う。
+
+### 方式A（`HERDR_ENV` 非設定のとき）— Agent ツール
+**`isolation: worktree` のサブエージェントを1メッセージで並列起動**する（各エージェント＝1タスク）。
+戻り値を集約する。可視化ペインは無いが実行モデルは同じ。
+
+### 各エージェントへ渡すプロンプト（両方式共通）
+そのタスクの **goal を回す**指示。`/goal` はセッション固有の Stop hook で（Agent ツール/別ペイン双方とも
+オーケストレータの hook 圏外で）使えない前提で、**goal の完了条件をプロンプトに埋め、loop-protocol で自走**させる:
 - タスク: `tasks/<id>.md`（受け入れ条件・E2E シナリオ）。base ブランチ: `feat/loop-engineering`
   （依存連鎖時は `feat/<dep>`）。
 - 完了条件: `loop-config.yml` の `goal_template` を当該タスクで具体化（test_cmd/area・E2E 含む）。
@@ -34,10 +62,12 @@ description: tasks/STAGE1-PROGRESS.md のキューを依存順に消化する上
   `JETUSE_<TASK>` で隔離**する（ADMIN で `CREATE USER JETUSE_<task>` → そのスキーマへ migrate/E2E。
   ADB は増やさない）。非 DB タスクは ADB に触れない。
 - **コミットしない**。PASS まで実装したら停止し、最終メッセージで {task, review_verdict, e2e結果,
-  証跡パス, 残る人間ゲート} を構造化して返す。
+  証跡パス, 残る人間ゲート} を構造化して返す（方式Bでは最終メッセージをペインに出力する）。
 
-オーケストレータは全エージェントの戻りを集約し、**人間ゲートをまとめて提示**する（下記ゲートで停止）。
+オーケストレータは全エージェントの戻り（方式B では各ペインの `pane read` 結果）を集約し、
+**人間ゲートをまとめて提示**する（下記ゲートで停止）。
 1 波が終わってゲートを人間が通したら、STAGE1-PROGRESS を更新し次の波へ。
+方式B のペインは波の確認が済むまで残し、後始末は `.claude/loop/end-loop.sh <task>` と `herdr pane close` で行う。
 
 ## 逐次モード / 各エージェントが従う「タスク実行契約」
 1. `GOAL="<完了条件>" .claude/skills/loop-runner/scripts/begin_task.sh <task-id>` を実行。
@@ -55,7 +85,8 @@ description: tasks/STAGE1-PROGRESS.md のキューを依存順に消化する上
 
 ## 原則
 - 並列は**実行可能集合（相互独立）に限る**。依存があるものは依存先が base にマージされるまで回さない。
-- 同時実行は最大 3。各並列タスクは `isolation: worktree`／実環境 E2E は `JETUSE_<task>` スキーマで隔離。
+- 同時実行は最大 3。各並列タスクは worktree 隔離（`HERDR_ENV=1` は herdr ペイン＋start-loop.sh、
+  それ以外は Agent ツール `isolation: worktree`）／実環境 E2E は `JETUSE_<task>` スキーマで隔離。
 - Stage は `loop-config.yml` に従う（既定 report-only ＝ コミットしない）。無人度を上げるのは人間ゲート。
 - **完全無人化はしない。ゲートを飛ばさないことがこの仕組みの価値。** 並列でもゲートはタスクごとに必ず止める。
 
