@@ -17,7 +17,13 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install
-        run: pip install -e ".[dev]"
+        # api のテスト(test_central_registry / test_plugin_publisher)は jetuse_registry(PLG-04)を
+        # import する(PLG-05 publish・PLG-06 マーケットの統合検証で実 RegistryService を使う)。
+        # registry は ../api へ path 依存するため dev extras に入れると循環で解決不能。api を先に
+        # editable 導入し、registry は --no-deps で追加導入して循環を断つ(cwd=packages/api)。
+        run: |
+          pip install -e ".[dev]"
+          pip install -e ../registry --no-deps
       - name: Lint
         run: ruff check .
       - name: Test
