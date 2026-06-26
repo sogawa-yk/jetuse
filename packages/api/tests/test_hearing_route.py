@@ -240,6 +240,49 @@ def test_preview_unknown_session_404(repo):
     assert client.post("/api/hearing/sessions/nope/preview").status_code == 404
 
 
+def test_validate_gate_passes_valid_composition(repo):
+    """推薦→/validate で構成と合成バリデーション(ガバナンス4制約)が返る。妥当なら ok。HBD-04。"""
+    sid = _create()
+    for qid, val in FULL.items():
+        client.put(f"/api/hearing/sessions/{sid}/answers/{qid}", json={"value": val})
+    client.post(f"/api/hearing/sessions/{sid}/recommend")
+    r = client.post(f"/api/hearing/sessions/{sid}/validate")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["composition"]["sample_app"] == "SBA-A"
+    gov = body["governance"]
+    assert gov["ok"] is True
+    assert gov["violations"] == []
+    assert all(gov["checks"].values())
+
+
+def test_validate_gate_flags_disallowed_combination(repo):
+    """SBA-A + 業務DB照会 → nl2sql は組込点が無く許可外組合せとして弾かれ、代替提案が返る。"""
+    sid = _create()
+    answers = {**FULL, "Q2": ["business_db", "docs"]}
+    for qid, val in answers.items():
+        client.put(f"/api/hearing/sessions/{sid}/answers/{qid}", json={"value": val})
+    client.post(f"/api/hearing/sessions/{sid}/recommend")
+    r = client.post(f"/api/hearing/sessions/{sid}/validate")
+    assert r.status_code == 200, r.text
+    gov = r.json()["governance"]
+    assert gov["ok"] is False
+    nl = next(
+        v for v in gov["violations"]
+        if v["kind"] == "disallowed_combination" and v["element"] == "nl2sql"
+    )
+    assert nl["alternative"]  # 外させない代替提案
+
+
+def test_validate_without_recommendation_409(repo):
+    sid = _create()
+    assert client.post(f"/api/hearing/sessions/{sid}/validate").status_code == 409
+
+
+def test_validate_unknown_session_404(repo):
+    assert client.post("/api/hearing/sessions/nope/validate").status_code == 404
+
+
 def test_recommend_incomplete_answers_422(repo):
     sid = _create()
     client.put(f"/api/hearing/sessions/{sid}/answers/Q1", json={"value": "support"})
