@@ -48,5 +48,21 @@ fi
 
 cd "$WT"
 export LOOP_TASK="$TASK"
-echo "[loop] worktree で起動します（cd $WT / LOOP_TASK=$TASK）。/goal で完了条件を登録してください。" >&2
-exec claude
+
+# 起動モード分岐:
+# - LOOP_AUTONOMOUS=1（オーケストレータが無人ペインで回す並列モード）:
+#   権限プロンプトで止まらず自走する（bypassPermissions）。ただし「ループの価値＝人間ゲートを
+#   飛ばさない」ため、コミット/PR/push/merge/apply/destroy は --disallowedTools で権限層からも遮断する。
+#   完了条件は呼び出し側が GOAL env で登録済み（session_start.sh が goal.txt に記録）。
+# - 未設定（人間が付く逐次/worktree 起動）: 従来どおり対話モード。GOAL env を渡せば goal.txt に記録される。
+if [ "${LOOP_AUTONOMOUS:-0}" = "1" ]; then
+  echo "[loop] 自律モードで起動（bypassPermissions＋ハードゲート deny / LOOP_TASK=$TASK）。" >&2
+  exec claude --permission-mode bypassPermissions \
+    --disallowedTools \
+      "Bash(git commit:*)" "Bash(git push:*)" "Bash(git merge:*)" \
+      "Bash(gh pr create:*)" "Bash(gh pr merge:*)" \
+      "Bash(terraform apply:*)" "Bash(terraform destroy:*)"
+else
+  echo "[loop] worktree で起動します（cd $WT / LOOP_TASK=$TASK）。完了条件は GOAL env で登録（goal.txt）。" >&2
+  exec claude
+fi

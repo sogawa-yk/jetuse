@@ -35,12 +35,17 @@ herdr 内で回っている場合は、各タスクを**専用ペインで起動
    python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')`
    でペインを作り、`herdr pane rename` 相当が無いので**ペイン内の最初のコマンドでタスク名を表示**しておく
    （例: `herdr pane run "$PANE" "echo '=== <task> ==='"`）。
-2. そのペインで worktree 隔離込みの公式ランチャを起動:
-   `herdr pane run "$PANE" "GOAL='<完了条件>' .claude/loop/start-loop.sh <task>"`。
-   start-loop.sh がタスク専用 worktree を切り `claude` を起動する。
+2. そのペインで worktree 隔離込みの公式ランチャを**自律モードで**起動:
+   `herdr pane run "$PANE" "LOOP_AUTONOMOUS=1 GOAL='<完了条件>' .claude/loop/start-loop.sh <task>"`。
+   start-loop.sh がタスク専用 worktree を切り、`bypassPermissions`（権限プロンプトで止まらない）かつ
+   ハードゲート（コミット/PR/push/merge/apply/destroy は `--disallowedTools` で遮断）で `claude` を起動する。
+   - **`LOOP_AUTONOMOUS=1` 必須**: 無人ペインは付けないと毎ツールの承認プロンプトで停止し自走できない。
+   - **`GOAL='<完了条件>'` 必須**: session_start.sh が `runs/<id>/goal.txt` に記録する（証跡）。
 3. プロンプト待ちを待ってから goal プロンプトを流し込む:
    `herdr wait output "$PANE" --match '>' --timeout 60000` →
    `herdr pane run "$PANE" "<下記『各エージェントへ渡すプロンプト』>"`。
+   - **注意**: 大きなプロンプトは入力欄で `[Pasted text]` に畳まれ Enter が消費され未送信になることがある。
+     投入後に `herdr pane list` で当該ペインが `working` でなければ `herdr pane send-keys "$PANE" Enter` で送信する。
 4. 全ペイン起動後、**完了を待ち合わせて回収**:
    各 `$PANE` について `herdr wait agent-status "$PANE" --status done --timeout <十分大>` →
    `herdr pane read "$PANE" --source recent --lines 120` で最終の構造化メッセージを取得。
@@ -51,8 +56,11 @@ herdr 内で回っている場合は、各タスクを**専用ペインで起動
 戻り値を集約する。可視化ペインは無いが実行モデルは同じ。
 
 ### 各エージェントへ渡すプロンプト（両方式共通）
-そのタスクの **goal を回す**指示。`/goal` はセッション固有の Stop hook で（Agent ツール/別ペイン双方とも
-オーケストレータの hook 圏外で）使えない前提で、**goal の完了条件をプロンプトに埋め、loop-protocol で自走**させる:
+そのタスクの **goal を回す**指示。**本リポジトリに `/goal` というスラッシュコマンドは存在しない**
+（Stop hook `log_turn.sh` はターン記録のみで、goal 採点・再プロンプトはしない）。ループは
+**エージェント自身が loop-protocol を毎ターン辿って自走**することで回る。よって完了条件は
+（A）起動時の `GOAL` env で `goal.txt` に記録し、（B）下記プロンプトに完了条件を埋めて agent に渡す、
+の二点で伝える（スラッシュコマンドは使わない）:
 - タスク: `tasks/<id>.md`（受け入れ条件・E2E シナリオ）。base ブランチ: `feat/loop-engineering`
   （依存連鎖時は `feat/<dep>`）。
 - 完了条件: `loop-config.yml` の `goal_template` を当該タスクで具体化（test_cmd/area・E2E 含む）。
