@@ -3,6 +3,27 @@
 
 stage: report-only            # report-only | auto-fix | auto-commit（引き上げは人間ゲート §7）
 
+# ステージ承認ループ（stage-runner スキル）。loop-runner の上位。人間ゲートを「タスク単位」から
+# 「ステージ単位」へ引き上げる。導入は人間承認済み（2026-06-26 / loop-doctor）。
+# 自動統合は **ステージ専用ローカルブランチ限定**。リモート/PR/apply/ADR承認/IAM は自走中も停止。
+stage_runner:
+  enabled: true
+  integration_branch: "feat/<stage>"            # base=worktree.base_branch から分岐。push しない。
+  autonomy: auto_commit_to_stage_branch_only     # 自動 commit+merge はこの隔離ブランチだけ。
+  max_concurrency: 3                             # 1波の同時タスク数（loop-runner と同じ上限）。
+  # 自走中も必ず停止するハードゲート（越えない）。当該タスクは blocked にして他を進め、ステージ報告で提示。
+  hard_gates:
+    - push                  # リモート push
+    - pr_to_base            # base への PR / merge
+    - terraform_apply       # apply・課金
+    - billing
+    - iam_identity          # IAM / Identity Domain
+    - adr_approval          # 真の決定を伴う ADR 承認（ドラフト作成は可）
+  # 波間の自動統合でコンフリクト時: サブエージェントで解決試行→codex-review→緑なら継続/不能なら停止。
+  conflict_policy: subagent_resolve_then_review
+  report_at: stage_completion                    # ステージ完了で1回だけ人間へ報告・チェック。
+  stage_token_budget: 20000000                   # ステージ全体のトークン天井（タスクごとの budget に上乗せ）。
+
 review:
   reviewer: codex
   # 空文字なら codex の ~/.codex/config.toml の既定モデルを使う。

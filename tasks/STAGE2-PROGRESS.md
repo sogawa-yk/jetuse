@@ -20,6 +20,13 @@ status: `todo` | `in_progress` | `blocked` | `done`
 > 並行可: HBD-01 完了後、HBD-02 と HBD-03 は相互独立で並行可（最大3）。HBD-04 は HBD-03 後、HBD-05 は HBD-02/03/04 後。
 > 単一セッションの loop-runner は「依存が満たされた todo の先頭」を1つずつ実行する。
 
+> **実行方式の選択**:
+> - `loop-runner`: 波ごとに人間ゲート（コミット/PR/承認）で停止するセミオート（従来）。
+> - `stage-runner`（`.claude/loop/start-stage.sh stage-2`）: ステージ承認ループ。PASS タスクを
+>   `feat/stage-2` へ自動統合して波を繋ぎ、**ステージ完了で1回だけ報告**。この方式では status 更新は
+>   **Codex PASS＋自動統合後**に行い（人間承認を待たない）、デモ品質/ADR 承認/push/PR/apply は
+>   ステージ報告（`runs/_stages/stage-2/REPORT.md`）に集約して人間に提示する。
+
 ## 実行可能集合（開始時）
 - HBD-01 のみ（S2 の先頭）。完了後に {HBD-02, HBD-03} が解禁。
 

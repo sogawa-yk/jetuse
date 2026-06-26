@@ -68,6 +68,14 @@ maker/checker を分離する。完了条件は `GOAL` env（→ `runs/<id>/goal
 - **毎ターン**: `loop-protocol` スキルの手順を厳守（実装→`codex-review`→履歴記録→STATE 更新）。
   レビュー判定（`review_verdict`）を自分で書き換えない。採点者は Codex。
 - **単一の真実源**: 現在状態は `STATE.md`、不変の実行履歴は `runs/<run-id>/`（追記のみ）。設定は `loop-config.yml`。
+- **ステージ承認ループ（`stage-runner` / loop-runner の上位）**: 人間ゲートを「タスク単位」から
+  「**ステージ単位**」へ引き上げる方式。`.claude/loop/start-stage.sh <stage>` で起動し、`STAGE<N>-PROGRESS.md`
+  のキューを波で自走させ、**PASS したタスクを ステージ専用ローカルブランチ `feat/stage-<N>` へ自動 commit+merge**
+  して波を繋ぎ、キュー枯渇まで進めて**ステージ完了で1回だけ人間へ報告**（`runs/_stages/<stage>/REPORT.md`）。
+  自動統合は**この隔離ブランチ限定**で、**push / base への PR / apply / 課金 / IAM / ADR 承認は自走中も停止**する
+  （`loop-config.yml` の `stage_runner.hard_gates`）。自動コミットはオーケストレータのみ（タスクエージェントの
+  権限 deny は据え置き＝多層防御）。波間の統合衝突はサブエージェント解決→`codex-review`→緑なら継続/不能なら停止。
+  導入は人間承認済み（2026-06-26 / loop-doctor）。
 - **自己改善**: 成果物の問題は `loop-doctor` スキルに渡す。コードでなく「ループの仕組み」を直す。
 - **やってはいけないこと（人間ゲート）**: コミット / PR / push / リリースは承認なしに行わない。
   ループの仕組み（スキル・hooks・完了条件(GOAL/goal_template)・設定）の編集は `loop-doctor` 経由・承認後のみ。
