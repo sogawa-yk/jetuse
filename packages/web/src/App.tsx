@@ -11,6 +11,7 @@ const Builder = lazy(() => import('./pages/builder'))
 const Chat = lazy(() => import('./pages/chat'))
 const DbChat = lazy(() => import('./pages/dbchat'))
 const Design = lazy(() => import('./pages/design'))
+const Hearing = lazy(() => import('./pages/hearing'))
 const Admin = lazy(() => import('./pages/admin'))
 const Home = lazy(() => import('./pages/home'))
 const Minutes = lazy(() => import('./pages/minutes'))
@@ -62,6 +63,8 @@ export default function App() {
           <Route path="uc/:id" element={<UsecaseRun />} />
           <Route path="sba/:id" element={<SampleApp />} />
           <Route path="marketplace" element={<Marketplace />} />
+          <Route path="hearing" element={<Hearing />} />
+          <Route path="builder/standard" element={<Hearing />} />
           <Route path="builder" element={<Builder />} />
           <Route path="agents" element={<Agents />} />
           <Route path="agents/new" element={<AgentBuilder />} />
