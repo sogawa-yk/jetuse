@@ -77,7 +77,16 @@ variable "ocir_namespace" {
   default     = "idqcucnenh88"
 }
 
-# 明示指定時は合成より優先(空なら ocir_* から合成)。
+# イメージrepo名のプレフィックス。リソース名の var.prefix とは分離する(設計上の独立)。
+# release.yml が push する repo 名は固定(jetuse-api / jetuse-fn-router)なので、
+# prefix を変えてもイメージ参照が壊れないよう、ここは既定 "jetuse" を使う。
+variable "image_repo_prefix" {
+  description = "OCIRイメージrepo名のプレフィックス(release.ymlのpush先と一致させる。既定 jetuse)"
+  type        = string
+  default     = "jetuse"
+}
+
+# 明示指定時は合成より優先(空なら ocir_* / image_repo_prefix から合成)。
 variable "api_image_url" {
   type    = string
   default = ""
