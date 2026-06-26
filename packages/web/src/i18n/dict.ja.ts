@@ -391,6 +391,15 @@ export const ja = {
   'sba.title': 'サポートデスク',
   'sba.notFound': 'サンプルアプリが見つかりません',
   'sba.loadError': 'サンプルアプリの読み込みに失敗しました。時間をおいて再度お試しください。',
+  // 在庫・受発注照会 業務アプリ（SBA-B / SBA-03 / NL2SQL）
+  'sba_b.tab.query': 'AI照会',
+  'sba_b.tab.inventory': '在庫',
+  'sba_b.tab.orders': '受発注',
+  'sba_b.schema.title': '照会できるデータ',
+  'sba_b.schema.lead': 'これらのテーブルについて自然言語で質問できます',
+  'sba_b.placeholder': '例: 倉庫別の在庫数を集計して',
+  'sba_b.generating.note': '数秒〜十数秒かかります',
+  'sba_b.empty': 'データがありません',
   // サポートデスク業務アプリ（SBA-A / SBA-02）
   'supportdesk.inbox': '受信トレイ',
   'supportdesk.knowledge': 'ナレッジ',

@@ -751,10 +751,38 @@ def test_draft_nonempty_corpus_is_support_reply_backward_compat():
     assert res["capability"] == "draft" and res["draft"]
 
 
-def test_handle_nl2sql_requires_schema():
+def test_handle_nl2sql_without_schema_is_generate_only():
+    """マージ後のデュアルモード(SBA-B 統合)契約。
+
+    nl2sql ハンドラは `ctx.nl2sql_schema` が無ければ SBA-B 互換の「生成のみ」
+    (SELECT を返すだけで実行しない)になる。**行を捏造せず実行ランナーも呼ばない**ので
+    「成功偽装」にはならない。SBA-C の『売上集計は必ず実 ADB(JETUSE_SBA04)を実行する』
+    保証は route 層が担保する(resolve_app が schema を必ず渡す)
+    → test_invoke_sales_rollup_route / *_503 / *_502。
+    """
     d = sba_c_definition()
-    with pytest.raises(ai_runtime.SlotInputError):
-        ai_runtime.invoke_slot(d, "sales-rollup", {"input": "売上合計"}, owner="u")
+    ran = {"runner": False}
+
+    def fake(model_key, messages, max_chars):
+        return "SELECT owner, SUM(amount) AS total FROM sales GROUP BY owner"
+
+    def boom_runner(*a, **k):
+        ran["runner"] = True
+        raise AssertionError("schema 未指定で実行ランナーを呼んではならない")
+
+    orig_runner = ai_runtime._nl2sql_runner
+    ai_runtime._completer = fake
+    ai_runtime._nl2sql_runner = boom_runner
+    try:
+        res = ai_runtime.invoke_slot(d, "sales-rollup", {"input": "売上合計"}, owner="u")
+    finally:
+        ai_runtime._completer = ai_runtime._default_completer
+        ai_runtime._nl2sql_runner = orig_runner
+
+    assert res["capability"] == "nl2sql"
+    assert res["sql"].lstrip().upper().startswith("SELECT")
+    assert "rows" not in res       # 生成のみ。実行結果(行)は返さない=成功偽装しない
+    assert ran["runner"] is False  # 実行ランナーは呼ばれない
 
 
 # --- ルート経由 -----------------------------------------------------------

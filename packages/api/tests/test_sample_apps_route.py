@@ -357,3 +357,226 @@ def test_invoke_moderation_guards_categories_even_with_long_input(monkeypatch):
         json={"input": "あ" * 7900, "categories": ["アカウント", "禁止ワード厳禁"]},
     )
     assert res.status_code == 400, res.text
+
+
+# --- SBA-B(在庫・受発注照会 / NL2SQL)ルート(SBA-03) -----------------------
+
+from jetuse_core.plugins.sample_app_builtin_sba_b import SBA_B_INSTANCE_ID  # noqa: E402
+
+
+def test_list_includes_sba_b():
+    apps = client.get("/api/sample-apps").json()["sample_apps"]
+    ids = {a["id"] for a in apps}
+    assert SBA_A_INSTANCE_ID in ids and SBA_B_INSTANCE_ID in ids
+    sba_b = next(a for a in apps if a["id"] == SBA_B_INSTANCE_ID)
+    assert set(sba_b["capabilities"]) == {"nl2sql", "chart"}
+
+
+def test_get_sba_b_definition():
+    res = client.get(f"/api/sample-apps/{SBA_B_INSTANCE_ID}")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["knowledge_dataset"] is None
+    assert all(body["slot_bindings"].values())  # nl2sql / chart とも束縛済み
+    assert {ds["name"] for ds in body["definition"]["datasets"]} == {"inventory", "orders"}
+
+
+def test_invoke_nl2sql_slot(monkeypatch):
+    monkeypatch.setattr(
+        ai_runtime,
+        "_completer",
+        lambda m, msgs, mc: "SELECT warehouse, SUM(quantity) FROM INVENTORY GROUP BY warehouse",
+    )
+    res = client.post(
+        f"/api/sample-apps/{SBA_B_INSTANCE_ID}/slots/nl2sql-query/invoke",
+        json={"input": "倉庫別の在庫数を集計して"},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["capability"] == "nl2sql"
+    assert body["sql"].upper().startswith("SELECT")
+
+
+def test_invoke_nl2sql_non_select_502(monkeypatch):
+    """生成 SQL が SELECT 以外ならガードで弾き 502(成功偽装しない)。"""
+    monkeypatch.setattr(
+        ai_runtime, "_completer", lambda m, msgs, mc: "DROP TABLE INVENTORY",
+    )
+    res = client.post(
+        f"/api/sample-apps/{SBA_B_INSTANCE_ID}/slots/nl2sql-query/invoke",
+        json={"input": "テーブルを消して"},
+    )
+    assert res.status_code == 502, res.text
+
+
+def test_invoke_chart_slot(monkeypatch):
+    """chart スロットは columns/rows を受け取り ChartSpec を返す(M1 回帰)。"""
+    monkeypatch.setattr(
+        ai_runtime,
+        "_completer",
+        lambda m, msgs, mc: '{"type":"bar","x":"warehouse","y":["qty"],'
+        '"title":"倉庫別","reason":"比較"}',
+    )
+    res = client.post(
+        f"/api/sample-apps/{SBA_B_INSTANCE_ID}/slots/result-chart/invoke",
+        json={
+            "input": "倉庫別の在庫数",
+            "columns": ["warehouse", "qty"],
+            "rows": [["東京DC", "320"], ["大阪DC", "140"]],
+        },
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["capability"] == "chart"
+    assert body["type"] == "bar"
+    assert body["x"] == "warehouse" and body["y"] == ["qty"]
+
+
+def test_invoke_chart_slot_too_many_rows_422():
+    """rows 上限超過は 422(プロンプト肥大の予防)。"""
+    res = client.post(
+        f"/api/sample-apps/{SBA_B_INSTANCE_ID}/slots/result-chart/invoke",
+        json={
+            "input": "x",
+            "columns": ["a"],
+            "rows": [["v"]] * (ai_runtime.MAX_CHART_ROWS + 1),
+        },
+    )
+    assert res.status_code == 422, res.text
+
+
+# --- sample-app 専用 NL2SQL 実行(B1: テーブル許可リストを実行段でも強制) -------------
+
+def test_sample_app_execute_allows_in_scope(monkeypatch):
+    from jetuse_core import nl2sql
+    captured = {}
+
+    def fake_exec(sql, current_schema=None):
+        captured["sql"] = sql
+        captured["current_schema"] = current_schema
+        return {"columns": ["WAREHOUSE", "QTY"], "rows": [["東京DC", "320"]],
+                "row_count": 1, "truncated": False}
+
+    monkeypatch.setattr(nl2sql, "execute_readonly", fake_exec)
+    res = client.post(
+        f"/api/sample-apps/{SBA_B_INSTANCE_ID}/dbchat/execute",
+        json={"sql": "SELECT warehouse, SUM(quantity) AS qty FROM INVENTORY GROUP BY warehouse"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["row_count"] == 1
+    assert "INVENTORY" in captured["sql"].upper()
+
+
+def test_sample_app_execute_pins_current_schema(monkeypatch):
+    """B1: sample_db_schema 設定時、専用 execute は CURRENT_SCHEMA を当該スキーマへ固定して渡す。"""
+    from jetuse_core import nl2sql
+    from jetuse_core.settings import Settings, get_settings
+    captured = {}
+
+    def fake_exec(sql, current_schema=None):
+        captured["current_schema"] = current_schema
+        return {"columns": ["X"], "rows": [["1"]], "row_count": 1, "truncated": False}
+
+    monkeypatch.setattr(nl2sql, "execute_readonly", fake_exec)
+    # settings は lru_cache。テスト中だけ schema を固定した Settings に差し替える。
+    import jetuse_core.settings as settings_mod
+    pinned = Settings(sample_db_schema="JETUSE_SBA03")
+    get_settings.cache_clear()
+    monkeypatch.setattr(settings_mod, "get_settings", lambda: pinned)
+    # ルート側は from import で取り込むため、そちらの参照も差し替える。
+    import service.routes.sample_apps as routes_mod
+    monkeypatch.setattr(routes_mod, "get_settings", lambda: pinned)
+    res = client.post(
+        f"/api/sample-apps/{SBA_B_INSTANCE_ID}/dbchat/execute",
+        json={"sql": "SELECT product_code FROM INVENTORY FETCH FIRST 1 ROWS ONLY"},
+    )
+    get_settings.cache_clear()
+    assert res.status_code == 200, res.text
+    assert captured["current_schema"] == "JETUSE_SBA03"
+
+
+def test_sample_app_execute_rejects_out_of_scope_table(monkeypatch):
+    """編集 SQL が許可外テーブル(別スキーマ/辞書ビュー)を指したら 400(DB に到達しない)。"""
+    from jetuse_core import nl2sql
+    called = {"n": 0}
+
+    def _boom(sql, current_schema=None):
+        called["n"] += 1
+
+    monkeypatch.setattr(nl2sql, "execute_readonly", _boom)
+    bad_sqls = (
+        "SELECT * FROM SYS.DBA_USERS",
+        "SELECT * FROM SH.SALES",
+        "SELECT * FROM secret_table",
+    )
+    for bad in bad_sqls:
+        res = client.post(
+            f"/api/sample-apps/{SBA_B_INSTANCE_ID}/dbchat/execute", json={"sql": bad}
+        )
+        assert res.status_code == 400, f"{bad}: {res.text}"
+    assert called["n"] == 0  # ガードで弾かれ execute_readonly は呼ばれない
+
+
+def test_sample_app_execute_404_for_app_without_nl2sql():
+    """NL2SQL を持たない sample-app(SBA-A)では DB 照会 execute に到達できない(404)。"""
+    res = client.post(
+        f"/api/sample-apps/{SBA_A_INSTANCE_ID}/dbchat/execute",
+        json={"sql": "SELECT * FROM INVENTORY"},
+    )
+    assert res.status_code == 404, res.text
+
+
+def test_sample_app_execute_rejects_dual_and_non_dataset(monkeypatch):
+    """DUAL の暗黙許可を切り、業務テーブル不参照 SQL(スカラ/関数)を 400 拒否(DB 未到達)。"""
+    from jetuse_core import nl2sql
+    called = {"n": 0}
+
+    def _boom(sql, current_schema=None):
+        called["n"] += 1
+
+    monkeypatch.setattr(nl2sql, "execute_readonly", _boom)
+    for bad in (
+        "SELECT USER FROM DUAL",
+        "SELECT SYS_CONTEXT('USERENV','SESSION_USER') FROM DUAL",
+    ):
+        res = client.post(
+            f"/api/sample-apps/{SBA_B_INSTANCE_ID}/dbchat/execute", json={"sql": bad}
+        )
+        assert res.status_code == 400, f"{bad}: {res.text}"
+    assert called["n"] == 0  # ガードで弾かれ execute_readonly は呼ばれない
+
+
+def test_sample_app_execute_rejects_non_select():
+    res = client.post(
+        f"/api/sample-apps/{SBA_B_INSTANCE_ID}/dbchat/execute",
+        json={"sql": "DELETE FROM INVENTORY"},
+    )
+    assert res.status_code == 400, res.text
+
+
+def test_sample_app_execute_unknown_app_404():
+    res = client.post(
+        "/api/sample-apps/nope/dbchat/execute", json={"sql": "SELECT * FROM INVENTORY"}
+    )
+    assert res.status_code == 404
+
+
+# --- chart payload の上限(M2) ---------------------------------------------
+
+def test_invoke_chart_oversized_cell_422():
+    res = client.post(
+        f"/api/sample-apps/{SBA_B_INSTANCE_ID}/slots/result-chart/invoke",
+        json={"input": "x", "columns": ["a"],
+              "rows": [["v" * (ai_runtime.MAX_CHART_CELL_CHARS + 1)]]},
+    )
+    assert res.status_code == 422, res.text
+
+
+def test_invoke_chart_too_wide_row_422():
+    res = client.post(
+        f"/api/sample-apps/{SBA_B_INSTANCE_ID}/slots/result-chart/invoke",
+        json={"input": "x",
+              "columns": ["a"],
+              "rows": [["v"] * (ai_runtime.MAX_CHART_COLUMNS + 1)]},
+    )
+    assert res.status_code == 422, res.text

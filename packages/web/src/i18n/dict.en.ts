@@ -393,6 +393,15 @@ export const en: Record<keyof typeof ja, string> = {
   'sba.title': 'Support desk',
   'sba.notFound': 'Sample app not found',
   'sba.loadError': 'Failed to load the sample app. Please try again later.',
+  // Inventory & orders business app (SBA-B / SBA-03 / NL2SQL)
+  'sba_b.tab.query': 'AI Query',
+  'sba_b.tab.inventory': 'Inventory',
+  'sba_b.tab.orders': 'Orders',
+  'sba_b.schema.title': 'Queryable data',
+  'sba_b.schema.lead': 'Ask about these tables in natural language',
+  'sba_b.placeholder': 'e.g. Total stock quantity by warehouse',
+  'sba_b.generating.note': 'takes a few to a dozen seconds',
+  'sba_b.empty': 'No data',
   // Support desk business app (SBA-A / SBA-02)
   'supportdesk.inbox': 'Inbox',
   'supportdesk.knowledge': 'Knowledge',
