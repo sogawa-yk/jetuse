@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from jetuse_core import hearing as hearing_repo
 from jetuse_core import hearing_genai
 from jetuse_core.auth import AuthContext, require_user
+from jetuse_core.governance import validate_governance
 from jetuse_core.hearing_schema import (
     MAX_INPUT_NOTES_CHARS,
     HearingSchemaError,
@@ -251,3 +252,30 @@ async def preview_composition(
     rec = _recommendation_from_detail(detail)
     composition = synthesize(rec)
     return composition.model_dump()
+
+
+@router.post("/api/hearing/sessions/{sid}/validate")
+async def validate_composition_gate(
+    sid: str, user: Annotated[AuthContext, Depends(require_user)]
+):
+    """保存済み推薦を合成し、**デプロイ前ゲート**としてガバナンス4制約で検証する(HBD-04)。
+
+    許可組合せ(sample-app × AI部品 × connector)・必要ケイパビリティ束縛・権限スコープ・
+    モデル可用性を判定し、違反は機械可読(種別・該当要素・代替提案つき)で返す。外れた構成は
+    `ok=False` で弾く(外させない: 各違反に代替提案を添える)。実行はしない(静的検証)。
+    """
+    session = hearing_repo.get_session(user.subject, sid)
+    if session is None:
+        raise HTTPException(status_code=404, detail="hearing session not found")
+    detail = session.get("recommendation")
+    if not detail:
+        raise HTTPException(
+            status_code=409, detail="推薦がまだありません。先に /recommend を実行してください"
+        )
+    rec = _recommendation_from_detail(detail)
+    composition = synthesize(rec)
+    report = validate_governance(composition)
+    return {
+        "composition": composition.model_dump(),
+        "governance": report.model_dump(),
+    }
