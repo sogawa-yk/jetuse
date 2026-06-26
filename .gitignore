@@ -54,3 +54,8 @@ loop-impl.md
 # ループ実環境 E2E / レビュー証跡: 実 OCID・接続情報を含みうるためコミットしない
 # (deploy.log は上の *.log で既に無視。payload.txt は .txt なので明示)
 runs/**/reviews/*.payload.txt
+
+# stage-runner: E2E スクラッチ（ADB wallet/接続情報など秘匿値。リポジトリに置かない）
+scratchpad_e2e/
+*wallet*.zip
+conn.env
