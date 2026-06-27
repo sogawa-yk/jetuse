@@ -1,42 +1,54 @@
-"""DEP-02: 生成デモコンテナへの Platform API ランタイム注入(L3 / ADR-0014 / ADR-0015 §7)。
+"""生成デモへの Platform API ランタイム注入(L3 / ADR-0014 / ADR-0016。**DEP-03 で K8s Secret 化**)。
 
-DEP-01(`deploy.py`)は **秘密を一切持たない** 宣言的配備仕様(`ContainerDeploySpec`)を生成する
-ところまでを担う。本モジュール(DEP-02)は、その仕様を起点に **コンテナ起動時** の
-ランタイム注入を組み立てる:
+`deploy.py` は **秘密を一切持たない** 宣言的配備仕様(`ContainerDeploySpec`)を生成するところまでを担
+う。
+本モジュールは、その仕様を起点に **デモ Pod 起動時** のランタイム注入を組み立てる:
 
-  - **ベース URL(非秘密 env)**: デモコンテナが Platform API へ到達する URL
-    (`JETUSE_PLATFORM_API_BASE_URL`)。
-  - **短期トークン(秘密)**: `platform_grants.issue_token` が発行する **承認スコープに厳密に
-    閉じた** 短期 JWT(`JETUSE_PLATFORM_TOKEN`)。**呼び出し(=コンテナ起動/更新)ごとに発行**する
-    (ADR-0014 §2 / platform_grants の発行粒度)。
+  - **ベース URL(非秘密)**: デモ Pod が Platform API へ到達する URL(`JETUSE_PLATFORM_API_BASE_URL`)
+  。
+    K8s では **ConfigMap**(`<prefix>-runtime`)に載せる(非秘密。committed/state に残ってよい)。
+  - **短期トークン(秘密)**: `platform_grants.issue_token` が発行する **承認スコープに厳密に閉じた**
+    短期 JWT(`JETUSE_PLATFORM_TOKEN`)。K8s では **Secret**(`<prefix>-platform-token`)に載せ、
+    オーケストレータが **アウトオブバンドで `kubectl apply`**(Terraform/コミット/state を通さない)。
+    **呼び出し(= Pod 起動/更新)ごとに発行**する(ADR-0014 §2 / platform_grants の発行粒度)。
 
-設計の核(ADR-0015 §3〜§7 を DEP-02 で確定):
-  - **DB 認証情報は注入しない**(D5)。デモコンテナはブローカー発行の短期トークンだけで
-    テナントデータへ到達する。注入物は base_url(非秘密)＋ token(秘密)に限る。本モジュールは
-    `adb_*` 等の DB 資格を読まない・載せない(構造的に到達不能)。
+**基盤の置換(ADR-0017)**: 配備ターゲットを Container Instances から OKE(K8s)へ移した。注入は
+ConfigMap(base_url)＋ Secret(token)の **K8s マニフェスト描画**になり、Deployment は envFrom で両者を
+参照する。**基盤非依存の核は不変**(下記)。
+
+設計の核(ADR-0016。OKE でも保つ):
+  - **DB 認証情報は注入しない**(D5)。デモ Pod はブローカー発行の短期トークンだけでテナントデータへ
+    到達する。注入物は base_url(非秘密)＋ token(秘密)に限る。`adb_*` 等の DB 資格を読まない・載せな
+    い。
   - **承認スコープに厳密に閉じる**: トークンに載るスコープは
     **配備仕様 `required_scopes`(デモが宣言した必要スコープ)∩ 承認グラント** に限定する。
     配備仕様が宣言していないスコープは要求できず(deploy-spec 閉包)、承認外スコープは
     `platform_grants.issue_token` が `scope_not_granted` で拒否(grant 閉包)。二重閉包・fail-closed。
   - **秘密と非秘密を分離**: `env()` は **非秘密のみ**(base_url)、トークンは `secret_env()` に分け、
-    非秘密 env(committed tfvars 経路)へ秘密を混ぜない(ADR-0015 §3)。
+    非秘密(ConfigMap)へ秘密を混ぜない。K8s でも ConfigMap=base_url / Secret=token に分けて描画する。
 
-トークンのライフサイクル(ADR-0016 で確定):
-  - **TTL は短期**(`settings.platform_token_ttl_seconds`、broker 上限 900 秒)。
-    `expires_at` で失効時刻を公開する。
-  - **失効(revoke)**: `platform_grants.revoke_grant` 後の再発行(=次回起動/更新)は
-    `grant_revoked` で拒否される。実トークンの即時失効機構(jti 失効リスト)は MVP 非対象のため、
-    **失効の有効化窓 = TTL**(発行済みは TTL まで有効、その後の更新で必ず止まる)。fail-closed。
-  - **更新(refresh)**: 短期 TTL のため、長時間稼働するデモコンテナは TTL 内に **再注入(=本関数の
-    再呼び出し)で更新** する。更新時に承認グラントが再評価されるため、失効は TTL 窓内で伝播する。
+トークンのライフサイクル(ADR-0016。OKE ネイティブ):
+  - **TTL は短期**(`settings.platform_token_ttl_seconds`、broker 上限 900 秒)。`expires_at` で失効時
+  刻を公開。
+  - **失効(revoke)**: `platform_grants.revoke_grant` 後の再発行(=次回起動/更新)は `grant_revoked` で
+    拒否される。即時失効機構(jti 失効リスト)は MVP 非対象のため、**失効の有効化窓 = TTL**。fail-clos
+    ed。
+  - **更新(refresh)**: 短期 TTL のため、長時間稼働するデモ Pod は TTL 内に **再注入(= 本関数の再呼び
+  出し
+    → Secret を新値で再 apply → Deployment を rolling restart)で更新** する(ADR-0017 §6)。更新時に承
+    認
+    グラントが再評価されるため、失効は TTL 窓内で伝播する。env 固定だった CI の制約は OKE で解消する
+    。
 
 セキュリティ姿勢: **fail-closed**(deploy.py / platform_broker.py と同方針)。base_url 未設定/不正、
 スコープが配備仕様の閉包外/空、グラント無し/失効/承認超過、トークンへの Vault OCID 混入のいずれでも
-注入を組み立てない。
+注入を組み立てない。**短期トークンは ConfigMap・committed マニフェスト・IaC state に出さない**(Secre
+t のみ)。
 """
 
 from __future__ import annotations
 
+import base64
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -44,10 +56,10 @@ from datetime import UTC, datetime
 
 from . import platform_broker as pb
 from . import platform_grants as pg
-from .deploy import _VAULT_OCID_SUBSTR_RE, ContainerDeploySpec
+from .deploy import _VAULT_OCID_SUBSTR_RE, ContainerDeploySpec, tenant_hash_hex
 from .settings import Settings, get_settings
 
-# 注入する env キー(契約: hosted-demo Terraform 環境の TF_VAR と一致させる)。
+# 注入する env キー(契約: deploy.py の Deployment envFrom と一致させる)。
 #: 非秘密。Platform API のベース URL。
 PLATFORM_API_BASE_URL_ENV = "JETUSE_PLATFORM_API_BASE_URL"
 #: 秘密。ブローカー発行の短期 JWT。**非秘密 env には決して載せない**(secret_env 経由)。
@@ -101,10 +113,14 @@ class RuntimeInjection:
     def secret_env(self) -> dict[str, str]:
         """コンテナへ渡す **秘密** env(短期トークンのみ)。
 
-        **Terraform 経由では渡さない**(Terraform に渡した値は resource 入力として state に保存され、
-        短期トークンを state へ残してしまうため)。トークンは起動時の **アウトオブバンド注入**
-        — オーケストレータが実行中コンテナへ直接注入(MVP)、将来はコンテナ自身がブローカーから取得 —
-        で渡す(ADR-0016 §4・§5)。短期 TTL で揮発し、更新は `should_refresh` 判定での再注入で行う。
+        **Terraform/コミット/IaC state には残さない**(渡した値は resource 入力として state に保存さ
+        れ、
+        短期トークンを永続化してしまうため)。トークンは起動時の **アウトオブバンド注入** — K8s では
+        オーケストレータが `<prefix>-platform-token` Secret を `kubectl apply` し、Deployment が env
+        From で
+        参照する(ADR-0017 §5)。短期 TTL で揮発し、更新は `should_refresh` 判定での再注入(Secret 再 a
+        pply
+        ＋ rolling restart)で行う。
         """
         return {PLATFORM_TOKEN_ENV: self.token}
 
@@ -126,6 +142,83 @@ class RuntimeInjection:
             "tenant": self.tenant,
             "plugin_id": self.plugin_id,
         }
+
+    # ---- K8s(OKE)注入マニフェスト描画(ADR-0017 §5)。名前は spec の命名規約に一致させる ----
+
+    def _assert_spec_tenant(self, spec: ContainerDeploySpec) -> None:
+        """描画/起動 env が **この注入と同じ spec(テナント＋発行プラグイン)** に対してのみ行える
+        ことを保証する。
+
+        - spec が tenant ハッシュ付きなら `tenant_hash_hex(self.tenant)` と一致必須(F-001)。
+        - spec が plugin_id 固定なら `self.plugin_id` と一致必須。無いと plugin B で発行した注入を
+          plugin A の spec に渡して描画でき、別プラグインのグラントへすり替えられる。
+        いずれも不一致は fail-closed(他テナント/他プラグインの namespace/Secret 名で出力させない)。
+        """
+        if spec.tenant_hash and tenant_hash_hex(self.tenant) != spec.tenant_hash:
+            raise InjectionError(
+                "注入の発行テナントと spec のテナントが不一致(別テナントへの描画/起動を拒否)"
+            )
+        if spec.plugin_id and self.plugin_id != spec.plugin_id:
+            raise InjectionError(
+                "注入の発行プラグインと spec のプラグインが不一致(別プラグインへの描画/起動を拒否)"
+            )
+
+    def render_runtime_configmap(self, spec: ContainerDeploySpec) -> dict:
+        """**非秘密**(base_url)を載せる ConfigMap(`<prefix>-runtime`)を描画する。
+
+        非秘密なので committed/state に残ってよい。トークンは決して載せない(`env()` を使う=allowlist
+         経由)。
+        """
+        self._assert_spec_tenant(spec)
+        return {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": spec.runtime_config_map_name,
+                "namespace": spec.namespace,
+                "labels": spec.labels(),
+            },
+            "data": dict(sorted(self.env().items())),
+        }
+
+    def render_secret_manifest(self, spec: ContainerDeploySpec) -> dict:
+        """**秘密**(短期トークン)を載せる K8s Secret(`<prefix>-platform-token`)を描画する。
+
+        オーケストレータが **アウトオブバンドで `kubectl apply --server-side`** する
+        (Terraform/コミット/state を通さない=ADR-0017 §5)。トークンは **base64 済み `data`**
+        (`{JETUSE_PLATFORM_TOKEN: <base64>}`、`secret_env()` 経由)。`stringData` は使わない
+        (server-side apply の field 管理が不安定で refresh の in-place 更新が不確実なため。下の実装
+        コメント参照)。失効時刻を annotation で公開し(非秘密)、refresh ツールが TTL を読めるように
+        する。トークン値(平文/base64 とも)は annotation/label に出さない。
+        """
+        self._assert_spec_tenant(spec)
+        return {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "name": spec.token_secret_name,
+                "namespace": spec.namespace,
+                "labels": spec.labels(),
+                "annotations": {
+                    # 非秘密メタ(失効時刻・スコープ)。トークン本体は載せない。
+                    "jetuse.dev/token-expires-at": self.expires_at.isoformat(),
+                    "jetuse.dev/token-scopes": ",".join(self.scopes),
+                },
+            },
+            "type": "Opaque",
+            # `stringData` ではなく base64 済み `data` を出す: server-side apply は stringData
+            # (書込専用変換フィールド)の field 管理が不安定で、refresh の in-place 更新が反映され
+            # ないことがある。`data` なら apply 経路に依らず決定的に更新される(review 対応)。
+            "data": {k: base64.b64encode(v.encode("utf-8")).decode("ascii")
+                     for k, v in sorted(self.secret_env().items())},
+        }
+
+    def render_injection_manifests(self, spec: ContainerDeploySpec) -> list[dict]:
+        """注入の K8s マニフェスト群を描画する。
+
+        [ConfigMap(base_url=非秘密), Secret(token=秘密)] のリストを返す。
+        """
+        return [self.render_runtime_configmap(spec), self.render_secret_manifest(spec)]
 
 
 def _now(now: datetime | None) -> datetime:
@@ -158,9 +251,7 @@ def _resolve_base_url(base_url: str | None, settings: Settings) -> str:
     return url
 
 
-def _closed_scopes(
-    spec: ContainerDeploySpec, scopes: Iterable[str] | None
-) -> tuple[str, ...]:
+def _closed_scopes(spec: ContainerDeploySpec, scopes: Iterable[str] | None) -> tuple[str, ...]:
     """トークンへ載せる要求スコープを **配備仕様の必要スコープに閉じて** 決める(fail-closed)。
 
     既定(scopes=None)は配備仕様 `required_scopes` 全体。明示要求は **その部分集合のみ** 許可し、
@@ -212,6 +303,35 @@ def build_runtime_injection(
     DB 認証情報は読まない・注入しない(D5)。発行粒度は **呼び出しごと**(更新は再呼び出し)。
     """
     settings = settings or get_settings()
+
+    # tenant は **非空必須**(空/空白は環境変数展開ミスの兆候。トークン発行前に fail-closed)。
+    if not tenant or not tenant.strip():
+        raise InjectionError("tenant が空(空白のみ)。有効なテナント識別子を渡すこと")
+    # 前後空白を正規化(build_deploy_spec と同じ規約)。spec の tenant_hash・grant 発行と一致させる。
+    tenant = tenant.strip()
+
+    # テナント分離: spec が tenant ハッシュ付き(マルチテナント配備)なら、注入する tenant が
+    # **その spec のテナントと一致** することを fail-closed で要求する。さもないと tenant B の
+    # トークンを tenant A の namespace/Secret(spec 由来)へ注入でき、分離が破れる(review F-001)。
+    if spec.tenant_hash and tenant_hash_hex(tenant) != spec.tenant_hash:
+        raise InjectionError(
+            "tenant が spec のテナントと不一致(別テナントの Secret/namespace への注入を拒否)"
+        )
+
+    # 発行プラグインの binding(core でも強制。CLI live-check だけに依存しない多層防御)。
+    plugin_id = plugin_id.strip()
+    if not plugin_id:
+        raise InjectionError("plugin_id が空。発行主体プラグインを指定すること")
+    # 注入が必要(scoped)なのに spec が plugin 未固定だと ground truth が無く別プラグインへすり替え
+    # 可能なため発行しない。固定済みなら一致必須(別プラグインのグラントへのすり替えを core で拒否)。
+    if spec.needs_platform_injection and not spec.plugin_id:
+        raise InjectionError(
+            "injectable な spec は plugin_id を固定して deploy すること(plugin binding)"
+        )
+    if spec.plugin_id and plugin_id != spec.plugin_id:
+        raise InjectionError(
+            "plugin_id が spec の発行プラグインと不一致(別プラグインへのすり替えを拒否)"
+        )
 
     resolved_url = _resolve_base_url(base_url, settings)
     want_scopes = _closed_scopes(spec, scopes)
@@ -273,12 +393,21 @@ def _assert_injection_safe(injection: RuntimeInjection) -> None:
 def container_start_environment(
     spec: ContainerDeploySpec, injection: RuntimeInjection
 ) -> tuple[dict[str, str], dict[str, str]]:
-    """コンテナ起動時の (非秘密 env, 秘密 env) を組み立てる(注入の適用点)。
+    """Pod 起動時に **実際に効く** (非秘密 env, 秘密 env) を組み立てる(注入の論理適用点)。
+
+    K8s では非秘密 env は ConfigMap(静的＝`<prefix>-config` ＋ 注入＝`<prefix>-runtime`)、
+    秘密 env は Secret(`<prefix>-platform-token`)に分かれ、Deployment の envFrom で
+    **K8s が実行時にマージ**する。本関数はその **マージ結果**(Pod が見る最終 env)を返し、
+    キー衝突や秘密の非秘密側への漏れを fail-closed で検出する(マニフェスト描画とは別に、
+    注入契約の不変条件を 1 か所で検証する)。
 
     非秘密 env = 配備仕様の非秘密 env(deploy.py 生成)＋ 注入の base_url。
     秘密 env = 注入の短期トークンのみ。**DB 認証情報は含まない**。
     キー衝突(配備仕様が同名キーを既に持つ)は fail-closed で弾く(上書き事故防止)。
     """
+    # テナント分離: 注入の発行テナントと spec のテナントが一致することを fail-closed で要求する
+    # (別テナント spec への起動 env 組み立てを拒否。render_* と同じ不変条件。F-001)。
+    injection._assert_spec_tenant(spec)
     base = spec.module_environment()  # 非秘密のみ(deploy.py が保証)
     inj_nonsecret = injection.env()
     overlap = set(base) & set(inj_nonsecret)

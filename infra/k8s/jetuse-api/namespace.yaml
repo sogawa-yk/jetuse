@@ -1,0 +1,9 @@
+# JetUse 本体(FastAPI)の OKE namespace(ADR-0017 §3)。本体は L3 デモとは別 namespace で分離する。
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jetuse-system
+  labels:
+    app.kubernetes.io/part-of: jetuse
+    app.kubernetes.io/managed-by: jetuse-deploy
+    jetuse.dev/kind: core

@@ -1,0 +1,22 @@
+# JetUse 本体の **非秘密** 設定(ConfigMap)。実値はコミットしない雛形。
+# 秘密(ADB ウォレットパスワード/broker 署名鍵 等)は **本 ConfigMap に置かない** — Secret(下記)へ。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jetuse-api-config
+  namespace: jetuse-system
+  labels:
+    app.kubernetes.io/name: jetuse-api
+    app.kubernetes.io/part-of: jetuse
+data:
+  OCI_REGION: "ap-osaka-1"
+  # 本体が L3 デモへ広告する Platform API のベース URL(非秘密)。
+  JETUSE_PLATFORM_API_BASE_URL: "https://platform.example.ap-osaka-1.oci.example.com/platform"
+  LOG_LEVEL: "INFO"
+  # 注意(ADR-0017 / 移行 follow-up・人間ゲート): 本体の **OCI 認証 on OKE** は未設定。
+  # 既存コードは AUTH_MODE=resource_principal で Functions 用 env ベース signer
+  # (get_resource_principals_signer / oci_genai_auth.OciResourcePrincipalAuth)を使うが、これは OKE Pod
+  # では成立しない。OKE では Workload Identity(SDK の workload identity signer ＋ oci_genai_auth の対応)
+  # か instance principal へ切り替えるコード対応＋実 OKE 検証が要る。方式確定までは AUTH_MODE を
+  # **設定しない**(誤って resource_principal を入れて OKE 上で認証失敗するのを防ぐ)。
+  # 詳細: ../README.md §1 / runs/<id>/e2e/SKIPPED.md / ADR-0017 §影響。

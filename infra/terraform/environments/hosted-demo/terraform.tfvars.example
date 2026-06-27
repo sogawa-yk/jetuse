@@ -1,6 +1,7 @@
 # DEP-01 hosted-demo の入力例。**実値はコミットしない**(OCID/秘密)。
-# 実行時は基盤由来値を TF_VAR_ で、構成由来値を deploy.py 生成の
-# `*.auto.tfvars.json`(ContainerDeploySpec.render_tfvars_json)で与える。
+# 注意(ADR-0017): L3 の新規配備は OKE へ移行(deploy.py render_manifests / infra/k8s)。本 CI 環境は
+# stage-4 ベースライン残置で、tfvars 写像(render_tfvars_json)も後方互換で維持。
+# 実行時は基盤由来値を TF_VAR_ で、構成由来値を deploy.py 生成の `*.auto.tfvars.json` で与える。
 #
 #   export TF_VAR_compartment_ocid=<jetuse-dev-compartment-ocid>  # 実値は .env / シェルで
 #   export TF_VAR_subnet_id=<private-subnet-ocid>                 # 既存基盤の private subnet

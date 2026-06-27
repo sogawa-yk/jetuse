@@ -1,4 +1,6 @@
 # DEP-01: 生成デモのコンテナ配備(L3 ホスト型)環境変数。
+# **注意(ADR-0017)**: L3 の **新規** 配備は OKE(K8s)へ移行(deploy.py の render_manifests / infra/k8s)。
+# 本 Container Instances 環境は stage-4 ベースラインとして残置し、tfvars 写像 API も後方互換で維持する。
 # 構成由来の値(prefix/image_url/environment_variables/...)は deploy.py が生成する
 # `*.auto.tfvars.json`(ContainerDeploySpec.render_tfvars_json)で与える。基盤由来の値
 # (compartment/subnet/nsg)は固定リファレンス基盤が供給し、TF_VAR_ か別 tfvars で与える。
