@@ -29,7 +29,7 @@ pydantic モデルは alias で受理し、`model_dump(by_alias=True)` で同じ
 | `schemaVersion` | string | ✓ | 現行は `"1"` 固定。後方非互換変更で繰り上げ。 |
 | `id` | string | ✓ | `namespace/name`。各セグメントは `[a-z0-9]` とハイフン（端はハイフン不可）。最大 255 文字。 |
 | `version` | string | ✓ | semver.org 準拠（MAJOR.MINOR.PATCH[-prerelease][+build]）。最大 64 文字。 |
-| `kind` | string | ✓ | `usecase` \| `agent` \| `sample-app`(§10) \| `connector`(§12)。 |
+| `kind` | string | ✓ | `usecase` \| `agent` \| `sample-app`(§10) \| `connector`(§12) \| `external-app`(§14)。 |
 | `name` | string | ✓ | 非空（表示名）。 |
 | `description` | string | – | 既定 `""`。 |
 | `publisher` | string | ✓ | 発行者 ID（非空）。レジストリの発行者認証と対応。 |
@@ -511,3 +511,88 @@ scope 強制 → テナント一致 → 監査（ALLOW/DENY）** を通した範
 （`BrokerConfigError`）→ **503**。テナント越境は scope 不足より先に `tenant_mismatch` として監査に残す
 （§13.5 の契約）。`conversations.read` / `files.*` のルート、rag.search の本格検索、connector.invoke の
 実 MCP 呼び出し、レート制限、OIDC 発行主体認証（INFRA-02）は後続。
+
+## 14. kind: external-app（外部アプリ連携 / SSO ブリッジ / ASSET-01）
+
+`kind: external-app` は **外部アプリの UI そのものを JetUse へ埋め込み（iframe / link）＋ OIDC SSO で
+シングルサインオン**するオンボード種別（§6 D9 の「外部連携」）。コネクタ（§12 / L2 MCP）が「外部 SaaS の
+**API** を JetUse から呼び出す」のに対し、external-app は「外部アプリの **画面**を JetUse 内に出し、利用者の
+身元を SSO で引き渡す」。独自フロントを持つ既存資産（例: 伝ぴょん）の最短オンボード経路。実装は
+`jetuse_core/plugins/external_app.py`（定義スキーマ＋OIDC SSO ブリッジ最小実装）と、資産別 builder
+（`denpyon_external_app.py`）。**実コネクタ化（MCP 化）が過剰な、UI 完結型の既存資産に用いる**
+（方式選択は docs/verification/ASSET-01.md）。
+
+### 14.1 contributes["external-app"] スキーマ
+
+| キー | 型 | 必須 | 規則 |
+|---|---|---|---|
+| `app` | string | ✓ | 連携先アプリの安定キー（`denpyon` 等。小文字英数とハイフン/アンダースコア、≤64）。 |
+| `embed` | string | ✓ | `iframe`（画面内枠埋め込み）\| `link`（別タブ導線）。 |
+| `url` | string | ✓ | 外部アプリの HTTPS エンドポイント。**オフライン・決定的検証**（https・公開ホスト・private/loopback 拒否・userinfo/query/fragment 禁止＝認証値埋め込み防止）。url は**利用者ブラウザが iframe/link の src として読む**（サーバ側 fetch しない）ため DNS 解決を伴う SSRF ガードは持たず、内部 FQDN 抑止は配備時のネットワーク境界・iframe CSP/sandbox・IdP の redirect_uri 許可リストで担保する。 |
+| `title` | string | ✓ | 表示名（≤200）。 |
+| `sso` | object\|null | – | OIDC SSO ブリッジ宣言（§14.2）。None なら埋め込みのみ（SSO なし）。 |
+| `summary` | string | – | 表示用説明（≤2000）。 |
+
+`claimMapping` は写像元（subject クレーム名）に資格情報系の名前（token/secret/jwt/sid 等）を使えず、
+宛先クレーム名の重複も禁止（後勝ちで身元属性を黙って上書きしない）。SSO 宣言時は最低1つの写像が必須。
+external-app は UI 埋め込み＋SSO であり **Platform API スコープを要求しない**（builder は manifest の
+top-level `permissions` を空にする。external-app は broker invoke 経路を持たないため、仮に宣言されても
+inert）。
+
+### 14.2 sso（OIDC SSO ブリッジ / 実値を持たない）
+
+| サブキー | 規則 |
+|---|---|
+| `mode` | `oidc`（現状 OIDC のみ。SAML 等は後段）。 |
+| `issuer` | OIDC IdP の HTTPS URL（公開ホスト・オフライン検証）。token/authorize の基底。 |
+| `clientIdRef` | OIDC client_id の **論理参照名**（install 時に解決。値ではない）。 |
+| `secretRef` | client_secret の **論理参照名**（Vault 束ね対象。値ではない）。 |
+| `audience` | token-exchange の audience（連携先アプリの HTTPS URL）。 |
+| `scopes` | OIDC スコープ。**openid を含む**・重複不可（≤50）。 |
+| `claimMapping` | JetUse subject クレーム名 → 連携先アプリのクレーム名 への写像（SSO で渡す身元属性。≤50）。 |
+
+**実シークレットの非保持**: コネクタ（§12.2）と同じ契約。manifest・配布定義・証跡のいずれにも
+**実 client_secret 値・実トークンは保存しない**。保持するのは論理参照名（`clientIdRef`/`secretRef`）のみ。
+実値は install 時に Vault(OCID) へ束ねる（人間ゲート）。url/issuer/audience は認証値を埋め込めない
+公開 HTTPS URL に限定する（userinfo/query/fragment 禁止）。
+
+### 14.3 SSO ブリッジ最小実装（`build_sso_handoff`）
+
+`build_sso_handoff(definition, subject, *, state, nonce, subject_token_ref=...)` は **決定的・オフライン**
+（IdP へ実通信しない）で OIDC ハンドオフ要求を組み立てる:
+- `sso` 未宣言のアプリは **fail-closed**（`SsoHandoffError`）。`state`/`nonce` 欠落も fail-closed。
+- `claimMapping` を `subject`（認証済み利用者のクレーム）へ適用し受け渡しクレームを作る。写像元クレームの
+  欠落・空は **fail-closed**（SSO は正しい身元の確実な引き渡しが要）。
+- **RFC 8693 token-exchange 要求の shape**（grant_type / audience / scope）を返す。token endpoint は IdP
+  ごとに異なり issuer から機械的に導出できないため**固定パスを生成せず**、OIDC discovery URL
+  （issuer + `/.well-known/openid-configuration`）を返す（`sso.tokenEndpoint` 明示時はそれを使う）。
+  client_id / client_secret / subject_token は **参照名**のみ（実値・実トークンを含めない）。
+- 返り値・例外の **JetUse 構築部分**（token_exchange_request の client_id/client_secret/subject_token は
+  参照名のみ）に**実シークレット値・実トークンを注入しない**（`contains_secret_values=False` の意味）。
+  `mapped_claims` は**呼び出し側が与える subject の身元属性**であり、秘密を入れない責務は呼び出し側。
+  多層防御として、claimMapping の写像元に資格情報系クレーム名（token/secret/jwt/sid 等）を使うことは
+  定義検証で禁止する（実トークンの転写経路を塞ぐ）。
+
+実 IdP 接続・実 client_secret 投入・実 id_token 発行・実 token-exchange の実行は **人間ゲート**（SSO 実設定）。
+合成（sample-app × connector × external-app）への組込・実埋め込みレンダリングは後段。
+
+### 14.4 オンボード経路とマーケット流通の境界（ASSET-01 スコープ）
+
+external-app の**オンボードは builder（`denpyon_external_app_manifest` 等）による配布表現の生成と、
+in-process の SSO ブリッジ（`build_sso_handoff`）**で完結する（DB のインスタンス store は持たない）。
+そのため本タスクでは **マーケット publish/install（PLG-05 / MKT-01）への接続は後段**とし、`external-app` は
+`marketplace` の `SUPPORTED_KINDS` に**含めない**。`installer._ingest_contributes` は未対応 kind を
+`IngestError` で **fail-closed に拒否**するため、external-app manifest を誤って install 経路へ流しても安全
+（取込先テーブルが無いまま中途半端に登録されることはない）。マーケット流通させる場合は
+`external_app_instances` 相当の store＋migration と publisher/installer の kind 分岐追加が必要（後段タスク）。
+
+### 14.5 公開 API（`jetuse_core/plugins/external_app.py`）
+
+| シンボル | 役割 |
+|---|---|
+| `ExternalAppDefinition` | `contributes["external-app"]` の pydantic ルートモデル。 |
+| `OidcSsoBridge` | OIDC SSO ブリッジのサブモデル。 |
+| `validate_external_app(source) -> ExternalAppDefinition` | manifest か dict を検証。不正なら `ExternalAppError`。 |
+| `build_sso_handoff(definition, subject, *, state, nonce) -> dict` | SSO ハンドオフ組み立て（fail-closed）。 |
+| `external_app_json_schema() -> dict` | 定義の JSON Schema（camelCase）。 |
+| `EMBED_MODES` / `SSO_MODES` | 仕様定数。 |
