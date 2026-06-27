@@ -26,6 +26,8 @@ dependencies = [
   "pymupdf>=1.24",
   # プラグイン署名(PLG-01, ed25519)で直接利用。Ed25519PublicKey.public_bytes_raw は 43.0 以降。
   "cryptography>=43",
+  # L3 デモの K8s マニフェスト描画(DEP-03 / deploy.py の YAML 直列化)で直接利用。
+  "PyYAML>=6",
 ]
 
 [project.optional-dependencies]

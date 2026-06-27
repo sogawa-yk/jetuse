@@ -59,16 +59,19 @@ def _answers(**over):
 def _spec(settings=None, **over):
     settings = settings or _settings()
     comp = synthesize(recommend(_answers(**over)))
-    return build_deploy_spec(comp, settings=settings, image_url=_IMAGE)
+    return build_deploy_spec(comp, settings=settings, image_url=_IMAGE, plugin_id=PLUGIN)
 
 
-def _stub_grant(monkeypatch, *, scopes, status=pg.GRANT_STATUS_ACTIVE, exists=True):
+def _stub_grant(monkeypatch, *, scopes, status=pg.GRANT_STATUS_ACTIVE, exists=True,
+                tenant_match_any=False):
     def fake_get_grant(tenant, plugin_id):
-        if not exists or tenant != TENANT or plugin_id != PLUGIN:
+        if not exists or plugin_id != PLUGIN:
+            return None
+        if not tenant_match_any and tenant != TENANT:
             return None
         return {
             "id": "g-1",
-            "tenant": TENANT,
+            "tenant": tenant,
             "plugin_id": PLUGIN,
             "source_version": "1.0.0",
             "scopes": sorted(scopes),
@@ -202,6 +205,96 @@ def test_revoked_grant_refused(monkeypatch):
     assert e.value.reason == "grant_revoked"
 
 
+def test_tenant_mismatch_against_spec_refused(monkeypatch):
+    # F-001 回帰: tenant ハッシュ付き spec(= tenant A の namespace/Secret)に、別テナント B の
+    # トークンを注入しようとしたら fail-closed(別テナントの Secret 上書き=分離破壊を防ぐ)。
+    s = _settings()
+    _stub_grant(monkeypatch, scopes=[_SCOPE])
+    comp = synthesize(recommend(_answers()))
+    spec_a = build_deploy_spec(comp, settings=s, image_url=_IMAGE, tenant=TENANT, plugin_id=PLUGIN)
+    with pytest.raises(InjectionError):
+        build_runtime_injection(
+            spec_a, tenant="ocid1.tenancy.oc1..aaaa-tenant-B",
+            plugin_id=PLUGIN, settings=s, base_url=_BASE_URL,
+        )
+
+
+def test_render_with_foreign_spec_refused(monkeypatch):
+    # F-001 回帰: tenant B で発行した注入を tenant A の spec で描画/起動しようとしたら fail-closed。
+    # (render_secret_manifest / render_runtime_configmap / container_start_environment すべて)。
+    s = _settings()
+    _stub_grant(monkeypatch, scopes=[_SCOPE], tenant_match_any=True)
+    comp = synthesize(recommend(_answers()))
+    spec_a = build_deploy_spec(comp, settings=s, image_url=_IMAGE, tenant=TENANT, plugin_id=PLUGIN)
+    tenant_b = "ocid1.tenancy.oc1..aaaa-tenant-B"
+    spec_b = build_deploy_spec(comp, settings=s, image_url=_IMAGE,
+                               tenant=tenant_b, plugin_id=PLUGIN)
+    inj_b = build_runtime_injection(
+        spec_b, tenant=tenant_b, plugin_id=PLUGIN, settings=s, base_url=_BASE_URL
+    )
+    with pytest.raises(InjectionError):
+        inj_b.render_secret_manifest(spec_a)
+    with pytest.raises(InjectionError):
+        inj_b.render_runtime_configmap(spec_a)
+    with pytest.raises(InjectionError):
+        inj_b.render_injection_manifests(spec_a)
+    with pytest.raises(InjectionError):
+        container_start_environment(spec_a, inj_b)
+    # 自分の spec(B)になら描画できる(正常系)。
+    assert inj_b.render_secret_manifest(spec_b)["metadata"]["namespace"] == spec_b.namespace
+
+
+def test_plugin_swap_against_spec_refused_in_core(monkeypatch):
+    # blocker 回帰: spec.plugin_id=A の Secret に別 plugin=B のグラントで発行しようとしても
+    # core(build_runtime_injection)が fail-closed(CLI live-check だけに依存しない多層防御)。
+    s = _settings()
+    _stub_grant(monkeypatch, scopes=[_SCOPE], tenant_match_any=True)
+    comp = synthesize(recommend(_answers()))
+    spec_a = build_deploy_spec(comp, settings=s, image_url=_IMAGE, tenant=TENANT, plugin_id=PLUGIN)
+    with pytest.raises(InjectionError):
+        build_runtime_injection(
+            spec_a, tenant=TENANT, plugin_id="evil/other-plugin", settings=s, base_url=_BASE_URL
+        )
+
+
+def test_injectable_spec_without_plugin_refused(monkeypatch):
+    # major 回帰: scoped(注入が要る)spec を plugin 未固定で deploy → 注入は ground truth が無いため
+    # core で fail-closed(別プラグインへのすり替えを防ぐ。plugin 固定 deploy を要求)。
+    s = _settings()
+    _stub_grant(monkeypatch, scopes=[_SCOPE])
+    comp = synthesize(recommend(_answers()))
+    spec_noplugin = build_deploy_spec(comp, settings=s, image_url=_IMAGE, tenant=TENANT)
+    assert spec_noplugin.needs_platform_injection and not spec_noplugin.plugin_id
+    with pytest.raises(InjectionError):
+        build_runtime_injection(
+            spec_noplugin, tenant=TENANT, plugin_id=PLUGIN, settings=s, base_url=_BASE_URL
+        )
+
+
+@pytest.mark.parametrize("bad", ["", "   "])
+def test_empty_tenant_injection_refused(monkeypatch, bad):
+    # 空/空白 tenant はトークン発行前に fail-closed(環境変数展開ミス対策)。
+    s = _settings()
+    _stub_grant(monkeypatch, scopes=[_SCOPE])
+    with pytest.raises(InjectionError):
+        build_runtime_injection(
+            _spec(s), tenant=bad, plugin_id=PLUGIN, settings=s, base_url=_BASE_URL
+        )
+
+
+def test_tenant_match_against_spec_ok(monkeypatch):
+    # 同一 tenant なら注入は成立し、Secret 名は spec(tenant ハッシュ込み)と一致する。
+    s = _settings()
+    _stub_grant(monkeypatch, scopes=[_SCOPE])
+    comp = synthesize(recommend(_answers()))
+    spec_a = build_deploy_spec(comp, settings=s, image_url=_IMAGE, tenant=TENANT, plugin_id=PLUGIN)
+    inj = build_runtime_injection(
+        spec_a, tenant=TENANT, plugin_id=PLUGIN, settings=s, base_url=_BASE_URL
+    )
+    assert inj.token
+    assert spec_a.token_secret_name.endswith("-platform-token")
+
+
 # --- base_url 検証(fail-closed) -------------------------------------------
 
 
@@ -278,3 +371,102 @@ def test_should_refresh_near_expiry(monkeypatch):
     assert not should_refresh(inj, now=now, skew_seconds=30)
     assert should_refresh(inj, now=inj.expires_at - timedelta(seconds=10), skew_seconds=30)
     assert inj.is_expired(now=inj.expires_at + timedelta(seconds=1))
+
+
+# ---- K8s(OKE)注入マニフェスト描画(ADR-0017 §5) ----
+
+
+def test_render_secret_manifest_carries_token_and_correct_naming(monkeypatch):
+    s = _settings()
+    _stub_grant(monkeypatch, scopes=[_SCOPE])
+    spec = _spec(s)
+    inj = build_runtime_injection(
+        spec, tenant=TENANT, plugin_id=PLUGIN, settings=s, base_url=_BASE_URL
+    )
+    secret = inj.render_secret_manifest(spec)
+
+    assert secret["kind"] == "Secret"
+    assert secret["type"] == "Opaque"
+    # 名前/namespace は deploy.py の命名規約に一致(Deployment の envFrom と整合)。
+    assert secret["metadata"]["name"] == spec.token_secret_name
+    assert secret["metadata"]["namespace"] == spec.namespace
+    # トークンは base64 済み data のみ(allowlist キー)。server-side apply で決定的に更新される。
+    import base64
+    assert secret["data"] == {
+        PLATFORM_TOKEN_ENV: base64.b64encode(inj.token.encode()).decode()
+    }
+    assert "stringData" not in secret
+    # 失効時刻は annotation で公開(非秘密)。トークン値(平文/base64)は annotation/label に出さない。
+    ann = secret["metadata"]["annotations"]
+    assert ann["jetuse.dev/token-expires-at"] == inj.expires_at.isoformat()
+    assert inj.token not in str(secret["metadata"])
+    assert base64.b64encode(inj.token.encode()).decode() not in str(secret["metadata"])
+
+
+def test_render_runtime_configmap_is_nonsecret_base_url(monkeypatch):
+    s = _settings()
+    _stub_grant(monkeypatch, scopes=[_SCOPE])
+    spec = _spec(s)
+    inj = build_runtime_injection(
+        spec, tenant=TENANT, plugin_id=PLUGIN, settings=s, base_url=_BASE_URL
+    )
+    cm = inj.render_runtime_configmap(spec)
+
+    assert cm["kind"] == "ConfigMap"
+    assert cm["metadata"]["name"] == spec.runtime_config_map_name
+    # base_url(非秘密)のみ。トークンは絶対に載らない。
+    assert cm["data"] == {PLATFORM_API_BASE_URL_ENV: _BASE_URL}
+    assert inj.token not in str(cm)
+
+
+def test_injection_manifests_token_only_in_secret(monkeypatch):
+    s = _settings()
+    _stub_grant(monkeypatch, scopes=[_SCOPE])
+    spec = _spec(s)
+    inj = build_runtime_injection(
+        spec, tenant=TENANT, plugin_id=PLUGIN, settings=s, base_url=_BASE_URL
+    )
+    manifests = inj.render_injection_manifests(spec)
+    kinds = [m["kind"] for m in manifests]
+    assert kinds == ["ConfigMap", "Secret"]
+    # トークン(base64 済み)は Secret のドキュメントにのみ現れる(ConfigMap には現れない)。
+    import base64
+    b64 = base64.b64encode(inj.token.encode()).decode()
+    cm, secret = manifests
+    assert inj.token not in str(cm) and b64 not in str(cm)
+    assert b64 in str(secret)
+
+
+def test_refresh_reissues_new_token_in_secret(monkeypatch):
+    # ADR-0017 §6: 更新は build_runtime_injection 再呼び出し → Secret を新値で再 apply。
+    s = _settings()
+    _stub_grant(monkeypatch, scopes=[_SCOPE])
+    spec = _spec(s)
+    inj1 = build_runtime_injection(
+        spec, tenant=TENANT, plugin_id=PLUGIN, settings=s, base_url=_BASE_URL
+    )
+    inj2 = build_runtime_injection(
+        spec, tenant=TENANT, plugin_id=PLUGIN, settings=s, base_url=_BASE_URL
+    )
+    # 呼び出しごと発行(リプレイ露出窓の最小化)。Secret の中身が更新される。
+    assert inj1.token != inj2.token
+    sec1 = inj1.render_secret_manifest(spec)
+    sec2 = inj2.render_secret_manifest(spec)
+    # 同一 Secret 名(= in-place 更新 → rolling restart で反映)。base64 data は別トークン。
+    assert sec1["metadata"]["name"] == sec2["metadata"]["name"]
+    assert sec1["data"] != sec2["data"]
+
+
+def test_should_refresh_true_when_near_expiry(monkeypatch):
+    s = _settings()
+    _stub_grant(monkeypatch, scopes=[_SCOPE])
+    spec = _spec(s)
+    inj = build_runtime_injection(
+        spec, tenant=TENANT, plugin_id=PLUGIN, settings=s, base_url=_BASE_URL
+    )
+    # 失効直前(skew 内)なら更新すべき。
+    near = inj.expires_at - timedelta(seconds=5)
+    assert should_refresh(inj, now=near, skew_seconds=30) is True
+    # まだ余裕があれば更新不要。
+    early = datetime.now(UTC)
+    assert should_refresh(inj, now=early, skew_seconds=30) is False

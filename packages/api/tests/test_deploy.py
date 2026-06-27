@@ -1,10 +1,8 @@
-"""DEP-01: 生成デモのコンテナ配備仕様生成の単体テスト。
+"""生成デモの L3 配備仕様生成の単体テスト(DEP-01 / DEP-03 で OKE/K8s 化)。
 
-合成済み `DemoComposition` → container-instance モジュールへ写像できる配備仕様を、代表構成と
+合成済み `DemoComposition` → **K8s マニフェスト**へ写像できる配備仕様を、代表構成と
 fail-closed 境界(未合成・ガバナンス未通過・秘密実値混入・名前衝突・イメージ未指定)で検証する。
 """
-
-import json
 
 import pytest
 
@@ -84,7 +82,7 @@ def test_module_environment_is_deterministic_and_nonsecret():
 _CONTAINER_SECRET = "HOSTED_AGENT_CLIENT_SECRET"
 
 
-def test_tfvars_has_no_secret_or_vault_ocid():
+def test_manifests_have_no_secret_or_vault_ocid():
     comp = _composition()
     spec = build_deploy_spec(
         comp,
@@ -92,17 +90,34 @@ def test_tfvars_has_no_secret_or_vault_ocid():
         image_url=_IMAGE,
         required_secrets=[_CONTAINER_SECRET],
     )
-    payload = json.loads(spec.render_tfvars_json())
-    flat = json.dumps(payload)
+    manifests = spec.render_manifests()
+    kinds = [m["kind"] for m in manifests]
+    flat = spec.render_manifests_yaml()
 
-    assert payload["image_url"] == _IMAGE
-    # 秘密・Vault OCID は tfvars(=state)に一切残さない(DEP-02 が注入)。
-    assert "secret_refs" not in payload
+    # K8s マニフェスト一式(Namespace/ResourceQuota/ServiceAccount/ConfigMap/Deployment/Service)。
+    assert kinds == [
+        "Namespace",
+        "ResourceQuota",
+        "ServiceAccount",
+        "ConfigMap",
+        "Deployment",
+        "Service",
+    ]
+    # 短期トークンの Secret は deploy.py の描画には**含めない**(deploy_inject が別経路で apply)。
+    assert "Secret" not in kinds
+    # 秘密・Vault OCID はマニフェスト(=committed/state)に一切残さない。
     assert "ocid1.vaultsecret" not in flat
-    # 要求秘密は仕様メタにのみ論理名で残る。
+    # 要求秘密は仕様メタにのみ論理名で残る(マニフェストには現れない)。
     assert spec.required_secrets == (_CONTAINER_SECRET,)
-    # 非秘密 env(module_environment)に秘密名は現れない。
-    assert _CONTAINER_SECRET not in spec.module_environment()
+    assert _CONTAINER_SECRET not in flat
+    # ConfigMap は非秘密 env のみ(module_environment)。秘密名は現れない。
+    config_map = next(m for m in manifests if m["kind"] == "ConfigMap")
+    assert config_map["data"] == spec.module_environment()
+    assert _CONTAINER_SECRET not in config_map["data"]
+    # イメージは Deployment の唯一のコンテナに載る。
+    deployment = next(m for m in manifests if m["kind"] == "Deployment")
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+    assert container["image"] == _IMAGE
 
 
 def test_broker_signing_secret_request_is_refused():
@@ -373,3 +388,241 @@ def test_empty_after_sanitize_prefix_is_refused(prefix):
     comp = _composition()
     with pytest.raises(DeploySpecError):
         build_deploy_spec(comp, settings=_settings(), image_url=_IMAGE, prefix=prefix)
+
+
+# ---- K8s(OKE)マニフェスト描画(ADR-0017) ----
+
+
+def test_render_manifests_namespace_and_naming_are_deterministic():
+    comp = _composition()
+    spec = build_deploy_spec(
+        comp, settings=_settings(), image_url=_IMAGE, prefix="jetuse-demo-faq"
+    )
+    manifests = spec.render_manifests()
+    # namespace = prefix。全リソースが同一 namespace に入る。
+    assert spec.namespace == "jetuse-demo-faq"
+    for m in manifests:
+        if m["kind"] == "Namespace":
+            assert m["metadata"]["name"] == "jetuse-demo-faq"
+        else:
+            assert m["metadata"]["namespace"] == "jetuse-demo-faq"
+    # Deployment/Service 名は prefix。ConfigMap/Secret/SA 名はサフィックス規約に従う。
+    deployment = next(m for m in manifests if m["kind"] == "Deployment")
+    service = next(m for m in manifests if m["kind"] == "Service")
+    assert deployment["metadata"]["name"] == "jetuse-demo-faq"
+    assert service["metadata"]["name"] == "jetuse-demo-faq"
+    assert spec.config_map_name == "jetuse-demo-faq-config"
+    assert spec.runtime_config_map_name == "jetuse-demo-faq-runtime"
+    assert spec.token_secret_name == "jetuse-demo-faq-platform-token"
+    assert spec.service_account_name == "jetuse-demo-faq-sa"
+
+
+def test_deployment_envfrom_references_secret_when_scopes_present():
+    comp = _composition()
+    spec = build_deploy_spec(comp, settings=_settings(), image_url=_IMAGE)
+    assert spec.needs_platform_injection  # active コネクタ由来のスコープがある
+    deployment = next(m for m in spec.render_manifests() if m["kind"] == "Deployment")
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+    refs = container["envFrom"]
+    names = [
+        list(r.values())[0]["name"] for r in refs
+    ]
+    # 静的 ConfigMap ＋ 注入 ConfigMap(base_url)＋ Secret(token)を envFrom 参照する。
+    assert spec.config_map_name in names
+    assert spec.runtime_config_map_name in names
+    assert spec.token_secret_name in names
+    # Secret/runtime ConfigMap 参照は存在必須(fail-closed: 未注入のまま起動しない)。
+    for r in refs:
+        ref = list(r.values())[0]
+        if ref["name"] in (spec.runtime_config_map_name, spec.token_secret_name):
+            assert ref.get("optional") is False
+
+
+def test_deployment_envfrom_omits_injection_without_scopes(monkeypatch):
+    # スコープを必要としない構成では注入用 Secret/ConfigMap を参照しない(存在しない Secret 参照で
+    # Pod 起動不能になるのを防ぐ)。required_scopes が空のケースを直接構築して検証する。
+    comp = _composition()
+    spec = build_deploy_spec(comp, settings=_settings(), image_url=_IMAGE)
+    no_scope = ContainerDeploySpec(
+        region=spec.region,
+        prefix=spec.prefix,
+        image_url=spec.image_url,
+        app_port=spec.app_port,
+        ocpus=spec.ocpus,
+        memory_gb=spec.memory_gb,
+        sdk=spec.sdk,
+        agent_app_ocid=spec.agent_app_ocid,
+        environment_variables=dict(spec.environment_variables),
+        required_secrets=(),
+        required_scopes=(),
+        active_connectors=(),
+        sample_app=spec.sample_app,
+    )
+    assert not no_scope.needs_platform_injection
+    deployment = next(m for m in no_scope.render_manifests() if m["kind"] == "Deployment")
+    refs = deployment["spec"]["template"]["spec"]["containers"][0]["envFrom"]
+    names = [list(r.values())[0]["name"] for r in refs]
+    assert names == [no_scope.config_map_name]
+
+
+def test_pod_least_privilege_and_quota():
+    comp = _composition()
+    spec = build_deploy_spec(comp, settings=_settings(), image_url=_IMAGE)
+    manifests = spec.render_manifests()
+    deployment = next(m for m in manifests if m["kind"] == "Deployment")
+    pod_spec = deployment["spec"]["template"]["spec"]
+    # K8s API トークンを Pod に自動マウントしない(最小権限)。
+    assert pod_spec["automountServiceAccountToken"] is False
+    sec = pod_spec["containers"][0]["securityContext"]
+    assert sec["runAsNonRoot"] is True
+    # 非 root UID/GID を明示(イメージ USER が root 既定でも kubelet が検証可能=Pod 拒否を防ぐ)。
+    assert sec["runAsUser"] >= 1 and sec["runAsUser"] == sec["runAsGroup"]
+    assert sec["allowPrivilegeEscalation"] is False
+    assert sec["capabilities"]["drop"] == ["ALL"]
+    # namespace 単位の ResourceQuota が付く(越境・暴走抑止)。
+    assert any(m["kind"] == "ResourceQuota" for m in manifests)
+
+
+def test_manifests_yaml_is_multidoc_and_parseable():
+    import yaml
+
+    comp = _composition()
+    spec = build_deploy_spec(comp, settings=_settings(), image_url=_IMAGE)
+    text = spec.render_manifests_yaml()
+    docs = list(yaml.safe_load_all(text))
+    assert [d["kind"] for d in docs] == [m["kind"] for m in spec.render_manifests()]
+
+
+def test_tfvars_backward_compat_still_works():
+    # ADR-0017: 新規 L3 配備は K8s だが、stage-4 の Container Instances ベースライン(hosted-demo)を
+    # 残すため、tfvars 写像 API は後方互換でそのまま機能する(公開シグネチャ不変)。
+    import json as _json
+
+    comp = _composition()
+    spec = build_deploy_spec(comp, settings=_settings(), image_url=_IMAGE)
+    tfvars = spec.to_tfvars()
+    assert tfvars["image_url"] == _IMAGE
+    assert tfvars["region"] == "ap-osaka-1"
+    assert tfvars["environment_variables"] == dict(spec.environment_variables)
+    # 秘密・Vault OCID は tfvars(=state)に出さない(従来契約)。
+    flat = spec.render_tfvars_json()
+    assert "ocid1.vaultsecret" not in flat
+    assert _json.loads(flat)["prefix"] == spec.prefix
+
+
+def test_injection_keys_are_reserved_and_rejected_in_extra_env():
+    # 注入経路が所有するキー(base_url/token)を静的 env(extra_environment)に入れさせない。
+    # これらが静的 ConfigMap に入ると envFrom で runtime ConfigMap/Secret と衝突しうる。
+    from jetuse_core import deploy_inject as di
+
+    comp = _composition()
+    for key in (di.PLATFORM_API_BASE_URL_ENV, di.PLATFORM_TOKEN_ENV):
+        # deploy.py の予約キーと deploy_inject の定数が一致していること(同期)。
+        from jetuse_core import deploy as dep
+        assert key in dep._RESERVED_ENV_KEYS
+        with pytest.raises(DeploySpecError):
+            build_deploy_spec(
+                comp, settings=_settings(), image_url=_IMAGE,
+                extra_environment={key: "x"},
+            )
+
+
+def test_manifest_envfrom_keys_do_not_collide():
+    # 静的 ConfigMap(data)のキーと、注入経路(runtime ConfigMap / Secret)のキーが衝突しない。
+    # 衝突すると K8s 実行時に envFrom の上書きが起き、注入契約の fail-closed を迂回する。
+    from jetuse_core import deploy_inject as di
+
+    comp = _composition()
+    spec = build_deploy_spec(comp, settings=_settings(), image_url=_IMAGE)
+    config_map = next(m for m in spec.render_manifests() if m["kind"] == "ConfigMap")
+    static_keys = set(config_map["data"])
+    injection_keys = {di.PLATFORM_API_BASE_URL_ENV, di.PLATFORM_TOKEN_ENV}
+    assert static_keys.isdisjoint(injection_keys)
+
+
+def test_deployment_carries_required_scopes_annotation():
+    comp = _composition()
+    spec = build_deploy_spec(comp, settings=_settings(), image_url=_IMAGE)
+    deployment = next(m for m in spec.render_manifests() if m["kind"] == "Deployment")
+    ann = deployment["metadata"]["annotations"]["jetuse.dev/required-scopes"]
+    assert ann == ",".join(spec.required_scopes)
+
+
+def test_tenant_isolation_namespaces_and_labels_do_not_collide():
+    # ADR-0016 §6 / マルチテナンシ: 同一 sample_app を別テナントへ配備しても namespace/Secret/
+    # Deployment 名が衝突しない(tenant 非秘密ハッシュを prefix に必ず含める)。
+    comp = _composition()
+    a = build_deploy_spec(comp, settings=_settings(), image_url=_IMAGE,
+                          tenant="ocid1.tenancy.oc1..aaaa-tenant-A")
+    b = build_deploy_spec(comp, settings=_settings(), image_url=_IMAGE,
+                          tenant="ocid1.tenancy.oc1..aaaa-tenant-B")
+    # namespace / Secret / Deployment 名がテナント間で異なる。
+    assert a.namespace != b.namespace
+    assert a.token_secret_name != b.token_secret_name
+    assert a.prefix != b.prefix
+    # tenant label が付き、生 OCID は label に出さない(非秘密ハッシュ・<=63)。
+    assert a.labels()["jetuse.dev/tenant"] == a.tenant_hash
+    assert "ocid1.tenancy" not in a.render_manifests_yaml()
+    # 決定的: 同じテナントは同じ namespace に収束(再配備で増やさない)。
+    a2 = build_deploy_spec(comp, settings=_settings(), image_url=_IMAGE,
+                           tenant="ocid1.tenancy.oc1..aaaa-tenant-A")
+    assert a2.namespace == a.namespace
+
+
+def test_tenant_hash_survives_truncation_with_long_prefix():
+    # F-001 回帰: 長い base prefix でも tenant suffix(`-<hash8>`)が切り詰めで欠落せず、
+    # 最終 prefix が必ず tenant ハッシュで終わる → 別テナントで namespace/Secret が衝突しない。
+    comp = _composition()
+    long_prefix = "jetuse-demo-" + ("x" * 60)  # MAX_PREFIX_LEN(40)を大きく超える
+    a = build_deploy_spec(comp, settings=_settings(), image_url=_IMAGE,
+                          prefix=long_prefix, tenant="ocid1.tenancy.oc1..aaaa-tenant-A")
+    b = build_deploy_spec(comp, settings=_settings(), image_url=_IMAGE,
+                          prefix=long_prefix, tenant="ocid1.tenancy.oc1..aaaa-tenant-B")
+    # 上限内に収まり(<=40)、両テナントとも tenant ハッシュで終端する。
+    assert len(a.prefix) <= 40 and len(b.prefix) <= 40
+    assert a.prefix.endswith("-" + a.tenant_hash)
+    assert b.prefix.endswith("-" + b.tenant_hash)
+    # 同一 base・同一 sample_app・長い名前でも namespace/Secret/Deployment が衝突しない。
+    assert a.namespace != b.namespace
+    assert a.token_secret_name != b.token_secret_name
+    assert a.tenant_hash != b.tenant_hash
+
+
+def test_tenant_whitespace_is_normalized():
+    # 前後空白付き tenant は strip 正規化され、空白無しと同じ namespace に収束する(分裂しない)。
+    comp = _composition()
+    a = build_deploy_spec(comp, settings=_settings(), image_url=_IMAGE,
+                          tenant="ocid1.tenancy.oc1..aaaa-tenant-A")
+    a_ws = build_deploy_spec(comp, settings=_settings(), image_url=_IMAGE,
+                             tenant="  ocid1.tenancy.oc1..aaaa-tenant-A  ")
+    assert a.namespace == a_ws.namespace
+    assert a.tenant_hash == a_ws.tenant_hash
+
+
+def test_render_manifests_labels_are_independent_dicts():
+    # 各リソースの metadata.labels は独立した dict(共有しない)。1 つを patch しても他に波及しない。
+    spec = build_deploy_spec(_composition(), settings=_settings(), image_url=_IMAGE,
+                             tenant="ocid1.tenancy.oc1..aaaa-tenant-A")
+    manifests = spec.render_manifests()
+    labelled = [m for m in manifests if m.get("metadata", {}).get("labels")]
+    assert len(labelled) >= 2
+    labelled[0]["metadata"]["labels"]["jetuse.dev/patched"] = "x"
+    assert all("jetuse.dev/patched" not in m["metadata"]["labels"] for m in labelled[1:])
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "\t"])
+def test_empty_or_whitespace_tenant_rejected(bad):
+    # 空/空白の tenant は fail-closed。env 展開ミスで複数テナントが
+    # 同一 namespace に集約される事故を防ぐ。
+    comp = _composition()
+    with pytest.raises(DeploySpecError):
+        build_deploy_spec(comp, settings=_settings(), image_url=_IMAGE, tenant=bad)
+
+
+def test_sanitize_prefix_forces_rfc1035_leading_letter():
+    # K8s Service 名は RFC 1035(先頭英字必須)。数字始まり prefix でも Service 名が有効になる。
+    comp = _composition()
+    spec = build_deploy_spec(comp, settings=_settings(), image_url=_IMAGE, prefix="123-demo")
+    assert spec.prefix[0].isalpha()
+    service = next(m for m in spec.render_manifests() if m["kind"] == "Service")
+    assert service["metadata"]["name"][0].isalpha()

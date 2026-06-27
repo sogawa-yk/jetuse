@@ -21,6 +21,17 @@ from .connector_runtime import (
     invoke_connector_action,
     register_builtin_action,
 )
+from .external_app import (
+    EMBED_MODES,
+    SSO_MODES,
+    ExternalAppDefinition,
+    ExternalAppError,
+    OidcSsoBridge,
+    SsoHandoffError,
+    build_sso_handoff,
+    external_app_json_schema,
+    validate_external_app,
+)
 from .manifest import (
     PLATFORM_SCOPES,
     PLUGIN_KINDS,
@@ -55,8 +66,10 @@ from .slack_connector_builtin import (
 # `from jetuse_core.plugins.installer import install, uninstall` /
 # `from jetuse_core.plugins.scaffold import ...` / `from jetuse_core.plugins.store import ...` /
 # `from jetuse_core.plugins.connector_store import register_connector, ...` で明示 import する。
-# registry_client(httpx 遅延 import)と sample_app/connector(定義検証・合成バリデーション、
-# DB 非依存)はモジュール import で副作用がないため再公開する。
+# registry_client(httpx 遅延 import)と sample_app/connector/external_app(定義検証・合成
+# バリデーション・SSO ブリッジ、DB 非依存)はモジュール import で副作用がないため再公開する。
+# 既存資産オンボードの builder(asset_connectors / denpyon_external_app / ASSET-01)は manifest
+# builder であり明示 import で使う(`from jetuse_core.plugins.asset_connectors import ...`)。
 # connector_runtime(invoke 層 / CON-02)・slack_connector_builtin(コア Slack / CON-02)は import 時に
 # DB へ触れない(認可監査は invoke 呼び出し時にのみ走り、import は副作用なし)ため再公開する。
 
@@ -68,6 +81,8 @@ __all__ = [
     "PLUGIN_KINDS",
     "SCHEMA_VERSION",
     "SAMPLE_APP_CAPABILITIES",
+    "EMBED_MODES",
+    "SSO_MODES",
     "CompositionError",
     "CompositionReport",
     "ConnectorCompositionError",
@@ -77,14 +92,20 @@ __all__ = [
     "ConnectorInvokeDenied",
     "ConnectorInvokeError",
     "ConnectorInvokeResult",
+    "ExternalAppDefinition",
+    "ExternalAppError",
     "ManifestError",
+    "OidcSsoBridge",
+    "SsoHandoffError",
     "PluginManifest",
     "RegistryClient",
     "RegistryError",
     "SampleAppDefinition",
     "SampleAppError",
+    "build_sso_handoff",
     "canonical_signing_payload",
     "connector_json_schema",
+    "external_app_json_schema",
     "invoke_connector_action",
     "manifest_json_schema",
     "register_builtin_action",
@@ -94,6 +115,7 @@ __all__ = [
     "validate_composition",
     "validate_connector",
     "validate_connector_composition",
+    "validate_external_app",
     "validate_manifest",
     "validate_sample_app",
     "verify_signature",

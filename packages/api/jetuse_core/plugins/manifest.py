@@ -46,7 +46,9 @@ SCHEMA_VERSION = "1"
 #: `jetuse_core.plugins.sample_app`(contributes["sample-app"] の構造検証)が担う。
 #: `connector`(L2 MCP = §6 D9 / plan §10 `tool`=`connector`)は CON-01 で追加した。詳細スキーマは
 #: `jetuse_core.plugins.connector`(contributes["connector"] の構造検証)が担う。
-PluginKind = Literal["usecase", "agent", "sample-app", "connector"]
+#: `external-app`(外部アプリ連携 = iframe/link 埋め込み＋OIDC SSO ブリッジ)は ASSET-01 で追加した。
+#: 詳細スキーマは `jetuse_core.plugins.external_app`(contributes["external-app"] の構造検証)が担う。
+PluginKind = Literal["usecase", "agent", "sample-app", "connector", "external-app"]
 PLUGIN_KINDS = get_args(PluginKind)
 
 #: Platform API ブローカー(§7)が発行するスコープの語彙。
@@ -118,6 +120,7 @@ _CONTRIBUTES_DETAIL_VALIDATORS: dict[str, Callable[[dict[str, Any]], None]] = {}
 _L2_DETAIL_MODULES: dict[str, str] = {
     "connector": "jetuse_core.plugins.connector",
     "sample-app": "jetuse_core.plugins.sample_app",
+    "external-app": "jetuse_core.plugins.external_app",
 }
 
 

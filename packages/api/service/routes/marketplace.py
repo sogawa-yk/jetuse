@@ -42,6 +42,9 @@ _vkey = _semver_key
 # MKT-01 で sample-app(scaffold 取込)/ connector(connector_store 登録)へ拡張した。installer は
 # kind に応じた取込先へ署名検証付き・版固定・出所付きで取り込む(installer._ingest_contributes)。
 # 未対応 kind は installable=False で表し、UI は install ボタンを無効化して未対応を明示する。
+# external-app(ASSET-01)は builder＋in-process SSO ブリッジでオンボードし DB の instance store を
+# 持たないため、マーケット publish/install は後段(specs/16-platform.md §14.4)。よって意図的に
+# 未対応(installer._ingest_contributes が fail-closed に拒否)。流通時は store+migration を追加する。
 SUPPORTED_KINDS = frozenset({"usecase", "agent", "sample-app", "connector"})
 
 

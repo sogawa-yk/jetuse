@@ -16,8 +16,8 @@ status: `todo` | `in_progress` | `blocked` | `done`
 | 2 | MKT-01 sample-app/connector のマーケット流通 | ステージ1(PLG-04/05)・CON-01・SBA-01 | レジストリ apply・課金 | done（feat/stage-4 統合・mock E2E。実レジストリ apply は残ゲート） |
 | 3 | DEP-02 Platform API 注入（D3 解） | DEP-01 | terraform apply・課金（実コンテナ）/ **ADR-0016 承認** | done（feat/stage-4 統合・mock E2E・ADR-0016 起票。実コンテナ apply は残ゲート） |
 | 4 | MKT-02 中央レジストリ μService（署名・版・評価） | MKT-01 | μService apply・課金 | done（feat/stage-4 統合・migration 022・loop-ADB E2E。μService apply は残ゲート） |
-| 5 | ASSET-01 既存資産オンボード（伝ぴょん/No.1-RAG/SQL-Assist） | DEP-01・CON-01・MKT-01 | **既存資産接続・SSO・apply（濃い）** | blocked（後回し＝外部資産専用パス。施主判断 2026-06-27） |
-| 6 | DEP-03 OKE 基盤への移行（JetUse 本体＋デモ） | ステージ4（DEP-01/02）・**ADR-0017** | **ADR-0017 承認 / OKE クラスタ apply・恒常課金** | todo（次タスク。施主判断 2026-06-27 で OKE 全面移行。CI 版 DEP-01/02 は本ステージのベースライン） |
+| 5 | ASSET-01 既存資産オンボード（伝ぴょん/No.1-RAG/SQL-Assist） | DEP-01・CON-01・MKT-01 | **既存資産接続・SSO・apply（濃い）** | done（feat/stage-4b 統合・review-12 PASS・mock E2E。実資産接続/SSO は人間ゲート＝SKIPPED） |
+| 6 | DEP-03 OKE 基盤への移行（JetUse 本体＋デモ） | ステージ4（DEP-01/02）・**ADR-0017** | **ADR-0017 承認 / OKE クラスタ apply・恒常課金** | done（feat/stage-4b 統合・review-26 PASS・ADR-0017採用・**OKE 実 apply 成功＋実機 deploy/inject/delete 検証済**） |
 
 > 並行可: 起動直後は **DEP-01 と MKT-01 が相互独立で並行可（最大2）**。
 > 続く波で **DEP-02（←DEP-01）と MKT-02（←MKT-01）が並行可**。ASSET-01 は DEP-01＋MKT-01 後。
@@ -63,3 +63,11 @@ status: `todo` | `in_progress` | `blocked` | `done`
   **DEP-02 が ADR-0016（L3 デモ注入/ライフサイクル）を新規起票（提案中＝承認は人間ゲート）**。
   自走スコープ完了（DEP/MKT 4本 done・ASSET-01 deferred）。feat/stage-4 = api 902 passed / registry 108 / ruff clean / tf validate OK。
   残ゲート: ADR-0016 承認・terraform apply（複数）・base PR/push。ステージ報告: runs/_stages/stage-4/REPORT.md。
+- 2026-06-27 stage-4b（S5 手前の残: OKE 移行＋既存資産 / 施主が apply・provisioning を確認不要で委譲）:
+  feat/stage-4（PR #22 マージ済）を base に `feat/stage-4b` を切り、ASSET-01 と DEP-03 を自走・統合。
+  ASSET-01（review-12 PASS・No.1-RAG/SQL-Assist=MCP・伝ぴょん=外部連携）、DEP-03（review-26 PASS・ADR-0017採用・
+  配備層を K8s manifest/Secret 化）を統合。**OKE を実 apply（27 リソース・IAM ゲート無し）→ クラスタ
+  jetuse-dev-oke-cluster(v1.35.2/2ノード) ACTIVE**。実機で namespace→Deployment(ConfigMap+Secret 注入)→Pod
+  Running(env 確認)→namespace delete を実証。feat/stage-4b = api 990 passed / ruff clean / tf validate(OKE) OK。
+  残ゲート: **base への PR/push（人間）**・JetUse 本体の実 cutover（イメージ build/push）・実 Slack・ASSET 実接続/SSO。
+  ステージ報告: runs/_stages/stage-4b/REPORT.md。OKE tfstate は _stage-4b worktree 内（destroy 可・課金中）。
