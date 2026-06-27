@@ -30,10 +30,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from .plugins import sample_app_registry as registry
 from .plugins.ai_runtime import bound_capabilities
+from .plugins.connector import validate_connector_composition
+from .plugins.core_connectors import connector_invoke_scopes, core_connector
 from .plugins.sample_app import (
     CompositionReport,
     SampleAppDefinition,
@@ -98,6 +100,37 @@ class SlotBinding(BaseModel):
     reason: str | None = None
 
 
+class ConnectorBinding(BaseModel):
+    """推薦されたコネクタを **コアコネクタ・パレットへ束縛**した結果(1 provider 分)。
+
+    AI 部品(`SlotBinding`)と同じく「推薦を黙って消さず、束縛できたか/外したかを理由付きで残す」。
+
+    `status`:
+      - `active`   : コアパレットに在り、かつコネクタ合成バリデーション(宣言整合)が ok。
+                     `required_scopes` の短期トークンを broker から得れば invoke 経路に載せられる。
+      - `excluded` : パレット外(後段マーケット)、または合成不整合(action 要求スコープ未宣言)。
+                     `reason` に外した理由を残す(synth の warnings にも引き継ぐ)。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: 接続先 SaaS の安定キー(slack 等)。推薦 `connectors` の要素。
+    provider: str
+    status: str
+    #: コアコネクタの接続方式(builtin/mcp)。excluded(パレット外)で定義が無いとき None。
+    transport: str | None
+    #: コネクタが公開する action 名。excluded(パレット外)で空。
+    actions: list[str]
+    #: このコネクタを invoke するのに要る Platform スコープ(invoke スコープ＋action 宣言スコープ)。
+    required_scopes: list[str]
+    #: install 時に Vault へ束ねる秘密が要るか(auth.kind!=none)。
+    requires_secret: bool
+    #: 束ねるべき秘密の参照名(requires_secret のとき非 None。**実値ではない**)。
+    secret_ref: str | None
+    #: active でない理由(excluded のときに人間向け説明)。
+    reason: str | None = None
+
+
 class ScreenView(BaseModel):
     """プレビューに描く 1 画面(SBA 定義の screen ＋ active な組込点)。"""
 
@@ -147,7 +180,13 @@ class DemoComposition(BaseModel):
     icon: str
     #: UI/出力テンプレ(chat | notify | report)。
     ui: str | None
+    #: 推薦されたコネクタ(provider 名)。**後方互換**で生の推薦リストを保持(summary.py 等が参照)。
     connectors: list[str]
+    #: 推薦コネクタの束縛結果(active/excluded・理由付き)。CON-03 で追加。**後方互換**: 旧 payload
+    #: (本フィールド以前の DemoComposition)を `model_validate` できるよう既定空リストにする。
+    connector_bindings: list[ConnectorBinding] = Field(default_factory=list)
+    #: 束縛済み(active)=デプロイ後に invoke 経路へ載せられるコネクタ provider(既定空・後方互換)。
+    active_connectors: list[str] = Field(default_factory=list)
     #: 主役 capability(Q3 由来)。
     highlight: str | None
     #: 描画する画面(active 組込点付き)。
@@ -311,6 +350,81 @@ def _bindings(
     return bindings, screens
 
 
+def _connector_bindings(
+    recommendation: Recommendation,
+) -> tuple[list[ConnectorBinding], list[str]]:
+    """推薦 `connectors` をコアコネクタ・パレットへ束縛し、binding と警告を作る。
+
+    provider ごとに `core_connector()` で引き当て、コネクタ合成バリデーション(宣言整合)で active/
+    excluded を分ける。重複 provider は最初の 1 件のみ束縛する(順序を保ちつつ二重束縛を避ける)。
+    パレット外・合成不整合は黙って消さず excluded＋理由を残し、warnings にも引き継ぐ(§4)。
+    元の検証済み定義は変形しない。
+    """
+    bindings: list[ConnectorBinding] = []
+    warnings: list[str] = []
+    seen: set[str] = set()
+    for provider in recommendation.connectors:
+        if provider in seen:
+            continue
+        seen.add(provider)
+        core = core_connector(provider)
+        if core is None:
+            reason = (
+                f"コネクタ '{provider}' はコアパレット外(コアコネクタは Slack のみ)。"
+                "後段マーケット(S3+)で追加するか連携なし(none)にする"
+            )
+            bindings.append(
+                ConnectorBinding(
+                    provider=provider,
+                    status="excluded",
+                    transport=None,
+                    actions=[],
+                    required_scopes=[],
+                    requires_secret=False,
+                    secret_ref=None,
+                    reason=reason,
+                )
+            )
+            warnings.append(reason)
+            continue
+        definition = core.definition()
+        report = validate_connector_composition(core.manifest(), definition=definition)
+        scopes = connector_invoke_scopes(definition)
+        action_names = [a.name for a in definition.actions]
+        if not report.ok:
+            reason = (
+                f"コネクタ '{provider}' は合成不整合(action 要求スコープ未宣言: "
+                f"{report.undeclared_permissions})。manifest.permissions に宣言してから束縛する"
+            )
+            bindings.append(
+                ConnectorBinding(
+                    provider=provider,
+                    status="excluded",
+                    transport=definition.transport,
+                    actions=action_names,
+                    required_scopes=scopes,
+                    requires_secret=report.requires_secret,
+                    secret_ref=report.secret_ref,
+                    reason=reason,
+                )
+            )
+            warnings.append(reason)
+            continue
+        bindings.append(
+            ConnectorBinding(
+                provider=provider,
+                status="active",
+                transport=definition.transport,
+                actions=action_names,
+                required_scopes=scopes,
+                requires_secret=report.requires_secret,
+                secret_ref=report.secret_ref,
+                reason=None,
+            )
+        )
+    return bindings, warnings
+
+
 def _empty_composition(
     recommendation: Recommendation, errors: list[str], warnings: list[str]
 ) -> DemoComposition:
@@ -324,6 +438,8 @@ def _empty_composition(
         icon="🧩",
         ui=recommendation.ui,
         connectors=list(recommendation.connectors),
+        connector_bindings=[],
+        active_connectors=[],
         highlight=recommendation.highlight,
         screens=[],
         bindings=[],
@@ -387,6 +503,11 @@ def synthesize(
 
     bindings, screens = _bindings(definition, recommendation)
 
+    # コネクタ束縛(CON-03): 推薦コネクタをコアパレットへ束縛し active/excluded を理由付きで残す。
+    connector_bindings, connector_warnings = _connector_bindings(recommendation)
+    active_connectors = [c.provider for c in connector_bindings if c.status == "active"]
+    warnings.extend(connector_warnings)
+
     active_parts = [b.capability for b in bindings if b.status == "active"]
     excluded = [
         {"capability": b.capability, "status": b.status, "reason": b.reason or ""}
@@ -437,6 +558,8 @@ def synthesize(
         icon=summary_row.get("icon", "🧩"),
         ui=recommendation.ui,
         connectors=list(recommendation.connectors),
+        connector_bindings=connector_bindings,
+        active_connectors=active_connectors,
         highlight=recommendation.highlight,
         screens=screens,
         bindings=bindings,

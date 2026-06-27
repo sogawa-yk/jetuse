@@ -76,6 +76,7 @@ from .routes import (
     hearing,
     marketplace,
     minutes,
+    platform,
     sample_apps,
     usecases,
     voice,
@@ -129,6 +130,7 @@ def create_app() -> FastAPI:
     app.include_router(marketplace.router)
     app.include_router(sample_apps.router)
     app.include_router(hearing.router)
+    app.include_router(platform.router)
 
     return app
 

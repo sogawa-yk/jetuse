@@ -24,6 +24,7 @@ import binascii
 import json
 import math
 import re
+from collections.abc import Callable
 from typing import Any, Literal, get_args
 
 from pydantic import (
@@ -40,10 +41,12 @@ from pydantic import (
 #: manifest スキーマ自体の版。後方非互換な変更で繰り上げる。
 SCHEMA_VERSION = "1"
 
-#: サポートする配布種別の型。tool(L2 MCP)/hosted-app(L3)/bundle は後続。
+#: サポートする配布種別の型。hosted-app(L3)/bundle は後続。
 #: `sample-app`(scaffold テンプレ = §6 D9)は SBA-01 で追加した。詳細スキーマは
 #: `jetuse_core.plugins.sample_app`(contributes["sample-app"] の構造検証)が担う。
-PluginKind = Literal["usecase", "agent", "sample-app"]
+#: `connector`(L2 MCP = §6 D9 / plan §10 `tool`=`connector`)は CON-01 で追加した。詳細スキーマは
+#: `jetuse_core.plugins.connector`(contributes["connector"] の構造検証)が担う。
+PluginKind = Literal["usecase", "agent", "sample-app", "connector"]
 PLUGIN_KINDS = get_args(PluginKind)
 
 #: Platform API ブローカー(§7)が発行するスコープの語彙。
@@ -57,6 +60,15 @@ PlatformScope = Literal[
     "platform:connector.invoke",
 ]
 PLATFORM_SCOPES = frozenset(get_args(PlatformScope))
+
+#: 実 Platform API ルート(PAPI-03)が要求する scope の名前付き定数。各ルートが文字列直書きを
+#: 避け、typo を import エラーで前倒し検出するための再エクスポート(語彙の正本は PlatformScope)。
+PLATFORM_SCOPE_RAG_SEARCH = "platform:rag.search"
+PLATFORM_SCOPE_DB_QUERY = "platform:db.query"
+PLATFORM_SCOPE_CONVERSATIONS_READ = "platform:conversations.read"
+PLATFORM_SCOPE_FILES_READ = "platform:files.read"
+PLATFORM_SCOPE_FILES_WRITE = "platform:files.write"
+PLATFORM_SCOPE_CONNECTOR_INVOKE = "platform:connector.invoke"
 
 #: id は `namespace/name`。各セグメントは小文字英数とハイフン(端はハイフン不可)。
 _ID_SEGMENT = r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
@@ -85,6 +97,43 @@ SIGNATURE_ALGORITHM = "ed25519"
 
 class ManifestError(ValueError):
     """manifest が仕様に適合しないときに送出する。pydantic の詳細を文字列で保持する。"""
+
+
+# --- kind 別 contributes 詳細バリデータの登録機構 --------------------------
+#
+# `validate_manifest()` は L1 として「kind と contributes キーの対応」までを強制する。
+# 一方、L2 の kind(connector 等)は `contributes[kind]` の詳細スキーマ違反や認証値混入を
+# **公開入口である validate_manifest() の時点で**弾きたい(署名・レジストリ取込・保存の各経路が
+# validate_manifest() のみを信頼しても安全であるように)。
+#
+# manifest.py が個別の詳細モジュール(connector.py 等)を import すると循環するため、依存を反転し、
+# **詳細モジュール側が自分の validator をここへ登録**する(connector.py の import 時に register)。
+# plugins パッケージ(__init__)は connector を import するため、実利用経路では必ず登録済みになる。
+# validator は payload(dict)を受け取り、不正なら ValueError を送出(pydantic が ValidationError 化)。
+_CONTRIBUTES_DETAIL_VALIDATORS: dict[str, Callable[[dict[str, Any]], None]] = {}
+
+# import 順に依存しないための保険: 登録がまだ無い L2 kind は、検証時に当該モジュールを遅延 import し
+# 自己登録させる(manifest だけを import した経路でも詳細検証が必ず効く)。
+# 遅延 import は「検証時」に起きるため、import 時の循環は発生しない。
+_L2_DETAIL_MODULES: dict[str, str] = {"connector": "jetuse_core.plugins.connector"}
+
+
+def register_contributes_validator(
+    kind: str, validator: Callable[[dict[str, Any]], None]
+) -> None:
+    """kind の `contributes[kind]` 詳細バリデータを登録する(詳細モジュールが import 時に呼ぶ)。"""
+    _CONTRIBUTES_DETAIL_VALIDATORS[kind] = validator
+
+
+def _resolve_detail_validator(kind: str) -> Callable[[dict[str, Any]], None] | None:
+    """kind の詳細バリデータを返す。未登録でも既知 L2 kind は遅延 import で確実に解決する。"""
+    validator = _CONTRIBUTES_DETAIL_VALIDATORS.get(kind)
+    if validator is None and kind in _L2_DETAIL_MODULES:
+        import importlib
+
+        importlib.import_module(_L2_DETAIL_MODULES[kind])  # モジュールが自己登録する
+        validator = _CONTRIBUTES_DETAIL_VALIDATORS.get(kind)
+    return validator
 
 
 def _assert_json_value(v: Any, path: str) -> None:
@@ -240,6 +289,11 @@ class PluginManifest(BaseModel):
             raise ValueError(
                 f"contributes は kind '{self.kind}' のキーのみ持てる。余分: {sorted(extra)}"
             )
+        # L2 kind(connector 等)は詳細バリデータで `contributes[kind]` を構造検証する。これにより
+        # validate_manifest() 単体で詳細違反・認証値混入を弾く(公開入口の安全性・import 順非依存)。
+        detail_validator = _resolve_detail_validator(self.kind)
+        if detail_validator is not None:
+            detail_validator(self.contributes[self.kind])
         return self
 
 
