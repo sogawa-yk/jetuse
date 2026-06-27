@@ -225,9 +225,25 @@ def validate_answers(answers: dict[str, Any], *, require_all: bool = False) -> d
     return normalized
 
 
+# 未実装機能へ向かう(= デモが成立しない)選択肢を UI 配信から一旦非表示にする。実装時にこの集合
+# から外せば解禁される(QUESTIONS 定義・recommend/governance の写像は残すので復元は容易)。
+#   accounting   = Q1 経理・帳票 → 主 SBA-D(VLM-OCR=SBA-05、MM-01 待ちで blocked)に着地し合成不能
+#   image        = Q2 帳票/画像/スキャン → vlm.ocr 部品を誘発(実装済 SBA に組込点なし)
+#   ocr_extract  = Q3 読取・抽出(OCR)   → 同上
+#   other        = Q1 その他(自由) → 主 SBA を決定ルールで定められず GenAI 最近傍提案(未実装)待ち。
+#                  sample_app=None → unresolved_composition で合成不能。GenAI 補助の実装で解禁。
+HIDDEN_OPTION_IDS: frozenset[str] = frozenset({"accounting", "image", "ocr_extract", "other"})
+
+
 def question_schema() -> dict[str, Any]:
-    """質問セットの機械可読スキーマ(UI/外部公開用)。"""
-    return {
-        "version": "1",
-        "questions": [q.model_dump() for q in QUESTIONS],
-    }
+    """質問セットの機械可読スキーマ(UI/外部公開用)。
+
+    未実装機能(SBA-D / VLM-OCR)へ向かう選択肢(`HIDDEN_OPTION_IDS`)は配信から除外し、
+    ビルダーが「常に成立するデモ」へ着地するようにする。実装時は集合を空にすれば解禁。
+    """
+    questions = []
+    for q in QUESTIONS:
+        d = q.model_dump()
+        d["options"] = [o for o in d.get("options", []) if o.get("id") not in HIDDEN_OPTION_IDS]
+        questions.append(d)
+    return {"version": "1", "questions": questions}

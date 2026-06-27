@@ -479,6 +479,9 @@ export const ja = {
   'hearing.result.mainSba': '主サンプルアプリ',
   'hearing.result.highlight': '主役AI部品',
   'hearing.result.aiParts': 'AI部品セット',
+  'hearing.result.notApplicable': '対象外の部品（自動フィット）',
+  'hearing.result.notApplicableHint':
+    '主サンプルアプリの組込点に該当しないため除外しました。SBA を変えると組込めます。',
   'hearing.result.connectors': 'コネクタ',
   'hearing.result.ui': 'UI / 出力',
   'hearing.result.seed': 'デモデータ',

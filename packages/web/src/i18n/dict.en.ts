@@ -481,6 +481,9 @@ export const en: Record<keyof typeof ja, string> = {
   'hearing.result.mainSba': 'Main sample app',
   'hearing.result.highlight': 'Lead AI part',
   'hearing.result.aiParts': 'AI parts',
+  'hearing.result.notApplicable': 'Excluded parts (auto-fit)',
+  'hearing.result.notApplicableHint':
+    'Excluded because the main sample app has no slot for them. Switch SBA to enable.',
   'hearing.result.connectors': 'Connectors',
   'hearing.result.ui': 'UI / output',
   'hearing.result.seed': 'Demo data',

@@ -67,19 +67,25 @@ def test_branch_no_promote_when_already_sba_b():
     assert not any("格上げ" in r for r in rec.rationale)
 
 
-def test_ai_parts_union_of_q2_and_q3():
+def test_ai_parts_autofit_excludes_parts_without_slot():
+    """自動フィット: 候補(Q2∪Q3)のうち主 SBA に組込点が無い部品は ai_parts から外し
+    not_applicable_parts に退避する。SBA-A に minutes/agent のスロットは無い。"""
     rec = recommend(_answers(Q2=["docs", "audio"], Q3="agent"))
-    # docs→{rag.search,summarize,classify}, audio→{minutes}, Q3 agent→{agent}
-    assert set(rec.ai_parts) == {"rag.search", "summarize", "classify", "minutes", "agent"}
-    assert rec.highlight == "agent"
+    # 候補 = docs{rag.search,summarize,classify} ∪ audio{minutes} ∪ agent{agent}
+    # SBA-A の組込点 = {rag.search, classify, summarize, draft} → minutes/agent は対象外。
+    assert set(rec.ai_parts) == {"rag.search", "summarize", "classify"}
+    assert set(rec.not_applicable_parts) == {"minutes", "agent"}
+    # 主役 agent は SBA-A に組込点が無い → 主役は当アプリの部品にフォールバック。
+    assert rec.highlight in rec.ai_parts
 
 
-def test_image_data_requests_vlm_ocr_with_warning():
+def test_vlm_part_is_excluded_as_not_applicable():
+    """帳票/OCR(vlm.ocr)はどの実装済み SBA にも組込点が無い → 対象外として除外(常に成立)。"""
     rec = recommend(_answers(Q2=["image"], Q3="ocr_extract"))
-    assert "vlm.ocr" in rec.ai_parts
-    assert "classify" in rec.ai_parts
-    # vlm.ocr は MM-01 依存の警告が付く(部品は外さない)。
-    assert any("MM-01" in w for w in rec.validation.warnings)
+    assert "vlm.ocr" not in rec.ai_parts
+    assert "vlm.ocr" in rec.not_applicable_parts
+    assert "classify" in rec.ai_parts  # SBA-A に組込点がある classify は残る
+    assert rec.validation.ok is True   # 対象外を外した結果、警告無く成立
 
 
 @pytest.mark.parametrize(

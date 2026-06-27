@@ -77,6 +77,7 @@ const REC_SBA_B = {
   sample_app: 'SBA-B',
   secondary_sample_apps: [],
   ai_parts: ['rag.search', 'nl2sql', 'chart'],
+  not_applicable_parts: [],
   highlight: 'nl2sql',
   connectors: ['slack'],
   ui: 'chat',

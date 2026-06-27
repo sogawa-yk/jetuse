@@ -35,6 +35,7 @@ type Recommendation = {
   sample_app: string | null
   secondary_sample_apps: string[]
   ai_parts: string[]
+  not_applicable_parts: string[]
   highlight: string | null
   connectors: string[]
   ui: string
@@ -720,6 +721,24 @@ function ResultStep({
             <dt className="mb-1 text-xs font-medium text-ink-muted">{t('hearing.result.aiParts')}</dt>
             <dd>{chips(rec.ai_parts)}</dd>
           </div>
+          {(rec.not_applicable_parts ?? []).length > 0 && (
+            <div className="sm:col-span-2">
+              <dt className="mb-1 text-xs font-medium text-ink-muted">
+                {t('hearing.result.notApplicable')}
+              </dt>
+              <dd className="flex flex-wrap gap-1.5">
+                {rec.not_applicable_parts.map((x) => (
+                  <span
+                    key={x}
+                    className="rounded-full border border-line bg-surface px-2.5 py-0.5 text-xs text-ink-muted line-through"
+                  >
+                    {partLabel(t, x)}
+                  </span>
+                ))}
+              </dd>
+              <p className="mt-1 text-[11px] text-ink-muted">{t('hearing.result.notApplicableHint')}</p>
+            </div>
+          )}
           <div>
             <dt className="mb-1 text-xs font-medium text-ink-muted">{t('hearing.result.connectors')}</dt>
             <dd>{chips(rec.connectors)}</dd>

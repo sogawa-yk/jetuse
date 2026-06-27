@@ -302,11 +302,9 @@ def _governance_gate(composition: DemoComposition):
     起動できない(ガバナンス FAIL)構成では顧客提示サマリも生成させない(「起動済みデモのサマリ」の
     整合: 外れた構成を顧客資料に載せない)。違反は機械可読＋代替提案つきで 409 にする。
     """
-    if not composition.ok:
-        raise HTTPException(
-            status_code=409,
-            detail="デモ構成が成立していません。先に /validate で構成を確認してください",
-        )
+    # 合成不能(主SBA 未解決)も validate_governance が unresolved_composition 違反として
+    # 構造化レポートで返す。launch ルートと同一の dict 形 detail に揃え、フロントが起動/サマリで
+    # 同じ違反表示・代替提案を扱えるようにする(早期の文字列 detail を廃止)。
     report = validate_governance(composition)
     if not report.ok:
         raise HTTPException(

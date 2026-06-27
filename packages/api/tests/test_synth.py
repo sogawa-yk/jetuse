@@ -111,8 +111,11 @@ def test_scenario2_nl2sql_binds_to_sba_b():
 
 
 def test_scenario3_unbound_capability_excluded_with_warning():
-    # Q3=ocr_extract → ai_parts に vlm.ocr＋ classify。
-    rec = recommend(_answers(Q1="support", Q2=["image"], Q3="ocr_extract"))
+    # 自動フィット後は recommend が no_slot 部品を ai_parts に残さないため、synth の安全縮退を
+    # 直接検証する: SBA-A 構成に vlm.ocr(SBA-A に組込点なし)を注入し、no_slot として active から
+    # 外れ excluded/warnings に残ることを確かめる。
+    rec = recommend(_answers(Q1="support", Q2=["docs"], Q3="rag_qa"))
+    rec = rec.model_copy(update={"ai_parts": [*rec.ai_parts, "vlm.ocr"]})
     assert "vlm.ocr" in rec.ai_parts
 
     comp = synthesize(rec)
@@ -146,8 +149,10 @@ def test_unbound_but_slotted_capability_marked_unbound(monkeypatch):
 
 
 def test_scenario3_recommended_part_without_slot_is_no_slot():
-    # サポート(SBA-A)＋業務DB → nl2sql が推薦されるが SBA-A に nl2sql 組込点は無い。
-    rec = recommend(_answers(Q1="support", Q2=["business_db", "docs"], Q3="rag_qa"))
+    # 自動フィット後は recommend が nl2sql(SBA-A 組込点なし)を残さないため、synth の no_slot
+    # 分類を直接検証する目的で nl2sql を注入する。
+    rec = recommend(_answers(Q1="support", Q2=["docs"], Q3="rag_qa"))
+    rec = rec.model_copy(update={"ai_parts": [*rec.ai_parts, "nl2sql"]})
     assert "nl2sql" in rec.ai_parts
     comp = synthesize(rec)
     nl = next(b for b in comp.bindings if b.capability == "nl2sql")

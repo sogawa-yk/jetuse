@@ -278,9 +278,12 @@ def test_validate_gate_passes_valid_composition(repo):
 
 
 def test_validate_gate_flags_disallowed_combination(repo):
-    """SBA-A + 業務DB照会 → nl2sql は組込点が無く許可外組合せとして弾かれ、代替提案が返る。"""
+    """未実装 SBA(Q1=accounting→SBA-D)に着地する構成は合成不能で弾かれ、代替提案が返る。
+
+    自動フィットにより業務×AI 不一致は合成側で吸収される(対象外として除外)ため、validate が
+    FAIL を返す経路は「主 SBA を解決できない」unresolved_composition に集約される。"""
     sid = _create()
-    answers = {**FULL, "Q2": ["business_db", "docs"]}
+    answers = {**FULL, "Q1": "accounting"}
     for qid, val in answers.items():
         client.put(f"/api/hearing/sessions/{sid}/answers/{qid}", json={"value": val})
     client.post(f"/api/hearing/sessions/{sid}/recommend")
@@ -290,7 +293,7 @@ def test_validate_gate_flags_disallowed_combination(repo):
     assert gov["ok"] is False
     nl = next(
         v for v in gov["violations"]
-        if v["kind"] == "disallowed_combination" and v["element"] == "nl2sql"
+        if v["kind"] == "unresolved_composition"
     )
     assert nl["alternative"]  # 外させない代替提案
 
@@ -534,19 +537,21 @@ def test_launch_requires_confirmation_409(repo):
 
 
 def test_launch_blocked_when_governance_fails(repo):
-    """境界: バリデーション FAIL 構成は起動に進めず、代替提案つき違反が返る。"""
+    """境界: governance FAIL 構成は起動に進めず、代替提案つき違反が返る。
+
+    自動フィットで業務×AI 不一致は合成側で吸収されるため、残る FAIL 経路=未実装 SBA
+    (Q1=accounting→SBA-D)で合成不能(unresolved_composition)を起こしてゲートを検証する。"""
     sid = _create()
-    # SBA-A + 業務DB → nl2sql は組込点なし(許可外組合せ)で governance FAIL。
-    _confirm_full(sid, {**FULL, "Q2": ["business_db", "docs"]})
+    _confirm_full(sid, {**FULL, "Q1": "accounting"})
     r = client.post(f"/api/hearing/sessions/{sid}/launch")
     assert r.status_code == 409, r.text
     detail = r.json()["detail"]
     assert detail["governance"]["ok"] is False
-    nl = next(
+    v = next(
         v for v in detail["governance"]["violations"]
-        if v["kind"] == "disallowed_combination" and v["element"] == "nl2sql"
+        if v["kind"] == "unresolved_composition"
     )
-    assert nl["alternative"]  # 外させない代替提案
+    assert v["alternative"]  # 外させない代替提案(最近傍 SBA へ誘導)
     # 起動記録は作られない。
     assert client.get(f"/api/hearing/sessions/{sid}/launch").status_code == 404
 
@@ -616,7 +621,7 @@ def test_summary_falls_back_when_genai_unavailable(repo, monkeypatch):
 def test_summary_blocked_when_governance_fails(repo):
     """境界: ガバナンス FAIL の構成では構成サマリを生成できない(409＋代替提案 / F-003)。"""
     sid = _create()
-    _confirm_full(sid, {**FULL, "Q2": ["business_db", "docs"]})  # nl2sql 許可外 → governance FAIL
+    _confirm_full(sid, {**FULL, "Q1": "accounting"})  # SBA-D 未実装 → 合成不能 → governance FAIL
     r = client.post(f"/api/hearing/sessions/{sid}/summary")
     assert r.status_code == 409, r.text
     assert r.json()["detail"]["governance"]["ok"] is False

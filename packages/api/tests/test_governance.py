@@ -32,8 +32,13 @@ def _answers(**over):
     return base
 
 
-def _comp(**over):
-    return synthesize(recommend(_answers(**over)))
+def _comp(_inject=(), **over):
+    # 自動フィット後は recommend が「アプリに合わない部品」を ai_parts に残さないため、ガバナンスの
+    # no_slot/model 判定を検証するテストでは、対象部品を推薦に**直接注入**して no_slot 構成を作る。
+    rec = recommend(_answers(**over))
+    if _inject:
+        rec = rec.model_copy(update={"ai_parts": [*rec.ai_parts, *_inject]})
+    return synthesize(rec)
 
 
 # --- シナリオ1(正常): 妥当な構成は PASS ------------------------------------
@@ -60,7 +65,7 @@ def test_valid_nl2sql_composition_passes():
 
 def test_disallowed_combination_capability_without_slot():
     # SBA-A + 業務DB → nl2sql が推薦されるが SBA-A に nl2sql 組込点は無い(許可外組合せ)。
-    report = validate_governance(_comp(Q1="support", Q2=["business_db", "docs"], Q3="rag_qa"))
+    report = validate_governance(_comp(_inject=["nl2sql"], Q1="support"))
     assert report.ok is False
     combos = [v for v in report.violations if v.kind == "disallowed_combination"]
     nl = next(v for v in combos if v.element == "nl2sql")
@@ -74,7 +79,7 @@ def test_disallowed_combination_capability_without_slot():
 
 def test_disallowed_combination_capability_without_any_core_sba():
     # SBA-A + 画像 → vlm.ocr が推薦されるが、コア同梱に vlm.ocr 組込点を持つ SBA は無い。
-    report = validate_governance(_comp(Q1="support", Q2=["image"], Q3="ocr_extract"))
+    report = validate_governance(_comp(_inject=["vlm.ocr"], Q1="support"))
     assert report.ok is False
     vlm = next(
         v for v in report.violations
@@ -158,7 +163,7 @@ def test_missing_host_capability_from_composition_report():
 
 def test_model_unavailable_when_vision_missing():
     # SBA-A + ocr_extract → vlm.ocr(vision 要求)。vision 無しレジストリでは可用性 NG。
-    comp = _comp(Q1="support", Q2=["image"], Q3="ocr_extract")
+    comp = _comp(_inject=["vlm.ocr"], Q1="support")
     report = validate_governance(comp, available_models=_TEXT_ONLY_MODELS)
     assert report.ok is False
     v = next(v for v in report.violations if v.kind == "model_unavailable")
@@ -202,7 +207,7 @@ def test_unresolved_composition_is_rejected():
 
 def test_all_violations_carry_alternatives():
     # 複数違反が同時に出る構成(no_slot + vision 不可)で、全件に代替提案がある。
-    comp = _comp(Q1="support", Q2=["image"], Q3="ocr_extract")
+    comp = _comp(_inject=["vlm.ocr"], Q1="support")
     report = validate_governance(comp, available_models=_TEXT_ONLY_MODELS)
     assert report.violations
     assert all(v.alternative.strip() for v in report.violations)

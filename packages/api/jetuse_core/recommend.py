@@ -13,10 +13,29 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from .hearing_schema import HearingSchemaError, validate_answers
-from .plugins.sample_app import DEFAULT_HOST_CAPABILITIES, SAMPLE_APP_CAPABILITIES
+from .plugins import sample_app_registry as _registry
+from .plugins.sample_app import (
+    DEFAULT_HOST_CAPABILITIES,
+    SAMPLE_APP_CAPABILITIES,
+    required_capabilities,
+)
+
+#: SBA コード → コア同梱 instance_id(実装済みのみ。SBA-D は未実装で不在)。
+_SBA_CODE_TO_INSTANCE: dict[str, str] = {
+    "SBA-A": _registry.SBA_A_INSTANCE_ID,
+    "SBA-B": _registry.SBA_B_INSTANCE_ID,
+    "SBA-C": _registry.SBA_C_INSTANCE_ID,
+}
+
+
+def _sba_capabilities(code: str | None) -> set[str]:
+    """実装済みコア SBA が組込点(aiSlot)に持つ capability 集合。未実装/None は空集合。"""
+    inst = _SBA_CODE_TO_INSTANCE.get(code or "")
+    resolved = _registry.resolve_app(inst) if inst else None
+    return set(required_capabilities(resolved.definition)) if resolved else set()
 
 # --- 写像表(仕様の正本・監査可能) ------------------------------------------
 
@@ -107,8 +126,10 @@ class Recommendation(BaseModel):
     sample_app: str | None
     #: 主＋従の従(MVP は単一 SBA に絞るため通常は空。§8 の複合は HBD 後段)。
     secondary_sample_apps: list[str]
-    #: AI 部品セット(capability)。決定順に整列。
+    #: AI 部品セット(capability)。決定順に整列。主 SBA の組込点に合うもののみ(自動フィット)。
     ai_parts: list[str]
+    #: 推薦されたが主 SBA に組込点が無く「対象外」として除外した部品。UI 提示・監査用。
+    not_applicable_parts: list[str] = Field(default_factory=list)
     #: デモの主役 capability(Q3 由来)。SBA の組込点に優先配置する。
     highlight: str | None
     #: コネクタ(Q4)。slack のみコア。
@@ -184,7 +205,28 @@ def recommend(answers: dict[str, Any]) -> Recommendation:
     highlight = Q3_TO_PARTS[q3][0]
     parts.add(highlight)
     ai_parts = _ordered_parts(parts)
-    rationale.append(f"AI部品 = Q2{sorted(q2)} ∪ Q3({q3}) → {ai_parts}(主役 {highlight})")
+    rationale.append(f"AI部品(候補) = Q2{sorted(q2)} ∪ Q3({q3}) → {ai_parts}(主役 {highlight})")
+
+    # 自動フィット: 主 SBA の組込点に合う部品のみへ限定し、合わない部品は「対象外」に退避する。
+    # ガバナンスが弾く no_slot を作らず、どの選択でも成立するデモにする(§4: 部品は黙って消さず
+    # not_applicable_parts と rationale に残す)。候補が全滅したらアプリ本来の AI で成立させる。
+    not_applicable: list[str] = []
+    app_caps = _sba_capabilities(sample_app)
+    if app_caps:
+        fitting = [p for p in ai_parts if p in app_caps]
+        not_applicable = [p for p in ai_parts if p not in app_caps]
+        if not fitting:
+            fitting = _ordered_parts(app_caps)
+            rationale.append(
+                f"主役/データが {sample_app} の組込点に該当せず → 本来の組込AI {fitting} で成立"
+            )
+        if not_applicable:
+            rationale.append(f"{sample_app} 対象外の部品を除外(自動フィット): {not_applicable}")
+        if highlight not in app_caps:
+            new_hl = fitting[0] if fitting else None
+            rationale.append(f"主役 {highlight} は組込点なし → 主役を {new_hl} へ変更")
+            highlight = new_hl
+        ai_parts = fitting
 
     # 3) コネクタ / UI / シード。
     connectors = list(Q4_TO_CONNECTORS[q4])
@@ -200,6 +242,7 @@ def recommend(answers: dict[str, Any]) -> Recommendation:
         sample_app=sample_app,
         secondary_sample_apps=[],
         ai_parts=ai_parts,
+        not_applicable_parts=not_applicable,
         highlight=highlight,
         connectors=connectors,
         ui=ui,
