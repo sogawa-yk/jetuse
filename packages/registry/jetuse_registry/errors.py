@@ -39,3 +39,18 @@ class RegistryStorageError(RegistryError):
 
     「未登録(404)」と区別する。index にエントリがあるのに成果物が読めないのは利用者起因では
     なく保存層の破損/手動削除であり、404 で隠さず内部エラーとして表面化させる。"""
+
+
+class RegistryGoneError(RegistryError):
+    """要求された版が yank 済みで配布停止された(MKT-02 版ライフサイクル)。HTTP 410 相当。
+
+    「未登録(404)」と区別する。エントリは存在するが発行者が yank で配布を取り下げたため、新規取得を
+    拒否する(取込側に「もう使えない」を 410 で明示)。版は不変なので削除せず yanked 状態にする。"""
+
+
+class RegistryUnsupportedError(RegistryError):
+    """当該バックエンド未対応の操作(評価/ライフサイクル/DL 数は ADB 限定)。HTTP 501 相当。
+
+    レガシーの index.json バックエンドは MVP の 5 操作のみを後方互換で提供する。μService 拡張機能は
+    ADB バックエンドでのみ動くため、index バックエンドへの拡張操作はこの例外で明示的に弾く
+    (黙って no-op にして利用者に成功と誤認させない)。"""

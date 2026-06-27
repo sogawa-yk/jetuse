@@ -22,6 +22,15 @@ INDEX_SCHEMA_VERSION = "1"
 #: Object Storage 上の index オブジェクト名。
 INDEX_OBJECT_NAME = "index.json"
 
+#: 版ライフサイクル状態(MKT-02)。
+#:   active     — 通常。list/search/latest に出る。
+#:   deprecated — 非推奨。明示取得は可だが latest 解決から外す(他に active が無ければ fallback)。
+#:   yanked     — 配布取り下げ。list/search/latest から除外し明示 download は 410。版は不変で残す。
+LIFECYCLE_ACTIVE = "active"
+LIFECYCLE_DEPRECATED = "deprecated"
+LIFECYCLE_YANKED = "yanked"
+LIFECYCLE_STATES = (LIFECYCLE_ACTIVE, LIFECYCLE_DEPRECATED, LIFECYCLE_YANKED)
+
 
 class PublisherKey(BaseModel):
     """登録済みの発行者公開鍵(ed25519, base64 raw 32 バイト)。"""
@@ -58,6 +67,10 @@ class IndexEntry(BaseModel):
     public_key_id: str = Field(alias="publicKeyId")
     #: 公開時刻(ISO8601, UTC)。
     published_at: str = Field(alias="publishedAt")
+    #: 版ライフサイクル(MKT-02)。既定 active。旧 index.json(本欄無し)は active 扱いで後方互換。
+    lifecycle: str = LIFECYCLE_ACTIVE
+    #: 累計 DL 数(MKT-02)。index バックエンドは加算しない(0 据置=後方互換)。ADB が原子的に加算する。
+    download_count: int = Field(default=0, alias="downloadCount")
 
 
 class RegistryIndex(BaseModel):

@@ -256,7 +256,8 @@ def test_missing_artifact_for_indexed_version_is_storage_error(registered_servic
     entry = registered_service.publish(
         TOKEN, sign_manifest(private_key, base_manifest(version="1.0.0"))
     )
-    del registered_service._store._objects[entry["objectPath"]]  # 成果物だけ削除(index は残る)
+    # 成果物だけ削除(index は残る)
+    del registered_service._backend._store._objects[entry["objectPath"]]
     with pytest.raises(RegistryStorageError):
         registered_service.get("acme/faq-summarizer", "1.0.0")
     with pytest.raises(RegistryStorageError):
@@ -269,7 +270,7 @@ def test_corrupted_artifact_sha_mismatch_is_storage_error(registered_service, pr
         TOKEN, sign_manifest(private_key, base_manifest(version="1.0.0"))
     )
     # 同じパスに別バイト列を上書き(sha が index と不一致になる)。
-    registered_service._store.put(entry["objectPath"], b'{"tampered":true}')
+    registered_service._backend._store.put(entry["objectPath"], b'{"tampered":true}')
     with pytest.raises(RegistryStorageError, match="sha256"):
         registered_service.get("acme/faq-summarizer", "1.0.0")
     with pytest.raises(RegistryStorageError, match="sha256"):
