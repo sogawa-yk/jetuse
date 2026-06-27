@@ -138,6 +138,30 @@ variable "environment_variables" {
   }
 }
 
-# 注: 秘密(Vault OCID 参照含む)は本環境では受けない。コンテナへの秘密注入は DEP-02(Platform API 注入)が
-# 担い、Vault OCID を tfvars/Terraform state に残さない設計とした(DEP-01 は配備=コンテナ起動まで)。
+# --- DEP-02: Platform API ベース URL 注入(コンテナ起動時・非秘密のみ) ---------
+# deploy_inject.build_runtime_injection が組み立てる base_url(非秘密)を Terraform 経由でコンテナ env へ
+# 注入する。**短期トークン(秘密)は Terraform に渡さない**: Terraform に渡した値は resource 入力として
+# state に保存され、短期トークンを state に残すことになるため。トークンは起動時のアウトオブバンド注入で
+# 渡す(ADR-0016 §4・§5)。よって本環境が受けるランタイム注入は base_url(非秘密)のみ。
+
+variable "platform_api_base_url" {
+  description = "DEP-02: 注入する Platform API ベース URL(https 固定・非秘密。空なら注入しない)。"
+  type        = string
+  default     = ""
+
+  # 多層防御(deploy_inject._BASE_URL_RE と整合): https 固定(平文 http でトークンを載せない)。
+  validation {
+    condition     = var.platform_api_base_url == "" || can(regex("^https://[A-Za-z0-9.\\-]+(:[0-9]+)?(/[^\\s]*)?$", var.platform_api_base_url))
+    error_message = "platform_api_base_url は https の URL(平文 http 不可)。"
+  }
+  # 秘密(Vault OCID)を URL に混ぜない(deploy_inject と整合)。
+  validation {
+    condition     = !can(regex("ocid1\\.vaultsecret\\.", var.platform_api_base_url))
+    error_message = "platform_api_base_url に Vault secret OCID を入れない。"
+  }
+}
+
+# 注: 秘密(短期トークン・Vault OCID 参照含む)は本環境では受けない。**短期トークンを Terraform に渡すと
+# state に残る**ため、トークンは Terraform 経路を通さず起動時のアウトオブバンド注入で渡す設計とした
+# (ADR-0016 §5)。DB 認証情報はそもそも注入経路に存在しない(D5: ブローカー経由の短期トークンのみ)。
 # image pull も ADR-0011 の public OCIR を前提とし、pull secret(Vault OCID)を本環境で扱わない。
