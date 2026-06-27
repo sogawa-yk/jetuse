@@ -40,14 +40,20 @@ from pydantic import BaseModel, ConfigDict
 
 from .models import MODELS, ModelDef
 from .plugins import sample_app_registry as registry
+from .plugins.core_connectors import core_connector_providers
+from .plugins.manifest import (
+    PLATFORM_SCOPE_CONNECTOR_INVOKE,
+    PLATFORM_SCOPES,
+)
 from .plugins.sample_app import required_capabilities
 from .synth import SBA_CODE_TO_INSTANCE, DemoComposition
 
 # --- 許可パレット(§4 制約2: 制約付きパレット) ------------------------------
 
 #: コア同梱コネクタのパレット。コアは Slack 1本(§6 D9)。これ以外は後段マーケット(S3+)で、
-#: 現段階の合成では許可外。空(=連携なし)は当然許可。
-CORE_CONNECTORS = frozenset({"slack"})
+#: 現段階の合成では許可外。空(=連携なし)は当然許可。**正本は `core_connectors` レジストリ**から
+#: 導出する(governance とレジストリで二重定義しない。後段で provider を足せば自動追従する)。
+CORE_CONNECTORS = core_connector_providers()
 
 #: 部品(capability) → 実行に必要なモデル能力(feature)。既定は "text"(任意の chat/responses
 #: モデルで動く)。vlm.ocr はマルチモーダル(vision)モデルを要求する(MM-01 依存)。
@@ -64,6 +70,9 @@ ViolationKind = Literal[
     "missing_host_capability",
     "scope_out_of_manifest",
     "model_unavailable",
+    # CON-03: コネクタ invoke スコープ経路の検証。
+    "connector_scope_undeclared",  # パレット内なのに合成不整合(action 要求スコープ未宣言)。
+    "connector_scope_unknown",  # 束縛が要求する Platform スコープが既知語彙(PLATFORM_SCOPES)外。
 ]
 
 ElementType = Literal["composition", "capability", "connector", "permission"]
@@ -183,6 +192,7 @@ def validate_governance(
                 "capabilities_bound": False,
                 "permission_scope": False,
                 "model_available": False,
+                "connector_scope": False,
             },
         )
 
@@ -315,6 +325,70 @@ def validate_governance(
                 )
             )
 
+    # (CON-03) コネクタ invoke スコープ経路: 構成が使う各コネクタ(`composition.connectors`)のうち
+    # **パレットが許可するもの**は、必ず **active な束縛**を持ち、その束縛が (1) 既知 Platform 語彙
+    # (PLATFORM_SCOPES)の部分集合で、(2) `connector.invoke` を含むことを検証する(invoke 経路が成立
+    # する構成だけデプロイ可)。パレット外は上の disallowed_combination が担当(二重計上しない)。
+    # **許可しただけで束縛できない/excluded のコネクタはここで弾く**(非コアを許可しても active
+    # 束縛が無ければ invoke 経路に載らないため。CON03-MAJ-001)。
+    binding_by_provider = {b.provider: b for b in composition.connector_bindings}
+    for provider in composition.connectors:
+        if provider not in connectors_palette:
+            continue  # パレット外 = disallowed_combination で既出。ここでは扱わない。
+        cb = binding_by_provider.get(provider)
+        if cb is None or cb.status != "active":
+            reason = cb.reason if (cb is not None and cb.reason) else "active な束縛が無い"
+            violations.append(
+                GovernanceViolation(
+                    kind="connector_scope_undeclared",
+                    element=provider,
+                    element_type="connector",
+                    detail=(
+                        f"コネクタ '{provider}' は許可パレット内だが束縛できない({reason})。"
+                        "invoke 経路に載らない構成はデプロイ不可"
+                    ),
+                    alternative=(
+                        f"'{provider}' のコネクタ定義を用意し合成不整合(スコープ未宣言)を解消して"
+                        "active に束縛する。当面は連携なし(none)にする"
+                    ),
+                )
+            )
+            continue
+        # active 束縛: invoke スコープ経路の健全性を検証する。
+        unknown_scopes = [s for s in cb.required_scopes if s not in PLATFORM_SCOPES]
+        if unknown_scopes:
+            violations.append(
+                GovernanceViolation(
+                    kind="connector_scope_unknown",
+                    element=provider,
+                    element_type="connector",
+                    detail=(
+                        f"コネクタ '{provider}' が要求する Platform スコープ "
+                        f"{unknown_scopes} は既知語彙(PLATFORM_SCOPES)外(未知は信じない)"
+                    ),
+                    alternative=(
+                        "コネクタ定義の action.permissions を既知 Platform スコープに直す"
+                        "(語彙の正本は manifest.PlatformScope)"
+                    ),
+                )
+            )
+        if PLATFORM_SCOPE_CONNECTOR_INVOKE not in cb.required_scopes:
+            violations.append(
+                GovernanceViolation(
+                    kind="connector_scope_undeclared",
+                    element=provider,
+                    element_type="connector",
+                    detail=(
+                        f"active コネクタ '{provider}' の required_scopes に "
+                        f"'{PLATFORM_SCOPE_CONNECTOR_INVOKE}' が無い(invoke 経路が成立しない)"
+                    ),
+                    alternative=(
+                        f"コネクタ束縛に '{PLATFORM_SCOPE_CONNECTOR_INVOKE}' を含める"
+                        "(呼ぶ権利そのもの。invoke 層が常に強制する)"
+                    ),
+                )
+            )
+
     kinds = {v.kind for v in violations}
     checks = {
         "allowed_combination": "disallowed_combination" not in kinds,
@@ -322,6 +396,8 @@ def validate_governance(
         and "missing_host_capability" not in kinds,
         "permission_scope": "scope_out_of_manifest" not in kinds,
         "model_available": "model_unavailable" not in kinds,
+        "connector_scope": "connector_scope_undeclared" not in kinds
+        and "connector_scope_unknown" not in kinds,
     }
     return GovernanceReport(
         ok=not violations,

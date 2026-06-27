@@ -210,3 +210,72 @@ def test_synthesize_is_deterministic_and_side_effect_free():
     a = synthesize(rec)
     b = synthesize(rec)
     assert a.model_dump() == b.model_dump()
+
+
+# --- CON-03: コネクタ束縛(active/excluded) --------------------------------
+
+
+def test_connector_binding_slack_active():
+    comp = synthesize(recommend(_answers(Q4="slack")))
+    # 後方互換: 生の推薦リストは維持。
+    assert comp.connectors == ["slack"]
+    # 束縛: slack はコアパレットに在り合成整合 → active。
+    assert comp.active_connectors == ["slack"]
+    sb = next(b for b in comp.connector_bindings if b.provider == "slack")
+    assert sb.status == "active"
+    assert sb.transport == "builtin"
+    assert "post_message" in sb.actions
+    assert "platform:connector.invoke" in sb.required_scopes
+    assert sb.requires_secret is True  # oauth2
+    assert sb.secret_ref == "slack-bot-token"  # 参照名(実値ではない)
+    assert sb.reason is None
+
+
+def test_connector_binding_excludes_outside_palette():
+    rec = recommend(_answers(Q4="slack"))
+    rec = rec.model_copy(update={"connectors": ["slack", "teams"]})
+    comp = synthesize(rec)
+    assert comp.active_connectors == ["slack"]  # teams は active にならない
+    teams = next(b for b in comp.connector_bindings if b.provider == "teams")
+    assert teams.status == "excluded"
+    assert teams.transport is None
+    assert teams.required_scopes == []
+    assert teams.reason and "パレット外" in teams.reason
+    # 黙って消さず warnings に理由が残る(§4)。
+    assert any("teams" in w for w in comp.warnings)
+
+
+def test_connector_binding_empty_when_no_connector():
+    comp = synthesize(recommend(_answers(Q4="none")))
+    assert comp.connectors == []
+    assert comp.connector_bindings == []
+    assert comp.active_connectors == []
+
+
+def test_connector_binding_dedupes_providers():
+    rec = recommend(_answers(Q4="slack"))
+    rec = rec.model_copy(update={"connectors": ["slack", "slack"]})
+    comp = synthesize(rec)
+    providers = [b.provider for b in comp.connector_bindings]
+    assert providers == ["slack"]  # 重複 provider は 1 件だけ束縛
+
+
+def test_connector_binding_no_real_secret_in_definition():
+    comp = synthesize(recommend(_answers(Q4="slack")))
+    # 束縛結果に持つのは参照名のみ。実トークンらしき値を含まない。
+    dump = comp.model_dump_json()
+    assert "slack-bot-token" in dump  # 参照名(非機密)
+    assert "xoxb-" not in dump  # 実 Bot トークンの prefix は出ない
+
+
+def test_demo_composition_back_compat_old_payload_validates():
+    # CON03-MAJ-002: connector_bindings / active_connectors を持たない旧 payload も検証できる
+    # （新フィールドは default_factory=list。公開モデルの後方互換を維持）。
+    comp = synthesize(recommend(_answers()))
+    payload = comp.model_dump()
+    payload.pop("connector_bindings")
+    payload.pop("active_connectors")
+    restored = DemoComposition.model_validate(payload)
+    assert restored.connector_bindings == []
+    assert restored.active_connectors == []
+    assert restored.connectors == comp.connectors  # 旧フィールドは保持

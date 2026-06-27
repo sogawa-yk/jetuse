@@ -5,6 +5,7 @@
 副作用なし(DB/GenAI 非依存)。
 """
 
+import pytest
 
 from jetuse_core.governance import (
     CORE_CONNECTORS,
@@ -104,10 +105,57 @@ def test_disallowed_connector_outside_palette():
 
 
 def test_allowed_connectors_can_be_overridden():
+    # 許可パレットを teams へ広げ、かつ teams を **active 束縛**として与えた現実的な構成は通る。
+    from jetuse_core.synth import ConnectorBinding
+
     comp = _comp()
     comp.connectors = ["teams"]
+    comp.connector_bindings = [
+        ConnectorBinding(
+            provider="teams", status="active", transport="mcp", actions=["post_message"],
+            required_scopes=["platform:connector.invoke"], requires_secret=True,
+            secret_ref="teams-token", reason=None,
+        )
+    ]
     report = validate_governance(comp, allowed_connectors=CORE_CONNECTORS | {"teams"})
     assert all(v.element != "teams" for v in report.violations)
+
+
+def test_allowed_connector_without_active_binding_is_rejected():
+    # CON03-MAJ-001: 許可しただけで active 束縛が無い connector は invoke 経路に載らない → 弾く。
+    comp = _comp()
+    comp.connectors = ["teams"]
+    comp.connector_bindings = []  # teams の束縛が存在しない
+    report = validate_governance(comp, allowed_connectors=CORE_CONNECTORS | {"teams"})
+    assert report.ok is False
+    v = next(
+        v for v in report.violations
+        if v.kind == "connector_scope_undeclared" and v.element == "teams"
+    )
+    assert v.element_type == "connector"
+    assert report.checks["connector_scope"] is False
+
+
+def test_allowed_connector_with_excluded_binding_is_rejected():
+    # CON03-MAJ-001: 許可されているが excluded(合成不整合)な connector も弾く。
+    from jetuse_core.synth import ConnectorBinding
+
+    comp = _comp()
+    comp.connectors = ["teams"]
+    comp.connector_bindings = [
+        ConnectorBinding(
+            provider="teams", status="excluded", transport="mcp", actions=["x"],
+            required_scopes=["platform:connector.invoke"], requires_secret=False,
+            secret_ref=None, reason="action 要求スコープ未宣言",
+        )
+    ]
+    report = validate_governance(comp, allowed_connectors=CORE_CONNECTORS | {"teams"})
+    assert report.ok is False
+    assert any(
+        v.kind == "connector_scope_undeclared" and v.element == "teams"
+        for v in report.violations
+    )
+    assert report.checks["connector_scope"] is False
 
 
 # --- (b) 必要ケイパビリティが束縛済み ---------------------------------------
@@ -219,3 +267,153 @@ def test_validate_governance_is_deterministic():
     a = validate_governance(comp)
     b = validate_governance(comp)
     assert a.model_dump() == b.model_dump()
+
+
+# --- (CON-03) コネクタ invoke スコープ経路 ---------------------------------
+
+
+def test_active_connector_scope_path_passes():
+    # 既定構成(slack 連携)は active コネクタの invoke スコープ経路が成立 → connector_scope パス。
+    report = validate_governance(_comp())
+    assert report.checks["connector_scope"] is True
+    assert all(v.element_type != "connector" for v in report.violations)
+
+
+def test_connector_scope_undeclared_for_inpalette_excluded():
+    # コアコネクタ(slack)が合成不整合で excluded になった状況を擬似注入する。
+    from jetuse_core.synth import ConnectorBinding
+
+    comp = _comp()
+    comp.connector_bindings = [
+        ConnectorBinding(
+            provider="slack",
+            status="excluded",
+            transport="builtin",
+            actions=["post_message"],
+            required_scopes=["platform:connector.invoke"],
+            requires_secret=True,
+            secret_ref="slack-bot-token",
+            reason="action 要求スコープ未宣言",
+        )
+    ]
+    report = validate_governance(comp)
+    assert report.ok is False
+    v = next(v for v in report.violations if v.kind == "connector_scope_undeclared")
+    assert v.element == "slack"
+    assert v.element_type == "connector"
+    assert v.alternative
+    assert report.checks["connector_scope"] is False
+
+
+def test_connector_scope_unknown_scope_is_rejected():
+    from jetuse_core.synth import ConnectorBinding
+
+    comp = _comp()
+    comp.connector_bindings = [
+        ConnectorBinding(
+            provider="slack",
+            status="active",
+            transport="builtin",
+            actions=["post_message"],
+            # 既知 PLATFORM_SCOPES 外のスコープを要求(語彙逸脱)。
+            required_scopes=["platform:connector.invoke", "platform:bogus.scope"],
+            requires_secret=True,
+            secret_ref="slack-bot-token",
+            reason=None,
+        )
+    ]
+    report = validate_governance(comp)
+    assert report.ok is False
+    v = next(v for v in report.violations if v.kind == "connector_scope_unknown")
+    assert "platform:bogus.scope" in v.detail
+    assert report.checks["connector_scope"] is False
+
+
+def test_excluded_outside_palette_connector_is_not_scope_violation():
+    # パレット外(teams・既定パレットは slack のみ)の excluded コネクタは connector_scope ではなく
+    # connectors リストの disallowed_combination が担当する(二重計上しない)。
+    from jetuse_core.synth import ConnectorBinding
+
+    comp = _comp()
+    comp.connectors = ["teams"]
+    comp.connector_bindings = [
+        ConnectorBinding(
+            provider="teams", status="excluded", transport=None, actions=[],
+            required_scopes=[], requires_secret=False, secret_ref=None,
+            reason="コアパレット外",
+        )
+    ]
+    report = validate_governance(comp)  # 既定パレット(slack のみ)
+    assert all(v.kind != "connector_scope_undeclared" for v in report.violations)
+    assert any(
+        v.kind == "disallowed_combination" and v.element == "teams"
+        for v in report.violations
+    )
+    assert report.checks["connector_scope"] is True
+
+
+def test_synth_governance_invoke_wiring(monkeypatch):
+    """合成 → ガバナンス → broker 経由 invoke の結線(mock transport・実 DB 非依存)。"""
+    from jetuse_core import platform_broker as pb
+    from jetuse_core.plugins import connector_runtime as cr
+    from jetuse_core.plugins.core_connectors import resolve_active_connector
+    from jetuse_core.settings import Settings
+
+    # 監査(DB 書込)を no-op 化して実 ADB 非依存にする(invoke 経路の検証が目的)。
+    monkeypatch.setattr(pb, "record_broker_access", lambda **kw: None)
+    settings = Settings(platform_broker_secret="test-secret-please-rotate")
+
+    comp = _comp()
+    gov = validate_governance(comp)
+    assert gov.ok is True  # デプロイ前ゲート通過
+
+    # active コネクタを解決して broker 経由で invoke(短期 JWT・connector.invoke 強制)。
+    defn = resolve_active_connector(comp, "slack")
+    assert defn is not None
+    tenant = "ocid1.tenancy.oc1..project-test"
+    token = pb.issue_broker_token(
+        "jetuse/slack-connector", tenant, ["platform:connector.invoke"], settings=settings
+    )
+
+    calls = []
+
+    def _mock_http(url, headers, body):
+        calls.append({"url": url, "has_auth": "Authorization" in headers})
+        return {"ok": True, "channel": body.get("channel"), "ts": "1.2"}
+
+    result = cr.invoke_connector_action(
+        defn, "post_message", {"channel": "#demo", "text": "wired"},
+        broker_token=token, tenant=tenant, settings=settings,
+        secret_resolver=lambda ref: "xoxb-mock-not-real", http_caller=_mock_http,
+    )
+    assert result.ok is True
+    assert len(calls) == 1 and calls[0]["has_auth"] is True
+    # 戻り値に実トークンが出ない(redact 契約)。
+    assert "xoxb-mock-not-real" not in str(result.output)
+
+
+def test_invoke_fail_closed_without_invoke_scope(monkeypatch):
+    """connector.invoke 未付与トークンは外部到達前に拒否(mock 不呼出)。"""
+    from jetuse_core import platform_broker as pb
+    from jetuse_core.plugins import connector_runtime as cr
+    from jetuse_core.plugins.core_connectors import resolve_active_connector
+    from jetuse_core.settings import Settings
+
+    monkeypatch.setattr(pb, "record_broker_access", lambda **kw: None)
+    settings = Settings(platform_broker_secret="test-secret-please-rotate")
+    comp = _comp()
+    defn = resolve_active_connector(comp, "slack")
+    tenant = "ocid1.tenancy.oc1..project-test"
+    # invoke スコープを含まないトークン。
+    token = pb.issue_broker_token(
+        "jetuse/slack-connector", tenant, ["platform:rag.search"], settings=settings
+    )
+    calls = []
+    with pytest.raises(cr.ConnectorInvokeDenied) as ei:
+        cr.invoke_connector_action(
+            defn, "post_message", {"channel": "#x", "text": "y"},
+            broker_token=token, tenant=tenant, settings=settings,
+            secret_resolver=lambda ref: "xoxb-mock", http_caller=lambda *a: calls.append(a),
+        )
+    assert ei.value.reason == "scope_denied"
+    assert calls == []  # 外部副作用ゼロ
