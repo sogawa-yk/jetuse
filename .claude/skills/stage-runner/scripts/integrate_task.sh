@@ -26,12 +26,22 @@ SWT="$(realpath -m "${WT_ROOT}/_${STAGE}")"
 [ -d "$SWT" ] || { echo "[stage] ERROR: stage worktree 無し: $SWT（begin_stage.sh 未実行?）" >&2; exit 1; }
 
 # 1) タスク worktree で deliverable をコミット（loop 成果物は除外）。
+#    add -A は gitignore 済（.current_run_id / .env 等）を自動スキップ。tracked/untracked の
+#    loop 成果物（STATE.md / runs/ / dist）は add 後に reset で外す（exclude pathspec は
+#    ignore 済パスを名指しすると git が中断するため使わない）。
 ( cd "$TWT"
-  git add -A -- . \
-    ':(exclude)STATE.md' \
-    ':(exclude)runs' \
-    ':(exclude)packages/web/dist' \
-    ':(exclude).current_run_id'
+  git add -A
+  # loop 成果物＋E2E スクラッチ＋秘匿値の置き場を staged から外す（エージェントがリポジトリ内に
+  # ADB wallet/接続情報を置く事故があったため明示除外。pathspec が無ければ無視）。
+  git reset -q -- STATE.md runs packages/web/dist scratchpad_e2e .env 2>/dev/null || true
+  git reset -q -- '*.zip' '*wallet*' 'conn.env' '*.pem' '*.key' 2>/dev/null || true
+  # 安全網: staged 内容に明白な秘匿値が混入していたら**コミットせず中断**（exit 4）。
+  if git diff --cached -U0 | grep -aErqi '(ADB_ADMIN_PASSWORD|ADB_WALLET_PASSWORD|BEGIN [A-Z ]*PRIVATE KEY|aws_secret_access_key|password\s*=\s*[^ ]{6,})'; then
+    echo "[stage] ABORT: staged 差分に秘匿値らしき内容を検出。コミットしない（$TASK / worktree=$TWT）。" >&2
+    echo "[stage] → 当該ファイルをリポジトリ外（セッション scratchpad）へ退避し .gitignore してから再実行。" >&2
+    git reset -q
+    exit 4
+  fi
   if git diff --cached --quiet; then
     echo "[stage] $TASK: コミット対象の変更なし（既にコミット済み?）" >&2
   else
@@ -39,7 +49,7 @@ SWT="$(realpath -m "${WT_ROOT}/_${STAGE}")"
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>" >&2
   fi
-)
+) || exit $?
 
 # 2) ステージ worktree へローカル merge（push しない）。コンフリクトは exit 3。
 set +e

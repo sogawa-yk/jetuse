@@ -31,10 +31,16 @@ herdr 内で回っている場合は、各タスクを**専用ペインで起動
 `herdr pane read` でいつでも作業内容を覗ける（`herdr` スキル参照）。
 
 タスクごとに（最大3、`--no-focus` で自分のフォーカスは保つ）:
-1. `PANE=$(herdr pane split <自分のpane> --direction <right|down> --no-focus | \
-   python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')`
-   でペインを作り、`herdr pane rename` 相当が無いので**ペイン内の最初のコマンドでタスク名を表示**しておく
-   （例: `herdr pane run "$PANE" "echo '=== <task> ==='"`）。
+1. ペインを作る。**main（オーケストレータ）ペインを縮め続けないため、分割の起点を切り替える**:
+   - **1本目のタスク**: `<自分のpane>`（main）を右に分割して「タスク列」を作る。生成ペインを `ANCHOR` に記録。
+     `PANE=$(herdr pane split <自分のpane> --direction right --no-focus | \
+     python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])'); ANCHOR=$PANE`
+   - **2本目以降**: main ではなく**直前タスクペイン `$ANCHOR` を下に分割**して右列に積む（main を再分割しない）。
+     `PANE=$(herdr pane split "$ANCHOR" --direction down --no-focus | \
+     python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])'); ANCHOR=$PANE`
+   - これで main は台数に関係なく約 1/2 を維持（最低でも画面の 1/4 を割らない）。タスクペインだけが右列で縦に縮む。
+   - `herdr pane rename` 相当が無いので**ペイン内の最初のコマンドでタスク名を表示**しておく
+     （例: `herdr pane run "$PANE" "echo '=== <task> ==='"`）。
 2. そのペインで worktree 隔離込みの公式ランチャを**自律モードで**起動:
    `herdr pane run "$PANE" "LOOP_AUTONOMOUS=1 GOAL='<完了条件>' .claude/loop/start-loop.sh <task>"`。
    start-loop.sh がタスク専用 worktree を切り、`bypassPermissions`（権限プロンプトで止まらない）かつ
