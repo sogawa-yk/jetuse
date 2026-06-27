@@ -11,6 +11,9 @@ COPY packages/api/service ./service
 COPY packages/api/fn ./fn
 COPY packages/api/entrypoint.sh ./entrypoint.sh
 RUN pip install --no-cache-dir . uvicorn && chmod +x entrypoint.sh
+# 非 root で実行する(OKE の runAsNonRoot/runAsUser=10001 と整合。ADR-0017)。/app は読み取りのみ。
+RUN useradd -u 10001 -m appuser && chown -R 10001:10001 /app
+USER 10001
 EXPOSE 8000
 # RUN_DB_BOOTSTRAP=true で起動時にスキーマ用意+マイグレーション(ORMワンクリック)。既定はuvicornのみ。
 CMD ["./entrypoint.sh"]

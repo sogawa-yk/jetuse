@@ -1,0 +1,34 @@
+# JetUse 本体の Service。MVP は **内部 LB**(OCI LB / private)。外部公開(API GW 連携 or public LB)は
+# 人間承認で annotation を変更する(ADR-0017 §3・§7)。
+apiVersion: v1
+kind: Service
+metadata:
+  name: jetuse-api
+  namespace: jetuse-system
+  labels:
+    app.kubernetes.io/name: jetuse-api
+    app.kubernetes.io/part-of: jetuse
+  annotations:
+    # 内部 LB(プライベート)を既定にする。外部公開時は "false" にし NSG/サブネットを公開用に切り替える。
+    # OCI CCM が認識する内部 LB の annotation は `service.beta.kubernetes.io/oci-load-balancer-internal`
+    # (legacy 接頭辞)。`oci.oraclecloud.com/load-balancer-internal` は CCM に無視されるため使わない。
+    service.beta.kubernetes.io/oci-load-balancer-internal: "true"
+    # 任意: OCI CCM に LB を専用 NSG(environments/oke の svclb NSG。ingress 80/443)へ関連付けたい場合は、
+    # apply 後に実 OCID を付与する(プレースホルダをコミットして CCM に無効値を渡さないため、既定では未設定)。
+    # NSG OCID は terraform output から取得する:
+    #   NSG=$(terraform -chdir=infra/terraform/environments/oke output -raw service_lb_nsg_id)
+    #   kubectl -n jetuse-system annotate service jetuse-api \
+    #     oci.oraclecloud.com/oci-network-security-groups="$NSG"
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: jetuse-api
+  ports:
+    # 本体(uvicorn)は **平文 HTTP** を 8000 で待ち受ける。OCI LB の LoadBalancer Service は
+    # 自動 TLS 終端しないため、Service は平文 HTTP(port 80)で公開し、**TLS 終端は上流(API Gateway /
+    # Ingress)で行う**(API Gateway backend scheme = HTTP)。LB で TLS 終端したい場合のみ
+    # `service.beta.kubernetes.io/oci-load-balancer-tls-secret` 等の annotation と証明書を別途設定する。
+    - name: http
+      port: 80
+      targetPort: 8000
+      protocol: TCP

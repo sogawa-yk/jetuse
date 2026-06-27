@@ -1,0 +1,26 @@
+# OKE 基盤(ADR-0017)の入力例。**実 OCID/秘密はコミットしない**。
+# 実行時は jetuse-dev のコンパートメント OCID を TF_VAR で与える(.env / シェル):
+#
+#   export TF_VAR_compartment_ocid=<jetuse-dev-compartment-ocid>   # 実値は .env / シェルで
+#   terraform init
+#   terraform validate
+#   terraform plan        # apply・恒常課金は人間ゲート(本タスクでは plan 止まり)
+#
+# 以下は形式説明用のプレースホルダ(実値ではない)。
+region   = "ap-osaka-1"
+prefix   = "jetuse-dev-oke"
+vcn_cidr = "10.10.0.0/16"
+
+# Kubernetes バージョンは apply 時に実在版へ合わせる(例 `oci ce cluster-options get` で確認)。
+kubernetes_version = "v1.30.1"
+
+# 最小ノードプール(恒常課金。apply は人間ゲート)。
+node_pool_size = 2
+node_ocpus     = 2
+node_memory_gb = 16
+
+# K8s API はプライベート既定(public 公開は人間承認時のみ true)。
+is_public_api_endpoint = false
+
+# worker への SSH 公開鍵(任意)。
+# ssh_public_key = "ssh-rsa AAAA... user@host"
