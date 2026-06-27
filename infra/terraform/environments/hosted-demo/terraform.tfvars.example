@@ -1,0 +1,31 @@
+# DEP-01 hosted-demo の入力例。**実値はコミットしない**(OCID/秘密)。
+# 実行時は基盤由来値を TF_VAR_ で、構成由来値を deploy.py 生成の
+# `*.auto.tfvars.json`(ContainerDeploySpec.render_tfvars_json)で与える。
+#
+#   export TF_VAR_compartment_ocid=<jetuse-dev-compartment-ocid>  # 実値は .env / シェルで
+#   export TF_VAR_subnet_id=<private-subnet-ocid>                 # 既存基盤の private subnet
+#   export TF_VAR_nsg_id=<app-nsg-ocid>
+#   # 構成由来は generated.auto.tfvars.json として配置(deploy.py 出力)
+#   terraform plan
+#
+# ※ 実 OCID/秘密はコミットしない。本ファイルの値はすべて形式説明用のプレースホルダ。
+#
+# 以下は構成由来値の形の例(deploy.py が生成する内容と同型)。
+region    = "ap-osaka-1"
+prefix    = "jetuse-demo-sba-a"
+image_url = "kix.ocir.io/<namespace>/jetuse-demo:latest"
+app_port  = 8000
+ocpus     = 1
+memory_gb = 8
+
+environment_variables = {
+  OCI_REGION               = "ap-osaka-1"
+  JETUSE_SDK               = "openai_agents"
+  JETUSE_DEMO_APP          = "FAQ ナレッジデスク"
+  JETUSE_ACTIVE_CONNECTORS = "slack"
+  JETUSE_PLATFORM_SCOPES   = "platform:connector.invoke"
+}
+
+# 秘密(Vault OCID 参照含む)は本環境で扱わない。コンテナへの秘密注入は DEP-02(Platform API 注入)。
+# DEP-01 の配備仕様は「要求する秘密の論理名」を宣言するに留め、Vault OCID を tfvars/state に残さない。
+# image pull も public OCIR(ADR-0011)前提で pull secret を持たない。
