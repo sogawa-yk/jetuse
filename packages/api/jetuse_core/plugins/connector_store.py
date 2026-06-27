@@ -207,3 +207,24 @@ def remove_connector(instance_id: str) -> bool:
         removed = cur.rowcount
         conn.commit()
     return removed > 0
+
+
+def delete_by_source(plugin_id: str, version: str) -> int:
+    """出所(plugin_id, source_version)に一致する connector インスタンスを全削除する。
+
+    マーケット取込(installer / MKT-01)の uninstall で使う。削除した件数を返す
+    (冪等: 対象が無ければ 0)。
+    """
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            DELETE FROM connector_instances
+            WHERE plugin_id = :pid AND source_version = :ver
+            """,
+            pid=plugin_id,
+            ver=version,
+        )
+        deleted = cur.rowcount
+        conn.commit()
+    return deleted

@@ -21,7 +21,7 @@ from jetuse_registry.storage import InMemoryObjectStore
 
 import service.routes.marketplace as mp
 from jetuse_core import agents, usecases
-from jetuse_core.plugins import store
+from jetuse_core.plugins import connector_store, scaffold, store
 from jetuse_core.plugins.central_registry import CentralRegistryClient
 from jetuse_core.plugins.manifest import (
     SCHEMA_VERSION,
@@ -149,6 +149,10 @@ def fake_db(monkeypatch):
     monkeypatch.setattr(store, "connect", fake_connect)
     monkeypatch.setattr(usecases, "connect", fake_connect)
     monkeypatch.setattr(agents, "connect", fake_connect)
+    # MKT-01: uninstall は全 kind の取込先を出所キーで掃除するため、scaffold / connector_store の
+    # DB 接続も同じインメモリ ADB に向ける(L2 kind 表が無くても 0 件で安全に通る)。
+    monkeypatch.setattr(scaffold, "connect", fake_connect)
+    monkeypatch.setattr(connector_store, "connect", fake_connect)
     return db
 
 
@@ -178,3 +182,51 @@ def test_marketplace_route_install_uninstall_via_plg04(fake_db, monkeypatch):
     )
     assert res.status_code == 200
     assert fake_db.usecases == [] and fake_db.installed == []
+
+
+def test_marketplace_route_install_uninstall_sample_app_via_plg04(fake_db, monkeypatch):
+    # MKT-01: sample-app がマーケット API 経由で install→uninstall できる(installable=True)。
+    md = tpi._sample_app_manifest()
+    objstore, _ = build_plg04_registry([md])
+    monkeypatch.setattr(mp, "build_client", lambda settings: client_for(objstore))
+
+    catalog = client.get("/api/marketplace/plugins").json()["plugins"]
+    card = next(c for c in catalog if c["id"] == md["id"])
+    assert card["kind"] == "sample-app" and card["installable"] is True
+
+    res = client.post("/api/marketplace/install", json={"plugin_id": md["id"]})
+    assert res.status_code == 200, res.json()
+    assert res.json()["kind"] == "sample-app"
+    assert len(fake_db.sample_app_instances) == 1
+    assert fake_db.sample_app_instances[0]["plugin_id"] == md["id"]
+
+    res = client.post(
+        "/api/marketplace/uninstall",
+        json={"plugin_id": md["id"], "version": md["version"]},
+    )
+    assert res.status_code == 200
+    assert fake_db.sample_app_instances == [] and fake_db.installed == []
+
+
+def test_marketplace_route_install_uninstall_connector_via_plg04(fake_db, monkeypatch):
+    # MKT-01: connector がマーケット API 経由で install→uninstall できる(installable=True)。
+    md = tpi._connector_manifest()
+    objstore, _ = build_plg04_registry([md])
+    monkeypatch.setattr(mp, "build_client", lambda settings: client_for(objstore))
+
+    catalog = client.get("/api/marketplace/plugins").json()["plugins"]
+    card = next(c for c in catalog if c["id"] == md["id"])
+    assert card["kind"] == "connector" and card["installable"] is True
+
+    res = client.post("/api/marketplace/install", json={"plugin_id": md["id"]})
+    assert res.status_code == 200, res.json()
+    assert res.json()["kind"] == "connector"
+    assert len(fake_db.connector_instances) == 1
+    assert fake_db.connector_instances[0]["provider"] == "slackish"
+
+    res = client.post(
+        "/api/marketplace/uninstall",
+        json={"plugin_id": md["id"], "version": md["version"]},
+    )
+    assert res.status_code == 200
+    assert fake_db.connector_instances == [] and fake_db.installed == []

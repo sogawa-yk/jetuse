@@ -18,7 +18,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from jetuse_core import agents, usecases
-from jetuse_core.plugins import installer, store
+from jetuse_core.plugins import connector_store, installer, scaffold, store
 from jetuse_core.plugins.installer import (
     AlreadyInstalled,
     SignatureRejected,
@@ -89,6 +89,68 @@ def _agent_manifest(version="1.0.0"):
     }
 
 
+def _sample_app_manifest(version="1.0.0"):
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "id": "acme/crm-lite",
+        "version": version,
+        "kind": "sample-app",
+        "name": "CRMライト",
+        "description": "サンプル CRM",
+        "publisher": "acme-corp",
+        "jetuse": {"minVersion": "0.3.0"},
+        "permissions": ["platform:rag.search"],
+        "contributes": {
+            "sample-app": {
+                "screens": [
+                    {"key": "leads", "title": "リード一覧", "type": "list",
+                     "dataset": "leads", "slots": ["summarize-lead"]},
+                ],
+                "datasets": [
+                    {"name": "leads", "label": "リード", "fields": [
+                        {"name": "company", "type": "string", "required": True},
+                        {"name": "amount", "type": "number"},
+                    ], "seed": [
+                        {"company": "ACME", "amount": 100},
+                        {"company": "Globex", "amount": 200},
+                    ]},
+                ],
+                "aiSlots": [
+                    {"key": "summarize-lead", "title": "要約", "capability": "summarize",
+                     "permissions": ["platform:rag.search"]},
+                ],
+            }
+        },
+    }
+
+
+def _connector_manifest(version="1.0.0", *, permissions=None, action_perms=None):
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "id": "acme/slackish",
+        "version": version,
+        "kind": "connector",
+        "name": "Slackish",
+        "description": "サンプルコネクタ",
+        "publisher": "acme-corp",
+        "jetuse": {"minVersion": "0.3.0"},
+        "permissions": ["platform:files.read"] if permissions is None else permissions,
+        "contributes": {
+            "connector": {
+                "provider": "slackish",
+                "transport": "builtin",
+                # 実シークレットは持たず参照名のみ(CON-01 の契約)。
+                "auth": {"kind": "api_token", "secretRef": "slackish-token"},
+                "actions": [
+                    {"name": "post_message", "title": "投稿",
+                     "permissions": ["platform:files.read"]
+                     if action_perms is None else action_perms},
+                ],
+            }
+        },
+    }
+
+
 def make_signed_registry(manifest_dicts):
     """署名付き manifest を配るレジストリと、対応する RegistryClient を返す。"""
     private_key = Ed25519PrivateKey.generate()
@@ -124,11 +186,24 @@ _INSTALLED_COLS = [
 ]
 
 
+_SAMPLE_APP_COLS = [
+    "id", "plugin_id", "source_version", "name", "definition", "created_by", "created_at",
+]
+_CONNECTOR_COLS = [
+    "id", "plugin_id", "source_version", "name", "provider", "transport",
+    "definition", "registered_by", "created_at",
+]
+
+
 class FakeDB:
     def __init__(self):
         self.installed: list[dict] = []
         self.usecases: list[dict] = []
         self.agents: list[dict] = []
+        # MKT-01: L2 kind の取込先(scaffold / connector_store)を同じインメモリ ADB で表す。
+        self.sample_app_instances: list[dict] = []
+        self.sample_app_seed_rows: list[dict] = []
+        self.connector_instances: list[dict] = []
         self._seq = 0
 
 
@@ -209,8 +284,88 @@ class FakeCursor:
                         and r["source_version"] == b["sver"])
             ]
             self.rowcount = before - len(self.db.agents)
+        # --- MKT-01: sample-app(scaffold)取込先 ---
+        elif s.startswith("INSERT INTO sample_app_instances"):
+            self.db._seq += 1
+            self.db.sample_app_instances.append({
+                "id": b["id"], "plugin_id": b["pid"], "source_version": b["ver"],
+                "name": b["name"], "definition": b["defn"], "created_by": b["creator"],
+                "created_at": self.db._seq,
+            })
+            self.rowcount = 1
+        elif s.startswith("SELECT") and "FROM sample_app_instances" in s:
+            rows = self.db.sample_app_instances
+            if "WHERE id = :id" in s:
+                rows = [r for r in rows if r["id"] == b["id"]]
+            self._result = [tuple(r[c] for c in _SAMPLE_APP_COLS) for r in rows]
+        elif s.startswith("DELETE FROM sample_app_seed_rows"):
+            if "instance_id = :iid" in s:
+                keep = lambda r: r["instance_id"] != b["iid"]  # noqa: E731
+            else:  # IN (SELECT ... WHERE plugin_id = :pid AND source_version = :ver)
+                victim = {
+                    r["id"] for r in self.db.sample_app_instances
+                    if r["plugin_id"] == b["pid"] and r["source_version"] == b["ver"]
+                }
+                keep = lambda r: r["instance_id"] not in victim  # noqa: E731
+            before = len(self.db.sample_app_seed_rows)
+            self.db.sample_app_seed_rows = [
+                r for r in self.db.sample_app_seed_rows if keep(r)
+            ]
+            self.rowcount = before - len(self.db.sample_app_seed_rows)
+        elif s.startswith("DELETE FROM sample_app_instances"):
+            before = len(self.db.sample_app_instances)
+            if "WHERE id = :id" in s:
+                self.db.sample_app_instances = [
+                    r for r in self.db.sample_app_instances if r["id"] != b["id"]
+                ]
+            else:  # WHERE plugin_id = :pid AND source_version = :ver
+                self.db.sample_app_instances = [
+                    r for r in self.db.sample_app_instances
+                    if not (r["plugin_id"] == b["pid"] and r["source_version"] == b["ver"])
+                ]
+            self.rowcount = before - len(self.db.sample_app_instances)
+        # --- MKT-01: connector(connector_store)取込先 ---
+        elif s.startswith("INSERT INTO connector_instances"):
+            self.db._seq += 1
+            self.db.connector_instances.append({
+                "id": b["id"], "plugin_id": b["pid"], "source_version": b["ver"],
+                "name": b["name"], "provider": b["prov"], "transport": b["trans"],
+                "definition": b["defn"], "registered_by": b["registrar"],
+                "created_at": self.db._seq,
+            })
+            self.rowcount = 1
+        elif s.startswith("SELECT") and "FROM connector_instances" in s:
+            rows = self.db.connector_instances
+            if "WHERE id = :id" in s:
+                rows = [r for r in rows if r["id"] == b["id"]]
+            self._result = [tuple(r[c] for c in _CONNECTOR_COLS) for r in rows]
+        elif s.startswith("DELETE FROM connector_instances"):
+            before = len(self.db.connector_instances)
+            if "WHERE id = :id" in s:
+                self.db.connector_instances = [
+                    r for r in self.db.connector_instances if r["id"] != b["id"]
+                ]
+            else:  # WHERE plugin_id = :pid AND source_version = :ver
+                self.db.connector_instances = [
+                    r for r in self.db.connector_instances
+                    if not (r["plugin_id"] == b["pid"] and r["source_version"] == b["ver"])
+                ]
+            self.rowcount = before - len(self.db.connector_instances)
         else:  # pragma: no cover
             raise AssertionError(f"unexpected SQL: {s}")
+
+    def executemany(self, sql: str, rows):
+        s = " ".join(sql.split())
+        if s.startswith("INSERT INTO sample_app_seed_rows"):
+            # 位置パラメータ (:1..:5) = (id, instance_id, dataset, row_index, payload)
+            for r in rows:
+                self.db.sample_app_seed_rows.append({
+                    "id": r[0], "instance_id": r[1], "dataset": r[2],
+                    "row_index": r[3], "payload": r[4],
+                })
+            self.rowcount = len(rows)
+        else:  # pragma: no cover
+            raise AssertionError(f"unexpected executemany SQL: {s}")
 
     def fetchone(self):
         return self._result[0] if self._result else None
@@ -238,10 +393,12 @@ def fake_db(monkeypatch):
     def fake_connect():
         yield FakeConn(db)
 
-    # store / usecases / agents が共有する 1 つのインメモリ ADB に向ける。
+    # store / usecases / agents / scaffold / connector_store が共有する 1 つのインメモリ ADB。
     monkeypatch.setattr(store, "connect", fake_connect)
     monkeypatch.setattr(usecases, "connect", fake_connect)
     monkeypatch.setattr(agents, "connect", fake_connect)
+    monkeypatch.setattr(scaffold, "connect", fake_connect)
+    monkeypatch.setattr(connector_store, "connect", fake_connect)
     return db
 
 
@@ -405,3 +562,152 @@ def test_record_failure_compensation_only_removes_new_defs(fake_db, monkeypatch)
     # 2.0.0 の取込定義だけが補償削除され、1.0.0 の既存定義は残る。
     assert [r["id"] for r in fake_db.usecases] == [existing_id]
     assert fake_db.usecases[0]["source_version"] == "1.0.0"
+
+
+# --- MKT-01: sample-app / connector kind の取込 → 出現 → uninstall → 消滅 -------
+
+
+def test_install_sample_app_then_uninstall_roundtrip(fake_db):
+    client, *_ = make_signed_registry([_sample_app_manifest()])
+
+    rec = install(client, "acme/crm-lite", "1.0.0", installed_by="sa@example.com")
+
+    # 署名検証済みで installed_plugins に記録される(kind=sample-app)。
+    assert rec["signature_verified"] is True
+    assert rec["version"] == "1.0.0"
+    inst_id = fake_db.sample_app_instances[0]["id"]
+    assert rec["ingested"] == [("sample_app_instances", inst_id)]
+
+    # scaffold が版固定・出所付きでインスタンスを展開し、seed 行も展開される。
+    inst = fake_db.sample_app_instances[0]
+    assert inst["plugin_id"] == "acme/crm-lite"
+    assert inst["source_version"] == "1.0.0"
+    assert inst["created_by"] == "sa@example.com"
+    assert len(fake_db.sample_app_seed_rows) == 2  # leads dataset の seed 2 行
+    definition = json.loads(inst["definition"])
+    assert definition["screens"][0]["key"] == "leads"
+    assert definition["aiSlots"][0]["capability"] == "summarize"
+
+    # uninstall でインスタンス・seed 行・インストール記録がすべて消える。
+    assert uninstall("acme/crm-lite", "1.0.0") is True
+    assert fake_db.sample_app_instances == []
+    assert fake_db.sample_app_seed_rows == []
+    assert store.find_install("acme/crm-lite", "1.0.0") is None
+
+
+def test_install_connector_then_uninstall_roundtrip(fake_db):
+    client, *_ = make_signed_registry([_connector_manifest()])
+
+    rec = install(client, "acme/slackish", "1.0.0", installed_by="sa@example.com")
+
+    assert rec["signature_verified"] is True
+    inst_id = fake_db.connector_instances[0]["id"]
+    assert rec["ingested"] == [("connector_instances", inst_id)]
+
+    inst = fake_db.connector_instances[0]
+    assert inst["plugin_id"] == "acme/slackish"
+    assert inst["source_version"] == "1.0.0"
+    assert inst["provider"] == "slackish"
+    assert inst["registered_by"] == "sa@example.com"
+    definition = json.loads(inst["definition"])
+    assert definition["actions"][0]["name"] == "post_message"
+    # 認証は参照名のみ(実シークレット値は保存しない = CON-01 の契約)。
+    assert definition["auth"]["secretRef"] == "slackish-token"
+    assert "kind" in definition["auth"]
+
+    assert uninstall("acme/slackish", "1.0.0") is True
+    assert fake_db.connector_instances == []
+    assert store.find_install("acme/slackish", "1.0.0") is None
+
+
+def test_install_sample_app_signature_verified_before_scaffold(fake_db):
+    # 署名不正の sample-app は scaffold 展開前に拒否され、ADB に何も書かれない(fail-closed)。
+    client, *_ = make_signed_registry([_sample_app_manifest()])
+    index = json.loads(client._fetch(INDEX_PATH))
+    files = {INDEX_PATH: None}
+
+    # 公開鍵を差し替えて検証を失敗させる。
+    other = Ed25519PrivateKey.generate().public_key().public_bytes_raw()
+    index["publisherKeys"] = {"acme-key-1": base64.b64encode(other).decode()}
+    path = index["plugins"][0]["manifest"]
+    files[path] = client._fetch(path)
+    files[INDEX_PATH] = json.dumps(index).encode()
+    bad_client = RegistryClient(base_url="https://reg/", transport=lambda p: files[p])
+
+    with pytest.raises(SignatureRejected):
+        install(bad_client, "acme/crm-lite", "1.0.0", installed_by="sa")
+    assert fake_db.sample_app_instances == []
+    assert fake_db.sample_app_seed_rows == []
+    assert fake_db.installed == []
+
+
+def test_install_sample_app_rejected_when_host_lacks_capability(fake_db):
+    # ホストが必要ケイパビリティ(summarize)を備えない場合、合成不能で取込拒否(fail-closed)。
+    client, *_ = make_signed_registry([_sample_app_manifest()])
+    with pytest.raises(installer.IngestError):
+        install(
+            client, "acme/crm-lite", "1.0.0", installed_by="sa",
+            available_capabilities=frozenset({"rag.search"}),  # summarize を欠く
+        )
+    # 取込先・インストール記録のいずれにも残骸を残さない。
+    assert fake_db.sample_app_instances == []
+    assert fake_db.sample_app_seed_rows == []
+    assert fake_db.installed == []
+
+
+def test_install_sample_app_normalizes_sampleapp_error(fake_db, monkeypatch):
+    # 取込側が SampleAppError(構造不正など)を投げても IngestError へ正規化し、残骸を残さない。
+    # 検証を迂回構築した manifest でも install/route が 500 にならない(Codex F-001 の防御)。
+    from jetuse_core.plugins.sample_app import SampleAppError
+
+    client, *_ = make_signed_registry([_sample_app_manifest()])
+
+    def boom(*a, **k):
+        raise SampleAppError("simulated malformed sample-app")
+
+    monkeypatch.setattr(scaffold, "scaffold_sample_app", boom)
+    with pytest.raises(installer.IngestError):
+        install(client, "acme/crm-lite", "1.0.0", installed_by="sa")
+    assert fake_db.sample_app_instances == []
+    assert fake_db.installed == []
+
+
+def test_record_failure_compensation_sample_app(fake_db, monkeypatch):
+    # record_install が L2(sample-app)作成後に失敗しても、補償で instance + seed 行が消える
+    # (_delete_created の sample_app_instances 分岐の回帰 / Codex review-3 F-001)。
+    client, *_ = make_signed_registry([_sample_app_manifest()])
+
+    def boom(*a, **k):
+        raise RuntimeError("simulated record_install failure")
+
+    monkeypatch.setattr(installer.store, "record_install", boom)
+    with pytest.raises(RuntimeError):
+        install(client, "acme/crm-lite", "1.0.0", installed_by="sa")
+    assert fake_db.sample_app_instances == []
+    assert fake_db.sample_app_seed_rows == []
+    assert fake_db.installed == []
+
+
+def test_record_failure_compensation_connector(fake_db, monkeypatch):
+    # record_install が L2(connector)作成後に失敗しても、補償で connector 行が消える
+    # (_delete_created の connector_instances 分岐の回帰 / Codex review-3 F-001)。
+    client, *_ = make_signed_registry([_connector_manifest()])
+
+    def boom(*a, **k):
+        raise RuntimeError("simulated record_install failure")
+
+    monkeypatch.setattr(installer.store, "record_install", boom)
+    with pytest.raises(RuntimeError):
+        install(client, "acme/slackish", "1.0.0", installed_by="sa")
+    assert fake_db.connector_instances == []
+    assert fake_db.installed == []
+
+
+def test_install_connector_rejected_on_undeclared_permission(fake_db):
+    # action が要求するスコープが manifest.permissions に宣言されていなければ合成不能で取込拒否。
+    md = _connector_manifest(permissions=[], action_perms=["platform:files.read"])
+    client, *_ = make_signed_registry([md])
+    with pytest.raises(installer.IngestError):
+        install(client, "acme/slackish", "1.0.0", installed_by="sa")
+    assert fake_db.connector_instances == []
+    assert fake_db.installed == []

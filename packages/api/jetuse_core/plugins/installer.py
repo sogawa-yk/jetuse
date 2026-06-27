@@ -1,14 +1,20 @@
-"""スナップショット取込 / アンインストール(PLG-03 / D6・D7)。
+"""スナップショット取込 / アンインストール(PLG-03 / D6・D7 / MKT-01)。
 
 中央レジストリ(registry_client.py)から取得した manifest を、発行者の ed25519 署名で
 検証(D7)したうえで、`contributes` を **版固定** で ADB へ書き込む(D6 スナップショット取込)。
 取り込んだ定義には出所(`source_plugin_id`/`source_version`)を刻み、アンインストールで
 出所キーごと除去できるようにする。
 
+MKT-01 で取込対象を **L2 kind(sample-app / connector)** へ拡張した。署名検証・版固定
+(同一 (plugin_id, version) の二重取込防止)・出所追跡・補償削除の枠組みは kind 非依存で、
+kind 別の取込先のみを分岐する(sample-app→scaffold / connector→connector_store)。
+
 責務分担:
   - registry_client.RegistryClient: list/get/download + 公開鍵取得(通信)。
   - manifest.verify_signature: ed25519 署名検証(真正性。fail-closed)。
-  - usecases/agents.insert_ingested / delete_by_source: 取込定義の永続化(出所追跡)。
+  - usecases/agents.insert_ingested / delete_by_source: UC/Agent 取込定義の永続化(出所追跡)。
+  - scaffold.scaffold_sample_app / delete_by_source: sample-app 展開・除去(SBA-01 / 出所追跡)。
+  - connector_store.register_connector / delete_by_source: connector 登録・除去(CON-01 / 出所追跡)。
   - store(installed_plugins): インストール記録の CRUD(PLG-02)。
 
 トランザクション境界(MVP の割り切り):
@@ -23,9 +29,11 @@ from __future__ import annotations
 from typing import Any
 
 from .. import agents, usecases
-from . import store
+from . import connector_store, scaffold, store
+from .connector import ConnectorError
 from .manifest import PluginManifest, verify_signature
 from .registry_client import RegistryError
+from .sample_app import SampleAppError
 
 
 class SignatureRejected(Exception):
@@ -41,48 +49,84 @@ class AlreadyInstalled(Exception):
 
 
 def _ingest_contributes(
-    manifest: PluginManifest, owner: str, *, visibility: str
+    manifest: PluginManifest,
+    owner: str,
+    *,
+    visibility: str,
+    available_capabilities: frozenset[str] | set[str] | None = None,
 ) -> list[tuple[str, str]]:
-    """manifest.contributes を kind に応じて usecases/agents へ取り込み、(table, id) を返す。
+    """manifest.contributes を kind に応じて取込先へ書き込み、(table, id) を返す。
 
+    取込先: usecase→usecases / agent→agents / sample-app→sample_app_instances(scaffold)/
+    connector→connector_instances(connector_store)。
     版固定: 書き込む定義に source_plugin_id=manifest.id / source_version=manifest.version を刻む。
     返り値は補償削除・呼び出し側の確認用(取込で作られた行の (テーブル名, id) リスト)。
+
+    sample-app は scaffold 展開時に合成バリデーション(必要ケイパビリティ/権限スコープ)を通す
+    (`available_capabilities` 不足や宣言整合違反なら fail-closed で取込拒否)。connector も登録時に
+    権限スコープ宣言整合を通す。これにより「署名 OK でも合成不能な配布物は取り込まない」を保つ。
     """
     kind = manifest.kind
-    payload = dict(manifest.contributes[kind])
-    # 表示メタは manifest トップレベルを既定にする(payload が持てば payload 優先)。
+    created: list[tuple[str, str]] = []
+    if kind == "usecase":
+        created.append(("usecases", usecases.insert_ingested(
+            owner, _payload_with_meta(manifest),
+            source_plugin_id=manifest.id, source_version=manifest.version,
+            visibility=visibility,
+        )))
+    elif kind == "agent":
+        created.append(("agents", agents.insert_ingested(
+            owner, _payload_with_meta(manifest),
+            source_plugin_id=manifest.id, source_version=manifest.version,
+            visibility=visibility,
+        )))
+    elif kind == "sample-app":
+        # scaffold は manifest 全体を受け取り、合成バリデーション→展開を行う(出所は manifest 由来)。
+        try:
+            rec = scaffold.scaffold_sample_app(
+                manifest, created_by=owner,
+                available_capabilities=available_capabilities,
+            )
+        # CompositionError は SampleAppError の subclass。構造不正(SampleAppError)も含めて
+        # IngestError へ正規化する(検証を迂回構築した manifest でも取込側で 500 にしない / F-001)。
+        except SampleAppError as e:
+            raise IngestError(f"sample-app の取込に失敗したため拒否: {e}") from e
+        created.append(("sample_app_instances", rec["id"]))
+    elif kind == "connector":
+        try:
+            rec = connector_store.register_connector(manifest, registered_by=owner)
+        # ConnectorCompositionError は ConnectorError の subclass。構造不正も含めて正規化する。
+        except ConnectorError as e:
+            raise IngestError(f"connector の取込に失敗したため拒否: {e}") from e
+        created.append(("connector_instances", rec["id"]))
+    else:  # manifest 検証で kind は既知集合に限定済み。防御的に拒否する。
+        raise IngestError(f"取込に未対応の kind: {kind}")
+    return created
+
+
+def _payload_with_meta(manifest: PluginManifest) -> dict[str, Any]:
+    """usecase/agent 取込用に contributes[kind] へ表示メタ(トップレベル)を既定注入した dict。"""
+    payload = dict(manifest.contributes[manifest.kind])
     payload.setdefault("name", manifest.name)
     payload.setdefault("description", manifest.description)
     if manifest.icon is not None:
         payload.setdefault("icon", manifest.icon)
     if manifest.tags:
         payload.setdefault("tags", list(manifest.tags))
-
-    created: list[tuple[str, str]] = []
-    if kind == "usecase":
-        uc_id = usecases.insert_ingested(
-            owner, payload,
-            source_plugin_id=manifest.id, source_version=manifest.version,
-            visibility=visibility,
-        )
-        created.append(("usecases", uc_id))
-    elif kind == "agent":
-        ag_id = agents.insert_ingested(
-            owner, payload,
-            source_plugin_id=manifest.id, source_version=manifest.version,
-            visibility=visibility,
-        )
-        created.append(("agents", ag_id))
-    else:  # manifest 検証で kind は usecase|agent に限定済み。防御的に拒否する。
-        raise IngestError(f"取込に未対応の kind: {kind}")
-    return created
+    return payload
 
 
 def _delete_ingested(plugin_id: str, version: str) -> int:
-    """取込定義(usecases/agents)を出所キーで全削除し、合計削除件数を返す(uninstall 用)。"""
+    """取込定義を出所キーで全削除し、合計削除件数を返す(uninstall 用)。
+
+    全 kind の取込先(usecases/agents/sample_app_instances/connector_instances)を出所キーで
+    冪等に掃除する(kind に依らず安全。対象が無い表は 0 件)。
+    """
     return (
         usecases.delete_by_source(plugin_id, version)
         + agents.delete_by_source(plugin_id, version)
+        + scaffold.delete_by_source(plugin_id, version)
+        + connector_store.delete_by_source(plugin_id, version)
     )
 
 
@@ -98,6 +142,10 @@ def _delete_created(created: list[tuple[str, str]]) -> None:
             usecases.delete_ingested(rid)
         elif table == "agents":
             agents.delete_ingested(rid)
+        elif table == "sample_app_instances":
+            scaffold.delete_instance(rid)
+        elif table == "connector_instances":
+            connector_store.remove_connector(rid)
 
 
 def install(
@@ -108,6 +156,7 @@ def install(
     installed_by: str,
     owner: str | None = None,
     visibility: str = "private",
+    available_capabilities: frozenset[str] | set[str] | None = None,
 ) -> dict[str, Any]:
     """レジストリからプラグインを取得・署名検証し、スナップショット取込する(D6/D7)。
 
@@ -117,12 +166,15 @@ def install(
          ADB には一切書き込まない(fail-closed)。
       3. 同一 (plugin_id, version) が既にインストール済みなら AlreadyInstalled で拒否する
          (版固定スナップショットの二重取込防止。取込前に確認するため ADB を汚さない)。
-      4. contributes を版固定で usecases/agents に取り込む(source_* を刻む)。
+      4. contributes を版固定で kind 別の取込先に取り込む(source_* を刻む)。sample-app/connector は
+         取込先の合成バリデーションを通す(不能なら IngestError で拒否=ADB に残さず補償削除)。
       5. installed_plugins に記録する(signature_verified=True)。記録に失敗したら、
          「いま作った取込定義だけ」を補償削除して整合を保つ。
 
     返り値はインストール記録(store.record_install の戻り)に `ingested`
     ((table,id) の一覧)を加えた dict。`owner` 未指定なら installed_by を取込定義の所有者にする。
+    `available_capabilities` は sample-app 取込時の合成バリデーションでホスト能力集合として使う
+    (None なら全コア能力)。
     """
     owner = owner or installed_by
     manifest = client.download(plugin_id, version)
@@ -150,7 +202,10 @@ def install(
 
     # --- スナップショット取込 ---
     source_registry = getattr(client, "base_url", "") or None
-    created = _ingest_contributes(manifest, owner, visibility=visibility)
+    created = _ingest_contributes(
+        manifest, owner, visibility=visibility,
+        available_capabilities=available_capabilities,
+    )
     try:
         record = store.record_install(
             installed_by, manifest,
