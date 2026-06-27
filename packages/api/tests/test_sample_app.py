@@ -396,3 +396,55 @@ def test_definition_is_json_safe_for_manifest():
     assert isinstance(payload, bytes) and payload
     # 改ざんに依存しない健全性: 同じ manifest からは同じバイト列。
     assert payload == canonical_signing_payload(validate_manifest(copy.deepcopy(_manifest())))
+
+
+# --- validate_manifest() の公開入口で sample-app 詳細を強制する(MKT-01 / Codex F-001) ---
+
+
+def test_validate_manifest_enforces_sample_app_detail_empty_screens():
+    from jetuse_core.plugins.manifest import ManifestError
+
+    bad = _definition()
+    bad["screens"] = []  # screens は min_length=1。
+    with pytest.raises(ManifestError):
+        validate_manifest(_manifest(definition=bad))
+
+
+def test_validate_manifest_enforces_sample_app_detail_bad_seed_type():
+    from jetuse_core.plugins.manifest import ManifestError
+
+    bad = _definition()
+    # number 型フィールドに文字列 seed → SampleAppDefinition 検証で弾かれる。
+    bad["datasets"][0]["fields"].append({"name": "score", "type": "number"})
+    bad["datasets"][0]["seed"][0]["score"] = "not-a-number"
+    with pytest.raises(ManifestError):
+        validate_manifest(_manifest(definition=bad))
+
+
+def test_validate_manifest_sample_app_detail_enforced_without_importing_sample_app():
+    # import 順非依存の回帰: sample_app を import せず validate_manifest だけの新規プロセスでも、
+    # 構造不正(screens 空)の sample-app manifest が ManifestError になる(遅延 import dispatch)。
+    import subprocess
+    import sys
+    import textwrap
+
+    code = textwrap.dedent(
+        """
+        from jetuse_core.plugins.manifest import validate_manifest, ManifestError
+        bad = {
+            "schemaVersion": "1", "id": "jetuse/s", "version": "1.0.0",
+            "kind": "sample-app", "name": "s", "publisher": "jetuse",
+            "jetuse": {"minVersion": "0.3.0"},
+            "contributes": {"sample-app": {"screens": []}},
+        }
+        try:
+            validate_manifest(bad)
+            print("NO_RAISE")
+        except ManifestError:
+            print("RAISED")
+        """
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True
+    )
+    assert out.stdout.strip() == "RAISED", out.stderr

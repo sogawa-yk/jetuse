@@ -17,7 +17,11 @@ from jetuse_registry.publishers import StaticTokenAuthenticator
 from jetuse_registry.service import RegistryService
 from jetuse_registry.storage import InMemoryObjectStore
 
-from jetuse_core.plugins.manifest import validate_manifest, verify_signature
+from jetuse_core.plugins.manifest import (
+    ManifestError,
+    validate_manifest,
+    verify_signature,
+)
 from jetuse_core.plugins.publisher import (
     PublisherConfig,
     PublisherConfigError,
@@ -26,6 +30,8 @@ from jetuse_core.plugins.publisher import (
     build_plugin_id,
     build_signed_manifest,
     manifest_from_agent,
+    manifest_from_connector,
+    manifest_from_sample_app,
     manifest_from_usecase,
     publish_definition,
     sign_manifest,
@@ -108,6 +114,39 @@ AGENT_DEF = {
     "enabled_tools": ["web_search"],
     "framework": "openai_agents",
     "auto_tools": True,
+}
+
+# MKT-01: sample-app / connector の publish 入力(メタ＋ kind 固有ペイロードを平坦に持つ dict)。
+SAMPLE_APP_DEF = {
+    "id": "sa-1",
+    "name": "CRM Lite",
+    "description": "サンプル CRM",
+    "tags": ["crm"],
+    "screens": [
+        {"key": "leads", "title": "リード", "type": "list",
+         "dataset": "leads", "slots": ["sum"]},
+    ],
+    "datasets": [
+        {"name": "leads", "fields": [{"name": "company", "type": "string"}], "seed": []},
+    ],
+    "aiSlots": [
+        {"key": "sum", "title": "要約", "capability": "summarize",
+         "permissions": ["platform:rag.search"]},
+    ],
+}
+
+CONNECTOR_DEF = {
+    "id": "conn-1",
+    "name": "Slackish",
+    "description": "サンプルコネクタ",
+    "tags": ["chat"],
+    "provider": "slackish",
+    "transport": "builtin",
+    "auth": {"kind": "api_token", "secretRef": "slackish-token"},
+    "actions": [
+        {"name": "post_message", "title": "投稿",
+         "permissions": ["platform:files.read"]},
+    ],
 }
 
 
@@ -310,3 +349,86 @@ def _proxy(tc, base, method, url, body, headers):
         return resp.status_code, resp.json()
     except ValueError:
         return resp.status_code, resp.text
+
+
+# --- MKT-01: sample-app / connector の manifest 化・署名・publish ---------------
+
+
+def test_manifest_from_sample_app_valid_and_declares_required_permissions():
+    m = manifest_from_sample_app(
+        SAMPLE_APP_DEF, version="1.0.0", publisher=PUBLISHER, namespace="plg05-e2e",
+        public_key_id=PUBLIC_KEY_ID,
+    )
+    manifest = validate_manifest(m)  # PLG-01 の検証(contributes 詳細含む)を通る。
+    assert manifest.kind == "sample-app"
+    assert manifest.id == "plg05-e2e/crm-lite"
+    # contributes は取込側(scaffold)がそのまま展開できる形(メタは混ぜない)。
+    sa = manifest.contributes["sample-app"]
+    assert sa["screens"][0]["key"] == "leads"
+    assert "name" not in sa and "permissions" not in sa
+    # aiSlots が要求するスコープが manifest.permissions に最小権限で宣言される。
+    assert manifest.permissions == ["platform:rag.search"]
+    assert manifest.name == "CRM Lite"
+    assert manifest.tags == ["crm"]
+
+
+def test_manifest_from_connector_valid_and_declares_required_permissions():
+    m = manifest_from_connector(
+        CONNECTOR_DEF, version="0.2.0", publisher=PUBLISHER, namespace="plg05-e2e",
+        public_key_id=PUBLIC_KEY_ID,
+    )
+    manifest = validate_manifest(m)
+    assert manifest.kind == "connector"
+    conn = manifest.contributes["connector"]
+    assert conn["provider"] == "slackish"
+    assert conn["actions"][0]["name"] == "post_message"
+    # 実シークレットは持たず参照名のみが配布物に乗る。
+    assert conn["auth"]["secretRef"] == "slackish-token"
+    assert manifest.permissions == ["platform:files.read"]
+
+
+def test_manifest_from_sample_app_invalid_payload_raises_manifest_error():
+    bad = dict(SAMPLE_APP_DEF, screens=[])  # screens は min_length=1。
+    with pytest.raises(ManifestError):
+        manifest_from_sample_app(
+            bad, version="1.0.0", publisher=PUBLISHER, namespace="plg05-e2e",
+            public_key_id=PUBLIC_KEY_ID,
+        )
+
+
+def test_build_signed_manifest_sample_app_roundtrips(config, private_key):
+    signed = build_signed_manifest(
+        config, kind="sample-app", definition=SAMPLE_APP_DEF, version="1.0.0",
+        entity_id="sa-1",
+    )
+    manifest = validate_manifest(signed)
+    assert manifest.kind == "sample-app"
+    pub = private_key.public_key().public_bytes_raw()
+    assert verify_signature(manifest, pub) is True
+
+
+def test_build_signed_manifest_connector_roundtrips(config, private_key):
+    signed = build_signed_manifest(
+        config, kind="connector", definition=CONNECTOR_DEF, version="1.0.0",
+        entity_id="conn-1",
+    )
+    manifest = validate_manifest(signed)
+    assert manifest.kind == "connector"
+    pub = private_key.public_key().public_bytes_raw()
+    assert verify_signature(manifest, pub) is True
+
+
+def test_publish_sample_app_then_connector_appear_in_list(config, registry_client):
+    client, _tc = registry_client
+    sa = publish_definition(
+        kind="sample-app", definition=SAMPLE_APP_DEF, version="1.0.0", entity_id="sa-1",
+        config=config, client=client,
+    )
+    conn = publish_definition(
+        kind="connector", definition=CONNECTOR_DEF, version="1.0.0", entity_id="conn-1",
+        config=config, client=client, register_key=False,  # 鍵は初回 publish で登録済み。
+    )
+    assert sa["kind"] == "sample-app" and conn["kind"] == "connector"
+    listed = {(p["id"], p["kind"]) for p in client.list_plugins()}
+    assert ("plg05-e2e/crm-lite", "sample-app") in listed
+    assert ("plg05-e2e/slackish", "connector") in listed

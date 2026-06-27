@@ -280,3 +280,35 @@ def delete_instance(instance_id: str) -> bool:
         deleted = cur.rowcount > 0
         conn.commit()
         return deleted
+
+
+def delete_by_source(plugin_id: str, version: str) -> int:
+    """出所(plugin_id, source_version)に一致する sample-app インスタンスを全削除する。
+
+    マーケット取込(installer / MKT-01)の uninstall で使う。展開済み seed 行も連動削除する
+    (FK ON DELETE CASCADE があるが、CASCADE 未対応の構成でも確実に消えるよう先に明示削除)。
+    削除したインスタンス件数を返す(冪等: 対象が無ければ 0)。
+    """
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            DELETE FROM sample_app_seed_rows WHERE instance_id IN (
+              SELECT id FROM sample_app_instances
+              WHERE plugin_id = :pid AND source_version = :ver
+            )
+            """,
+            pid=plugin_id,
+            ver=version,
+        )
+        cur.execute(
+            """
+            DELETE FROM sample_app_instances
+            WHERE plugin_id = :pid AND source_version = :ver
+            """,
+            pid=plugin_id,
+            ver=version,
+        )
+        deleted = cur.rowcount
+        conn.commit()
+        return deleted

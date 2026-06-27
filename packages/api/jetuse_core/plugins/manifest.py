@@ -115,7 +115,10 @@ _CONTRIBUTES_DETAIL_VALIDATORS: dict[str, Callable[[dict[str, Any]], None]] = {}
 # import 順に依存しないための保険: 登録がまだ無い L2 kind は、検証時に当該モジュールを遅延 import し
 # 自己登録させる(manifest だけを import した経路でも詳細検証が必ず効く)。
 # 遅延 import は「検証時」に起きるため、import 時の循環は発生しない。
-_L2_DETAIL_MODULES: dict[str, str] = {"connector": "jetuse_core.plugins.connector"}
+_L2_DETAIL_MODULES: dict[str, str] = {
+    "connector": "jetuse_core.plugins.connector",
+    "sample-app": "jetuse_core.plugins.sample_app",
+}
 
 
 def register_contributes_validator(
