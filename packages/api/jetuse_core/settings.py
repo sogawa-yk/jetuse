@@ -105,6 +105,11 @@ class Settings(BaseSettings):
     agent_langgraph_app_ocid: str = ""
     agent_adk_app_ocid: str = ""
 
+    # DEP-01: 生成デモのコンテナ配備(L3)既定イメージ。ADR-0011 に従い OCIR(ap-osaka-1, public)。
+    # namespace はテナンシ固有のため実値は .env で与え、コミットしない。空なら配備仕様生成時に
+    # image_url を明示指定する必要がある(未指定は fail-closed で DeploySpecError)。
+    hosted_demo_image_url: str = ""
+
     # OPS-02: OCI Logging(カスタムログOCID。空なら送らない) / Monitoring名前空間
     log_ocid: str = ""
     metrics_namespace: str = "jetuse_dev"

@@ -1,0 +1,8 @@
+# DEP-01: 生成・実行アーティファクト(コミットしない)。
+.terraform/
+.terraform.lock.hcl
+generated.auto.tfvars.json
+*.auto.tfvars.json
+*.tfstate
+*.tfstate.*
+terraform.tfvars
