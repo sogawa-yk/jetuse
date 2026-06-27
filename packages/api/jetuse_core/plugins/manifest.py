@@ -61,6 +61,15 @@ PlatformScope = Literal[
 ]
 PLATFORM_SCOPES = frozenset(get_args(PlatformScope))
 
+#: 実 Platform API ルート(PAPI-03)が要求する scope の名前付き定数。各ルートが文字列直書きを
+#: 避け、typo を import エラーで前倒し検出するための再エクスポート(語彙の正本は PlatformScope)。
+PLATFORM_SCOPE_RAG_SEARCH = "platform:rag.search"
+PLATFORM_SCOPE_DB_QUERY = "platform:db.query"
+PLATFORM_SCOPE_CONVERSATIONS_READ = "platform:conversations.read"
+PLATFORM_SCOPE_FILES_READ = "platform:files.read"
+PLATFORM_SCOPE_FILES_WRITE = "platform:files.write"
+PLATFORM_SCOPE_CONNECTOR_INVOKE = "platform:connector.invoke"
+
 #: id は `namespace/name`。各セグメントは小文字英数とハイフン(端はハイフン不可)。
 _ID_SEGMENT = r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
 ID_PATTERN = rf"^{_ID_SEGMENT}/{_ID_SEGMENT}$"
