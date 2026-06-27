@@ -403,3 +403,22 @@ manifest が宣言していても**未承認スコープはトークンに載ら
 | `issue_token(tenant, plugin_id, *, scopes=None)` | 承認に閉じた発行フロー（PAPI-02）。 |
 | `get_grant` / `list_grants` / `revoke_grant` | 承認グラントの参照・失効（PAPI-02）。 |
 | `validate_grant_scopes` / `select_issuable_scopes` | 承認・発行スコープ選択の純粋ポリシー（DB 非依存・PAPI-02）。 |
+
+### 13.7 実 Platform API ルート（`service/routes/platform.py` / PAPI-03）
+
+L2/L3/生成デモは、`Authorization: Bearer <broker-jwt>` に **broker が発行した短期トークン** を載せて
+`/platform/*` を呼ぶ（OIDC のユーザトークンとは**別系統**。検証鍵は常にブローカー側）。各ルートは
+冒頭で `authorize(token, required_scope, tenant=<要求リソースのテナント>)` を呼び、**JWT 検証 →
+scope 強制 → テナント一致 → 監査（ALLOW/DENY）** を通した範囲でだけ既存エンジンへ委譲する。
+
+| path / method | 要求 scope | 委譲先 / 配管 | 備考 |
+|---|---|---|---|
+| `POST /platform/db/query` | `platform:db.query` | `nl2sql.execute_readonly`（**読取限定**） | 非 SELECT は `SqlRejectedError`→**400**（書込は到達しない）。 |
+| `POST /platform/connector/invoke` | `platform:connector.invoke` | 配管まで（CON-02/03） | 認可＋コネクタ/action 存在検証まで→実 MCP は **501**。未登録は 404。 |
+| `POST /platform/rag/search` | `platform:rag.search` | 配管まで（後続） | 認可まで→本格ベクトル検索（OCI Responses）委譲は **501**。 |
+
+**拒否マッピング（fail-closed）**: `scope_denied` / `tenant_mismatch` → **403**、改竄・期限切れ・未署名・
+必須 claim 欠落（`invalid_token` 他）→ **401**、トークン欠如 → **401**、ブローカー鍵未設定
+（`BrokerConfigError`）→ **503**。テナント越境は scope 不足より先に `tenant_mismatch` として監査に残す
+（§13.5 の契約）。`conversations.read` / `files.*` のルート、rag.search の本格検索、connector.invoke の
+実 MCP 呼び出し、レート制限、OIDC 発行主体認証（INFRA-02）は後続。
