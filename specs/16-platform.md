@@ -337,6 +337,52 @@ Vault 束ねは本タスクの非ゴール（CON-02/03）。
 | `connector_json_schema() -> dict` | 定義の JSON Schema（camelCase）。 |
 | `CONNECTOR_TRANSPORTS` / `CONNECTOR_AUTH_KINDS` | 仕様定数。 |
 
+### 12.6 コネクタ実行（invoke）／ Slack コア（CON-02）
+
+CON-01 が確定した配布表現（定義・合成・登録）の上に、**登録済みコネクタの action を実際に呼び出す
+実行経路**（`jetuse_core/plugins/connector_runtime.py`）と、その最初の実体である**コア同梱 Slack
+コネクタ**（`jetuse_core/plugins/slack_connector_builtin.py`）を実装する。コネクタは「DB 認証情報を
+持たずに外部 SaaS／テナントデータへ到達する唯一の正規経路」（plan §4-3）の L2 であり、invoke は
+必ず **Platform API ブローカー**（§ ADR-0014 / `platform_broker`）の認可を通す。
+
+**`invoke_connector_action(definition, action, payload, *, broker_token, tenant, resource="",
+secret_resolver=None, http_caller=None, mcp_caller=None)`** の手順（順序が安全契約）:
+
+1. **action 解決**: 未知 action は `ConnectorInvokeError`（外部に触れる前）。
+2. **ブローカー認可（fail-closed）**: 必須 `platform:connector.invoke` ＋ action が宣言する Platform
+   スコープ（`action.permissions`）を `platform_broker.authorize` で順に強制し、許可/拒否を
+   `platform_broker_audit` に記録する。未付与スコープ・テナント越境・期限切れ・改竄・鍵未設定は
+   `ConnectorInvokeDenied`（broker の DENY を引き継ぐ）に倒す。**認可は外部呼び出しより前**に行い、
+   拒否時は Slack/MCP へ一切到達しない（外部副作用ゼロ）。
+3. **秘密解決**: `auth.kind!=none` のとき `secret_resolver(secretRef)` で実トークンを取得する
+   （未設定なら fail-closed）。解決したトークンは **戻り値・例外・監査・ログのいずれにも出さない**
+   （Authorization ヘッダ／MCP ヘッダにのみ載せる）。実 Vault 束ね・install フローは CON-03。
+4. **transport 別ディスパッチ**:
+   - `builtin`: `(provider, action)` で引く**インプロセスハンドラ**（`register_builtin_action`）。
+     実 HTTP は差し替え可能な `http_caller` 経由（既定は実ネットワーク禁止の fail-closed。テスト/E2E は
+     mock を注入）。
+   - `mcp`: Responses API **`type:"mcp"`** ツール仕様（`server_label=provider`／`server_url=endpoint`／
+     `Bearer=解決トークン`／`require_approval=never`）を組み立てて `responses.create` を呼ぶ配管
+     （`mcp_caller` 差し替え可能。単体は mock、実 MCP 接続は CON-03）。
+
+戻り値 `ConnectorInvokeResult`（provider/action/transport/ok/output/jti）に**実シークレットを含めない**。
+新規 migration は作らず、invoke の認可監査は既存 `platform_broker_audit`（020）を再利用する。
+
+**コア Slack コネクタ**: `provider=slack` / `transport=builtin` / `auth=oauth2`・
+`secretRef="slack-bot-token"`（参照名のみ）。actions = `post_message`（`chat.postMessage`）/
+`list_channels`（`conversations.list`）。いずれも SaaS ブリッジで Platform データに触れないため
+`permissions` は空（呼ぶ権利 `platform:connector.invoke` は invoke 層が常に強制）。`slack_connector_manifest()`
+は `kind: connector` として `validate_manifest`／合成バリデーション（ok・requires_secret）を満たす。
+**実 Slack 認証は本タスクでは投入しない**（実 OAuth トークン未投入のため `http_caller` を mock して投稿
+フローを検証。実 SaaS／実 MCP 接続は CON-03）。
+
+| シンボル（CON-02） | 役割 |
+|---|---|
+| `invoke_connector_action(...) -> ConnectorInvokeResult` | コネクタ action 実行（認可→秘密解決→ディスパッチ）。 |
+| `register_builtin_action(provider, action)` | builtin ハンドラ登録デコレータ。 |
+| `ConnectorInvokeError` / `ConnectorInvokeDenied` | 構成不備／認可拒否（fail-closed）。 |
+| `slack_connector_definition()` / `slack_connector_manifest()` | コア Slack コネクタ定義／manifest。 |
+
 ## 13. Platform API ブローカー（plan §7 昇格 / PAPI-01・02）
 
 > plan §7 を本仕様へ昇格したもの。認可モデルの正本は `docs/decisions/ADR-0014`（採用済）。
