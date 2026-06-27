@@ -1,9 +1,10 @@
 # specs/16: デモ生成プラットフォーム — プラグイン manifest 仕様（PLG-01）
 
 > 出典: `docs/enhance/202607-demo-platform-plan.md` §4・§6・§10／`docs/comparison/marketplace-plugin.md`。
-> 設計判断は `docs/decisions/ADR-0013`。本仕様は **L1 宣言型サブセット**（`kind: usecase | agent`）を
-> 確定する。tool(L2 MCP)・sample-app・hosted-app(L3)・bundle は後続タスクで拡張する。
-> 実装は `jetuse_core/plugins/manifest.py`（pydantic モデル＋JSON Schema＋検証）。
+> 設計判断は `docs/decisions/ADR-0013`。本仕様は PLG-01 で **L1 宣言型サブセット**（`kind: usecase | agent`）を
+> 確定し、以降 **`sample-app`（§10 / SBA-01）・`connector`（L2 MCP / §12 / CON-01）** を追加した。
+> `hosted-app`(L3)・bundle は後続タスクで拡張する。
+> 実装は `jetuse_core/plugins/manifest.py`（pydantic モデル＋JSON Schema＋検証。kind 別詳細は §10/§12 の専用モジュール）。
 
 ## 1. 位置づけ
 
@@ -28,7 +29,7 @@ pydantic モデルは alias で受理し、`model_dump(by_alias=True)` で同じ
 | `schemaVersion` | string | ✓ | 現行は `"1"` 固定。後方非互換変更で繰り上げ。 |
 | `id` | string | ✓ | `namespace/name`。各セグメントは `[a-z0-9]` とハイフン（端はハイフン不可）。最大 255 文字。 |
 | `version` | string | ✓ | semver.org 準拠（MAJOR.MINOR.PATCH[-prerelease][+build]）。最大 64 文字。 |
-| `kind` | string | ✓ | L1 サブセット = `usecase` \| `agent`。 |
+| `kind` | string | ✓ | `usecase` \| `agent` \| `sample-app`(§10) \| `connector`(§12)。 |
 | `name` | string | ✓ | 非空（表示名）。 |
 | `description` | string | – | 既定 `""`。 |
 | `publisher` | string | ✓ | 発行者 ID（非空）。レジストリの発行者認証と対応。 |
@@ -69,9 +70,12 @@ manifest が要求できるスコープは Platform API ブローカー（§7）
 
 - `kind: usecase` → `contributes.usecase`（UC-01 の definition: fields/template 等）
 - `kind: agent` → `contributes.agent`（instructions/tools 等）
+- `kind: sample-app` → `contributes["sample-app"]`（screens/datasets/aiSlots。§10）
+- `kind: connector` → `contributes.connector`（provider/transport/actions/auth。§12）
 
-`kind` に一致しないキー、または複数キーは検証エラー。内部構造の詳細スキーマは各エンジン
-（usecases / agents）側に委ね、本タスクでは「kind とキーの対応」までを強制する。
+`kind` に一致しないキー、または複数キーは検証エラー。`usecase`/`agent` の内部構造の詳細スキーマは
+各エンジン（usecases / agents）側に委ね、manifest.py では「kind とキーの対応」までを強制する。
+`sample-app`/`connector` の詳細スキーマは専用モジュール（§10/§12）が担う。
 
 ## 6. signature（発行者署名 / D7）
 
@@ -136,10 +140,11 @@ manifest を拒否する。**manifest の構文 valid と署名の valid は別*
 ## 9. 非ゴール
 
 - レジストリ通信・UI・インストール処理（PLG-03..08）。
-- `kind` の L2/L3 拡張（tool/hosted-app/bundle）。
+- `kind` の L3 拡張（hosted-app/bundle）。
 - permissions の承認フロー・短期 JWT 発行（§7 Platform API、後続ステージ）。
 
 > 注: PLG-01 当初の非ゴールだった `kind: sample-app` は SBA-01 で追加した（§10）。
+> `kind: connector`（L2 MCP）は CON-01 で追加した（§12）。
 
 ## 10. kind: sample-app（scaffold テンプレ / SBA-01）
 
@@ -249,3 +254,84 @@ API（`/api/hearing`）: `GET questions` / セッション CRUD / `PUT sessions/
 ダイアログ UI は HBD-02、合成（実構成生成）は HBD-03、本格的な合成バリデーションは HBD-04。
 推薦の「複合（主＋従 SBA）」は MVP では単一 SBA に絞り、`secondary_sample_apps` は将来拡張余地として
 空で保持（§8 未決）。
+
+## 12. kind: connector（L2 MCP コネクタ / CON-01）
+
+`kind: connector` は §6 D9 の「SaaS コネクタ」を表す配布種別（plan §10 で `tool`=`connector`＝L2 MCP）。
+コネクタは「**DB 認証情報を持たずにテナントデータ／外部 SaaS へ到達する唯一の正規経路**」（plan §4-3）の
+L2 を担い、Slack 等の SaaS を JetUse から呼び出すための**正規化された MCP 接続**を宣言する。
+`contributes["connector"]` は **接続方法（transport）＋公開操作（actions）＋必要な認証方式（auth）** を
+宣言する。実装は `jetuse_core/plugins/connector.py`（定義スキーマ＋合成バリデーション土台）と
+`jetuse_core/plugins/connector_store.py`（インスタンスへの登録）。migration は `019_connector_instances.sql`。
+**Slack 等の実コネクタ本体は CON-02、合成（sample-app × AI 部品 × connector）への組込＋E2E は CON-03。**
+
+### 12.1 contributes["connector"] スキーマ
+
+| キー | 型 | 必須 | 規則 |
+|---|---|---|---|
+| `provider` | string | ✓ | 接続先 SaaS の安定キー（`slack`/`teams`/`jira` 等。小文字英数とハイフン/アンダースコア、≤64）。 |
+| `transport` | string | ✓ | `mcp`（外部 HTTPS MCP サーバー）\| `builtin`（コア同梱・インプロセス実行）。 |
+| `endpoint` | string\|null | – | `transport=mcp` のとき必須（https・公開ホスト literal）。`builtin` のとき禁止。 |
+| `auth` | object | ✓ | 認証方式の宣言（§12.2）。**実シークレット値は持たない**。 |
+| `actions` | object[] | ✓ | 1..100。`name`（小文字 snake）・`title`・`description`・`permissions`（Platform スコープ部分集合）。 |
+| `summary` | string | – | 表示用説明（≤2000）。 |
+
+cross-field 規則: `transport=mcp` は `endpoint` 必須・`builtin` は `endpoint` 禁止。`action.name` は一意。
+`endpoint` 検証は**オフライン・決定的**（DNS 解決しない）で、https スキーム・ホスト名あり・明白な
+private/loopback/link-local の IP literal 拒否までを行う（完全な SSRF ガード＝DNS 解決を伴う公開判定は
+invoke 時＝CON-03）。検証済み定義は正準 JSON 化可能（manifest 署名往復の前提）。
+
+### 12.2 auth（認証方式 / 実値を持たない）
+
+| サブキー | 規則 |
+|---|---|
+| `kind` | `none` \| `api_token` \| `oauth2`。 |
+| `scopes` | 外部 SaaS 側のスコープ（例 Slack `chat:write`）。**Platform スコープではない**自由文字列。`oauth2` のときのみ非空可（重複不可）。 |
+| `secretRef` | ホストが install 時に Vault へ束ねる秘密の**論理参照名**（小文字英数とハイフン/アンダースコア、≤64）。`kind!=none` のとき必須・`none` のとき禁止。 |
+
+**認証実値の非保持と `secretRef` の機密区分（設計判断）**:
+
+- 非保持の対象は**トークン/パスワード等の実シークレット値**である。manifest・`connector_instances`・
+  証跡のいずれにも**実シークレット値は保存しない**。実シークレットは install 時に Vault（OCID 参照）へ
+  束ねる（CON-02/03）。`019_connector_instances.sql` は秘密値の列を持たない。
+- `secretRef` は**実シークレットではなく、宣言の一部である論理参照名**（例 `slack-bot-token`）。
+  「このコネクタは名前 X の秘密を要求する」という宣言であり、それ自体は資格情報ではない（既存の
+  `mcp_servers.auth_secret_ocid` が OCID 参照を保持するのと同じ区分）。
+- **`secretRef` は登録定義に保持してよい**（むしろ保持すべき）。`connector_instances.definition` は
+  発行された manifest の `contributes["connector"]` ペイロードを**そのまま往復保存**する（署名往復の前提・
+  install 時にどの Vault 秘密を束ねるべきか復元するため）。`secretRef` を除去すると定義が manifest と
+  一致しなくなり round-trip 契約が壊れる。機密区分は「テナント内部の論理名（非機密）」とし、テナント境界は
+  登録者（`registered_by`）と plugin 出所（`plugin_id`/`source_version`）で追跡する。
+- 整理: **保存する** = 配布定義（`secretRef` 名を含む）。**保存しない** = 実シークレット値・OCID 実値・
+  認証トークン。CLAUDE.md「認証実値をコミットしない」とも整合する。
+
+### 12.3 合成バリデーション土台（CON-03 / HBD-04 の前段）
+
+`validate_connector_composition(manifest)` が以下を判定する:
+- `undeclared_permissions`: action が要求するが manifest.permissions に宣言されていないスコープ（致命）。
+- `unused_permissions`: 宣言されたがどの action も使わないスコープ（警告）。
+- `requires_secret`/`secret_ref`: 認証が必要か（`kind!=none`）＋束ねるべき参照名。
+
+`ok` は `undeclared_permissions` が空のとき True。`required_permissions` は actions から導出。
+許可組合せ・テナント境界等の本格的な合成検証は CON-03／ステージ2 HBD-04。
+
+### 12.4 登録（インスタンスへの取込）
+
+`register_connector(manifest, *, registered_by, name=None)` は合成バリデーションを通したうえで、
+定義（provider/transport/actions/auth、配布表現のまま）を `connector_instances`（definition CLOB）へ
+登録する。`plugin_id`/`source_version` で出所追跡（installed_plugins と対応。幅は manifest の
+`MAX_ID_LEN`/`MAX_VERSION_LEN` と一致）。**合成バリデーションが致命的不整合を検出した場合は DB に
+何も書かず `ConnectorCompositionError` を送出**（fail-closed）。`get_connector`/`list_connectors`
+（plugin_id/provider 絞り込み）/`remove_connector` を提供する。定義 CLOB は配布表現のまま往復保存し、
+**実シークレット値は含まない**（含むのは `secretRef` 論理参照名のみ。§12.2 の機密区分）。実シークレットの
+Vault 束ねは本タスクの非ゴール（CON-02/03）。
+
+### 12.5 公開 API（`jetuse_core/plugins/connector.py`）
+
+| シンボル | 役割 |
+|---|---|
+| `ConnectorDefinition` | `contributes["connector"]` の pydantic ルートモデル。 |
+| `validate_connector(source) -> ConnectorDefinition` | manifest か dict を検証。不正なら `ConnectorError`。 |
+| `validate_connector_composition(manifest) -> ConnectorCompositionReport` | 合成バリデーション土台。 |
+| `connector_json_schema() -> dict` | 定義の JSON Schema（camelCase）。 |
+| `CONNECTOR_TRANSPORTS` / `CONNECTOR_AUTH_KINDS` | 仕様定数。 |
