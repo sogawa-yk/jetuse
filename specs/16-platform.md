@@ -144,7 +144,8 @@ manifest を拒否する。**manifest の構文 valid と署名の valid は別*
 - permissions の承認フロー・短期 JWT 発行（§7 Platform API、後続ステージ）。
 
 > 注: PLG-01 当初の非ゴールだった `kind: sample-app` は SBA-01 で追加した（§10）。
-> `kind: connector`（L2 MCP）は CON-01 で追加した（§12）。
+> `kind: connector`（L2 MCP）は CON-01 で追加した（§12）。permissions の承認フロー・短期 JWT 発行は
+> PAPI-01（認可コア）／PAPI-02（承認＋発行フロー）で実装した（§13）。
 
 ## 10. kind: sample-app（scaffold テンプレ / SBA-01）
 
@@ -335,3 +336,70 @@ Vault 束ねは本タスクの非ゴール（CON-02/03）。
 | `validate_connector_composition(manifest) -> ConnectorCompositionReport` | 合成バリデーション土台。 |
 | `connector_json_schema() -> dict` | 定義の JSON Schema（camelCase）。 |
 | `CONNECTOR_TRANSPORTS` / `CONNECTOR_AUTH_KINDS` | 仕様定数。 |
+
+## 13. Platform API ブローカー（plan §7 昇格 / PAPI-01・02）
+
+> plan §7 を本仕様へ昇格したもの。認可モデルの正本は `docs/decisions/ADR-0014`（採用済）。
+> 実装は `jetuse_core/platform_broker.py`（認可コア＝発行/検証/スコープ強制/テナント境界/監査。PAPI-01）と
+> `jetuse_core/platform_grants.py`（スコープ承認＋発行フロー。PAPI-02）。migration は
+> `020_platform_broker_audit.sql`（監査）/`021_platform_scope_grants.sql`（承認）。
+> 実 Platform API ルート本体（rag.search/db.query 等）は **PAPI-03**。
+
+L2 コネクタ・L3 ホスト型アプリ・生成デモが、**DB 認証情報を持たずに**テナントデータへ到達する
+**唯一の正規経路**。プラグインはブローカーが発行する**スコープ付き短期トークン**を提示し、ブローカーが
+スコープ・テナント境界・監査を一元的に強制する（plan §12「データはインスタンス所有・アクセスは仲介経由」）。
+
+### 13.1 スコープ語彙（§4 と同一集合）
+
+ブローカーが扱うスコープは manifest 検証の `PLATFORM_SCOPES`（§4）と**同一集合を正本**とする
+（manifest の `permissions` と発行トークンの `scope` が必ず突き合う）。付与スコープは常に
+`PLATFORM_SCOPES` の部分集合でなければならない（未知スコープは発行・検証で拒否）。
+
+### 13.2 短期トークン（ADR-0014 §2）
+
+呼び出しごとに JetUse（ブローカー）が短期 JWT を発行する。発行＝検証が JetUse 内で閉じるため
+**対称鍵 HS256**。鍵 `platform_broker_secret` は .env / Vault 注入で**コミットしない**。claims は
+`iss`=`jetuse-platform-broker` / `aud`=`jetuse-platform-api` / `sub`=プラグイン ID /
+`tenant`=テナント境界（Project OCID）/ `scope`（付与スコープ・スペース区切り）/ `jti`（監査・失効の継ぎ目）/
+`iat`/`nbf`/`exp`（TTL 既定 300 秒・上限 900 秒）。**DB 認証情報はトークンに載せない**。
+
+### 13.3 スコープ承認（PAPI-02 / `approve_scopes`）
+
+スコープは manifest `permissions` 由来で、**インストール／合成時に人間=SA が承認**した範囲だけを載せる。
+承認は (tenant=Project OCID, plugin_id) ごとに `platform_scope_grants` へ永続化する（upsert＝再承認で更新、
+失効＝`revoke_grant` で status=REVOKED）。承認可能なのは **manifest.permissions ∩ PLATFORM_SCOPES** のみで、
+プラグインが要求していないスコープ・未知スコープ・空は拒否する（fail-closed＝最小権限。manifest が正本）。
+グラント行・トークンに**署名鍵・DB 認証情報・実シークレット値を保存しない**。
+
+### 13.4 発行フロー＋粒度の確定（PAPI-02 / `issue_token`）
+
+`issue_token(tenant, plugin_id, scopes=None)` は承認済みグラントを読み、**承認スコープに厳密に閉じた**
+短期トークンを認可コア（`issue_broker_token`）経由で発行する。グラント無し（`no_grant`）・失効
+（`grant_revoked`）・承認超過要求（`scope_not_granted`）は**トークンを発行せず**拒否する（fail-closed）。
+manifest が宣言していても**未承認スコープはトークンに載らない**。
+
+**発行粒度の確定**（ADR-0014 §2 が PAPI-02 へ委任した決定）: **呼び出しごと**に発行する
+（セッション単位で使い回さない）。TTL 内の単回使用強制（`jti` 消費）を持たない MVP では、粒度を
+細かくするほどリプレイ露出窓が小さくなるため、最短粒度＝呼び出しごとを採る。リプレイリスト／単回 `jti`
+消費の本格導入は PAPI-03 で再判断する（ADR-0014 §2・§5）。
+
+### 13.5 テナント境界・監査・fail-closed（ADR-0014 §3〜5）
+
+実 API ルート（PAPI-03）は各エンドポイントの冒頭で `authorize(token, required_scope, tenant=...)` を
+呼び、**トークンの `tenant` と要求リソースのテナントの一致**を必須にする（不一致は `tenant_mismatch`）。
+全アクセス（ALLOW/DENY）を `platform_broker_audit` にベストエフォートで記録し、越境試行（DENY）が必ず
+監査に残るようにする。署名不正・期限切れ・`nbf` 未到来・`iss`/`aud` 不一致・未知スコープ・`tenant` 欠落・
+鍵未設定など**あらゆる失敗を「不可」に倒す**（fail-closed）。L3 コンテナは検証鍵を持たず短期トークンのみ
+提示し、検証は常にブローカー側で行う。レート制限は PAPI-03（ブローカーが一元的に絞れる位置を要件として固定）。
+
+### 13.6 公開 API（`platform_broker.py` / `platform_grants.py`）
+
+| シンボル | 役割 |
+|---|---|
+| `issue_broker_token(plugin_id, tenant, scopes)` | 認可コア: 署名付き短期 JWT を発行（PAPI-01）。 |
+| `verify_broker_token(token) -> BrokerContext` | fail-closed 検証（PAPI-01）。 |
+| `authorize(token, required_scope, *, tenant)` | 検証＋スコープ強制＋テナント一致＋監査（PAPI-01。PAPI-03 が各ルートで使う）。 |
+| `approve_scopes(manifest, *, tenant, scopes, approved_by)` | スコープ承認を永続化（PAPI-02）。 |
+| `issue_token(tenant, plugin_id, *, scopes=None)` | 承認に閉じた発行フロー（PAPI-02）。 |
+| `get_grant` / `list_grants` / `revoke_grant` | 承認グラントの参照・失効（PAPI-02）。 |
+| `validate_grant_scopes` / `select_issuable_scopes` | 承認・発行スコープ選択の純粋ポリシー（DB 非依存・PAPI-02）。 |
