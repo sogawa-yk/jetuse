@@ -45,6 +45,13 @@ class Settings(BaseSettings):
     oidc_audience: str = ""
     oidc_jwks_url: str = ""
 
+    # Platform API ブローカー(PAPI-01/ADR-0014)。スコープ付き短期トークンの署名鍵。
+    # JetUse が発行=検証する閉じた境界なので対称鍵(HS256)。**コミットしない**(.env/Vault 注入)。
+    # 空ならブローカーは fail-closed: 発行・検証とも不可(安全側に閉じる)。
+    platform_broker_secret: str = ""
+    # 発行する短期トークンの既定 TTL(秒)。短く保ち失効を時間で担保する(ADR-0014)。
+    platform_token_ttl_seconds: int = 300
+
     # ADB接続(CHAT-02)。ウォレットは adb_wallet_dir(ローカル) か
     # 非公開バケット(adb_wallet_bucket/object)から起動時取得
     # アプリスキーマ(接続=DDL=マイグレーション先)。開発者ごとにE2E環境を分ける場合はここを変える
