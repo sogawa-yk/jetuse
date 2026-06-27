@@ -108,7 +108,7 @@ def test_orphan_artifact_does_not_poison_later_publish(service, private_key):
     # 同一 version の修正版(別内容 B)も別パスに書かれ、orphan A に汚染されず成功する。
     service.register_public_key(TOKEN, PUBLIC_KEY_ID, public_key_b64(private_key))
     _, artifact_a, path_a = _artifact_and_path(private_key, version="1.0.0", name="A版")
-    service._store.put(path_a, artifact_a)  # orphan(index にエントリ無し)
+    service._backend._store.put(path_a, artifact_a)  # orphan(index にエントリ無し)
 
     signed_b, _, path_b = _artifact_and_path(private_key, version="1.0.0", name="B版")
     entry = service.publish(TOKEN, signed_b)
@@ -126,7 +126,7 @@ def test_version_immutability_blocks_different_content_republish(service, privat
     signed_b, _, _ = _artifact_and_path(private_key, version="1.0.0", name="B版")
     with pytest.raises(RegistryConflictError):
         service.publish(TOKEN, signed_b)
-    assert service._store.exists(path_a)  # 確定済み A の成果物は不変。
+    assert service._backend._store.exists(path_a)  # 確定済み A の成果物は不変。
 
 
 class AlwaysConflictStore(InMemoryObjectStore):
@@ -172,9 +172,9 @@ def test_idempotent_republish_same_content_when_artifact_exists(service, private
     # 自分のリトライ等で同一内容の成果物が既に在っても、publish は成功する(冪等)。
     service.register_public_key(TOKEN, PUBLIC_KEY_ID, public_key_b64(private_key))
     signed, artifact, path = _artifact_and_path(private_key, version="1.0.0")
-    service._store.put(path, artifact, content_type="application/json")  # 同一内容が先在
+    service._backend._store.put(path, artifact, content_type="application/json")  # 同一内容が先在
 
     entry = service.publish(TOKEN, signed)
     assert entry["version"] == "1.0.0"
     assert entry["objectPath"] == path
-    assert service._store.get(path) == artifact
+    assert service._backend._store.get(path) == artifact
