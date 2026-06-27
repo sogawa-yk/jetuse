@@ -1,8 +1,20 @@
 # ADR-0016: L3 デモの Platform API ランタイム注入とデモ配備ライフサイクル
 
 日付: 2026-06-27
-状態: **提案中**(DEP-02 で起票。ADR-0015 §7「デモ配備のライフサイクル(更新/破棄/命名規約)は実 apply
-前に DEP-02 で確定する」を受けて確定案を出す。承認は人間ゲート)。
+状態: **採用**(2026-06-27 施主承認。DEP-02 で起票。ADR-0015 §7「デモ配備のライフサイクル(更新/破棄/命名規約)は
+実 apply 前に DEP-02 で確定する」を受けた確定。**ただし下記「基盤の方針転換」を参照** — L3 実行基盤は OKE へ移す)。
+
+> **基盤の方針転換(2026-06-27 施主決定)**: JetUse 本体・生成デモともに **OKE(Kubernetes)へ移行**する。
+> 本 ADR の **§5 ランタイム注入機構(Container Instances 前提)・§6/§7 命名/更新/破棄** は OKE では
+> K8s ネイティブ(Secret＋投影/サイドカー refresh・rolling update、`kubectl`/Helm による deploy/delete、
+> namespace/label による棚卸し)に置き換わり、**ADR-0017(OKE 基盤・新規起票予定)が L3 基盤選択を supersede** する。
+> 本 ADR の基盤非依存な核(注入物を base_url＋短期トークンの2つに限定／二重閉包・発行後自己検証／TTL・
+> 呼び出しごと発行／秘密を state に残さない)は OKE でもそのまま保つ。Container Instances 版(DEP-01/02)は
+> 現 stage-4 のベースラインとして残し、OKE 移行は次タスク(DEP-03)で行う(§影響)。
+>
+> なお §5 MVP の「実行中コンテナへの再注入」は **OCI Container Instances では env が作成時固定のため
+> 事実上 restart/redeploy 相当**で、ライブ更新は §5 目標(自己取得/INFRA-02)待ちだった。OKE 移行でこの
+> 制約は解消する(Secret 更新＋投影反映/rolling update)。Container Instances 上での挙動は実 apply E2E で要確認。
 
 > ADR-0015 は L3 ホスト型デモの **配備仕様生成**(DEP-01: 秘密を持たない宣言的 tfvars 生成)までを確定し、
 > 実トークン発行のタイミング/失効・デモ単位の命名規約・更新/破棄(ライフサイクル)を **DEP-02 以降で確定** と

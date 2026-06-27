@@ -2,6 +2,10 @@
 
 日付: 2026-06-27
 状態: **採用**(2026-06-27 施主承認。レビューで2点を反映 — §7・§8。DEP-01 で起票)。
+**基盤の方針転換(2026-06-27)**: L3 実行基盤は **OKE(Kubernetes)へ移行**する方針が決定。本 ADR の
+Container Instances 前提(container-instance モジュール consume)は **ADR-0017(OKE 基盤・新規)が supersede** する。
+本 ADR の核(D8 固定基盤・新規インフラを作らない／秘密を持たない宣言的配備仕様／ブローカー一本のデータ注入)は
+OKE でも保つ。現 Container Instances 版(DEP-01/02)は stage-4 ベースラインとして残し、OKE 移行は次タスク DEP-03。
 
 > `docs/enhance/202607-demo-platform-plan.md` §11 が予告した「ADR-0015(S4): L3 ホスト型/既存資産
 > オンボード(実行基盤・SSO・データ注入)」のうち、**L3 ホスト型デモの配備**部分を DEP-01 の実装範囲で
