@@ -39,9 +39,10 @@ router = APIRouter()
 _vkey = _semver_key
 
 # マーケット UI から install できる kind(installer がスナップショット取込できるもの)。
-# sample-app(SBA-01)は scaffold 取込の別経路で、本 UI からの素の install は IngestError になる。
-# 一覧/詳細では installable=False で表し、UI は install ボタンを無効化して未対応を明示する。
-SUPPORTED_KINDS = frozenset({"usecase", "agent"})
+# MKT-01 で sample-app(scaffold 取込)/ connector(connector_store 登録)へ拡張した。installer は
+# kind に応じた取込先へ署名検証付き・版固定・出所付きで取り込む(installer._ingest_contributes)。
+# 未対応 kind は installable=False で表し、UI は install ボタンを無効化して未対応を明示する。
+SUPPORTED_KINDS = frozenset({"usecase", "agent", "sample-app", "connector"})
 
 
 # --- リクエスト DTO --------------------------------------------------------
@@ -254,9 +255,10 @@ def install_plugin(
     user: Annotated[AuthContext, Depends(require_user)],
     settings: Annotated[Settings, Depends(get_settings)],
 ):
-    """レジストリから取得・署名検証してスナップショット取込する(PLG-03 install)。
+    """レジストリから取得・署名検証してスナップショット取込する(PLG-03 / MKT-01 install)。
 
-    取込結果(usecases/agents への展開)はホーム(/api/usecases・/api/agents)に出現する。
+    取込結果は kind に応じた取込先に出現する: usecase/agent はホーム(/api/usecases・/api/agents)、
+    sample-app は scaffold(sample_app_instances)、connector は登録(connector_instances)。
     """
     client = build_client(settings)
     try:

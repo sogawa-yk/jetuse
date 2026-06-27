@@ -150,16 +150,22 @@ def test_build_catalog_no_update_on_downgrade_or_missing_version():
 
 
 def test_build_catalog_installable_by_kind():
+    # MKT-01: sample-app / connector もマーケットからインストール可能(installer が取込先へ展開)。
     cards = mp.build_catalog(
         [_entry("acme/uc", "1.0.0", kind="usecase"),
          _entry("acme/ag", "1.0.0", kind="agent"),
-         _entry("acme/sa", "1.0.0", kind="sample-app")],
+         _entry("acme/sa", "1.0.0", kind="sample-app"),
+         _entry("acme/conn", "1.0.0", kind="connector"),
+         _entry("acme/unknown", "1.0.0", kind="hosted-app")],
         [],
     )
     by_id = {c["id"]: c for c in cards}
     assert by_id["acme/uc"]["installable"] is True
     assert by_id["acme/ag"]["installable"] is True
-    assert by_id["acme/sa"]["installable"] is False  # sample-app は素の install 不可
+    assert by_id["acme/sa"]["installable"] is True
+    assert by_id["acme/conn"]["installable"] is True
+    # 未対応 kind は installable=False のまま(UI は install を無効化)。
+    assert by_id["acme/unknown"]["installable"] is False
 
 
 def test_build_catalog_can_uninstall_only_for_owner():

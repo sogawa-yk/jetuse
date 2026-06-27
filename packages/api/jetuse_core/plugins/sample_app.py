@@ -28,7 +28,7 @@ from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from .manifest import PlatformScope, PluginManifest
+from .manifest import PlatformScope, PluginManifest, register_contributes_validator
 
 # --- 語彙(仕様の正本) ----------------------------------------------------
 
@@ -287,6 +287,24 @@ def validate_sample_app(source: PluginManifest | dict[str, Any]) -> SampleAppDef
 def sample_app_json_schema() -> dict[str, Any]:
     """sample-app 定義(contributes["sample-app"])の JSON Schema(camelCase 別名)。"""
     return SampleAppDefinition.model_json_schema(by_alias=True)
+
+
+def _validate_sample_app_contributes(payload: dict[str, Any]) -> None:
+    """`validate_manifest()` の後段で呼ばれる contributes["sample-app"] 詳細バリデータ。
+
+    不正なら ValueError を送出する(pydantic の after-validator 内で ValidationError 化され、
+    最終的に `validate_manifest()` の ManifestError になる)。これにより署名済みでも構造不正な
+    sample-app は **公開入口 validate_manifest()(= レジストリ download)の時点で**弾かれ、取込
+    (scaffold)へ届く前に ManifestError へ正規化される(connector と対称。Codex F-001 への対応)。
+    """
+    try:
+        SampleAppDefinition.model_validate(payload)
+    except ValidationError as e:
+        raise ValueError(f"contributes['sample-app'] が不正: {e}") from e
+
+
+# import 時に manifest.py のレジストリへ自身の詳細バリデータを登録する(依存反転で循環回避)。
+register_contributes_validator("sample-app", _validate_sample_app_contributes)
 
 
 # --- 公開 API: 合成バリデーション土台 --------------------------------------

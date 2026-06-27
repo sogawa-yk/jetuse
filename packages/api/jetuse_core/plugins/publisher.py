@@ -1,5 +1,11 @@
-"""公開フロー(PLG-05 / D7): 既存 UC/Agent 定義を manifest 化し、発行者鍵で署名して
-中央レジストリ(PLG-04)の publish API へ送る。
+"""公開フロー(PLG-05 / D7 / MKT-01): 既存 UC/Agent/sample-app/connector 定義を manifest 化し、
+発行者鍵で署名して中央レジストリ(PLG-04)の publish API へ送る。
+
+MKT-01 でマーケット流通を **L2 kind(sample-app / connector)** に拡張した。usecase/agent と同じ
+署名・版固定・出所追跡の枠組みをそのまま使い、kind 固有の写像
+(`manifest_from_sample_app` / `manifest_from_connector`)を追加する。L2 kind は contributes が
+要求する Platform スコープ(aiSlots / actions の permissions)を **manifest.permissions に導出宣言**
+する(取込時の合成バリデーションが宣言整合 undeclared_permissions=空 を要求するため)。
 
 設計(§6 D7「発行者ID＋ed25519署名付き直接公開」):
   builder(web) → /api/{usecases|agents}/{id}/publish(route) → ここ:
@@ -257,6 +263,113 @@ def manifest_from_agent(
     )
 
 
+#: manifest トップレベル(配布メタ・署名・依存)に属するキー。L2 kind(sample-app/connector)を
+#: publish する際、入力 definition から **contributes ペイロードに混ぜてはいけない** キー集合。
+#: これ以外のキーを contributes[kind] に流し込む(camelCase/snake_case 両方を弾く)。
+_MANIFEST_LEVEL_KEYS = frozenset(
+    {
+        "schemaVersion", "schema_version", "id", "version", "kind", "name",
+        "description", "publisher", "jetuse", "requires", "permissions",
+        "icon", "tags", "license", "signature",
+    }
+)
+
+
+def _contributes_payload(definition: dict[str, Any]) -> dict[str, Any]:
+    """definition dict から contributes ペイロード(manifest メタ以外の全キー)を取り出す。
+
+    sample-app/connector の definition は「manifest メタ(name 等)＋ kind 固有ペイロード
+    (screens/datasets/aiSlots, provider/transport/actions/auth 等)」を平坦に持つ。メタは
+    `_clean_meta`/`permissions` で別途扱い、それ以外をそのまま contributes[kind] とする。
+    """
+    return {k: v for k, v in definition.items() if k not in _MANIFEST_LEVEL_KEYS}
+
+
+def _explicit_permissions(definition: dict[str, Any]) -> set[str]:
+    """definition が明示宣言する permissions(任意。必須スコープに上乗せできる)。"""
+    return {str(p) for p in (definition.get("permissions") or []) if str(p).strip()}
+
+
+def manifest_from_sample_app(
+    definition: dict[str, Any],
+    *,
+    version: str,
+    publisher: str,
+    namespace: str,
+    public_key_id: str,
+    entity_id: str = "",
+    min_version: str = DEFAULT_MIN_VERSION,
+) -> dict[str, Any]:
+    """sample-app 定義を未署名の配布 manifest(camelCase dict)に写像する。
+
+    contributes["sample-app"] は取込側(installer→scaffold)がそのまま展開できる形
+    (screens/datasets/aiSlots/summary)。`permissions` は aiSlots が要求する Platform スコープを
+    導出して宣言する(取込時の合成バリデーションが宣言整合を要求するため、最小権限を漏れなく宣言)。
+    definition が明示する permissions があれば和集合にする。
+    """
+    from . import sample_app
+
+    meta = _clean_meta(definition)
+    payload = _contributes_payload(definition)
+    try:
+        sa_def = sample_app.validate_sample_app(payload)
+    except sample_app.SampleAppError as e:
+        raise ManifestError(f"sample-app 定義が不正で manifest 化できません: {e}") from e
+    perms = sample_app.required_permissions(sa_def) | _explicit_permissions(definition)
+    return _assemble_manifest(
+        kind="sample-app",
+        contributes=payload,
+        meta=meta,
+        version=version,
+        publisher=publisher,
+        namespace=namespace,
+        public_key_id=public_key_id,
+        entity_id=entity_id or str(definition.get("id") or ""),
+        min_version=min_version,
+        permissions=sorted(perms),
+    )
+
+
+def manifest_from_connector(
+    definition: dict[str, Any],
+    *,
+    version: str,
+    publisher: str,
+    namespace: str,
+    public_key_id: str,
+    entity_id: str = "",
+    min_version: str = DEFAULT_MIN_VERSION,
+) -> dict[str, Any]:
+    """connector 定義を未署名の配布 manifest(camelCase dict)に写像する。
+
+    contributes["connector"] は取込側(installer→connector_store)がそのまま登録できる形
+    (provider/transport/endpoint/auth/actions)。`permissions` は actions が要求する Platform
+    スコープを導出して宣言する(最小権限の宣言整合)。実シークレット値は **含めない**
+    (definition には secret_ref = 参照名のみ。CON-01 の合成バリデータが実値混入を弾く)。
+    """
+    from . import connector
+
+    meta = _clean_meta(definition)
+    payload = _contributes_payload(definition)
+    try:
+        conn_def = connector.validate_connector(payload)
+    except connector.ConnectorError as e:
+        raise ManifestError(f"connector 定義が不正で manifest 化できません: {e}") from e
+    perms = connector.required_permissions(conn_def) | _explicit_permissions(definition)
+    return _assemble_manifest(
+        kind="connector",
+        contributes=payload,
+        meta=meta,
+        version=version,
+        publisher=publisher,
+        namespace=namespace,
+        public_key_id=public_key_id,
+        entity_id=entity_id or str(definition.get("id") or ""),
+        min_version=min_version,
+        permissions=sorted(perms),
+    )
+
+
 def _assemble_manifest(
     *,
     kind: str,
@@ -268,6 +381,7 @@ def _assemble_manifest(
     public_key_id: str,  # noqa: ARG001 (署名は sign_manifest で付与。引数は対称性のため受ける)
     entity_id: str,
     min_version: str,
+    permissions: list[str] | None = None,
 ) -> dict[str, Any]:
     plugin_id = build_plugin_id(namespace, meta["name"], entity_id=entity_id, kind=kind)
     manifest: dict[str, Any] = {
@@ -279,7 +393,10 @@ def _assemble_manifest(
         "description": meta["description"],
         "publisher": publisher,
         "jetuse": {"minVersion": min_version},
-        "permissions": [],
+        # permissions は kind により異なる。usecase/agent は宣言不要(空)。L2 kind
+        # (sample-app/connector)は contributes が要求するスコープを宣言する(取込時の合成
+        # バリデーションが undeclared_permissions=空 を要求するため、ここで漏れなく宣言する)。
+        "permissions": list(permissions or []),
         "tags": meta["tags"],
         "contributes": {kind: contributes},
     }
@@ -316,8 +433,26 @@ def build_signed_manifest(
 ) -> dict[str, Any]:
     """設定 + 定義から署名済み manifest を組み立てる(route / E2E 共通の入口)。"""
     config.require_complete()
+    try:
+        unsigned = _build_unsigned_manifest(
+            config, kind=kind, definition=definition, version=version, entity_id=entity_id
+        )
+        return sign_manifest(unsigned, config.private_key(), config.public_key_id)
+    except ManifestError as e:
+        raise PublishError(f"定義から有効な manifest を作れませんでした: {e}") from e
+
+
+def _build_unsigned_manifest(
+    config: PublisherConfig,
+    *,
+    kind: str,
+    definition: dict[str, Any],
+    version: str,
+    entity_id: str,
+) -> dict[str, Any]:
+    """kind に応じて未署名 manifest を組み立てる(build_signed_manifest の内部分岐)。"""
     if kind == "usecase":
-        unsigned = manifest_from_usecase(
+        return manifest_from_usecase(
             definition,
             version=version,
             publisher=config.publisher,
@@ -327,7 +462,27 @@ def build_signed_manifest(
             min_version=config.min_version,
         )
     elif kind == "agent":
-        unsigned = manifest_from_agent(
+        return manifest_from_agent(
+            definition,
+            version=version,
+            publisher=config.publisher,
+            namespace=config.id_namespace,
+            public_key_id=config.public_key_id,
+            entity_id=entity_id,
+            min_version=config.min_version,
+        )
+    elif kind == "sample-app":
+        return manifest_from_sample_app(
+            definition,
+            version=version,
+            publisher=config.publisher,
+            namespace=config.id_namespace,
+            public_key_id=config.public_key_id,
+            entity_id=entity_id,
+            min_version=config.min_version,
+        )
+    elif kind == "connector":
+        return manifest_from_connector(
             definition,
             version=version,
             publisher=config.publisher,
@@ -338,10 +493,6 @@ def build_signed_manifest(
         )
     else:
         raise PublishError(f"公開に未対応の kind: {kind}")
-    try:
-        return sign_manifest(unsigned, config.private_key(), config.public_key_id)
-    except ManifestError as e:
-        raise PublishError(f"定義から有効な manifest を作れませんでした: {e}") from e
 
 
 # --- レジストリ publish HTTP クライアント ----------------------------------
