@@ -39,6 +39,9 @@ from jetuse_core import (  # noqa: F401
     conversations as conv_repo,
 )
 from jetuse_core import (  # noqa: F401
+    hearing as hearing_repo,
+)
+from jetuse_core import (  # noqa: F401
     mcp_servers as mcp_repo,
 )
 from jetuse_core import (  # noqa: F401
@@ -70,6 +73,7 @@ from .routes import (
     chat,
     conversations,
     dbchat,
+    hearing,
     marketplace,
     minutes,
     sample_apps,
@@ -124,6 +128,7 @@ def create_app() -> FastAPI:
     app.include_router(usecases.router)
     app.include_router(marketplace.router)
     app.include_router(sample_apps.router)
+    app.include_router(hearing.router)
 
     return app
 

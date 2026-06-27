@@ -185,3 +185,67 @@ seed を `sample_app_seed_rows`（payload CLOB / row_index 順 / instance に ON
 展開する。`plugin_id`/`source_version` で出所追跡（installed_plugins と対応。幅は manifest の
 `MAX_ID_LEN`/`MAX_VERSION_LEN` と一致）。**合成バリデーションが致命的不足を検出した場合は DB に
 何も書かず `CompositionError` を送出**（fail-closed）。migration は `016_sample_app_instances.sql`。
+
+## 11. ヒアリングフロー＆推薦（HBD-01）
+
+スタンダードモード（§5）の中核 = 「顧客ヒアリング → ダイアログ Q&A → 素材（サンプルアプリ＋AI部品＋
+コネクタ）の推薦 → SA が確定 → 合成」。本章は `docs/enhance/202607-hearing-flow.md` を昇格したもの
+（質問セット・回答→素材の決定的写像・GenAI 補助の境界・データモデル）。実装は
+`jetuse_core/hearing_schema.py`（質問スキーマ）/ `jetuse_core/recommend.py`（決定的推薦エンジン）/
+`jetuse_core/hearing.py`（永続）/ `service/routes/hearing.py`（API）。migration は `017_hearing.sql`。
+
+### 11.1 質問スキーマ（Q1..Q6 ＋ Auto）
+
+| ID | 型 | 目的 | 選択肢 id | 素材写像 |
+|---|---|---|---|---|
+| **Q1** | single | 主サンプルアプリ決定 | support / sales / inventory / accounting / other | support→SBA-A・sales→SBA-C・inventory→SBA-B・accounting→SBA-D・other→GenAI 最近傍 |
+| **Q2** | multi | AI部品の素地 | docs / business_db / audio / image / saas | docs→{rag.search,summarize,classify}・business_db→{nl2sql}・audio→{minutes}・image→{vlm.ocr}・saas→コネクタ側 |
+| **Q3** | single | 主役 AI 強調 | rag_qa / nl2sql / agent / ocr_extract / summarize_draft | 主役 capability を highlight（先頭）に。SBA 組込点へ優先配置 |
+| **Q4** | single | コネクタ選定 | slack / other_connector / none | slack→コア・other_connector→後段マーケット・none→無し |
+| **Q5** | single | UI/出力テンプレ | chat_form / notify / report | chat / notify / report |
+| **Q6** | single | シード戦略 | sample / industry_generated / replace_later | sample / genai_generated / replace_later |
+| **Auto** | auto | 合成バリデーション | —（SA 回答なし） | 能力/警告を点検（不足は警告し外させない） |
+
+選択肢 `id` は安定キー（表示文言と分離）。必須 multi（Q2）は require 時に最低 `min_selections`（=1）件。
+回答は `validate_answer`/`validate_answers` で検証（未知 id・型不一致・必須欠落・空必須 multi を拒否）。
+
+### 11.2 推薦エンジン（決定的・監査可能）
+
+`recommend(answers)` は**副作用の無い決定的関数**で、3 要素＋UI/シード＋監査トレースを返す:
+1. **主 SBA**: Q1 を基点に、分岐「Q2 に business_db ＋ Q3=nl2sql → SBA-B へ格上げ」で補正（§3 分岐例）。
+   Q1=other は `sample_app=None`＋`needs_genai_nearest=True`（最近傍は GenAI 補助に委ねるが推薦自体は成立）。
+2. **AI 部品**: Q2（データ素地）∪ Q3（主役）。capability 語彙は §10.2 と一致。`highlight`=Q3 の主役。
+   並びは `PART_ORDER` で決定的（同じ回答→同じ出力）。
+3. **コネクタ**（Q4）＋ **UI**（Q5）＋ **シード戦略**（Q6）。
+代表例（§4）: support＋docs＋rag_qa → SBA-A ＋ {rag.search, summarize, classify} ＋ slack ＋ chat ＋ sample。
+
+`validation`（Auto）は要求 capability がホスト既定能力に収まるかを点検し、`vlm.ocr` は MM-01 依存を
+警告する（**部品は外さない**＝§3 の原則「不足は警告＋代替提案」）。最終選定は必ず画面で SA に提示する
+（ブラックボックス化しない）。
+
+### 11.3 GenAI 補助の境界（§6）
+
+決定（何を選ぶか）はルール＋SA 確認。GenAI は「埋める/書く/寄せる」に限定: ①ヒアリングメモの要点抽出
+→各質問のデフォルト提案（`source=genai_suggested` で保存）、②Q1=other 時の最近傍 SBA 提案、
+③シードデータ生成方針、④構成サマリの文章化。**GenAI 不在/失敗でも決定ルールだけで推薦が成立**
+（フォールバック）。
+
+### 11.4 データモデル（§7）／API
+
+- `hearing_session`: id / owner_sub / status(draft|ready|confirmed|archived) / input_notes(CLOB) /
+  created_at / updated_at。
+- `hearing_answer`: (session_id, question_id) 一意（upsert）/ value(CLOB JSON) /
+  source(sa|genai_suggested)。
+- `recommendation`: session_id 一意 / sample_app / ai_parts(JSON) / connectors(JSON) / ui /
+  seed_strategy / validation(JSON) / detail(JSON 全文) / confirmed_at。**内容差し替え時は confirmed_at を
+  NULL に戻す**（古い確定状態を引き継がない）。
+
+API（`/api/hearing`）: `GET questions` / セッション CRUD / `PUT sessions/{sid}/answers/{qid}`（upsert）/
+`POST sessions/{sid}/recommend`（決定的推薦を生成・保存）/ `POST .../recommend/confirm`（SA 確定）。
+所有権は SQL（owner_sub）で強制し、他人のセッションは 404。CLOB 列は明示 CLOB バインドで長文に耐える。
+
+### 11.5 非ゴール
+
+ダイアログ UI は HBD-02、合成（実構成生成）は HBD-03、本格的な合成バリデーションは HBD-04。
+推薦の「複合（主＋従 SBA）」は MVP では単一 SBA に絞り、`secondary_sample_apps` は将来拡張余地として
+空で保持（§8 未決）。
