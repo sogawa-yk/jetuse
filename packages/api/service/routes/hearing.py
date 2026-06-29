@@ -14,25 +14,35 @@
 """
 
 import asyncio
+import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
+from jetuse_core import deploy_runtime, hearing_genai
 from jetuse_core import hearing as hearing_repo
-from jetuse_core import hearing_genai
 from jetuse_core import materialize as materialize_mod
 from jetuse_core.auth import AuthContext, require_user
+from jetuse_core.deploy import DeploySpecError
+from jetuse_core.deploy_inject import InjectionError
 from jetuse_core.governance import validate_governance
 from jetuse_core.hearing_schema import (
     MAX_INPUT_NOTES_CHARS,
     HearingSchemaError,
     question_schema,
 )
+from jetuse_core.kube import KubeError
+from jetuse_core.platform_broker import BrokerConfigError, BrokerDenied
+from jetuse_core.platform_grants import GrantDenied
+from jetuse_core.plugins import sample_app_registry
 from jetuse_core.recommend import Recommendation, recommend
+from jetuse_core.settings import get_settings
 from jetuse_core.summary import build_summary
 from jetuse_core.synth import DemoComposition, synthesize
+
+logger = logging.getLogger("jetuse.hearing.deploy")
 
 router = APIRouter()
 
@@ -336,14 +346,89 @@ def _synth_confirmed(session: dict[str, Any]) -> tuple[DemoComposition, dict[str
     return composition, detail
 
 
+def _deploy_principal(composition: DemoComposition) -> str:
+    """配備/注入の発行主体 principal を **検証済み manifest.id** で解決する(F-003)。
+
+    承認グラントは manifest.id をキーに作られる(例 SBA-A=`jetuse/support-desk`)。registry の
+    sample-app 要約から composition.instance_id に対応する plugin_id を引く。解決できなければ空文字
+    (注入要デモは deploy_inject 側が plugin 必須で fail-closed=409。誤った principal は使わない)。
+    """
+    for s in sample_app_registry.list_sample_apps():
+        if s.get("id") == composition.instance_id:
+            return s.get("plugin_id") or ""
+    return ""
+
+
+async def _maybe_deploy_to_oke(
+    composition: DemoComposition, sid: str
+) -> dict[str, Any] | None:
+    """OKE 配備が有効なら launch 時に build_deploy_spec→render→apply まで実行する(BE-01)。
+
+    既定 OFF(`settings.oke_deploy_enabled=False`)では None を返し、**従来どおり DB 行＋/sba URL
+    のみ** の後方互換挙動を保つ(配備しない)。有効時は `deploy_runtime.deploy_demo` で配備し、
+    配備メタ(namespace / deploy_status / cluster_url / 注入トークン失効時刻など、非秘密のみ)を返す。
+    実 apply か dry-run 検証かは settings(`oke_deploy_dry_run`)が決める(実配備・課金は人間ゲート)。
+    配備失敗は 409。
+    """
+    settings = get_settings()
+    if not settings.oke_deploy_enabled:
+        return None
+    try:
+        outcome = await asyncio.to_thread(
+            deploy_runtime.deploy_demo,
+            composition,
+            settings=settings,
+            tenant=(settings.project_ocid or None),
+            # 注入(Platform トークン)を要するデモは (tenant, plugin_id) の承認グラントが必要。
+            # principal は **検証済み manifest.id**（例 jetuse/support-desk）を使う（承認グラントの
+            # キーと一致＝F-003。sample_app コードは principal にしない）。注入不要デモは未使用。
+            plugin_id=_deploy_principal(composition),
+            instance_key=sid,
+        )
+    except BrokerConfigError as exc:
+        # 署名鍵などブローカー設定不足は構成エラー(503)。詳細はサーバログのみ(利用者へ漏らさない)。
+        logger.warning("OKE deploy broker config error (sid=%s): %s", sid, exc)
+        raise HTTPException(
+            status_code=503,
+            detail={"message": "Platform ブローカー設定が未整備のため配備できません",
+                    "code": "broker_unconfigured"},
+        ) from exc
+    except (
+        deploy_runtime.DeployRuntimeError,
+        DeploySpecError,
+        InjectionError,
+        GrantDenied,
+        BrokerDenied,
+        KubeError,
+    ) as exc:
+        # 配備/注入の fail-closed(無効化・スコープ閉包違反・グラント無し/失効・kubectl 失敗 等)は
+        # 起動を 409 で拒否する(起動記録は残さない=成否境界)。**例外 str は利用者へ返さない**
+        # (Project OCID・kubeconfig パス・kubectl stderr 等の漏えい防止=F-013)。詳細はログのみ。
+        logger.warning("OKE deploy failed (sid=%s): %s: %s", sid, type(exc).__name__, exc)
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "OKE 配備に失敗しました", "code": "deploy_failed"},
+        ) from exc
+    return {
+        "namespace": outcome.namespace,
+        "deploy_status": outcome.deploy_status(),
+        "cluster_url": outcome.cluster_url,
+        "injected": outcome.injected,
+        "dry_run": outcome.dry_run,
+        "resources": list(outcome.resources),
+        "token_expires_at": outcome.token_expires_at,
+    }
+
+
 @router.post("/api/hearing/sessions/{sid}/launch")
 async def launch_demo(sid: str, user: Annotated[AuthContext, Depends(require_user)]):
     """確定済み推薦のデモ構成を**デプロイ前ゲート(ガバナンス4制約)に通してから起動**する(HBD-05)。
 
     一気通貫の出口: ヒアリング確定→合成→バリデーション PASS→起動。バリデーション未通過の構成は
     409 で「起動」を拒否し、機械可読な違反＋代替提案を返す(外れたデモを起動させない=境界)。
-    PASS なら起動記録を永続し、主役 AI 機能の実行導線(instance_id / entry_slot / demo_url)を返す。
-    本タスクの「起動」は既存 loop 基盤上のデモ(コンテナ配備は S4)。
+    PASS なら(BE-01: OKE 配備が有効なら実 OKE へ配備してから)起動記録を永続し、主役 AI 機能の
+    実行導線(instance_id / entry_slot / demo_url)＋配備メタを返す。OKE 配備 OFF では従来どおり
+    DB 行＋/sba URL のみ(後方互換)。
     """
     session = hearing_repo.get_session(user.subject, sid)
     if session is None:
@@ -375,6 +460,10 @@ async def launch_demo(sid: str, user: Annotated[AuthContext, Depends(require_use
         seeded=composition.seed.seeded,
     )
 
+    # BE-01: OKE 配備が有効なら、起動記録の前に実 OKE へ配備(または dry-run 検証)する。
+    # 既定 OFF では None(従来どおり DB 行＋/sba URL のみ=後方互換)。配備失敗は 409 で起動させない。
+    deploy = await _maybe_deploy_to_oke(composition, sid)
+
     entry_slot = _entry_slot(composition)
     demo_url = f"/sba/{composition.instance_id}"
     launch = hearing_repo.record_launch(
@@ -385,6 +474,10 @@ async def launch_demo(sid: str, user: Annotated[AuthContext, Depends(require_use
         entry_slot=entry_slot,
         demo_url=demo_url,
         composition=composition.model_dump(),
+        namespace=(deploy or {}).get("namespace"),
+        deploy_status=(deploy or {}).get("deploy_status"),
+        cluster_url=(deploy or {}).get("cluster_url"),
+        token_expires_at=(deploy or {}).get("token_expires_at"),
     )
     if launch is None:  # 直前に削除された等のレース
         raise HTTPException(status_code=404, detail="hearing session not found")
@@ -393,6 +486,7 @@ async def launch_demo(sid: str, user: Annotated[AuthContext, Depends(require_use
         "composition": composition.model_dump(),
         "governance": report.model_dump(),
         "materialized": materialized,
+        "deploy": deploy,
     }
 
 
@@ -406,6 +500,60 @@ async def get_launch(sid: str, user: Annotated[AuthContext, Depends(require_user
     if launch is None:
         raise HTTPException(status_code=404, detail="demo not launched")
     return launch
+
+
+@router.delete("/api/hearing/sessions/{sid}/launch")
+async def delete_launch(sid: str, user: Annotated[AuthContext, Depends(require_user)]):
+    """起動済みデモを削除する(BE-01)。削除方法は保存済み `deploy_status` を正本に決める(F-007)。
+
+    - `deploy_status == 'deployed'`(実 OKE 配備済み): 実 namespace の撤去は **人間ゲート**(本タスク
+      未対応)。記録を残したまま 409 を返す(唯一の参照を消して課金リソースを孤児化させない)。実撤去＋
+      所有権/finalize 整合は実 apply ライフサイクルの別タスクで行う(e2e/SKIPPED.md 参照)。
+    - `deploy_status` が 'validated'/未設定(dry-run 検証のみ＝実ワークロード無し、または OKE OFF/
+      未配備): クラスタ操作不要。任意で teardown を dry-run 検証し、起動記録を削除する。
+    再 launch で再作成できる(冪等)。
+    """
+    session = hearing_repo.get_session(user.subject, sid)
+    if session is None:
+        raise HTTPException(status_code=404, detail="hearing session not found")
+    launch = hearing_repo.get_launch(user.subject, sid)
+    if launch is None:
+        raise HTTPException(status_code=404, detail="demo not launched")
+
+    deploy_status = launch.get("deploy_status")
+    namespace = launch.get("namespace")
+    # 削除可能なのは **実クラスタ資源を持たない記録のみ**(None=OKE OFF/未配備 / validated=dry-run)。
+    # それ以外('deployed' や 'deploying'・未知値など)は実 namespace を持ち得るため、記録を保持して
+    # 409 で拒否する(唯一の追跡情報を消して課金リソースを孤児化させない＝F-005 fail-closed)。
+    if deploy_status not in (None, "validated"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "実 OKE 資源を持ち得るデモの削除は実 namespace 撤去(人間ゲート)が必要",
+                "code": "real_teardown_required",
+                "deploy_status": deploy_status,
+                "namespace": namespace,
+            },
+        )
+
+    settings = get_settings()
+    teardown: dict[str, Any] | None = None
+    if settings.oke_deploy_enabled and namespace:
+        # validated(dry-run)記録: 実ワークロードは無いが、撤去コマンドを dry-run 検証しておく。
+        try:
+            result = await asyncio.to_thread(
+                deploy_runtime.teardown_demo, namespace, settings=settings
+            )
+        except (deploy_runtime.DeployRuntimeError, KubeError) as exc:
+            logger.warning("teardown(dry-run) failed (sid=%s): %s", sid, exc)
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "namespace 撤去の検証に失敗しました", "code": "teardown_failed"},
+            ) from exc
+        teardown = {"namespace": namespace, "dry_run": result.dry_run}
+
+    deleted = hearing_repo.delete_launch(user.subject, sid)
+    return {"deleted": deleted, "teardown": teardown}
 
 
 async def _build_summary(session: dict[str, Any]):

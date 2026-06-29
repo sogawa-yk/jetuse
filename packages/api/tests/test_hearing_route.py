@@ -124,7 +124,8 @@ class FakeHearingRepo:
         return "confirmed"
 
     def record_launch(self, owner, sid, *, sample_app, instance_id, entry_slot,
-                      demo_url, composition):
+                      demo_url, composition, namespace=None, deploy_status=None,
+                      cluster_url=None, token_expires_at=None):
         if not self._own(owner, sid):
             return None
         self.launches[sid] = {
@@ -132,6 +133,8 @@ class FakeHearingRepo:
             "instance_id": instance_id, "entry_slot": entry_slot, "demo_url": demo_url,
             "composition": composition, "status": "launched",
             "launched_at": "2026-01-01T00:00:00",
+            "namespace": namespace, "deploy_status": deploy_status,
+            "cluster_url": cluster_url, "token_expires_at": token_expires_at,
         }
         return self.launches[sid]
 
@@ -140,6 +143,11 @@ class FakeHearingRepo:
             return None
         return self.launches.get(sid)
 
+    def delete_launch(self, owner, sid):
+        if not self._own(owner, sid):
+            return False
+        return self.launches.pop(sid, None) is not None
+
 
 @pytest.fixture
 def repo(monkeypatch):
@@ -147,7 +155,7 @@ def repo(monkeypatch):
     for name in (
         "create_session", "list_sessions", "get_session", "update_session",
         "delete_session", "save_answer", "get_answers", "save_recommendation",
-        "confirm_recommendation", "record_launch", "get_launch",
+        "confirm_recommendation", "record_launch", "get_launch", "delete_launch",
     ):
         monkeypatch.setattr(service_main.hearing_repo, name, getattr(fake, name))
     # 実DBへ触れないことを保証する: 万一 fake 未差し替えの repo 関数が呼ばれても
@@ -563,6 +571,150 @@ def test_launch_blocked_when_governance_fails(repo):
     assert v["alternative"]  # 外させない代替提案(最近傍 SBA へ誘導)
     # 起動記録は作られない。
     assert client.get(f"/api/hearing/sessions/{sid}/launch").status_code == 404
+
+
+# --- BE-01: OKE 実配備配線 -------------------------------------------------
+
+
+def _enable_oke(monkeypatch, **over):
+    """ルートの get_settings を OKE 有効な Settings に差し替える(実 kubectl は呼ばない)。"""
+    from jetuse_core.settings import Settings
+    from service.routes import hearing as hearing_route
+
+    base = dict(oke_deploy_enabled=True, oke_deploy_dry_run=True, project_ocid="ocid1.tenancy..t")
+    base.update(over)
+    s = Settings(_env_file=None, **base)
+    monkeypatch.setattr(hearing_route, "get_settings", lambda: s)
+    return hearing_route
+
+
+def test_launch_backward_compat_no_deploy_when_oke_off(repo):
+    """既定 OFF: launch は従来どおり DB 行＋/sba URL のみ(deploy=None・namespace 無し)。"""
+    sid = _create()
+    _confirm_full(sid)
+    body = client.post(f"/api/hearing/sessions/{sid}/launch").json()
+    assert body["deploy"] is None
+    assert body["launch"]["namespace"] is None
+    assert body["launch"]["demo_url"] == "/sba/builtin-sba-a"  # 既存契約を維持
+
+
+def test_launch_deploys_to_oke_when_enabled(repo, monkeypatch):
+    """OKE 有効: launch が deploy_demo を呼び、配備メタを記録・返す(dry-run 検証)。"""
+    from jetuse_core import deploy_runtime
+    from jetuse_core.deploy_runtime import DeployOutcome
+
+    hearing_route = _enable_oke(monkeypatch)
+    captured = {}
+
+    def fake_deploy(composition, **kw):
+        captured["kw"] = kw
+        return DeployOutcome(
+            namespace="jetuse-demo-sbaa-abc1234", service_name="jetuse-demo-sbaa-abc1234",
+            cluster_url="http://jetuse-demo-sbaa-abc1234.jetuse-demo-sbaa-abc1234.svc:80",
+            resources=("deployment.apps/x", "service/x"), injected=False,
+            dry_run="client", token_expires_at=None,
+        )
+
+    monkeypatch.setattr(hearing_route.deploy_runtime, "deploy_demo", fake_deploy)
+    sid = _create()
+    _confirm_full(sid)
+    body = client.post(f"/api/hearing/sessions/{sid}/launch").json()
+
+    assert body["deploy"]["namespace"] == "jetuse-demo-sbaa-abc1234"
+    assert body["deploy"]["deploy_status"] == "validated"
+    assert body["deploy"]["dry_run"] == "client"
+    # 配備メタが起動記録に永続される。
+    assert body["launch"]["namespace"] == "jetuse-demo-sbaa-abc1234"
+    assert body["launch"]["deploy_status"] == "validated"
+    # instance_key に session id を渡している(命名一意化 F-005)。
+    assert captured["kw"]["instance_key"] == sid
+    # principal は manifest.id（grant のキー）を解決して渡す（F-003。sample_app コードでない）。
+    assert captured["kw"]["plugin_id"] == "jetuse/support-desk"
+    assert deploy_runtime  # import 健全性
+
+
+def test_launch_deploy_failure_returns_409_without_record(repo, monkeypatch):
+    """配備失敗(fail-closed)は 409 で起動させず、起動記録も残さない。"""
+    hearing_route = _enable_oke(monkeypatch)
+
+    def boom(composition, **kw):
+        raise hearing_route.deploy_runtime.DeployRuntimeError("kubectl boom")
+
+    monkeypatch.setattr(hearing_route.deploy_runtime, "deploy_demo", boom)
+    sid = _create()
+    _confirm_full(sid)
+    r = client.post(f"/api/hearing/sessions/{sid}/launch")
+    assert r.status_code == 409, r.text
+    assert client.get(f"/api/hearing/sessions/{sid}/launch").status_code == 404
+
+
+def test_delete_launch_without_oke_deletes_record(repo):
+    """OKE OFF/未配備: DELETE は起動記録のみ削除する(冪等。再 launch で再作成可)。"""
+    sid = _create()
+    _confirm_full(sid)
+    client.post(f"/api/hearing/sessions/{sid}/launch")
+    r = client.request("DELETE", f"/api/hearing/sessions/{sid}/launch")
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] is True
+    assert r.json()["teardown"] is None
+    assert client.get(f"/api/hearing/sessions/{sid}/launch").status_code == 404
+
+
+def test_delete_launch_tears_down_namespace_when_oke(repo, monkeypatch):
+    """OKE 有効＋配備済み: DELETE は namespace を撤去してから記録を削除する。"""
+    hearing_route = _enable_oke(monkeypatch)
+
+    class _Res:
+        dry_run = "client"
+
+    teardowns = []
+
+    def fake_teardown(namespace, **kw):
+        teardowns.append(namespace)
+        return _Res()
+
+    def fake_deploy(composition, **kw):
+        from jetuse_core.deploy_runtime import DeployOutcome
+        return DeployOutcome(
+            namespace="jetuse-demo-sbaa-dead", service_name="jetuse-demo-sbaa-dead",
+            cluster_url="http://x", resources=(), injected=False, dry_run="client",
+        )
+
+    monkeypatch.setattr(hearing_route.deploy_runtime, "deploy_demo", fake_deploy)
+    monkeypatch.setattr(hearing_route.deploy_runtime, "teardown_demo", fake_teardown)
+    sid = _create()
+    _confirm_full(sid)
+    client.post(f"/api/hearing/sessions/{sid}/launch")
+    r = client.request("DELETE", f"/api/hearing/sessions/{sid}/launch")
+    assert r.status_code == 200, r.text
+    assert teardowns == ["jetuse-demo-sbaa-dead"]  # namespace 撤去が呼ばれた
+    assert r.json()["teardown"]["namespace"] == "jetuse-demo-sbaa-dead"
+    assert client.get(f"/api/hearing/sessions/{sid}/launch").status_code == 404
+
+
+def test_delete_launch_404_when_not_launched(repo):
+    """未起動セッションの DELETE は 404。"""
+    sid = _create()
+    _confirm_full(sid)
+    assert client.request(
+        "DELETE", f"/api/hearing/sessions/{sid}/launch"
+    ).status_code == 404
+
+
+@pytest.mark.parametrize("status", ["deployed", "deploying", "cleanup_pending", "weird"])
+def test_delete_launch_refuses_non_validated_status(repo, status):
+    """F-005: 実クラスタ資源を持ち得る状態(validated/None 以外)の削除は 409 で記録を保持する。"""
+    sid = _create()
+    _confirm_full(sid)
+    client.post(f"/api/hearing/sessions/{sid}/launch")
+    # 実配備済み相当の状態を記録に注入（OKE OFF の launch は None なので明示的に上書き）。
+    repo.launches[sid]["deploy_status"] = status
+    repo.launches[sid]["namespace"] = "jetuse-demo-x-real"
+    r = client.request("DELETE", f"/api/hearing/sessions/{sid}/launch")
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"]["code"] == "real_teardown_required"
+    # 記録は保持される（孤児化させない）。
+    assert client.get(f"/api/hearing/sessions/{sid}/launch").status_code == 200
 
 
 def _spy_materialize(monkeypatch):

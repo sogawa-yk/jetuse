@@ -121,6 +121,19 @@ class Settings(BaseSettings):
     # fail-closed で InjectionError)。環境依存実値は .env で与え、コミットしない。
     platform_api_base_url: str = ""
 
+    # BE-01: 生成デモの OKE 実配備配線（launch → kubectl apply）。
+    # 既定 OFF = **後方互換**（launch は従来どおり DB 行＋/sba URL のみ。コンテナ配備しない）。
+    # True にすると launch が build_deploy_spec→render→（要すれば）build_runtime_injection→
+    # kubectl apply まで実行する（描画側の fail-closed はそのまま流す）。
+    oke_deploy_enabled: bool = False
+    # kubeconfig パス（環境依存実値。.env で与え、コミットしない）。空なら kubectl 既定
+    # （KUBECONFIG / ~/.kube/config）に委ねる。
+    kube_config_path: str = ""
+    # True なら apply を `kubectl --dry-run=client` で **検証のみ**（実ワークロードを作らない）。
+    # 実 OKE への apply/課金は人間ゲート。自走（オーケストレータ）は dry-run 検証までに留める。
+    # 実配備するときだけ人間が False にする（= 人間ゲートを越える明示操作）。
+    oke_deploy_dry_run: bool = True
+
     # OPS-02: OCI Logging(カスタムログOCID。空なら送らない) / Monitoring名前空間
     log_ocid: str = ""
     metrics_namespace: str = "jetuse_dev"
