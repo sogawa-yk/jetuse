@@ -8,15 +8,15 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from jetuse_core import nl2sql
+from jetuse_core import nl2sql, rag
 from jetuse_core import platform_broker as pb
 from jetuse_core.plugins import connector_store
 from jetuse_core.settings import Settings, get_settings
 from service.main import app
 
 SECRET = "papi03-test-broker-secret-32bytes!"
-TENANT = "ocid1.tenancy.oc1..aaaa-tenant-A"
-TENANT_B = "ocid1.tenancy.oc1..bbbb-tenant-B"
+TENANT = "ocid1.generativeaiproject.oc1.ap-osaka-1.aaaaaaaatenanta"
+TENANT_B = "ocid1.generativeaiproject.oc1.ap-osaka-1.bbbbbbbbtenantb"
 PLUGIN = "acme/faq-summarizer"
 
 DB_QUERY = "platform:db.query"
@@ -244,17 +244,123 @@ def test_connector_invoke_unknown_action_404(client, audit, monkeypatch):
     assert res.status_code == 404, res.text
 
 
-# --- rag.search: 配管まで ----------------------------------------------------
+# --- rag.search: OCI Responses file_search 委譲 ------------------------------
 
 
-def test_rag_search_plumbing_501(client, audit):
+def test_rag_search_happy_path_delegates_and_audits_allow(client, audit, monkeypatch):
+    captured = {}
+
+    def fake_search(owner, query, *, top_k=5):
+        captured["owner"] = owner
+        captured["query"] = query
+        captured["top_k"] = top_k
+        return {
+            "hits": [
+                {"file_id": "f1", "filename": "請求書.pdf", "score": 0.91, "text": "..."}
+            ],
+            "citations": [
+                {"file_id": "f1", "filename": "請求書.pdf", "score": 0.91}
+            ],
+            "answer": "請求書の支払期日は月末です。",
+            "store_present": True,
+        }
+
+    monkeypatch.setattr(rag, "search", fake_search)
     res = client.post(
         "/platform/rag/search",
-        json={"tenant": TENANT, "query": "請求書"},
+        json={"tenant": TENANT, "query": "請求書", "top_k": 3},
         headers=_auth(_token([RAG_SEARCH])),
     )
-    assert res.status_code == 501, res.text
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["tenant"] == TENANT
+    assert body["hits"][0]["file_id"] == "f1"
+    assert body["citations"][0]["filename"] == "請求書.pdf"
+    assert body["answer"]
+    # テナント境界: 本体は broker 検証済みテナントをストア所有者キーに使う(呼び出し元は渡さない)。
+    assert captured["owner"] == TENANT
+    assert captured["query"] == "請求書"
+    assert captured["top_k"] == 3
+    allows = [r for r in audit if r["decision"] == "ALLOW"]
+    assert len(allows) == 1
+    assert allows[0]["scope"] == RAG_SEARCH
+    assert allows[0]["tenant"] == TENANT
+
+
+def test_rag_search_empty_store_returns_empty_200(client, audit, monkeypatch):
+    # テナントに取り込み済み文書(ストア)が無い場合は越境ではなくデータ未取込 → 空ヒットの 200。
+    monkeypatch.setattr(
+        rag,
+        "search",
+        lambda owner, query, *, top_k=5: {
+            "hits": [],
+            "citations": [],
+            "answer": "",
+            "store_present": False,
+        },
+    )
+    res = client.post(
+        "/platform/rag/search",
+        json={"tenant": TENANT, "query": "x"},
+        headers=_auth(_token([RAG_SEARCH])),
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["hits"] == []
     assert any(r["decision"] == "ALLOW" for r in audit)
+
+
+def test_rag_search_upstream_error_502(client, audit, monkeypatch):
+    # 委譲先(OCI Responses file_search)の失敗は曖昧に 200 へ倒さず 502(fail-closed)。
+    def boom(owner, query, *, top_k=5):
+        raise rag.RagSearchError("genai timeout")
+
+    monkeypatch.setattr(rag, "search", boom)
+    res = client.post(
+        "/platform/rag/search",
+        json={"tenant": TENANT, "query": "x"},
+        headers=_auth(_token([RAG_SEARCH])),
+    )
+    assert res.status_code == 502, res.text
+    assert any(r["decision"] == "ALLOW" for r in audit)
+
+
+def test_rag_search_upstream_error_hides_detail(client, audit, monkeypatch):
+    # 502 のクライアント応答に上流例外文字列(vector_store_id 等を含みうる)を漏らさない。
+    def boom(owner, query, *, top_k=5):
+        raise rag.RagSearchError("vector_store_id=vs_kix_SECRET endpoint=https://internal")
+
+    monkeypatch.setattr(rag, "search", boom)
+    res = client.post(
+        "/platform/rag/search",
+        json={"tenant": TENANT, "query": "x"},
+        headers=_auth(_token([RAG_SEARCH])),
+    )
+    assert res.status_code == 502, res.text
+    assert "vs_kix_SECRET" not in res.text
+    assert "internal" not in res.text
+
+
+def test_rag_search_blank_query_422_no_delegation(client, audit, monkeypatch):
+    # 空白のみの query は 422。rag.search に到達しない(課金 API を叩かない)。
+    monkeypatch.setattr(rag, "search", lambda *a, **k: pytest.fail("must not delegate"))
+    res = client.post(
+        "/platform/rag/search",
+        json={"tenant": TENANT, "query": "   "},
+        headers=_auth(_token([RAG_SEARCH])),
+    )
+    assert res.status_code == 422, res.text
+
+
+def test_rag_search_overlong_query_422_no_delegation(client, audit, monkeypatch):
+    from service.routes.platform import MAX_RAG_QUERY_CHARS
+
+    monkeypatch.setattr(rag, "search", lambda *a, **k: pytest.fail("must not delegate"))
+    res = client.post(
+        "/platform/rag/search",
+        json={"tenant": TENANT, "query": "あ" * (MAX_RAG_QUERY_CHARS + 1)},
+        headers=_auth(_token([RAG_SEARCH])),
+    )
+    assert res.status_code == 422, res.text
 
 
 def test_rag_search_scope_denied_403(client, audit):
@@ -264,3 +370,24 @@ def test_rag_search_scope_denied_403(client, audit):
         headers=_auth(_token([DB_QUERY])),
     )
     assert res.status_code == 403, res.text
+
+
+def test_rag_search_tenant_mismatch_403(client, audit, monkeypatch):
+    # 別テナントのトークンで TENANT のストアを検索 → tenant_mismatch で 403(越境拒否 fail-closed)。
+    # search に到達しないことも確認(認可で弾かれるため委譲が起きない)。
+    called = {"n": 0}
+
+    def fake_search(owner, query, *, top_k=5):
+        called["n"] += 1
+        return {"hits": [], "citations": [], "answer": "", "store_present": True}
+
+    monkeypatch.setattr(rag, "search", fake_search)
+    res = client.post(
+        "/platform/rag/search",
+        json={"tenant": TENANT, "query": "x"},
+        headers=_auth(_token([RAG_SEARCH], tenant=TENANT_B)),
+    )
+    assert res.status_code == 403, res.text
+    assert called["n"] == 0
+    denies = [r for r in audit if r["decision"] == "DENY"]
+    assert denies and denies[0]["reason"] == "tenant_mismatch"

@@ -504,13 +504,14 @@ scope 強制 → テナント一致 → 監査（ALLOW/DENY）** を通した範
 |---|---|---|---|
 | `POST /platform/db/query` | `platform:db.query` | `nl2sql.execute_readonly`（**読取限定**） | 非 SELECT は `SqlRejectedError`→**400**（書込は到達しない）。 |
 | `POST /platform/connector/invoke` | `platform:connector.invoke` | 配管まで（CON-02/03） | 認可＋コネクタ/action 存在検証まで→実 MCP は **501**。未登録は 404。 |
-| `POST /platform/rag/search` | `platform:rag.search` | 配管まで（後続） | 認可まで→本格ベクトル検索（OCI Responses）委譲は **501**。 |
+| `POST /platform/rag/search` | `platform:rag.search` | `rag.search`（OCI Responses **file_search** 委譲） | 認可→テナント登録簿（`platform_rag_stores`）からストア解決→`file_search`（実ヒット＋引用）。秘密（`vector_store_id`）は応答に含めない。ストア未保有テナントは空ヒットの **200**。委譲失敗/上流スキーマ破損は **502**（fail-closed）。テナント↔ストアの登録は SA 限定 `PUT /platform/rag/stores`。詳細は **ADR-0019**（承認済 / per-tenant Project 分離）。BE-04。 |
 
 **拒否マッピング（fail-closed）**: `scope_denied` / `tenant_mismatch` → **403**、改竄・期限切れ・未署名・
 必須 claim 欠落（`invalid_token` 他）→ **401**、トークン欠如 → **401**、ブローカー鍵未設定
 （`BrokerConfigError`）→ **503**。テナント越境は scope 不足より先に `tenant_mismatch` として監査に残す
-（§13.5 の契約）。`conversations.read` / `files.*` のルート、rag.search の本格検索、connector.invoke の
-実 MCP 呼び出し、レート制限、OIDC 発行主体認証（INFRA-02）は後続。
+（§13.5 の契約）。`conversations.read` / `files.*` のルート、connector.invoke の
+実 MCP 呼び出し、レート制限、OIDC 発行主体認証（INFRA-02）は後続。`rag.search` の本格ベクトル検索は
+BE-04 で実体化済み（OCI Responses file_search 委譲 / ADR-0019）。
 
 ## 14. kind: external-app（外部アプリ連携 / SSO ブリッジ / ASSET-01）
 
