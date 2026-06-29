@@ -376,13 +376,23 @@ _DEFINITION: dict[str, Any] = {
 _MANIFEST: dict[str, Any] = {
     "schemaVersion": "1",
     "id": SBA_A_ID,
-    "version": "1.0.0",
+    # 1.1.0: permissions に platform:connector.invoke を追加した版(方式A / ADR-0020 D7)。版は固定
+    # スナップショットで installed_plugins も (plugin_id, version) 一意のため、旧 1.0.0 が
+    # install 済みでも新権限契約を**別スナップショットとして**再インストール・再承認できるよう版を
+    # 繰り上げる(旧 1.0.0 のまま permissions を変えると保存済み manifest が正本で invoke を承認
+    # できない。BLK-001)。
+    "version": "1.1.0",
     "kind": "sample-app",
     "name": "問い合わせ/サポート管理",
     "description": "FAQ-RAG 回答・自動分類・要約・返信ドラフトを備えたサポート業務デモ(SBA-A)。",
     "publisher": "jetuse",
     "jetuse": {"minVersion": "0.3.0"},
-    "permissions": ["platform:rag.search"],
+    # platform:rag.search は FAQ-RAG slot 由来。platform:connector.invoke は Slack 等のコネクタを
+    # 束ねて通知する消費デモとして invoke を呼ぶ権利の宣言(方式A / ADR-0020 D7)。grant/approve は
+    # manifest.permissions に閉じるため、無いと Slack を束ねた配備の synth→approve→issue_token が
+    # scope_not_granted になり invoke へ届かない。宣言は invoke を**承認可能**にするだけで、
+    # 実 grant は配備が実際に Slack を束縛したときに限り invoke を含む(最小権限は grant 段で保つ)。
+    "permissions": ["platform:rag.search", "platform:connector.invoke"],
     "contributes": {"sample-app": _DEFINITION},
     "tags": ["support", "rag", "sample-app"],
     "icon": "💬",

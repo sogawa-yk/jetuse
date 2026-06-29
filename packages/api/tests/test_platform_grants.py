@@ -88,6 +88,22 @@ def test_validate_grant_scopes_not_requested_by_manifest_rejected():
         pg.validate_grant_scopes(m, ["platform:db.query"])
 
 
+def test_consumer_plugin_can_be_granted_connector_invoke():
+    # BE-03 到達性モデル(review-6 BLK-001): connector.invoke を**呼ぶ**のはコネクタ所有 plugin では
+    # なく消費側 L3 デモ(kind=usecase 等)。デモが自身の manifest で connector.invoke を宣言すれば、
+    # 非 connector plugin でも承認できる(scope は kind 制約を持たない＝grant→issue が成立する)。
+    m = _manifest(permissions=["platform:connector.invoke"])
+    granted = pg.validate_grant_scopes(m, ["platform:connector.invoke"])
+    assert granted == frozenset({"platform:connector.invoke"})
+
+
+def test_consumer_plugin_without_declaration_cannot_grant_connector_invoke():
+    # 宣言しない消費 plugin には connector.invoke を承認できない(迂回不可。BLK-002 回帰防止)。
+    m = _manifest(permissions=["platform:rag.search"])
+    with pytest.raises(pg.GrantError):
+        pg.validate_grant_scopes(m, ["platform:connector.invoke"])
+
+
 def test_validate_grant_scopes_empty_permissions_cannot_grant():
     m = _manifest(permissions=[])
     with pytest.raises(pg.GrantError):

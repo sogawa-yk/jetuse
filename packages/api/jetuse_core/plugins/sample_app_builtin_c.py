@@ -266,14 +266,20 @@ _DEFINITION: dict[str, Any] = {
 _MANIFEST: dict[str, Any] = {
     "schemaVersion": "1",
     "id": SBA_C_ID,
-    "version": "1.0.0",
+    # 1.1.0: permissions に platform:connector.invoke を追加した版(方式A / ADR-0020 D7)。版固定
+    # スナップショットのため版を繰り上げ、旧 1.0.0 install 済み環境でも新権限契約を再インストール・
+    # 再承認できるようにする(BLK-001)。
+    "version": "1.1.0",
     "kind": "sample-app",
     "name": "営業案件管理",
     "description": "議事録要約・次アクション提案・売上集計(NL2SQL)・メール下書きを"
     "連動させた営業案件管理デモ(SBA-C)。",
     "publisher": "jetuse",
     "jetuse": {"minVersion": "0.3.0"},
-    "permissions": [],
+    # platform:connector.invoke は Slack 等のコネクタを束ねて通知する消費デモとして invoke を呼ぶ
+    # 権利の宣言(方式A / ADR-0020 D7)。宣言は invoke を承認可能にするだけで、実 grant は配備が実際に
+    # Slack を active 束縛したときに限り invoke を含む(最小権限は grant 段で保つ)。
+    "permissions": ["platform:connector.invoke"],
     "contributes": {"sample-app": _DEFINITION},
     "tags": ["sales", "agent", "nl2sql", "sample-app"],
     "icon": "📊",

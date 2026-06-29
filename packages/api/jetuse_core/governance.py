@@ -46,7 +46,7 @@ from .plugins.manifest import (
     PLATFORM_SCOPES,
 )
 from .plugins.sample_app import required_capabilities
-from .synth import SBA_CODE_TO_INSTANCE, DemoComposition
+from .synth import SBA_CODE_TO_INSTANCE, DemoComposition, sba_manifest_permissions
 
 # --- 許可パレット(§4 制約2: 制約付きパレット) ------------------------------
 
@@ -73,9 +73,12 @@ ViolationKind = Literal[
     # CON-03: コネクタ invoke スコープ経路の検証。
     "connector_scope_undeclared",  # パレット内なのに合成不整合(action 要求スコープ未宣言)。
     "connector_scope_unknown",  # 束縛が要求する Platform スコープが既知語彙(PLATFORM_SCOPES)外。
+    # BE-03 方式A(ADR-0020 D7): コネクタを束ねる配備主体(sample-app)が自身の manifest.permissions に
+    # platform:connector.invoke を宣言していない(grant/approve が閉じる先に invoke が無く到達不能)。
+    "connector_invoke_unprovisioned",
 ]
 
-ElementType = Literal["composition", "capability", "connector", "permission"]
+ElementType = Literal["composition", "capability", "connector", "permission", "manifest"]
 
 
 class GovernanceViolation(BaseModel):
@@ -389,6 +392,54 @@ def validate_governance(
                 )
             )
 
+    # (BE-03 方式A / ADR-0020 D7) **配備主体 manifest の invoke 宣言担保**: active なコネクタ束縛が
+    # 1つでもあるなら、配備主体(sample-app)の manifest.permissions が platform:connector.invoke を
+    # 宣言していなければならない。grant/approve(`validate_grant_scopes`)は manifest.permissions に
+    # 閉じるため、未宣言だと synth→approve→issue_token が scope_not_granted になり invoke へ届かない
+    # (review-3 BLK-001)。宣言が無いデモはデプロイ不可にして早期に検出する(grant 段の fail-closed を
+    # ゲートへ前倒し)。**manifest を解決できない配備主体(未知 SBA / マッピング漏れ)も、active な
+    # コネクタがあるなら fail-closed で違反**にする(検証不能を黙って PASS にすると invoke 未宣言の
+    # 主体がゲートを通過し後段の承認/発行だけが失敗する=方式Aの fail-closed 保証と矛盾。MAJ-002)。
+    if any(cb.status == "active" for cb in composition.connector_bindings):
+        manifest_perms = sba_manifest_permissions(composition.sample_app)
+        if manifest_perms is None:
+            violations.append(
+                GovernanceViolation(
+                    kind="connector_invoke_unprovisioned",
+                    element=composition.sample_app or "sample-app",
+                    element_type="manifest",
+                    detail=(
+                        f"配備主体 '{composition.sample_app}' は active なコネクタを束ねるが、"
+                        "その manifest を解決できない(未知 SBA / manifest マッピング漏れ)。"
+                        "invoke 宣言を検証できないため fail-closed で拒否する"
+                    ),
+                    alternative=(
+                        "配備主体に検証可能な manifest を用意し、その manifest.permissions に "
+                        f"'{PLATFORM_SCOPE_CONNECTOR_INVOKE}' を宣言する(方式A)。"
+                        "または当該コネクタを束ねない(連携なし)構成にする"
+                    ),
+                )
+            )
+        elif PLATFORM_SCOPE_CONNECTOR_INVOKE not in manifest_perms:
+            violations.append(
+                GovernanceViolation(
+                    kind="connector_invoke_unprovisioned",
+                    element=composition.sample_app or "sample-app",
+                    element_type="manifest",
+                    detail=(
+                        f"配備主体 '{composition.sample_app}' は active なコネクタを束ねるが、"
+                        f"自身の manifest.permissions に '{PLATFORM_SCOPE_CONNECTOR_INVOKE}' を"
+                        "宣言していない(approve/issue_token は manifest.permissions に閉じるため"
+                        "実 invoke へ到達しない)"
+                    ),
+                    alternative=(
+                        "配備主体(sample-app)の manifest.permissions に "
+                        f"'{PLATFORM_SCOPE_CONNECTOR_INVOKE}' を宣言する(方式A)。"
+                        "または当該コネクタを束ねない(連携なし)構成にする"
+                    ),
+                )
+            )
+
     kinds = {v.kind for v in violations}
     checks = {
         "allowed_combination": "disallowed_combination" not in kinds,
@@ -397,7 +448,8 @@ def validate_governance(
         "permission_scope": "scope_out_of_manifest" not in kinds,
         "model_available": "model_unavailable" not in kinds,
         "connector_scope": "connector_scope_undeclared" not in kinds
-        and "connector_scope_unknown" not in kinds,
+        and "connector_scope_unknown" not in kinds
+        and "connector_invoke_unprovisioned" not in kinds,
     }
     return GovernanceReport(
         ok=not violations,
