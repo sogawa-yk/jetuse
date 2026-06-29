@@ -31,6 +31,12 @@ from jetuse_core.plugins.installer import (
 from jetuse_core.plugins.manifest import ManifestError
 from jetuse_core.plugins.registry_client import RegistryError, _semver_key
 from jetuse_core.settings import Settings, get_settings
+from service.deps import is_admin
+
+#: install/uninstall に **運用者（ADMIN_USERS）ゲート**が要る kind（BE06-AUTHZ-001）。external-app
+#: は全利用者へ SSO 起動導線（外部 URL）を platform-wide に露出するため、任意の認証利用者ではなく
+#: 運用者だけが install/uninstall できる（他 kind は従来どおりセルフサービス）。
+_ADMIN_ONLY_KINDS = frozenset({"external-app"})
 
 router = APIRouter()
 
@@ -42,10 +48,10 @@ _vkey = _semver_key
 # MKT-01 で sample-app(scaffold 取込)/ connector(connector_store 登録)へ拡張した。installer は
 # kind に応じた取込先へ署名検証付き・版固定・出所付きで取り込む(installer._ingest_contributes)。
 # 未対応 kind は installable=False で表し、UI は install ボタンを無効化して未対応を明示する。
-# external-app(ASSET-01)は builder＋in-process SSO ブリッジでオンボードし DB の instance store を
-# 持たないため、マーケット publish/install は後段(specs/16-platform.md §14.4)。よって意図的に
-# 未対応(installer._ingest_contributes が fail-closed に拒否)。流通時は store+migration を追加する。
-SUPPORTED_KINDS = frozenset({"usecase", "agent", "sample-app", "connector"})
+# external-app(ASSET-01 / BE-06)は §14.4 で後段としていた store+migration(external_app_instances /
+# 026)＋installer の kind 分岐を実装し、本タスクで install 対応にした(署名検証・版固定・出所追跡は
+# kind 非依存の枠組みをそのまま使う)。実シークレットは保存せず参照名のみ・SSO/Vault は人間ゲート。
+SUPPORTED_KINDS = frozenset({"usecase", "agent", "sample-app", "connector", "external-app"})
 
 
 # --- リクエスト DTO --------------------------------------------------------
@@ -264,6 +270,16 @@ def install_plugin(
     sample-app は scaffold(sample_app_instances)、connector は登録(connector_instances)。
     """
     client = build_client(settings)
+
+    # external-app は SSO 起動導線を全利用者へ露出するため、運用者（ADMIN_USERS）ゲート
+    # をかける（BE06-AUTHZ-001）。**取込と同一の署名検証済み manifest** に対して認可フックで強制し、
+    # 二重 download による TOCTOU を避ける（BE06-BLK-004）。他 kind は従来どおりセルフサービス。
+    def _authorize(manifest):
+        if manifest.kind in _ADMIN_ONLY_KINDS and not is_admin(user):
+            raise HTTPException(
+                status_code=403, detail=f"{manifest.kind} の install は運用者(ADMIN_USERS)のみ許可"
+            )
+
     try:
         record = installer.install(
             client,
@@ -271,6 +287,7 @@ def install_plugin(
             req.version,
             installed_by=user.subject,
             owner=user.subject,
+            authorize=_authorize,
         )
     except AlreadyInstalled as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
@@ -302,7 +319,21 @@ def uninstall_plugin(
     伏せて 404 を返す(未インストールと区別しない)。
     """
     record = store.find_install(req.plugin_id, req.version)
-    if record is None or record.get("installed_by") != user.subject:
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"未インストール: {req.plugin_id}@{req.version}",
+        )
+    if record.get("kind") in _ADMIN_ONLY_KINDS:
+        # external-app は platform-wide な運用者管理資産。**任意の現行運用者**が uninstall できる
+        # （原 installer の離任・無効化に依存しない。BE06-MAJ-004）。非運用者には伏せて 404。
+        if not is_admin(user):
+            raise HTTPException(
+                status_code=404,
+                detail=f"未インストール: {req.plugin_id}@{req.version}",
+            )
+    elif record.get("installed_by") != user.subject:
+        # 従来 kind: 取込本人のみ（第三者には存在を伏せて 404）。
         raise HTTPException(
             status_code=404,
             detail=f"未インストール: {req.plugin_id}@{req.version}",

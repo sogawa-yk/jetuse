@@ -16,11 +16,11 @@ status: `todo` | `in_progress` | `blocked` | `done`
 |---|---|---|---|---|---|
 | 1 | BE-02 サンプルアプリのデータ自動マテリアライズ | B | S2(synth)・ENH-01(datasets) | apply/課金（実ADB・loop ADB再利用可） | **done** (wave1: PASS/8 E2E/統合済) |
 | 2 | BE-01 デモ起動の実デプロイ配線（launch→OKE） | B | DEP-03(OKE) | **apply/課金**（OKE 実配備） | **done** (wave2: PASS/OKE dry-run E2E/統合済。実apply=人間ゲート) |
-| 3 | BE-04 Platform RAG 検索の実体化 | A | PAPI-01..03 | apply/課金（GenAI/OS） | **blocked** (wave2: 実装済だが ADR-0018=テナント→ストア登録簿が spec外→adr_approval ゲートで Codex FAIL。未統合) |
+| 3 | BE-04 Platform RAG 検索の実体化 | A | PAPI-01..03 | apply/課金（GenAI/OS） | **done** (wave4: ADR-0019承認→実装、PASS/実E2E 5/5（実ADB+実GenAI file_search）/feat/stage-6b統合済) |
 | 4 | BE-05 スコープ承認 API＋UI（PAPI-02 到達経路） | A | PAPI-02 | — | **done** (wave1: PASS/3 E2E/統合済) |
 | 5 | BE-07 スロット内RAG retrieval のベクトル化 | C(簡易→実) | S2(ai_runtime) | apply/課金（ベクトル索引） | **done** (wave1: PASS/E2E/統合済) |
-| 6 | BE-03 コネクタ実行の実体化（Slack コア） | C | CON-02/03 | **Vault/IAM・実Slack資格情報** | **blocked** (wave3: invoke機構/Slackコア/Vault解決 実装＆mock E2E済[1195 pass]。残BLK=出荷デモのinvoke到達性=ADR-0019 R3 製品判断＋実Slack/Vault。未統合) |
-| 7 | BE-06 ASSET-01 実接続（外部アプリSSO＋資産コネクタ） | C | ASSET-01・DEP-03 | **外部資産接続・SSO実設定(Identity Domain)** | **blocked** (wave3: SSO handoff/external-app store/asset MCP/marketplace install 実装＆mock E2E済。残BLK=実id_token nonce/identity検証=実IdP/Identity Domain変更＋ADR-0019承認。未統合) |
+| 6 | BE-03 コネクタ実行の実体化（Slack コア） | C | CON-02/03 | **Vault/IAM・実Slack資格情報** | **done** (wave4: ADR-0020承認→方式Aで到達性解消、PASS/mock E2E/feat/stage-6b統合済。実Slack/Vault/secrets:read IAM のライブE2Eは人間ゲート) |
+| 7 | BE-06 ASSET-01 実接続（外部アプリSSO＋資産コネクタ） | C | ASSET-01・DEP-03 | **外部資産接続・SSO実設定(Identity Domain)** | **done** (wave4: ADR-0021承認→seam実装、PASS/mock E2E/feat/stage-6b統合済。実IdP/Identity Domain/Vault/実MCP の活性化は人間ゲート) |
 | 8 | BE-08 認証付きMCPサーバー登録 | A | — | **Vault書込IAM** | **done** (wave2: PASS/mock E2E/統合済。実Vault書込IAM=人間ゲート) |
 
 ## 実行可能集合（開始時）

@@ -42,6 +42,21 @@ class Settings(BaseSettings):
     registry_namespace: str = ""          # plugin id の名前空間。空なら publisher_id を使う
     registry_min_version: str = ""        # manifest.jetuse.minVersion。空なら publisher 既定(0.3.0)
 
+    # external-app（ASSET-01 / BE-06）。伝ぴょん等の「UI 埋め込み＋OIDC SSO」連携の環境依存値。
+    # すべて .env / Vault で注入し、**実値をコミットしない**（url/issuer/audience は公開
+    # エンドポイントだが環境依存のため env）。url/issuer/audience のいずれかが空なら未構成＝
+    # SSO 起動ルートは 503（機能無効）。実 client_secret は Vault OCID 参照のみ（実 token-exchange
+    # の実値解決・実 IdP 接続は人間ゲート＝SSO 実設定）。
+    denpyon_url: str = ""          # 伝ぴょんの埋め込み先 HTTPS URL
+    denpyon_issuer: str = ""       # OIDC IdP（issuer）の HTTPS URL
+    denpyon_audience: str = ""     # token-exchange の audience（伝ぴょんの HTTPS URL）
+    denpyon_token_endpoint: str = ""  # OIDC token endpoint（実 exchange 用。空なら shape のみ）
+    denpyon_jwks_url: str = ""     # 連携先 IdP の JWKS URL（id_token 検証用。空なら exchange 不能）
+    # secretRef（論理参照名）→ Vault secret OCID の対応。"ref=ocid,ref2=ocid2" 形式（任意）。
+    # 実 token-exchange のとき secretRef/clientIdRef から実 client_secret/client_id を Vault 経由で
+    # 解決する索引（実値は Vault にのみ存在）。空なら実 exchange は不能（shape のみ＝人間ゲート）。
+    external_app_secret_ocids: str = ""
+
     # feature flags
     auth_required: bool = False  # INFRA-02(OIDC)完了までの暫定。本番はtrue必須
 
@@ -139,6 +154,17 @@ class Settings(BaseSettings):
     # が必須。いずれか空なら認証付き登録は fail-closed(503。実 Vault 書込 IAM は人間ゲート)。
     vault_ocid: str = ""
     vault_key_ocid: str = ""
+
+    # BE-03: コネクタ invoke の secret 対応表。キーは合成キー
+    # `<tenant>/<plugin_id>/<connector_id>/<secretRef>`(テナント＋呼出 plugin＋コネクタ instance に
+    # 束縛し越境/confused-deputy/取り違えを防ぐ。ADR-0020)。`<plugin_id>` は **invoke を呼ぶ L3 デモ
+    # 自身**(=トークン sub。コネクタ所有 plugin ではない)。値は secret OCID。例(1 件):
+    #   {"<tenant>/acme/sales-demo/<connector_id>/slack-bot-token": "ocid1.vaultsecret..."}
+    # **実トークン値は持たず** OCID 参照のみ。実トークンは invoke 時に Vault データプレーン
+    # (get_secret_bundle)で解決。コミットしない(.env で JSON 注入。実 OCID/トークンはコード/DB に
+    # 置かない / ADR-0014)。キー未マップなら当該 invoke は fail-closed(secret 解決不能=503)。
+    # 実 Vault 読取 IAM 付与・実 Slack Bot トークン投入は人間ゲート(本タスクは mock 注入で検証)。
+    connector_secret_ocids: dict[str, str] = {}
 
     # OPS-02: OCI Logging(カスタムログOCID。空なら送らない) / Monitoring名前空間
     log_ocid: str = ""

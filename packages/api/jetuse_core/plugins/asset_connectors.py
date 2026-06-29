@@ -25,12 +25,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from .connector import (
     ConnectorDefinition,
     validate_connector,
     validate_connector_composition,
+)
+from .connector_runtime import (
+    ConnectorInvokeResult,
+    McpCaller,
+    SecretResolver,
+    invoke_connector_action,
 )
 from .manifest import (
     PLATFORM_SCOPE_DB_QUERY,
@@ -221,3 +228,143 @@ def asset_connector_manifests(rag_endpoint: str, sql_endpoint: str) -> list[Plug
                 f"{report.undeclared_permissions}"
             )
     return manifests
+
+
+# --- 実 MCP 呼び出し（invoke 配線 / BE-06） --------------------------------
+#
+# CON-01 は配布表現の正規化、CON-02（connector_runtime）は invoke 実行層を担った。本節は
+# 既存資産コネクタ（No.1-RAG / No.1-SQL-Assist）の **呼出元**（これまで存在しなかった）を提供する。
+# transport=mcp なので connector_runtime が Responses API（type:"mcp"）経由で外部 MCP サーバーへ
+# 到達する（既定 `_default_mcp_caller`＝実 MCP。テスト/mock E2E は `mcp_caller` を注入）。認可は必ず
+# Platform ブローカー経由（rag.search / db.query ＋ connector.invoke）。資格情報は Vault
+# （`vault_secret_resolver`）。実 MCP エンドポイント配備・実 Vault 束ねは人間ゲート（実資産接続）。
+
+
+def vault_secret_resolver(secret_ocids: Mapping[str, str]) -> SecretResolver:
+    """secretRef（論理参照名）→ 実トークンを **OCI Vault** から解決する resolver を作る。
+
+    `secret_ocids` は secretRef → Vault secret OCID の対応（環境依存・人間ゲートで与える。実トークン
+    値ではなく OCID 参照のみ）。返す resolver は invoke 時に OCID から実値を Vault 経由で読む
+    （`mcp_servers._read_secret` を再利用＝唯一の Vault 読取経路）。未知 ref は fail-closed
+    （`KeyError`→ connector_runtime が `ConnectorInvokeError` に正規化）。
+
+    実 Vault への到達（実 OCID・実権限）は人間ゲート。単体/mock E2E では本 resolver を使わず、
+    `secret_resolver` に mock を注入する（実 Vault を触らない）。
+    """
+    mapping = dict(secret_ocids)
+
+    def _resolve(ref: str) -> str:
+        ocid = mapping.get(ref)
+        if not ocid:
+            # 参照名は宣言の一部（非機密）。実値は出さない。
+            raise KeyError(f"secretRef '{ref}' に対応する Vault secret OCID が未登録")
+        from ..mcp_servers import _read_secret
+
+        return _read_secret(ocid)
+
+    return _resolve
+
+
+#: invoke ヘルパの主入力（query/question）と追加 payload の長さ・総サイズ上限。
+#: connector_runtime の MAX_PAYLOAD_FIELD_LEN は builtin 経路専用で mcp には効かないため、公開
+#: ヘルパ側で **認可・secret 解決より前に** 境界を弾く（巨大入力/不正値を通さない。BOUNDARY-001）。
+MAX_ASSET_FIELD_LEN = 40000
+MAX_ASSET_PAYLOAD_BYTES = 200000
+
+
+def _validated_payload(
+    primary_key: str, primary_value: Any, extra: dict[str, Any]
+) -> dict[str, Any]:
+    """主入力＋追加 payload を **認可前に** 検証して payload dict を作る（fail-closed）。
+
+    主入力は非空文字列・長さ上限。追加 payload は予約キー衝突禁止・JSON 化可能・全体サイズ上限。
+    違反は `ConnectorInvokeError`（呼び出し側で予測可能なエラーになる）。
+    """
+    from .connector_runtime import ConnectorInvokeError
+
+    if not isinstance(primary_value, str) or not primary_value.strip():
+        raise ConnectorInvokeError(f"payload.{primary_key} は必須の非空文字列")
+    if len(primary_value) > MAX_ASSET_FIELD_LEN:
+        raise ConnectorInvokeError(f"payload.{primary_key} が長すぎる（>{MAX_ASSET_FIELD_LEN}）")
+    if primary_key in extra:
+        raise ConnectorInvokeError(f"payload.{primary_key} を追加引数で上書きできない")
+    payload: dict[str, Any] = {primary_key: primary_value, **extra}
+    try:
+        from .manifest import _assert_json_value
+
+        _assert_json_value(payload, "payload")
+    except ValueError as e:
+        raise ConnectorInvokeError(f"payload が JSON 化できない値を含む: {e}") from None
+    import json as _json
+
+    # 実バイト数で判定する（多バイト文字＝日本語/絵文字でも上限を正しく効かせる。BE06-006）。
+    size_bytes = len(_json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    if size_bytes > MAX_ASSET_PAYLOAD_BYTES:
+        raise ConnectorInvokeError(f"payload 全体が大きすぎる（>{MAX_ASSET_PAYLOAD_BYTES} bytes）")
+    return payload
+
+
+def invoke_no1_rag_search(
+    endpoint: str,
+    query: str,
+    *,
+    broker_token: str,
+    tenant: str,
+    secret_resolver: SecretResolver,
+    resource: str = "",
+    settings: Any = None,
+    mcp_caller: McpCaller | None = None,
+    secret_ref: str = NO1_RAG_SECRET_REF,
+    **payload: Any,
+) -> ConnectorInvokeResult:
+    """No.1-RAG の `search` を実 MCP 経由で呼び出す（broker 認可つき・fail-closed）。
+
+    `endpoint` は No.1-RAG MCP サーバーの HTTPS URL（環境依存・人間ゲート）。`broker_token` は
+    `platform:connector.invoke` ＋ `platform:rag.search` を持つ短期トークン。`secret_resolver` は
+    secretRef→実 API トークン（Vault 束ね＝`vault_secret_resolver` / テストは mock）。追加
+    payload はキーワードで渡す（既定は query のみ）。戻り値・例外に実トークンは出ない。
+    """
+    definition = no1_rag_connector_definition(endpoint, secret_ref=secret_ref)
+    return invoke_connector_action(
+        definition,
+        "search",
+        _validated_payload("query", query, payload),
+        broker_token=broker_token,
+        tenant=tenant,
+        resource=resource,
+        settings=settings,
+        secret_resolver=secret_resolver,
+        mcp_caller=mcp_caller,
+    )
+
+
+def invoke_no1_sql_nl2sql(
+    endpoint: str,
+    question: str,
+    *,
+    broker_token: str,
+    tenant: str,
+    secret_resolver: SecretResolver,
+    resource: str = "",
+    settings: Any = None,
+    mcp_caller: McpCaller | None = None,
+    secret_ref: str = NO1_SQL_SECRET_REF,
+    **payload: Any,
+) -> ConnectorInvokeResult:
+    """No.1-SQL-Assist の `nl2sql` を実 MCP 経由で呼び出す（broker 認可つき・fail-closed）。
+
+    `broker_token` は `platform:connector.invoke` ＋ `platform:db.query` を持つ短期トークン。
+    他は invoke_no1_rag_search と同契約（資格情報は Vault・実 MCP 配備は人間ゲート）。
+    """
+    definition = no1_sql_assist_connector_definition(endpoint, secret_ref=secret_ref)
+    return invoke_connector_action(
+        definition,
+        "nl2sql",
+        _validated_payload("question", question, payload),
+        broker_token=broker_token,
+        tenant=tenant,
+        resource=resource,
+        settings=settings,
+        secret_resolver=secret_resolver,
+        mcp_caller=mcp_caller,
+    )

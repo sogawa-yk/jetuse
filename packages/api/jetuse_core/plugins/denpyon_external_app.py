@@ -44,28 +44,34 @@ def denpyon_external_app_definition_dict(
     audience: str,
     client_id_ref: str = DENPYON_CLIENT_ID_REF,
     secret_ref: str = DENPYON_SECRET_REF,
+    token_endpoint: str | None = None,
 ) -> dict[str, Any]:
     """伝ぴょん external-app 定義（contributes["external-app"]）の配布表現 dict を組み立てる。
 
     `url`（伝ぴょんの埋め込み先）・`issuer`（OIDC IdP）・`audience`（伝ぴょんの token audience）は
-    環境依存値（オンボード時にオペレータが与える。実値は .env / Vault・人間ゲート）。
+    環境依存値（オンボード時にオペレータが与える。実値は .env / Vault・人間ゲート）。token_endpoint
+    を与えると実 token-exchange（`exchange_sso_token`）の POST 先になる（未指定なら shape のみ＝
+    discovery 解決は人間ゲート）。
     """
+    sso: dict[str, Any] = {
+        "mode": "oidc",
+        "issuer": issuer,
+        "clientIdRef": client_id_ref,
+        "secretRef": secret_ref,
+        "audience": audience,
+        "scopes": ["openid", "profile", "email"],
+        # モジュール定数の汚染を防ぐためコピーを返す（呼び出し側が claimMapping を変更しても
+        # 既定写像が変わらない。ASSET-01-MINOR-001）。
+        "claimMapping": dict(DENPYON_CLAIM_MAPPING),
+    }
+    if token_endpoint:
+        sso["tokenEndpoint"] = token_endpoint
     return {
         "app": DENPYON_APP,
         "embed": "iframe",
         "url": url,
         "title": "伝ぴょん",
-        "sso": {
-            "mode": "oidc",
-            "issuer": issuer,
-            "clientIdRef": client_id_ref,
-            "secretRef": secret_ref,
-            "audience": audience,
-            "scopes": ["openid", "profile", "email"],
-            # モジュール定数の汚染を防ぐためコピーを返す（呼び出し側が claimMapping を変更しても
-            # 既定写像が変わらない。ASSET-01-MINOR-001）。
-            "claimMapping": dict(DENPYON_CLAIM_MAPPING),
-        },
+        "sso": sso,
         "summary": "伝ぴょん（既存資産）を iframe 埋め込み＋OIDC SSO で連携する external-app。",
     }
 
@@ -77,6 +83,7 @@ def denpyon_external_app_definition(
     audience: str,
     client_id_ref: str = DENPYON_CLIENT_ID_REF,
     secret_ref: str = DENPYON_SECRET_REF,
+    token_endpoint: str | None = None,
 ) -> ExternalAppDefinition:
     """検証済みの伝ぴょん external-app 定義。"""
     return validate_external_app(
@@ -86,6 +93,7 @@ def denpyon_external_app_definition(
             audience=audience,
             client_id_ref=client_id_ref,
             secret_ref=secret_ref,
+            token_endpoint=token_endpoint,
         )
     )
 

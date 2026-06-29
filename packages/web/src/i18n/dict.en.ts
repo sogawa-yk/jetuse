@@ -540,4 +540,14 @@ export const en: Record<keyof typeof ja, string> = {
   'grants.revoking': 'Revoking…',
   'grants.loadError': 'Failed to load',
   'grants.actionFailed': 'Action failed',
+  // External app onboarding (external-app / ASSET-01 / BE-06)
+  'nav.externalapps': 'External apps',
+  'extapp.title': 'External app onboarding',
+  'extapp.subtitle': 'Launch existing apps via embed + OIDC SSO (e.g. Denpyon)',
+  'extapp.loading': 'Loading…',
+  'extapp.error': 'Failed to load the list',
+  'extapp.empty': 'No configured external apps (add via .env or marketplace install)',
+  'extapp.open': 'Open',
+  'extapp.embed': 'Launch',
+  'extapp.ssoGated': 'SSO launch is available, but establishing a logged-in session requires real SSO setup (IdP/Vault, admin human gate) — see ADR-0021.',
 }

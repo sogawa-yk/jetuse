@@ -32,7 +32,12 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from .manifest import PlatformScope, PluginManifest, register_contributes_validator
+from .manifest import (
+    PLATFORM_SCOPE_CONNECTOR_INVOKE,
+    PlatformScope,
+    PluginManifest,
+    register_contributes_validator,
+)
 
 # --- 語彙(仕様の正本) ----------------------------------------------------
 
@@ -339,7 +344,10 @@ def validate_connector_composition(
     req_perms = required_permissions(definition)
     declared = set(manifest.permissions)
     undeclared = sorted(req_perms - declared)
-    unused = sorted(declared - req_perms)
+    # `platform:connector.invoke` はコネクタを**呼ぶ権利そのもの**で、どの action の data-scope でも
+    # ない(invoke 層が常に強制する)。コネクタが承認可能にするため manifest に宣言してよく、どの
+    # action も「使わない」が unused 扱いしない(正当な呼出権の宣言。BE03-BLK-003 / ADR-0020)。
+    unused = sorted(declared - req_perms - {PLATFORM_SCOPE_CONNECTOR_INVOKE})
     requires_secret = definition.auth.kind != "none"
     return ConnectorCompositionReport(
         ok=not undeclared,
