@@ -279,6 +279,63 @@ def test_active_connector_scope_path_passes():
     assert all(v.element_type != "connector" for v in report.violations)
 
 
+# --- BE-03 方式A(ADR-0020 D7): 配備主体 manifest の invoke 宣言担保 --------------
+
+
+def test_active_connector_requires_subject_manifest_invoke_declaration(monkeypatch):
+    # コネクタを active 束縛する配備主体(sample-app)が自身の manifest.permissions に
+    # platform:connector.invoke を宣言していない構成はデプロイ不可(grant 段の fail-closed を
+    # ゲートへ前倒し。BLK-001)。配備主体 manifest から invoke が抜けた状況を模す(回帰/未宣言 SBA)。
+    import jetuse_core.governance as gov
+
+    comp = _comp()  # SBA-A + Slack(active)
+    assert "slack" in comp.active_connectors
+    monkeypatch.setattr(
+        gov, "sba_manifest_permissions", lambda code: frozenset({"platform:rag.search"})
+    )
+    report = validate_governance(comp)
+    assert report.ok is False
+    assert report.checks["connector_scope"] is False
+    v = next(v for v in report.violations if v.kind == "connector_invoke_unprovisioned")
+    assert v.element_type == "manifest"
+    assert v.element == "SBA-A"
+    assert "connector.invoke" in v.alternative
+
+
+def test_real_sample_app_manifest_declares_invoke_so_no_violation():
+    # 実 SBA は方式A で invoke を宣言済み(monkeypatch なし)→ unprovisioned 違反は出ない。
+    report = validate_governance(_comp())
+    assert all(v.kind != "connector_invoke_unprovisioned" for v in report.violations)
+
+
+def test_active_connector_with_unresolvable_manifest_fails_closed(monkeypatch):
+    # 配備主体 manifest を解決できない(未知 SBA / マッピング漏れ=None)のに active コネクタがある
+    # 場合は、検証不能を黙って PASS にせず fail-closed で違反にする(MAJ-002)。
+    import jetuse_core.governance as gov
+
+    comp = _comp()  # SBA-A + Slack(active)
+    assert "slack" in comp.active_connectors
+    monkeypatch.setattr(gov, "sba_manifest_permissions", lambda code: None)
+    report = validate_governance(comp)
+    assert report.ok is False
+    assert report.checks["connector_scope"] is False
+    v = next(v for v in report.violations if v.kind == "connector_invoke_unprovisioned")
+    assert v.element_type == "manifest"
+    assert "解決できない" in v.detail
+
+
+def test_no_active_connector_does_not_require_invoke_declaration(monkeypatch):
+    # コネクタを束ねない構成(Q4=none)は invoke 宣言を要求しない(最小権限。宣言は connector を
+    # 束ねるときだけ必要)。配備主体 manifest に invoke が無くても unprovisioned 違反は出ない。
+    import jetuse_core.governance as gov
+
+    comp = _comp(Q4="none")
+    assert comp.active_connectors == []
+    monkeypatch.setattr(gov, "sba_manifest_permissions", lambda code: frozenset())
+    report = validate_governance(comp)
+    assert all(v.kind != "connector_invoke_unprovisioned" for v in report.violations)
+
+
 def test_connector_scope_undeclared_for_inpalette_excluded():
     # コアコネクタ(slack)が合成不整合で excluded になった状況を擬似注入する。
     from jetuse_core.synth import ConnectorBinding

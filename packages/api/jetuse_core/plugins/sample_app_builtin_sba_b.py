@@ -205,13 +205,19 @@ _DEFINITION: dict[str, Any] = {
 _MANIFEST: dict[str, Any] = {
     "schemaVersion": "1",
     "id": SBA_B_ID,
-    "version": "1.0.0",
+    # 1.1.0: permissions に platform:connector.invoke を追加した版(方式A / ADR-0020 D7)。版固定
+    # スナップショットのため版を繰り上げ、旧 1.0.0 install 済み環境でも新権限契約を再インストール・
+    # 再承認できるようにする(BLK-001)。
+    "version": "1.1.0",
     "kind": "sample-app",
     "name": "在庫・受発注照会",
     "description": "自然言語DB照会(NL2SQL)＋結果グラフ化を備えた在庫・受発注デモ(SBA-B)。",
     "publisher": "jetuse",
     "jetuse": {"minVersion": "0.3.0"},
-    "permissions": ["platform:db.query"],
+    # platform:db.query は NL2SQL slot 由来。platform:connector.invoke は Slack 等のコネクタを
+    # 束ねて通知する消費デモとして invoke を呼ぶ権利の宣言(方式A / ADR-0020 D7)。宣言は invoke を
+    # 承認可能にするだけで、実 grant は配備が実際に Slack を束縛したときに限り invoke を含む。
+    "permissions": ["platform:db.query", "platform:connector.invoke"],
     "contributes": {"sample-app": _DEFINITION},
     "tags": ["inventory", "orders", "nl2sql", "chart", "sample-app"],
     "icon": "📦",

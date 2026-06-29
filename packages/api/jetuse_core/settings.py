@@ -140,6 +140,17 @@ class Settings(BaseSettings):
     vault_ocid: str = ""
     vault_key_ocid: str = ""
 
+    # BE-03: コネクタ invoke の secret 対応表。キーは合成キー
+    # `<tenant>/<plugin_id>/<connector_id>/<secretRef>`(テナント＋呼出 plugin＋コネクタ instance に
+    # 束縛し越境/confused-deputy/取り違えを防ぐ。ADR-0020)。`<plugin_id>` は **invoke を呼ぶ L3 デモ
+    # 自身**(=トークン sub。コネクタ所有 plugin ではない)。値は secret OCID。例(1 件):
+    #   {"<tenant>/acme/sales-demo/<connector_id>/slack-bot-token": "ocid1.vaultsecret..."}
+    # **実トークン値は持たず** OCID 参照のみ。実トークンは invoke 時に Vault データプレーン
+    # (get_secret_bundle)で解決。コミットしない(.env で JSON 注入。実 OCID/トークンはコード/DB に
+    # 置かない / ADR-0014)。キー未マップなら当該 invoke は fail-closed(secret 解決不能=503)。
+    # 実 Vault 読取 IAM 付与・実 Slack Bot トークン投入は人間ゲート(本タスクは mock 注入で検証)。
+    connector_secret_ocids: dict[str, str] = {}
+
     # OPS-02: OCI Logging(カスタムログOCID。空なら送らない) / Monitoring名前空間
     log_ocid: str = ""
     metrics_namespace: str = "jetuse_dev"

@@ -66,6 +66,19 @@ _SBA_MANIFEST = {
 }
 
 
+def sba_manifest_permissions(code: str | None) -> frozenset[str] | None:
+    """SBA コードの**配備主体 manifest** が宣言する Platform 権限スコープ集合を返す。
+
+    manifest を持たない SBA(後段の SBA-D 等)は None(検証不能)。governance の方式A 担保
+    (コネクタを束ねる配備主体は `platform:connector.invoke` を宣言していなければならない。
+    ADR-0020 D7)で、grant/approve が閉じる先である manifest.permissions を参照するために使う。
+    """
+    fn = _SBA_MANIFEST.get(code or "")
+    if fn is None:
+        return None
+    return frozenset(fn().permissions)
+
+
 class SynthesisError(ValueError):
     """合成が成立しない(主SBA を解決できない等)ときに送出する(strict=True 時)。"""
 
