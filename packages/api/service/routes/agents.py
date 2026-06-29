@@ -105,22 +105,26 @@ def list_mcp_servers(user: Annotated[AuthContext, Depends(require_user)]):
 def create_mcp_server(
     req: McpServerCreate, user: Annotated[AuthContext, Depends(require_user)]
 ):
-    if req.auth_token:
-        # Vault書き込みは現行ポリシー(read)では不可。追加は人間作業(specs/11)
-        raise HTTPException(
-            status_code=501,
-            detail="認証付きMCPサーバーの登録にはVault書き込み権限の追加が必要です"
-            "（docs/setup/iam.md参照。現在は認証なしサーバーのみ登録できます）",
-        )
+    # 認証付き(auth_token あり)は実トークンを Vault へ束ね、DB には OCID 参照のみ保持(BE-08)。
+    # SSRF/URL ガードは Vault 書込の前に効く(fail-closed)。Vault 未設定/権限欠如は 503(人間ゲート)。
     try:
-        return mcp_repo.create_server(user.subject, req.label, req.url, None)
-    except SsrfBlockedError as e:
+        return mcp_repo.create_server(
+            user.subject, req.label, req.url, auth_token=req.auth_token
+        )
+    except (SsrfBlockedError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except mcp_repo.VaultWriteError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
 
 
 @router.delete("/api/agent/mcp-servers/{sid}")
 def delete_mcp_server(sid: str, user: Annotated[AuthContext, Depends(require_user)]):
-    if not mcp_repo.delete_server(user.subject, sid):
+    # 自管理 secret の Vault 削除予約が DB 行削除より前に走る。予約失敗時は行を残し 503(再試行可)。
+    try:
+        deleted = mcp_repo.delete_server(user.subject, sid)
+    except mcp_repo.VaultWriteError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    if not deleted:
         raise HTTPException(status_code=404, detail="server not found")
     return {"deleted": True}
 
