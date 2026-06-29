@@ -15,7 +15,7 @@ from jetuse_core.plugins.manifest import SCHEMA_VERSION
 from jetuse_core.settings import get_settings
 from service.main import app
 
-TENANT = "ocid1.tenancy.oc1..aaaa-tenant-A"
+TENANT = "ocid1.generativeaiproject.oc1.ap-osaka-1.aaaaaaaatenanta"
 PLUGIN = "acme/faq-summarizer"
 DB_QUERY = "platform:db.query"
 RAG_SEARCH = "platform:rag.search"
@@ -315,3 +315,138 @@ def test_grants_endpoints_require_admin(monkeypatch):
     monkeypatch.setattr(pg, "list_grants", lambda *a, **k: [])
     res = _client(monkeypatch, admin=False).get("/platform/grants")
     assert res.status_code == 403, res.text
+
+
+# --- rag ストア登録(テナント→ストア紐付け / SA 限定 / BE-04) -----------------
+
+
+def test_register_rag_store_sa_upserts(monkeypatch, audit):
+    from jetuse_core import rag
+
+    captured = {}
+    monkeypatch.setattr(
+        rag, "register_tenant_store",
+        lambda tenant, vs: captured.update(tenant=tenant, vs=vs),
+    )
+    res = _client(monkeypatch).put(
+        "/platform/rag/stores",
+        json={"tenant": TENANT, "vector_store_id": "vs_kix_TENANT"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json() == {"registered": True, "tenant": TENANT}
+    assert captured == {"tenant": TENANT, "vs": "vs_kix_TENANT"}
+    # 高権限操作なので REGISTER 監査が誰が(actor)・どのテナントへで残る(BE04-R5-004)。
+    reg = [r for r in audit if r["decision"] == "REGISTER"]
+    assert len(reg) == 1 and reg[0]["tenant"] == TENANT
+    assert "by=" in reg[0]["resource"] and "vs_kix_TENANT" not in reg[0]["resource"]
+
+
+def test_register_rag_store_verify_failure_400_audits_deny(monkeypatch, audit):
+    # 別 Project/不存在ストアは検証で弾かれ 400。DB 無変更で REG_DENY 監査が残る(BE04-R5-003/004)。
+    from jetuse_core import rag
+
+    def boom(tenant, vs):
+        raise rag.StoreVerificationError("store not in project")
+
+    monkeypatch.setattr(rag, "register_tenant_store", boom)
+    res = _client(monkeypatch).put(
+        "/platform/rag/stores",
+        json={"tenant": TENANT, "vector_store_id": "vs_FOREIGN"},
+    )
+    assert res.status_code == 400, res.text
+    assert "vs_FOREIGN" not in res.text  # ストア id 実値はクライアントに漏らさない
+    deny = [r for r in audit if r["decision"] == "REG_DENY"]
+    assert len(deny) == 1 and deny[0]["tenant"] == TENANT
+
+
+def test_register_rag_store_upstream_error_502_audits(monkeypatch, audit):
+    # 検証先(CP)の一過性障害は 502(再試行可能)。入力不正 400 と区別する(BE04-008)。
+    # 高権限操作なので上流障害の試行も監査に残す(BE04-012)。
+    from jetuse_core import rag
+
+    def boom(tenant, vs):
+        raise rag.StoreUpstreamError("upstream timeout")
+
+    monkeypatch.setattr(rag, "register_tenant_store", boom)
+    res = _client(monkeypatch).put(
+        "/platform/rag/stores",
+        json={"tenant": TENANT, "vector_store_id": "vs_x"},
+    )
+    assert res.status_code == 502, res.text
+    err = [r for r in audit if r["decision"] == "REG_ERR"]
+    assert len(err) == 1 and err[0]["tenant"] == TENANT
+
+
+def test_register_rag_store_conflict_409_audits(monkeypatch, audit):
+    # 別テナントへ既登録のストア(UNIQUE 違反)→ 409。越境防止の一次境界(BE04-001)。
+    from jetuse_core import rag
+
+    def conflict(tenant, vs):
+        raise rag.StoreConflictError("already registered to another tenant")
+
+    monkeypatch.setattr(rag, "register_tenant_store", conflict)
+    res = _client(monkeypatch).put(
+        "/platform/rag/stores",
+        json={"tenant": TENANT, "vector_store_id": "vs_taken_by_other"},
+    )
+    assert res.status_code == 409, res.text
+    assert "vs_taken_by_other" not in res.text  # store id 実値は漏らさない
+    conf = [r for r in audit if r["decision"] == "REG_CONF"]
+    assert len(conf) == 1 and conf[0]["tenant"] == TENANT
+
+
+@pytest.mark.parametrize(
+    "bad_tenant",
+    [
+        "not-an-ocid",                                   # OCID ですらない
+        "ocid1.tenancy.oc1..aaaa-tenant-A",              # tenancy OCID(誤った型)
+        "ocid1.generativeaiproject.oc1",                 # 途中で切れた OCID
+        "ocid1.foo.oc1.ap-osaka-1.xyz",                  # 別の資源型
+        "ocid1.generativeaiproject.oc1..xyz",            # region 欠落
+    ],
+)
+def test_register_rag_store_non_project_ocid_422(monkeypatch, bad_tenant):
+    # tenant が Project OCID 形式でない管理入力は 422(永続化前に弾く。BE04-003/R5-007)。
+    from jetuse_core import rag
+
+    monkeypatch.setattr(
+        rag, "register_tenant_store", lambda *a: pytest.fail("must not touch DB")
+    )
+    res = _client(monkeypatch).put(
+        "/platform/rag/stores",
+        json={"tenant": bad_tenant, "vector_store_id": "vs_x"},
+    )
+    assert res.status_code == 422, res.text
+
+
+def test_register_rag_store_requires_admin(monkeypatch):
+    from jetuse_core import rag
+
+    monkeypatch.setattr(rag, "register_tenant_store", lambda *a: None)
+    res = _client(monkeypatch, admin=False).put(
+        "/platform/rag/stores",
+        json={"tenant": TENANT, "vector_store_id": "vs_kix_TENANT"},
+    )
+    assert res.status_code == 403, res.text
+
+
+def test_get_rag_store_hides_store_id(monkeypatch):
+    from jetuse_core import rag
+
+    monkeypatch.setattr(rag, "get_tenant_store_id", lambda t: "vs_kix_SECRET")
+    res = _client(monkeypatch).get("/platform/rag/stores", params={"tenant": TENANT})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body == {"tenant": TENANT, "registered": True}
+    assert "vs_kix_SECRET" not in res.text
+
+
+def test_register_rag_store_blank_id_422_no_db(monkeypatch):
+    from jetuse_core import rag
+
+    monkeypatch.setattr(rag, "register_tenant_store", lambda *a: pytest.fail("must not touch DB"))
+    res = _client(monkeypatch).put(
+        "/platform/rag/stores",
+        json={"tenant": TENANT, "vector_store_id": "   "},
+    )
+    assert res.status_code == 422, res.text
