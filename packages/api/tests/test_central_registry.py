@@ -21,7 +21,7 @@ from jetuse_registry.storage import InMemoryObjectStore
 
 import service.routes.marketplace as mp
 from jetuse_core import agents, usecases
-from jetuse_core.plugins import connector_store, scaffold, store
+from jetuse_core.plugins import connector_store, external_app_store, scaffold, store
 from jetuse_core.plugins.central_registry import CentralRegistryClient
 from jetuse_core.plugins.manifest import (
     SCHEMA_VERSION,
@@ -153,6 +153,9 @@ def fake_db(monkeypatch):
     # DB 接続も同じインメモリ ADB に向ける(L2 kind 表が無くても 0 件で安全に通る)。
     monkeypatch.setattr(scaffold, "connect", fake_connect)
     monkeypatch.setattr(connector_store, "connect", fake_connect)
+    # BE-06: uninstall の出所キー掃除は external_app_store.delete_by_source も呼ぶため、その
+    # DB 接続も同じインメモリ ADB に向ける(external-app 取込が無くても 0 件で安全に通る)。
+    monkeypatch.setattr(external_app_store, "connect", fake_connect)
     return db
 
 
