@@ -59,3 +59,7 @@ runs/**/reviews/*.payload.txt
 scratchpad_e2e/
 *wallet*.zip
 conn.env
+# E2E 実行時の秘匿ドットファイル（admin/wallet パスワード・wallet パス。コミットしない）
+runs/**/e2e/.admin_pw
+runs/**/e2e/.wallet_pw
+runs/**/e2e/.wallet_dir

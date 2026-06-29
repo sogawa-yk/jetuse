@@ -156,6 +156,15 @@ def repo(monkeypatch):
         raise AssertionError("route test must not touch the real DB")
 
     monkeypatch.setattr(service_main.hearing_repo, "connect", _no_db)
+    # BE-02: /launch は dataset を実テーブルへマテリアライズする(実DB)。ルートテストは実DBに
+    # 触れないので materialize を no-op 化し、起動記録ロジックだけを検証する(実機展開は E2E)。
+    from service.routes import hearing as hearing_route
+
+    monkeypatch.setattr(
+        hearing_route.materialize_mod,
+        "materialize_app",
+        lambda *a, **k: {"schema": "JETUSE_TEST", "datasets": []},
+    )
     return fake
 
 
@@ -553,6 +562,69 @@ def test_launch_blocked_when_governance_fails(repo):
     )
     assert v["alternative"]  # 外させない代替提案(最近傍 SBA へ誘導)
     # 起動記録は作られない。
+    assert client.get(f"/api/hearing/sessions/{sid}/launch").status_code == 404
+
+
+def _spy_materialize(monkeypatch):
+    """materialize_app の呼び出し(instance_id・kwargs)を記録する spy を仕込み、記録 list を返す。"""
+    from service.routes import hearing as hearing_route
+
+    calls: list[tuple] = []
+
+    def spy(instance_id, **k):
+        calls.append((instance_id, k))
+        return {
+            "schema": "JETUSE_APP", "query_user": "JETUSE_QUERY",
+            "datasets": [{"name": "faqs", "table": "FAQS", "rows": 3, "action": "created"}],
+        }
+
+    monkeypatch.setattr(hearing_route.materialize_mod, "materialize_app", spy)
+    return calls
+
+
+def test_launch_materializes_datasets_and_returns_summary(repo, monkeypatch):
+    """BE-02: /launch は composition.instance_id の dataset をマテリアライズし、要約を応答に載せる。
+
+    Q6=sample(SeedPlan.seeded=True)は materialize_app に seeded=True を渡す(F-008)。"""
+    calls = _spy_materialize(monkeypatch)
+    sid = _create()
+    _confirm_full(sid)  # FULL: Q6=sample
+    r = client.post(f"/api/hearing/sessions/{sid}/launch")
+    assert r.status_code == 200, r.text
+    assert len(calls) == 1
+    instance_id, kwargs = calls[0]
+    assert instance_id == "builtin-sba-a"
+    assert kwargs.get("seeded") is True  # sample → seed する
+    assert r.json()["materialized"]["datasets"][0]["table"] == "FAQS"
+
+
+def test_launch_passes_seeded_false_for_replace_later(repo, monkeypatch):
+    """BE-02/F-008: Q6=replace_later(SeedPlan.seeded=False)は seeded=False を materialize に渡す
+    (表だけ作って seed しない=合成のシード方針を起動結果に反映)。"""
+    calls = _spy_materialize(monkeypatch)
+    sid = _create()
+    _confirm_full(sid, {**FULL, "Q6": "replace_later"})
+    r = client.post(f"/api/hearing/sessions/{sid}/launch")
+    assert r.status_code == 200, r.text
+    assert calls[0][1].get("seeded") is False
+
+
+def test_launch_propagates_materialize_failure_without_recording(repo, monkeypatch):
+    """BE-02: materialize 失敗は握りつぶさず伝播し(一過性DB→503)、起動記録も残さない
+    (中核契約を満たせないのに 200 偽装しない / 成否境界の原子性。F-003/F-004)。"""
+    import oracledb
+
+    from service.routes import hearing as hearing_route
+
+    def boom(instance_id, **k):
+        raise oracledb.OperationalError("db unavailable")
+
+    monkeypatch.setattr(hearing_route.materialize_mod, "materialize_app", boom)
+    sid = _create()
+    _confirm_full(sid)
+    r = client.post(f"/api/hearing/sessions/{sid}/launch")
+    assert r.status_code == 503, r.text
+    # materialize は record_launch の前に走るため、失敗時は起動記録が作られない。
     assert client.get(f"/api/hearing/sessions/{sid}/launch").status_code == 404
 
 

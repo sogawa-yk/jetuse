@@ -87,7 +87,8 @@ def main() -> None:
     cur.execute(f'CREATE USER {app_user} IDENTIFIED BY "{app_pw}"')
     cur.execute(f"GRANT CREATE SESSION, RESOURCE, CREATE VIEW TO {app_user}")
     cur.execute(f"ALTER USER {app_user} QUOTA UNLIMITED ON DATA")
-    for pkg in ("DBMS_CLOUD", "DBMS_CLOUD_AI", "DBMS_CLOUD_AI_AGENT", "DBMS_CLOUD_PIPELINE"):
+    for pkg in ("DBMS_CLOUD", "DBMS_CLOUD_AI", "DBMS_CLOUD_AI_AGENT", "DBMS_CLOUD_PIPELINE",
+                "DBMS_LOCK"):  # BE-02: DBMS_LOCK = dataset 自動マテリアライズの直列化(fail-closed)
         cur.execute(f"GRANT EXECUTE ON {pkg} TO {app_user}")
     for host in ACL_HOSTS:
         cur.execute("""

@@ -21,7 +21,7 @@ from jetuse_shared.sqlguard import SqlRejectedError, assert_tables_allowed, sani
 from openai import APIError
 from pydantic import BaseModel, Field, field_validator
 
-from jetuse_core import audit, guardrails, moderation, nl2sql
+from jetuse_core import audit, guardrails, materialize, moderation, nl2sql
 from jetuse_core.auth import AuthContext, require_user
 from jetuse_core.logging import log_with
 from jetuse_core.models import MODELS
@@ -291,10 +291,13 @@ async def sample_app_execute(
         assert_tables_allowed(cleaned, allowed, allow_dual=False, require_table=True)
     except SqlRejectedError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    # B1: 専用 execute は CURRENT_SCHEMA を SBA-B の照会スキーマへ固定し、非修飾テーブル名が
-    # 当該スキーマの物理表へ確定解決するようにする(synonym 依存・読取ユーザ側の同名オブジェクト
-    # に左右されない)。未設定なら従来どおり既定解決。
-    current_schema = get_settings().sample_db_schema or None
+    # B1/BE-02: 専用 execute は CURRENT_SCHEMA を **その sample-app の照会スキーマ** へ固定し、
+    # テーブル名が当該スキーマの物理表へ確定解決するようにする(synonym 依存・読取ユーザ側の同名
+    # オブジェクトに左右されない)。アプリが専用 nl2sql_schema を宣言する場合(SBA-C / JETUSE_SBA04)は
+    # それを尊重し、宣言しない自動マテリアライズ対象(SBA-B 等)は `materialize.target_schema()`
+    # (= 展開先 adb_user)に固定。これで「展開先」と「読取解決先」を整合させ、起動だけで NL2SQL を
+    # 成立させつつ、専用スキーマ運用アプリを ORA-00942 に回帰させない(F-003)。
+    current_schema = resolved.nl2sql_schema or materialize.target_schema()
     try:
         result = await asyncio.to_thread(
             nl2sql.execute_readonly, cleaned, current_schema

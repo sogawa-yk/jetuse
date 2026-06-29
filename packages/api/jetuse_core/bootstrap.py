@@ -85,6 +85,8 @@ def _provision(settings: Settings) -> None:
         cur.execute(f"ALTER USER {app_user} QUOTA UNLIMITED ON DATA")
         for pkg in _DBMS_CLOUD_PKGS:
             cur.execute(f"GRANT EXECUTE ON {pkg} TO {app_user}")
+        # BE-02: dataset 自動マテリアライズの直列化に DBMS_LOCK を使う(fail-closed のため必須)。
+        cur.execute(f"GRANT EXECUTE ON DBMS_LOCK TO {app_user}")
         for host in acl_hosts:
             cur.execute(
                 """

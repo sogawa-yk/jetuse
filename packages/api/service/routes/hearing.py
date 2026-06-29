@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from jetuse_core import hearing as hearing_repo
 from jetuse_core import hearing_genai
+from jetuse_core import materialize as materialize_mod
 from jetuse_core.auth import AuthContext, require_user
 from jetuse_core.governance import validate_governance
 from jetuse_core.hearing_schema import (
@@ -359,6 +360,21 @@ async def launch_demo(sid: str, user: Annotated[AuthContext, Depends(require_use
                 "composition": composition.model_dump(),
             },
         )
+    # BE-02: 起動時に sample-app の dataset を実テーブルへ自動マテリアライズし、読取ユーザへ
+    # SELECT 付与する(NL2SQL が新規デモ起動だけで動く)。**失敗を握りつぶさない**: 中核契約
+    # (「起動だけで NL2SQL が動く」)を満たせないのに 200 で起動成功と偽装しないため、例外は
+    # そのまま伝播させる(一過性 DB 障害は main.py の oracledb→503 ハンドラ、設定/検証エラーは 500)。
+    # record_launch の **前** に実行することで、materialize 失敗時は起動記録を残さない(成否境界の
+    # 原子性)。なお provisioning はセッション非依存・冪等(同 sample-app は同じ schema の同名表を
+    # 再利用)なので、record_launch 直前にセッションが消えてテーブルだけ残っても無害(次回再利用)。
+    # seed 方針(Q6)を尊重する: replace_later / genai_generated(seeded=False)は表だけ作って
+    # サンプルseedを投入しない(合成結果 SeedPlan.seeded と起動結果を一致させる)。
+    materialized: dict[str, Any] | None = await asyncio.to_thread(
+        materialize_mod.materialize_app,
+        composition.instance_id,
+        seeded=composition.seed.seeded,
+    )
+
     entry_slot = _entry_slot(composition)
     demo_url = f"/sba/{composition.instance_id}"
     launch = hearing_repo.record_launch(
@@ -376,6 +392,7 @@ async def launch_demo(sid: str, user: Annotated[AuthContext, Depends(require_use
         "launch": launch,
         "composition": composition.model_dump(),
         "governance": report.model_dump(),
+        "materialized": materialized,
     }
 
 
