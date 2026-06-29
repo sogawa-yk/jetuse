@@ -34,6 +34,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
+import oracledb
+
 from . import platform_broker as pb
 from .plugins.manifest import (
     MAX_ID_LEN,
@@ -311,6 +313,44 @@ def revoke_grant(tenant: str, plugin_id: str) -> bool:
         changed = cur.rowcount
         conn.commit()
     return changed > 0
+
+
+def revoke_grant_capture(tenant: str, plugin_id: str) -> list[str] | None:
+    """ACTIVE グラントを失効し、**失効した scope 集合**を同一トランザクションで原子的に返す。
+
+    失効対象が無ければ None。`get_grant` → `revoke_grant` の 2 段だと、その間に同じ
+    (tenant, plugin_id) が再承認されると「監査に載せる scope」と「実際に失効した scope」がずれる
+    (再承認との競合 / 監査の取り違え)。UPDATE ... RETURNING で**実際に失効した行**の scope を
+    取り出し、監査が常に実失効と一致するようにする。承認 UI からの失効はこの原子操作を使う
+    (`revoke_grant` は冪等な真偽判定用に残す)。
+    """
+    from .db import connect
+
+    with connect() as conn:
+        cur = conn.cursor()
+        # DML RETURNING は影響行ごとに値を返す。単一行 UPDATE なので 0 or 1 件。
+        out = cur.var(oracledb.DB_TYPE_VARCHAR)
+        cur.execute(
+            """
+            UPDATE platform_scope_grants
+            SET status = :revoked, updated_at = SYSTIMESTAMP
+            WHERE tenant = :tenant AND plugin_id = :pid AND status = :active
+            RETURNING scopes INTO :out
+            """,
+            revoked=GRANT_STATUS_REVOKED,
+            active=GRANT_STATUS_ACTIVE,
+            tenant=tenant,
+            pid=plugin_id,
+            out=out,
+        )
+        changed = cur.rowcount
+        conn.commit()
+    if changed == 0:
+        return None
+    vals = out.getvalue() or []
+    raw = vals[0] if vals else ""
+    # 保存はスペース区切り。取り出しはソート済みで決定的に返す(_grant_row_to_record と同方針)。
+    return sorted(s for s in str(raw or "").split() if s)
 
 
 # --- 発行フロー(承認に閉じた短期トークン) ------------------------------------
