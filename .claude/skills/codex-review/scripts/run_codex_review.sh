@@ -63,6 +63,8 @@ CODEX_ARGS=(exec "$INSTRUCTIONS"
   --output-schema "$SCHEMA"
   --output-last-message "$CORE"
   --json)
+# 既定の Codex レビューモデル。CODEX_MODEL を明示指定すれば上書き可能。
+CODEX_MODEL="${CODEX_MODEL:-gpt-5.6-sol}"
 if [ -n "${CODEX_MODEL:-}" ]; then
   CODEX_ARGS+=(--model "$CODEX_MODEL")
 fi
