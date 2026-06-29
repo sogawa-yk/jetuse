@@ -29,6 +29,7 @@ const NAV: { to: string; key: string; icon: IconName }[] = [
   { to: '/video', key: 'nav.video', icon: 'video' },
   { to: '/ocr', key: 'nav.ocr', icon: 'ocr' },
   { to: '/marketplace', key: 'nav.market', icon: 'market' },
+  { to: '/grants', key: 'nav.grants', icon: 'checklist' },
   { to: '/admin', key: 'nav.admin', icon: 'admin' },
   { to: '/settings', key: 'nav.settings', icon: 'settings' },
   { to: '/design', key: 'nav.design', icon: 'design' },
@@ -107,8 +108,9 @@ export function Shell({ branding }: { branding: Branding | null }) {
     return () => document.removeEventListener('mousedown', onClick)
   }, [accountOpen])
 
-  // 権限のないユーザーには管理メニューを表示しない
-  const navItems = NAV.filter((it) => it.to !== '/admin' || me?.is_admin)
+  // 権限のないユーザーには管理メニュー（管理ダッシュボード・スコープ承認）を表示しない
+  const adminOnly = new Set(['/admin', '/grants'])
+  const navItems = NAV.filter((it) => !adminOnly.has(it.to) || me?.is_admin)
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">

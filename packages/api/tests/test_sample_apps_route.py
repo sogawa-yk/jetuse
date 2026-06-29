@@ -486,6 +486,10 @@ def test_sample_app_execute_pins_current_schema(monkeypatch):
     # ルート側は from import で取り込むため、そちらの参照も差し替える。
     import service.routes.sample_apps as routes_mod
     monkeypatch.setattr(routes_mod, "get_settings", lambda: pinned)
+    # BE-02: 読取の固定先解決は materialize.target_schema() に一本化したため、そちらの
+    # settings 参照も差し替える(SAMPLE_DB_SCHEMA 設定 → CURRENT_SCHEMA 固定の整合を検証)。
+    from jetuse_core import materialize
+    monkeypatch.setattr(materialize, "get_settings", lambda: pinned)
     res = client.post(
         f"/api/sample-apps/{SBA_B_INSTANCE_ID}/dbchat/execute",
         json={"sql": "SELECT product_code FROM INVENTORY FETCH FIRST 1 ROWS ONLY"},
@@ -493,6 +497,62 @@ def test_sample_app_execute_pins_current_schema(monkeypatch):
     get_settings.cache_clear()
     assert res.status_code == 200, res.text
     assert captured["current_schema"] == "JETUSE_SBA03"
+
+
+def test_sample_app_execute_unset_schema_pins_adb_user(monkeypatch):
+    """BE-02: SAMPLE_DB_SCHEMA 未設定でも CURRENT_SCHEMA を adb_user(= マテリアライズ先)へ固定する。
+
+    展開先(materialize.target_schema)と読取の固定先を同じ値に揃えることで、SAMPLE_DB_SCHEMA を
+    手で設定しなくても「起動だけで NL2SQL が動く」を成立させる。従来の未設定時 None からの
+    **意図的な**変更(回帰検知)。BE-02 以前は未設定+未マテリアライズでは sample-app の
+    業務表が読取ユーザのスキーマに存在せず、そもそも NL2SQL は成立しなかった。
+    """
+    import types
+
+    from jetuse_core import materialize, nl2sql
+    captured = {}
+
+    def fake_exec(sql, current_schema=None):
+        captured["current_schema"] = current_schema
+        return {"columns": ["X"], "rows": [["1"]], "row_count": 1, "truncated": False}
+
+    monkeypatch.setattr(nl2sql, "execute_readonly", fake_exec)
+    monkeypatch.setattr(
+        materialize,
+        "get_settings",
+        lambda: types.SimpleNamespace(
+            adb_user="JETUSE_APP", adb_query_user="JETUSE_QUERY", sample_db_schema=""
+        ),
+    )
+    res = client.post(
+        f"/api/sample-apps/{SBA_B_INSTANCE_ID}/dbchat/execute",
+        json={"sql": "SELECT product_code FROM INVENTORY FETCH FIRST 1 ROWS ONLY"},
+    )
+    assert res.status_code == 200, res.text
+    assert captured["current_schema"] == "JETUSE_APP"
+
+
+def test_sample_app_execute_uses_dedicated_schema_for_sba_c(monkeypatch):
+    """BE-02/F-003: 専用 nl2sql_schema を宣言するアプリ(SBA-C)は CURRENT_SCHEMA を当該専用スキーマ
+    (JETUSE_SBA04)に固定し、target_schema(adb_user)へ回帰させない(既存アプリの ORA-00942 回避)。"""
+    from jetuse_core import nl2sql
+    from jetuse_core.plugins.sample_app_builtin_c import (
+        SBA_C_INSTANCE_ID,
+        SBA_C_NL2SQL_SCHEMA,
+    )
+    captured = {}
+
+    def fake_exec(sql, current_schema=None):
+        captured["current_schema"] = current_schema
+        return {"columns": ["X"], "rows": [["1"]], "row_count": 1, "truncated": False}
+
+    monkeypatch.setattr(nl2sql, "execute_readonly", fake_exec)
+    res = client.post(
+        f"/api/sample-apps/{SBA_C_INSTANCE_ID}/dbchat/execute",
+        json={"sql": "SELECT owner FROM SALES FETCH FIRST 1 ROWS ONLY"},
+    )
+    assert res.status_code == 200, res.text
+    assert captured["current_schema"] == SBA_C_NL2SQL_SCHEMA  # JETUSE_SBA04
 
 
 def test_sample_app_execute_rejects_out_of_scope_table(monkeypatch):

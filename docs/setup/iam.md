@@ -70,15 +70,29 @@ allow any-user to use generative-ai-family in compartment jetuse-proto
 
 参照: https://docs.oracle.com/en-us/iaas/Content/generative-ai/semantic-store-permissions.htm
 
-## 追記（2026-06-11、AGT-02）: MCP認証情報のVault保存に必要な追加ステートメント
+## 追記（2026-06-11、AGT-02 ／ 2026-06-29 BE-08 改訂）: MCP認証情報のVault保存に必要な追加ステートメント
 
-認証付きMCPサーバー登録（アプリがVault secretを作成）を有効にする場合、ポリシーに以下を追加:
+認証付きMCPサーバー登録（アプリが Vault secret を作成 = `CreateSecret`）を有効にする場合、
+**人間が手動で**（IAM変更は人間ゲート）ポリシーに以下 **3 文すべて**を追加する。
 
 ```
+# secret 本体の作成・読取（VAULT_CREATE_SECRET 等）
 allow dynamic-group jetuse-dg to manage secret-family in compartment jetuse-proto
+# CreateSecret は暗号鍵での KEY_ENCRYPT/KEY_DECRYPT を要する（鍵で secret 内容を暗号化するため）
+allow dynamic-group jetuse-dg to use keys in compartment jetuse-proto
+# Vault コンテナへの secret 作成（VAULT_CREATE_SECRET / vault スコープ）
+allow dynamic-group jetuse-dg to use vaults in compartment jetuse-proto
 ```
 
-追加されるまでアプリは認証なしMCPサーバーのみ受け付ける（501で案内）。
+> **重要（BE-08 review BE08-001）**: `manage secret-family` **だけでは CreateSecret は 403 になる**。
+> `CreateSecret` は対象 Vault の鍵で内容を暗号化するため `use keys`（KEY_ENCRYPT）と、Vault コンテナへの
+> `use vaults`（VAULT_CREATE_SECRET）が併せて必要。最小権限化するなら `where target.key.id='<KEY_OCID>'` /
+> `where target.vault.id='<VAULT_OCID>'` で対象 Vault/鍵に限定する。参照:
+> https://docs.oracle.com/ja-jp/iaas/Content/Identity/policyreference/keypolicyreference.htm
+
+設定値（`VAULT_OCID` / `VAULT_KEY_OCID` / `COMPARTMENT_OCID`）が未設定、または上記ポリシー未追加の間は、
+アプリは認証付き登録を **503（fail-closed）**で拒否し、実トークンを書込まない（認証なしMCPは従来どおり動作）。
+ポリシー追加後は `jetuse-dev` で `CreateSecret` を実証してから完了とすること（実 Vault 書込は人間ゲート）。
 
 ## 追記（2026-06-12、AGT-04）: ホスト型エージェント（Applications/Deployments）に必要な追加設定
 

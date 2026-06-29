@@ -162,10 +162,13 @@ class FakeMcpRepo:
         return [{"id": k, **v, "auth_secret_ocid": None}
                 for k, v in self.store.items() if k in ids]
 
-    def create_server(self, owner, label, url, auth):
+    def create_server(self, owner, label, url, auth_secret_ocid=None, *, auth_token=None):
         sid = f"m{len(self.store) + 1}"
+        # 認証付きは実トークンを保存しない(Vault 束ねの代理: has_auth のみ)。
+        # 本番と同じく空/空白トークンは認証なし扱いに揃える(BE08-R3-005)。
         self.store[sid] = {"label": label, "url": url}
-        return {"id": sid, "label": label, "url": url, "has_auth": False}
+        has_auth = bool((auth_token and auth_token.strip()) or auth_secret_ocid)
+        return {"id": sid, "label": label, "url": url, "has_auth": has_auth}
 
     def delete_server(self, owner, sid):
         return self.store.pop(sid, None) is not None
@@ -188,10 +191,50 @@ def test_mcp_server_crud(fake_mcp):
     assert client.delete(f"/api/agent/mcp-servers/{sid}").json() == {"deleted": True}
 
 
-def test_mcp_server_with_token_rejected_for_now(fake_mcp):
+def test_mcp_server_with_token_registers_via_vault(fake_mcp):
+    # BE-08: 認証付き登録は 501 ではなく成功し、has_auth=True(実トークンは Vault 束ね)。
     res = client.post("/api/agent/mcp-servers", json={
         "label": "x", "url": "https://example.com/mcp", "auth_token": "secret"})
-    assert res.status_code == 501  # Vault書き込み権限が未整備
+    assert res.status_code == 200
+    assert res.json()["has_auth"] is True
+
+
+def test_mcp_server_auth_fail_closed_when_vault_unconfigured(monkeypatch):
+    """BE-08: Vault 未設定なら認証付き登録は 503 で fail-closed(実値は書かない)。"""
+    import jetuse_core.mcp_servers as mcp_servers
+    from jetuse_core.settings import Settings, get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        mcp_servers, "get_settings",
+        lambda: Settings(vault_ocid="", vault_key_ocid="", compartment_ocid=""),
+    )
+    # validate_url は通す(SSRF ガードは別経路)。connect は呼ばれない想定だが念のため監視。
+    called = {"connect": False}
+
+    def _no_connect(*a, **k):
+        called["connect"] = True
+        raise AssertionError("Vault 書込前に DB へ触れてはならない")
+
+    monkeypatch.setattr(mcp_servers, "connect", _no_connect)
+    res = client.post("/api/agent/mcp-servers", json={
+        "label": "x", "url": "https://example.com/mcp", "auth_token": "secret"})
+    assert res.status_code == 503
+    assert called["connect"] is False
+    get_settings.cache_clear()
+
+
+def test_mcp_server_auth_ssrf_before_vault(monkeypatch):
+    """BE-08: 不正 URL は Vault 書込の前に fail-closed(_write_secret を呼ばない)。"""
+    import jetuse_core.mcp_servers as mcp_servers
+
+    def _boom(*a, **k):
+        raise AssertionError("不正 URL なのに Vault 書込が呼ばれた")
+
+    monkeypatch.setattr(mcp_servers, "_write_secret", _boom)
+    res = client.post("/api/agent/mcp-servers", json={
+        "label": "x", "url": "http://example.com/mcp", "auth_token": "secret"})
+    assert res.status_code == 400  # https でない → SsrfBlockedError
 
 
 def test_mcp_url_validation():

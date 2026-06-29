@@ -12,6 +12,8 @@ fn.router.func が import 時に参照するのは fdk.response.Response のみ(
 import sys
 import types
 
+import pytest
+
 
 def _install_fdk_stub() -> None:
     if "fdk" in sys.modules:
@@ -50,3 +52,24 @@ def _install_fdk_stub() -> None:
 
 
 _install_fdk_stub()
+
+
+@pytest.fixture(autouse=True)
+def _no_external_embeddings(monkeypatch):
+    """全テスト既定: sample-app の semantic retrieval を無効化し、埋め込み器を外部接続禁止スタブに
+    固定する(BE07-004 / BE07-025)。
+
+    テスト環境/.env に `SAMPLE_APP_SEMANTIC_RETRIEVAL=true` が設定されていても、rag.search/draft を
+    叩く任意のテスト(test_ai_runtime / test_sample_apps_route 等)が実 OCI 埋め込みへ接続して
+    非決定/課金を起こさないようスイート全体で防ぐ。semantic を検証するテストは各自
+    `ai_runtime._semantic_enabled` / `ai_runtime._embedder` を明示的に上書きする(このフィクスチャの
+    後に test 本体の monkeypatch が適用されるため上書きが優先される)。
+    """
+    from jetuse_core.plugins import ai_runtime
+
+    monkeypatch.setattr(ai_runtime, "_semantic_enabled", lambda: False)
+
+    def _forbid_network(*_a, **_k):
+        raise AssertionError("embedder must be explicitly set in semantic tests")
+
+    monkeypatch.setattr(ai_runtime, "_embedder", _forbid_network)

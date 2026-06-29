@@ -83,6 +83,21 @@ variable "api_image_url" {
   default = ""
 }
 
+# BE-08: 認証付き MCP 登録で資格情報を束ねる既存 Vault と KMS 鍵を「参照」する入力(作成しない)。
+# 空なら認証付き登録は 503(fail-closed)。実値は tfvars / ORM 変数で与え、コミットしない。
+# 有効化には併せて IAM(use keys / use vaults / manage secret-family。docs/setup/iam.md)が必要(人間ゲート)。
+variable "vault_ocid" {
+  description = "認証付き MCP の secret を作成する既存 Vault の OCID(参照のみ)"
+  type        = string
+  default     = ""
+}
+
+variable "vault_key_ocid" {
+  description = "secret 内容の暗号化に使う既存 KMS 鍵の OCID(参照のみ)"
+  type        = string
+  default     = ""
+}
+
 variable "fn_router_image" {
   type    = string
   default = ""

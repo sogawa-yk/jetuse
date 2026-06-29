@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     # ここが既定実行経路。追加設定なしでデモが動くよう **project_ocid 不要な chat completions 系**
     # を既定にする(Responses 系 gpt-oss-120b は project_ocid 必須)。env で上書き可。
     sample_app_model: str = "llama-3.3-70b"
+    # BE-07: sample-app スロット内 RAG の semantic/vector retrieval を有効化する。
+    # 既定 False = 従来の語彙重なりスコア(ベクトル未設定でも素デプロイで動く)。
+    # True にすると既存 OCI 埋め込み(embeddings.embed / cohere.embed-multilingual-v3.0)を
+    # 再利用してコサイン類似で検索し、埋め込み呼び出し失敗時は自動で従来スコアへ degrade する。
+    sample_app_semantic_retrieval: bool = False
 
     # OpenSearch RAG(ENH-05)。例 http://10.1.1.x:9200。空ならOpenSearchバックエンド無効
     opensearch_endpoint: str = ""
@@ -115,6 +120,25 @@ class Settings(BaseSettings):
     # (DB 認証情報は持たない / ADR-0014 D5)。空なら注入組み立て時に明示指定が必要(未指定は
     # fail-closed で InjectionError)。環境依存実値は .env で与え、コミットしない。
     platform_api_base_url: str = ""
+
+    # BE-01: 生成デモの OKE 実配備配線（launch → kubectl apply）。
+    # 既定 OFF = **後方互換**（launch は従来どおり DB 行＋/sba URL のみ。コンテナ配備しない）。
+    # True にすると launch が build_deploy_spec→render→（要すれば）build_runtime_injection→
+    # kubectl apply まで実行する（描画側の fail-closed はそのまま流す）。
+    oke_deploy_enabled: bool = False
+    # kubeconfig パス（環境依存実値。.env で与え、コミットしない）。空なら kubectl 既定
+    # （KUBECONFIG / ~/.kube/config）に委ねる。
+    kube_config_path: str = ""
+    # True なら apply を `kubectl --dry-run=client` で **検証のみ**（実ワークロードを作らない）。
+    # 実 OKE への apply/課金は人間ゲート。自走（オーケストレータ）は dry-run 検証までに留める。
+    # 実配備するときだけ人間が False にする（= 人間ゲートを越える明示操作）。
+    oke_deploy_dry_run: bool = True
+
+    # BE-08: 認証付き MCP 登録の資格情報を束ねる Vault。秘密の実値は本体のみ保持
+    # (L3 へ配らない / ADR-0014)。create_secret(CP)に vault_ocid と暗号鍵 vault_key_ocid
+    # が必須。いずれか空なら認証付き登録は fail-closed(503。実 Vault 書込 IAM は人間ゲート)。
+    vault_ocid: str = ""
+    vault_key_ocid: str = ""
 
     # OPS-02: OCI Logging(カスタムログOCID。空なら送らない) / Monitoring名前空間
     log_ocid: str = ""
