@@ -38,6 +38,16 @@ if [ -z "${DIFF//[$'\t\r\n ']/}" ]; then
   exit 0
 fi
 
+# --- ライブ E2E のターゲット URL 検出 --------------------------------------
+# Codex は Playwright MCP（browser_navigate / browser_evaluate / browser_snapshot 等）を
+# 使える。到達可能なターゲット URL が与えられたときだけ、実ブラウザで独立 E2E を実施する。
+# URL は env E2E_BASE_URL か runs/<run-id>/e2e/target_url.txt（先頭の非コメント行）で渡す。
+E2E_URL_FILE="runs/${RUN_ID}/e2e/target_url.txt"
+E2E_BASE_URL="${E2E_BASE_URL:-}"
+if [ -z "$E2E_BASE_URL" ] && [ -f "$E2E_URL_FILE" ]; then
+  E2E_BASE_URL="$(grep -vE '^[[:space:]]*(#|$)' "$E2E_URL_FILE" | head -1 | tr -d '[:space:]')"
+fi
+
 # --- codex 呼び出し --------------------------------------------------------
 INSTRUCTIONS="あなたは厳格なコードレビュアーです。<stdin> に与える git 差分をレビューしてください。
 観点: 正確性 / 境界条件 / エラー処理 / 後方互換（公開シグネチャ） / テスト網羅。
@@ -53,6 +63,26 @@ blocker が1件でもあれば verdict は必ず FAIL。blocker が0件なら PA
 e2e セクションがあれば、実行シナリオ・結果・証跡パス・十分性の所見を出力スキーマの e2e に記すこと。
 指摘の見逃しより過剰報告を許容するが、minor を blocker に格上げしないこと。
 出力は指定の JSON スキーマに厳密に従うこと。"
+
+# --- ライブ E2E（Playwright MCP）の指示を条件付きで追記 --------------------
+if [ -n "$E2E_BASE_URL" ]; then
+  INSTRUCTIONS+="
+===== ライブ E2E（実ブラウザ）=====
+到達可能なターゲット URL: ${E2E_BASE_URL}
+あなたは Playwright MCP の browser ツール（browser_navigate / browser_snapshot / browser_evaluate /
+browser_click 等）を使える。この diff が触れているユーザー向けの主要フローを、上記 URL に対して
+実ブラウザで実際に検証すること（最低でもハッピーパス1本。UI 影響範囲が複数なら複数本）。
+手順: browser_navigate で開く → snapshot/evaluate で期待要素・タイトル・テキストの有無やコンソール/HTTP
+エラーを確認する。ページがエラーになる、期待要素が無い、操作が機能しない等で**主要フローが壊れていれば
+必ず severity=blocker の finding を立てる**（=verdict は FAIL）。実施した各シナリオ（名前・操作手順・期待・
+観測・合否）を出力スキーマの e2e.live_check に記録し、performed=true, target_url を埋め、result を
+pass/fail で示すこと。ブラウザで確認できた挙動は、添付された静的証跡より優先して評価してよい。"
+else
+  INSTRUCTIONS+="
+===== ライブ E2E（実ブラウザ）=====
+ライブのターゲット URL は提供されていない。ブラウザツールは使わないこと。
+出力スキーマの e2e.live_check は performed=false / target_url=\"\" / result=not_performed とすること。"
+fi
 
 RAW="${REV_DIR}/review-${N}.raw.txt"
 CORE="${REV_DIR}/review-${N}.core.json"
@@ -76,6 +106,11 @@ E2E_DIR="runs/${RUN_ID}/e2e"
 PAYLOAD="${REV_DIR}/review-${N}.payload.txt"
 {
   printf '%s\n' "$DIFF"
+  if [ -n "$E2E_BASE_URL" ]; then
+    printf '\n\n===== ライブ E2E ターゲット =====\n'
+    printf 'TARGET_URL=%s\n' "$E2E_BASE_URL"
+    printf '(Playwright MCP の browser ツールでこの URL を開き、diff 関連の主要フローを実検証すること)\n'
+  fi
   printf '\n\n===== 実環境 E2E 証跡 (jetuse-dev / Codex は実行せず証跡を評価する) =====\n'
   if [ -d "$E2E_DIR" ] && [ -n "$(ls -A "$E2E_DIR" 2>/dev/null)" ]; then
     find "$E2E_DIR" -type f | sort | while read -r ef; do
