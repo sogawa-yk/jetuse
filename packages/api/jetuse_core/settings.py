@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     # ここが既定実行経路。追加設定なしでデモが動くよう **project_ocid 不要な chat completions 系**
     # を既定にする(Responses 系 gpt-oss-120b は project_ocid 必須)。env で上書き可。
     sample_app_model: str = "llama-3.3-70b"
+    # BE-07: sample-app スロット内 RAG の semantic/vector retrieval を有効化する。
+    # 既定 False = 従来の語彙重なりスコア(ベクトル未設定でも素デプロイで動く)。
+    # True にすると既存 OCI 埋め込み(embeddings.embed / cohere.embed-multilingual-v3.0)を
+    # 再利用してコサイン類似で検索し、埋め込み呼び出し失敗時は自動で従来スコアへ degrade する。
+    sample_app_semantic_retrieval: bool = False
 
     # OpenSearch RAG(ENH-05)。例 http://10.1.1.x:9200。空ならOpenSearchバックエンド無効
     opensearch_endpoint: str = ""

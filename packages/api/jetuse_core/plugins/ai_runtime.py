@@ -15,8 +15,11 @@ sample-app の `aiSlot` は「画面のどこに JetUse のどの能力(capabili
     OCI へ出ずに検証できるようにする。
   - **知識コーパスは文脈(SlotContext.corpus)で渡す**: RAG/返信ドラフトは sample-app 自身の
     シードデータ(例: FAQ)を根拠にする。これにより「業務アプリのデータに AI を組み込む」型を
-    そのまま実現する。取り出し(retrieval)は外部ベクトルストアに依存しない軽量な語彙重なり
-    スコア(日本語は文字バイグラム併用)で、実環境では GenAI 推論のみで安定して動く。
+    そのまま実現する。取り出し(retrieval)は semantic/vector(既存 OCI 埋め込み cohere.embed-
+    multilingual-v3.0 を再利用したコサイン類似)で行い、語彙不一致でも意味が近ければ引ける。
+    **ベクトル未設定(settings.sample_app_semantic_retrieval=False)や埋め込み呼び出し失敗時は、
+    外部ベクトルストアに依存しない軽量な語彙重なりスコア(日本語は文字バイグラム併用)へ
+    フォールバック**し、素デプロイでも安定して動く(BE-07)。
 
 SBA-02 が束縛する能力: `rag.search`(FAQ-RAG 回答) / `summarize`(要約) / `classify`(自動分類) /
 `draft`(返信・メール下書き)。SBA-03(SBA-B 在庫・受発注照会)で `nl2sql`(自然言語DB照会) /
@@ -27,6 +30,8 @@ SBA-02 が束縛する能力: `rag.search`(FAQ-RAG 回答) / `summarize`(要約)
 
 from __future__ import annotations
 
+import logging
+import math
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -40,6 +45,7 @@ from jetuse_shared.sqlguard import (
     strip_code_fences,
 )
 
+from ..embeddings import EMBED_MAX_CHARS
 from .manifest import PluginManifest
 from .sample_app import (
     AiSlot,
@@ -52,6 +58,8 @@ from .sample_app import (
 # API ルート経由の実効既定は `settings.sample_app_model`(既定 llama-3.3-70b / project_ocid 不要)で、
 # ルートは常に model_key を明示して呼ぶためここには依存しない。両者の差は意図的(役割が異なる)。
 DEFAULT_MODEL = "gpt-oss-120b"
+
+_log = logging.getLogger(__name__)
 
 #: 1 スロット呼び出しで取り出す知識コーパス行の既定上限。
 DEFAULT_TOP_K = 3
@@ -264,17 +272,137 @@ def _relevant_hits(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [h for h in strong if h["relevance"] >= floor]
 
 
-def retrieve(
-    query: str, corpus: list[dict[str, Any]], *, top_k: int = DEFAULT_TOP_K
-) -> list[dict[str, Any]]:
-    """コーパスから query に関連する行を上位 top_k 件返す(スコア>0 のみ)。
+#: semantic 検索の grounded/採用下限(コサイン類似のスケール)。語彙重なり係数(MIN_RAG_RELEVANCE)
+#: とはスケールが異なるため別定数にする。**実コーパス(SBA-A FAQ)で校正済み**(BE-07 / review-3):
+#: cohere.embed-multilingual-v3.0 はベースラインが高く、無関係クエリでも全 FAQ に対し概ね 0.34〜0.41
+#: のコサインが出る一方、意味的に正しい FAQ は 0.6〜0.8 と明確に突出する。0.50 を下限にすると
+#: 無関係クエリ(最大≈0.41)は全件棄却して ungrounded になり、関連 FAQ(>0.5)だけが残るため、
+#: 弱い随伴一致(例: 別カテゴリの「退会」FAQ ≈0.476)が引用へ混入しない。
+MIN_SEMANTIC_RELEVANCE = 0.50
 
-    返り値の各要素: `{"index", "score", "relevance", "label", "row"}`。`relevance` は overlap 係数
-    (一致特徴数 / min(質問,行 の特徴数))で、語数差に左右されにくい関連度の目安。外部ベクトルストアに
-    依存しない軽量スコアで、実環境では GenAI 推論のみで安定動作する。
+#: 1 回の semantic retrieval で埋め込む対象コーパス行の上限。OCI 埋め込みの 1 リクエスト上限(96)に
+#: 合わせ、**文書側の埋め込み呼び出しを必ず単一バッチに収める**ことで、retrieval 全体の OCI 呼び出し
+#: 回数を定数(クエリ1 + 文書1 = 2)に有界化する(対話的経路の待機時間を有界にする / BE07-007)。
+#: スロットの知識コーパスはシード由来で小さく(FAQ 十数行)、実用上この上限に達しない。
+#: **この上限を超えるコーパスは「先頭だけ切り詰める」のではなく、全件を評価できる lexical 経路へ
+#: ルーティングする**(BE07-009: index>96 の関連文書を黙って落として false no-hit にしない。
+#: 大規模コーパスの semantic 化は埋め込み事前計算=実質ベクトルストア構築で本タスクの非ゴール)。
+MAX_SEMANTIC_CORPUS = 96
+
+
+def _default_embedder(texts: list[str], input_type: str) -> list[list[float]]:
+    """既定の埋め込み器。既存 OCI 埋め込み経路(embeddings.embed)を再利用する(新規ベクトルDBなし)。
+
+    対話的 retrieval 用に **有界タイムアウト＋有界リトライ** で呼び、OCI 障害時は SDK 既定の
+    長い待ち(最大8試行/総600秒)を待たず早期例外化する → `retrieve` が lexical へ即退避できる。
+    固定モデルの期待次元 `EMBED_DIM`(1024)・件数も本番経路でここで照合し、破損応答は
+    `_EmbeddingResponseError` にして lexical へ退避させる。遅延 import で oci 依存を
+    import 時に持ち込まない(単体テストは `ai_runtime._embedder` を差し替え OCI へ出ない)。
     """
-    if not corpus:
-        return []
+    from ..embeddings import (
+        EMBED_DIM,
+        INTERACTIVE_TIMEOUT,
+        embed,
+        interactive_retry_strategy,
+    )
+
+    vecs = embed(
+        texts,
+        input_type=input_type,
+        timeout=INTERACTIVE_TIMEOUT,
+        retry_strategy=interactive_retry_strategy(),
+        # 512 トークン超は黙って切り詰めず OCI 側で例外化 → lexical 退避(BE07-015)。
+        truncate="NONE",
+    )
+    if not isinstance(vecs, list) or len(vecs) != len(texts):
+        raise _EmbeddingResponseError(
+            f"embed: 件数不一致(expected {len(texts)}, "
+            f"got {len(vecs) if isinstance(vecs, list) else 'N/A'})"
+        )
+    for v in vecs:
+        if not isinstance(v, (list, tuple)) or len(v) != EMBED_DIM:
+            raise _EmbeddingResponseError(
+                f"embed: 期待次元 {EMBED_DIM} と異なる埋め込み"
+                f"(got {len(v) if isinstance(v, (list, tuple)) else 'N/A'})"
+            )
+    return vecs
+
+
+#: テストは `ai_runtime._embedder = fake` で差し替える。本番は既存 OCI 埋め込み経路を再利用。
+_embedder: Callable[[list[str], str], list[list[float]]] = _default_embedder
+
+
+def _semantic_enabled() -> bool:
+    """semantic/vector retrieval が有効か(settings.sample_app_semantic_retrieval)。
+
+    既定 False = ベクトル未設定。素デプロイでは従来の語彙重なりスコアで動く(後方互換)。
+    """
+    from ..settings import get_settings
+
+    return bool(get_settings().sample_app_semantic_retrieval)
+
+
+class _EmbeddingResponseError(Exception):
+    """埋め込み応答が不正(件数不足/次元不一致/零・非有限ベクトル)なときに送出する。
+
+    `retrieve` がこれを捕捉して **lexical フォールバックへ移行** するための内部例外。
+    部分的・破損した埋め込みで黙って誤った no-hit / 部分結果を返さないための fail-fast。
+    """
+
+
+def _validate_vector(vec: Any, *, dim: int | None, what: str) -> int:
+    """1 本の埋め込みベクトルを検証し、その次元を返す。
+
+    非空の数値列・全要素有限・非零ノルムであることを要求する。`dim` を与えた場合は次元一致も要求。
+    いずれか不正なら `_EmbeddingResponseError` を送出して lexical フォールバックへ倒す。
+    """
+    if not isinstance(vec, (list, tuple)) or not vec:
+        raise _EmbeddingResponseError(f"{what}: 埋め込みが空または非配列")
+    # bool は int の派生型だが埋め込み値として不正なので明示的に弾く(True/False を誤受理しない)
+    if not all(
+        isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+        for x in vec
+    ):
+        raise _EmbeddingResponseError(f"{what}: 埋め込みに非有限/非数値/bool の要素")
+    if dim is not None and len(vec) != dim:
+        raise _EmbeddingResponseError(
+            f"{what}: 次元不一致(expected {dim}, got {len(vec)})"
+        )
+    # ノルムは二乗和 sqrt より桁あふれに強い math.hypot で計算し、有限かつ非零を要求する。
+    norm = math.hypot(*(float(x) for x in vec))
+    if not math.isfinite(norm) or norm == 0.0:
+        raise _EmbeddingResponseError(f"{what}: ノルムが零/非有限({norm})")
+    return len(vec)
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    """コサイン類似度。検証済みの同次元・非零ベクトルを前提とする(零除算なし)。
+
+    要素が有限でも内積/ノルムの桁あふれで非有限になり得るため、結果の有限性を確認し、
+    非有限なら `_EmbeddingResponseError` を送出する(NaN を閾値比較で黙って棄却しない / BE07-008)。
+    """
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
+    na = math.hypot(*a)
+    nb = math.hypot(*b)
+    denom = na * nb
+    # ノルム個々が有限でも積がオーバーフローし得る。その場合 有限 dot / inf = 0.0 が有限性検査を
+    # すり抜けて「無関係」と黙殺されるため、分母の有限性・非零を除算前に確認する(BE07-017)。
+    if not math.isfinite(denom) or denom == 0.0:
+        raise _EmbeddingResponseError(f"cosine 分母が非有限/零(na={na}, nb={nb})")
+    sim = dot / denom
+    if not math.isfinite(sim):
+        raise _EmbeddingResponseError(f"cosine 非有限(dot={dot}, na={na}, nb={nb})")
+    return sim
+
+
+def _retrieve_lexical(
+    query: str, corpus: list[dict[str, Any]], *, top_k: int
+) -> list[dict[str, Any]]:
+    """語彙重なりスコアによる検索(従来実装。ベクトル未設定時のフォールバック)。
+
+    `relevance` は overlap 係数(一致特徴数 / min(質問,行 の特徴数))で、語数差に左右されにくい。
+    外部ベクトルストアに依存しない軽量スコアで、素デプロイでも安定動作する。
+    """
     q = _features(query)
     if not q:
         return []
@@ -302,6 +430,118 @@ def retrieve(
             }
         )
     return out
+
+
+def _retrieve_semantic(
+    query: str, corpus: list[dict[str, Any]], *, top_k: int
+) -> list[dict[str, Any]]:
+    """埋め込みベクトルのコサイン類似による semantic 検索(既存 OCI 埋め込み経路の再利用)。
+
+    語彙不一致(言い換え・同義語)でも意味が近ければ引ける。空テキストの行や下限
+    (MIN_SEMANTIC_RELEVANCE)未満の行は無関係として採らない。戻り値の各要素は lexical 版と同形
+    `{index, score, relevance, label, row}` で、`relevance`/`score` はコサイン類似度(0〜1)を表す
+    (後方互換: 下流の grounded/引用ロジックは
+    relevance を読むだけで semantic/lexical を区別しない)。
+    """
+    # 検索対象テキストを持つ行のみ埋め込む(空文字の行は OCI 埋め込みでも無意味)。
+    indexed = [(i, row, _row_text(row)) for i, row in enumerate(corpus)]
+    targets = [(i, row, text) for i, row, text in indexed if text.strip()]
+    if not targets:
+        return []
+    # 単一バッチに収まらないコーパスは retrieve() が事前に lexical へ振り分ける。ここへ到達した
+    # 場合の防御: 黙って切り詰めず例外化する(BE07-009: false no-hit を作らない)。
+    if len(targets) > MAX_SEMANTIC_CORPUS:
+        raise _EmbeddingResponseError(
+            f"corpus {len(targets)} 行 > 単一バッチ上限 {MAX_SEMANTIC_CORPUS}"
+        )
+    qres = _embedder([query], "SEARCH_QUERY")
+    # クエリは 1 件だけ要求しているので応答も 1 件であること(余分/欠落は破損応答)。
+    if not isinstance(qres, (list, tuple)) or len(qres) != 1:
+        raise _EmbeddingResponseError(
+            f"query: 埋め込み件数不正(expected 1, "
+            f"got {len(qres) if isinstance(qres, (list, tuple)) else 'N/A'})"
+        )
+    qvec = qres[0]
+    # クエリベクトルを **文書側を呼ぶ前に** 検証する(BE07-011: 破損クエリで無駄な文書 OCI 呼び出し・
+    # 待機・課金を発生させない)。不正なら例外→retrieve() が lexical へ退避。
+    dim = _validate_vector(qvec, dim=None, what="query")
+    dvecs = _embedder([t[2] for t in targets], "SEARCH_DOCUMENT")
+    # 文書ベクトルの件数が対象行数と一致しないと、行とベクトルの対応がずれて誤った検索になる。
+    # 黙って zip で切り詰めず、件数不一致は不正応答として lexical へフォールバックさせる。
+    if not isinstance(dvecs, (list, tuple)) or len(dvecs) != len(targets):
+        raise _EmbeddingResponseError(
+            f"document: 件数不一致(expected {len(targets)}, "
+            f"got {len(dvecs) if isinstance(dvecs, (list, tuple)) else 'N/A'})"
+        )
+    scored: list[tuple[float, int, dict[str, Any]]] = []
+    for (i, row, _text), dvec in zip(targets, dvecs, strict=True):
+        _validate_vector(dvec, dim=dim, what=f"document[{i}]")
+        rel = _cosine(qvec, dvec)
+        if rel >= MIN_SEMANTIC_RELEVANCE:
+            scored.append((rel, i, row))
+    scored.sort(key=lambda t: (-t[0], t[1]))
+    return [
+        {
+            "index": i,
+            "score": round(rel, 3),
+            "relevance": round(rel, 3),
+            "label": _row_label(row),
+            "row": row,
+        }
+        for rel, i, row in scored[:top_k]
+    ]
+
+
+def retrieve(
+    query: str, corpus: list[dict[str, Any]], *, top_k: int = DEFAULT_TOP_K
+) -> list[dict[str, Any]]:
+    """コーパスから query に関連する行を上位 top_k 件返す(スコア>0 のみ)。
+
+    返り値の各要素: `{"index", "score", "relevance", "label", "row"}`。`relevance` は関連度の目安。
+    semantic 有効時(settings.sample_app_semantic_retrieval)は既存 OCI 埋め込み(cohere.embed-
+    multilingual-v3.0)のコサイン類似で検索し、語彙不一致でも意味が近ければ引ける。**ベクトル未設定、
+    または埋め込み呼び出しがそのターン失敗した場合は従来の語彙重なりスコアへフォールバック**する
+    (素デプロイ/一過性障害でも壊れない)。いずれの経路でも戻り値形状は不変(後方互換)。
+    """
+    if not corpus:
+        return []
+    # 空/空白クエリは検索しない(semantic 有効時も OCI に空入力を送らない / BE07-012)。
+    # lexical も特徴ゼロで [] を返すため、両経路で挙動が一致する。
+    if not isinstance(query, str) or not query.strip():
+        return []
+    if _semantic_enabled() and _semantic_applicable(query, corpus):
+        try:
+            return _retrieve_semantic(query, corpus, top_k=top_k)
+        except Exception as e:  # noqa: BLE001
+            # 埋め込み呼び出しの失敗(認証/ネットワーク/レート/破損応答等)はそのターン限り
+            # 従来スコアへ degrade。5xx にせず品質を下げてもハッピーパスを維持する(偽装しない)。
+            _log.warning("semantic retrieval failed, falling back to lexical: %s", e)
+    return _retrieve_lexical(query, corpus, top_k=top_k)
+
+
+def _semantic_applicable(query: str, corpus: list[dict[str, Any]]) -> bool:
+    """このコーパス/クエリで semantic 経路を使ってよいか(使えないなら全文評価の lexical へ)。
+
+    semantic 化を見送って lexical にルーティングする条件(いずれも「取りこぼし防止」):
+      - 対象行数が単一バッチ上限を超える(BE07-009: 先頭だけ採ると後半が false no-hit)。
+      - query または対象行が埋め込み可能長(EMBED_MAX_CHARS)を超える(BE07-013: 切り詰めで
+        2000 字より後ろの関連語を落とすと false no-hit/誤ランキングになる)。
+    どちらも lexical なら全文・全件を評価できるため、後方互換(従来は引けた入力)を守れる。
+    """
+    eligible = [t for row in corpus if (t := _row_text(row)).strip()]
+    if len(eligible) > MAX_SEMANTIC_CORPUS:
+        _log.warning(
+            "corpus %d 行 > semantic 上限 %d。取りこぼし防止のため lexical を使用",
+            len(eligible), MAX_SEMANTIC_CORPUS,
+        )
+        return False
+    if len(query) > EMBED_MAX_CHARS or any(len(t) > EMBED_MAX_CHARS for t in eligible):
+        _log.warning(
+            "query/コーパス行が埋め込み可能長 %d を超過。切り詰め回避のため lexical を使用",
+            EMBED_MAX_CHARS,
+        )
+        return False
+    return True
 
 
 # --- ハンドラ: rag.search(FAQ-RAG 回答) ----------------------------------
