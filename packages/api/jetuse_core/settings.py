@@ -121,6 +121,12 @@ class Settings(BaseSettings):
     # fail-closed で InjectionError)。環境依存実値は .env で与え、コミットしない。
     platform_api_base_url: str = ""
 
+    # BE-08: 認証付き MCP 登録の資格情報を束ねる Vault。秘密の実値は本体のみ保持
+    # (L3 へ配らない / ADR-0014)。create_secret(CP)に vault_ocid と暗号鍵 vault_key_ocid
+    # が必須。いずれか空なら認証付き登録は fail-closed(503。実 Vault 書込 IAM は人間ゲート)。
+    vault_ocid: str = ""
+    vault_key_ocid: str = ""
+
     # OPS-02: OCI Logging(カスタムログOCID。空なら送らない) / Monitoring名前空間
     log_ocid: str = ""
     metrics_namespace: str = "jetuse_dev"

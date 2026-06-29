@@ -41,5 +41,8 @@ locals {
     RAG_BUCKET        = module.object_storage.app_data_bucket
     SPEECH_BUCKET     = module.object_storage.speech_bucket
     OS_NAMESPACE      = module.object_storage.namespace
+    # BE-08: 認証付き MCP 登録(空なら 503 fail-closed)。既存 Vault/鍵を参照。IAM は人間ゲート。
+    VAULT_OCID     = var.vault_ocid
+    VAULT_KEY_OCID = var.vault_key_ocid
   }
 }

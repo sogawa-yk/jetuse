@@ -29,6 +29,8 @@ variableGroups:
       - ocir_region_key
       - api_image_url
       - fn_router_image
+      - vault_ocid
+      - vault_key_ocid
   - title: "Hidden"
     visible: false
     variables:
@@ -111,6 +113,18 @@ variables:
     type: string
     title: "Functions ルーターイメージ（上書き）"
     description: "通常は空欄。空ならOCIRパスを自動合成（kix.ocir.io/<namespace>/<prefix>-fn-router:latest）"
+    required: false
+
+  vault_ocid:
+    type: string
+    title: "認証付きMCP用 Vault OCID（既存を参照）"
+    description: "空なら認証付きMCP登録は503。有効化には IAM(use keys/vaults/secret-family)も必要"
+    required: false
+
+  vault_key_ocid:
+    type: string
+    title: "認証付きMCP用 KMS鍵 OCID（既存を参照）"
+    description: "secret内容の暗号化鍵。vault_ocid とセットで設定する"
     required: false
 
   tenancy_ocid:
