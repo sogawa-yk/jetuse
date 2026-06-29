@@ -384,12 +384,18 @@ def _launch_to_record(row) -> dict[str, Any]:
         "composition": json.loads(_clob(row[6])),
         "status": row[7],
         "launched_at": row[8].isoformat() if row[8] else None,
+        # BE-01: OKE 配備メタ（非秘密のみ。OKE 配備 OFF の従来 launch は NULL）。
+        "namespace": row[9],
+        "deploy_status": row[10],
+        "cluster_url": row[11],
+        "token_expires_at": row[12],
     }
 
 
 _LAUNCH_COLS = (
     "id, session_id, sample_app, instance_id, entry_slot, demo_url, "
-    "composition, status, launched_at"
+    "composition, status, launched_at, namespace, deploy_status, "
+    "cluster_url, token_expires_at"
 )
 
 
@@ -402,10 +408,16 @@ def record_launch(
     entry_slot: str | None,
     demo_url: str,
     composition: dict[str, Any],
+    namespace: str | None = None,
+    deploy_status: str | None = None,
+    cluster_url: str | None = None,
+    token_expires_at: str | None = None,
 ) -> dict[str, Any] | None:
     """デモ起動を記録(差し替え)する。所有者でなければ None。1 セッション 1 起動(upsert)。
 
     呼び出し側(ルート)が合成＋ガバナンス検証 PASS を確認してから呼ぶ前提。本関数は永続のみ。
+    BE-01: OKE 配備メタ(namespace/deploy_status/cluster_url/token_expires_at)は非秘密のみ・任意。
+    OKE 配備 OFF の従来 launch は省略で NULL のまま(後方互換)。短期トークン本体は保存しない。
     """
     comp_json = json.dumps(composition, ensure_ascii=False)
     with connect() as conn:
@@ -418,6 +430,8 @@ def record_launch(
         binds = {
             "s": session_id, "o": owner, "app": sample_app, "inst": instance_id,
             "slot": entry_slot, "url": demo_url, "comp": comp_json,
+            "ns": namespace, "dstatus": deploy_status, "curl": cluster_url,
+            "texp": token_expires_at,
         }
         _clob_inputsizes(cur, "comp")
         cur.execute(
@@ -425,7 +439,8 @@ def record_launch(
             UPDATE demo_launch
             SET sample_app = :app, instance_id = :inst, entry_slot = :slot,
                 demo_url = :url, composition = :comp, status = 'launched',
-                launched_at = SYSTIMESTAMP
+                namespace = :ns, deploy_status = :dstatus, cluster_url = :curl,
+                token_expires_at = :texp, launched_at = SYSTIMESTAMP
             WHERE session_id = :s AND owner_sub = :o
             """,
             binds,
@@ -436,8 +451,11 @@ def record_launch(
                 cur.execute(
                     """
                     INSERT INTO demo_launch(id, session_id, owner_sub, sample_app,
-                                            instance_id, entry_slot, demo_url, composition)
-                    VALUES (:id, :s, :o, :app, :inst, :slot, :url, :comp)
+                                            instance_id, entry_slot, demo_url, composition,
+                                            namespace, deploy_status, cluster_url,
+                                            token_expires_at)
+                    VALUES (:id, :s, :o, :app, :inst, :slot, :url, :comp,
+                            :ns, :dstatus, :curl, :texp)
                     """,
                     {**binds, "id": _uid()},
                 )
@@ -449,7 +467,8 @@ def record_launch(
                     UPDATE demo_launch
                     SET sample_app = :app, instance_id = :inst, entry_slot = :slot,
                         demo_url = :url, composition = :comp, status = 'launched',
-                        launched_at = SYSTIMESTAMP
+                        namespace = :ns, deploy_status = :dstatus, cluster_url = :curl,
+                        token_expires_at = :texp, launched_at = SYSTIMESTAMP
                     WHERE session_id = :s AND owner_sub = :o
                     """,
                     binds,
@@ -470,6 +489,23 @@ def get_launch(owner: str, session_id: str) -> dict[str, Any] | None:
         )
         row = cur.fetchone()
         return _launch_to_record(row) if row else None
+
+
+def delete_launch(owner: str, session_id: str) -> bool:
+    """セッションの起動記録を削除する。所有者でなければ/未起動なら False（冪等）。
+
+    BE-01: デモ削除 API（namespace 撤去）の DB 側。namespace の実撤去（kubectl delete）は
+    呼び出し側（ルート）が deploy_runtime.teardown_demo で行い、本関数は記録の削除のみを担う。
+    所有者境界を WHERE に明示し、他オーナーの起動記録を消さない（多層防御）。
+    """
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM demo_launch WHERE session_id = :s AND owner_sub = :o",
+            s=session_id, o=owner,
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def confirm_recommendation(owner: str, session_id: str) -> str:
