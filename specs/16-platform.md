@@ -584,15 +584,26 @@ inert）。
 実 IdP 接続・実 client_secret 投入・実 id_token 発行・実 token-exchange の実行は **人間ゲート**（SSO 実設定）。
 合成（sample-app × connector × external-app）への組込・実埋め込みレンダリングは後段。
 
-### 14.4 オンボード経路とマーケット流通の境界（ASSET-01 スコープ）
+### 14.4 オンボード経路とマーケット流通（ASSET-01 → BE-06 / ADR-0021）
 
-external-app の**オンボードは builder（`denpyon_external_app_manifest` 等）による配布表現の生成と、
-in-process の SSO ブリッジ（`build_sso_handoff`）**で完結する（DB のインスタンス store は持たない）。
-そのため本タスクでは **マーケット publish/install（PLG-05 / MKT-01）への接続は後段**とし、`external-app` は
-`marketplace` の `SUPPORTED_KINDS` に**含めない**。`installer._ingest_contributes` は未対応 kind を
-`IngestError` で **fail-closed に拒否**するため、external-app manifest を誤って install 経路へ流しても安全
-（取込先テーブルが無いまま中途半端に登録されることはない）。マーケット流通させる場合は
-`external_app_instances` 相当の store＋migration と publisher/installer の kind 分岐追加が必要（後段タスク）。
+ASSET-01 では external-app の**オンボードは builder（`denpyon_external_app_manifest` 等）による配布表現の
+生成と、in-process の決定的 SSO ブリッジ（`build_sso_handoff`）**で完結し、DB の instance store も
+marketplace install も持たない「後段」扱いとしていた。**BE-06（ADR-0021）でこの後段を実装した**:
+
+- **store＋migration**: `external_app_instances`（migration 026。BE-04 が 025 を使用するため繰り下げ）＋ `external_app_store`
+  （register/get/list/remove/delete_by_source）。**実シークレット値は保存せず**参照名（clientIdRef/
+  secretRef）のみ（§14.2・§12.2 の機密区分）。
+- **install 対応**: `marketplace.SUPPORTED_KINDS` に `external-app` を追加。`installer._ingest_contributes`
+  に external-app 分岐を足し、署名検証・版固定・出所追跡・補償削除の **kind 非依存の枠組みをそのまま流用**
+  する（迂回構築 manifest は `IngestError` へ正規化）。
+- **実 token-exchange 配線＋起動ルート**: `external_app.exchange_sso_token`（実 RFC 8693 token-exchange。
+  継ぎ目は `secret_resolver`/`subject_token`/`token_exchange_caller`。既定 fail-closed・本番 caller
+  `http_token_exchange_caller` 提供）と routes `/api/external-apps`（一覧 / `sso-launch`=shape /
+  `sso-exchange`=実 exchange）。install 済み instance も起動ルートが surface する。
+
+**実 IdP 接続・実 client_secret 投入・実 MCP 配備・Vault 束ね・Identity Domain 設定は人間ゲート**（実接続）。
+`sso-exchange` は tokenEndpoint・Vault secret・利用者の実 id_token（Bearer）が揃わなければ fail-closed
+（503/401）＝未構成では実 IdP に到達しない。実接続の実設計と未解決事項は ADR-0021 を参照。
 
 ### 14.5 公開 API（`jetuse_core/plugins/external_app.py`）
 

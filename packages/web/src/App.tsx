@@ -23,6 +23,7 @@ const Rag = lazy(() => import('./pages/rag'))
 const Settings = lazy(() => import('./pages/settings'))
 const UsecaseRun = lazy(() => import('./pages/usecase'))
 const Marketplace = lazy(() => import('./pages/marketplace'))
+const ExternalApps = lazy(() => import('./pages/externalapps'))
 const Grants = lazy(() => import('./pages/grants'))
 const SampleApp = lazy(() => import('./pages/sampleapp'))
 const Preview = lazy(() => import('./pages/preview'))
@@ -65,6 +66,7 @@ export default function App() {
           <Route path="uc/:id" element={<UsecaseRun />} />
           <Route path="sba/:id" element={<SampleApp />} />
           <Route path="marketplace" element={<Marketplace />} />
+          <Route path="external-apps" element={<ExternalApps />} />
           <Route path="grants" element={<Grants />} />
           <Route path="hearing" element={<Hearing />} />
           <Route path="builder/standard" element={<Hearing />} />

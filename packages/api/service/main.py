@@ -73,6 +73,7 @@ from .routes import (
     chat,
     conversations,
     dbchat,
+    external_apps,
     hearing,
     marketplace,
     minutes,
@@ -128,6 +129,7 @@ def create_app() -> FastAPI:
     app.include_router(voice.router)
     app.include_router(usecases.router)
     app.include_router(marketplace.router)
+    app.include_router(external_apps.router)
     app.include_router(sample_apps.router)
     app.include_router(hearing.router)
     app.include_router(platform.router)

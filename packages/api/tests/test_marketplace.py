@@ -87,8 +87,12 @@ def wire(monkeypatch):
 
     monkeypatch.setattr(mp.store, "find_install", fake_find_install)
 
-    def fake_install(client, plugin_id, version=None, *, installed_by, owner=None):
+    def fake_install(client, plugin_id, version=None, *, installed_by, owner=None,
+                     authorize=None, **_):
         state["install_calls"].append((plugin_id, version, installed_by))
+        # 実 installer と同様、署名検証済み manifest に認可フックを呼ぶ（TOCTOU 回避の検証）。
+        if authorize is not None:
+            authorize(client.download(plugin_id, version))
         if state["install_raises"]:
             raise state["install_raises"]
         rec = {
@@ -284,3 +288,73 @@ def test_registry_unconfigured_returns_503():
         assert res.status_code == 503
     finally:
         app.dependency_overrides.pop(get_settings, None)
+
+
+# --- external-app kind の install 対応（BE-06） ----------------------------
+
+
+def test_build_catalog_marks_external_app_installable():
+    """external-app は SUPPORTED_KINDS に入り installable=True（BE-06）。"""
+    available = [_entry("jetuse/denpyon", "1.0.0", kind="external-app", name="伝ぴょん")]
+    card = mp.build_catalog(available, [])[0]
+    assert card["kind"] == "external-app"
+    assert card["installable"] is True
+
+
+def _external_app_manifest():
+    """external-app kind の検証済み manifest（admin ゲートの kind 判定用に download が返す）。"""
+    from jetuse_core.plugins.denpyon_external_app import denpyon_external_app_manifest
+
+    return denpyon_external_app_manifest(
+        url="https://denpyon.example.com/app",
+        issuer="https://idp.example.com",
+        audience="https://denpyon.example.com",
+    )
+
+
+def _wire_external_app(wire, monkeypatch):
+    """download が external-app manifest を返し、installer.install をフェイクにする。"""
+    wire["client"] = FakeClient(
+        [_entry("jetuse/denpyon", "1.0.0", kind="external-app", name="伝ぴょん")],
+        manifest=_external_app_manifest(),
+    )
+
+    def fake_install(client, plugin_id, version=None, *, installed_by, owner=None,
+                     authorize=None, **_):
+        # 認可フックを署名検証済み manifest に対して**取込前**に呼ぶ（admin ゲート発火点）。
+        if authorize is not None:
+            authorize(client.download(plugin_id, version))
+        wire["install_calls"].append((plugin_id, version, installed_by))
+        return {
+            "plugin_id": plugin_id,
+            "version": version or "1.0.0",
+            "kind": "external-app",
+            "ingested": [("external_app_instances", "ext-1")],
+        }
+
+    monkeypatch.setattr(mp.installer, "install", fake_install)
+
+
+def test_install_external_app_forbidden_without_admin(wire, monkeypatch):
+    """external-app の install は運用者(ADMIN_USERS)ゲート＝非運用者は 403（BE06-AUTHZ-001）。"""
+    _wire_external_app(wire, monkeypatch)
+    # ADMIN_USERS 空（既定）→ is_admin(dev-user)=False → 403。installer.install は呼ばれない。
+    resp = client.post("/api/marketplace/install", json={"plugin_id": "jetuse/denpyon"})
+    assert resp.status_code == 403
+    assert wire["install_calls"] == []
+
+
+def test_install_external_app_allowed_for_admin(wire, monkeypatch):
+    """運用者（ADMIN_USERS に dev-user）なら external-app を install できる（BE06-AUTHZ-001）。"""
+    import service.deps as deps
+    from jetuse_core.settings import Settings
+
+    _wire_external_app(wire, monkeypatch)
+    # is_admin は get_settings() を直接呼ぶ（Depends 注入ではない）ため deps 側を差し替える。
+    monkeypatch.setattr(deps, "get_settings", lambda: Settings(admin_users="dev-user"))
+    resp = client.post("/api/marketplace/install", json={"plugin_id": "jetuse/denpyon"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["kind"] == "external-app"
+    assert body["ingested"] == [["external_app_instances", "ext-1"]]
+    assert wire["install_calls"] == [("jetuse/denpyon", None, "dev-user")]
