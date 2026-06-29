@@ -42,6 +42,21 @@ class Settings(BaseSettings):
     registry_namespace: str = ""          # plugin id の名前空間。空なら publisher_id を使う
     registry_min_version: str = ""        # manifest.jetuse.minVersion。空なら publisher 既定(0.3.0)
 
+    # external-app（ASSET-01 / BE-06）。伝ぴょん等の「UI 埋め込み＋OIDC SSO」連携の環境依存値。
+    # すべて .env / Vault で注入し、**実値をコミットしない**（url/issuer/audience は公開
+    # エンドポイントだが環境依存のため env）。url/issuer/audience のいずれかが空なら未構成＝
+    # SSO 起動ルートは 503（機能無効）。実 client_secret は Vault OCID 参照のみ（実 token-exchange
+    # の実値解決・実 IdP 接続は人間ゲート＝SSO 実設定）。
+    denpyon_url: str = ""          # 伝ぴょんの埋め込み先 HTTPS URL
+    denpyon_issuer: str = ""       # OIDC IdP（issuer）の HTTPS URL
+    denpyon_audience: str = ""     # token-exchange の audience（伝ぴょんの HTTPS URL）
+    denpyon_token_endpoint: str = ""  # OIDC token endpoint（実 exchange 用。空なら shape のみ）
+    denpyon_jwks_url: str = ""     # 連携先 IdP の JWKS URL（id_token 検証用。空なら exchange 不能）
+    # secretRef（論理参照名）→ Vault secret OCID の対応。"ref=ocid,ref2=ocid2" 形式（任意）。
+    # 実 token-exchange のとき secretRef/clientIdRef から実 client_secret/client_id を Vault 経由で
+    # 解決する索引（実値は Vault にのみ存在）。空なら実 exchange は不能（shape のみ＝人間ゲート）。
+    external_app_secret_ocids: str = ""
+
     # feature flags
     auth_required: bool = False  # INFRA-02(OIDC)完了までの暫定。本番はtrue必須
 

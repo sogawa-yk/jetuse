@@ -163,31 +163,162 @@ def _resolve_responses_model(model_key: str) -> str:
     return model.oci_id
 
 
+def _item_get(item: Any, key: str) -> Any:
+    """SDK オブジェクト or dict から属性/キーを取り出す（output アイテム走査の共通形）。"""
+    if isinstance(item, dict):
+        return item.get(key)
+    return getattr(item, key, None)
+
+
+def _json_equal(a: Any, b: Any) -> bool:
+    """JSON 値の **型厳密**な再帰比較（BE06-MIN-001）。
+
+    Python の `==` は JSON では別物の値を等しいと見なす（`True == 1`・`False == 0`・`1 == 1.0`）。
+    引数照合を将来 MCP 直結経路へ接続したとき、型を変えた引数（bool↔int 等）を見逃さないよう、
+    bool/int/float を型ごと厳密に比較し、dict/list は再帰的にキー集合・要素順まで一致を要求する。
+    """
+    # bool は int のサブクラスなので最初に型一致で弾く（True と 1、False と 0 を区別する）。
+    if isinstance(a, bool) or isinstance(b, bool):
+        return type(a) is type(b) and a == b
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_json_equal(a[k], b[k]) for k in a)
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(_json_equal(x, y) for x, y in zip(a, b, strict=True))
+    # 数値は型一致を要求する（JSON では 1（int）と 1.0（float）は別表現）。
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return type(a) is type(b) and a == b
+    return a == b
+
+
+def _args_match_payload(item: Any, payload: dict[str, Any]) -> bool:
+    """MCP ツール呼び出しの **実引数**が認可 payload と**完全一致**するか検査する。
+
+    Responses type:"mcp" はツール引数をモデルが生成するため、prompt injection やモデルの
+    変形/省略/**追加**で「認可・監査した値」と「実際に実行された引数」が食い違い得る。実行アイテムの
+    `arguments`（JSON 文字列 or dict）が認可 payload と **完全一致（同一キー集合かつ同一値。追加キー
+    も拒否。型も厳密＝BE06-MIN-001）**であることを要求する（BE06-REV-004）。`arguments` が応答に
+    載らない場合は post-hoc 検査不能のため **fail-closed**（改変を許す穴にしない）。確実な事前束縛
+    （モデルを介さない MCP 直結の引数固定）は実 MCP 直結＝人間ゲート（SKIPPED.md 参照）。
+    """
+    raw = _item_get(item, "arguments")
+    if raw is None:
+        return False  # 引数が露出しない＝照合不能 → fail-closed（改変を通さない）
+    if isinstance(raw, str):
+        try:
+            args = json.loads(raw)
+        except ValueError:
+            return False
+    elif isinstance(raw, dict):
+        args = raw
+    else:
+        return False
+    if not isinstance(args, dict):
+        return False
+    # 同一キー集合かつ同一値（追加キーも欠落も改変も型差も拒否）。
+    return _json_equal(args, payload)
+
+
+def _mcp_calls_verified(
+    calls: Any, action: str, payload: dict[str, Any] | None = None
+) -> bool:
+    """MCP 呼出し記録の列が「**認可 action の成功呼出しのみ**」であることを検査する（共有コア）。
+
+    各呼出しが認可 action と一致・completed・error 無し、かつ（payload 指定時）実引数が payload と
+    完全一致を要求する。認可 action 以外の呼出しが1つでも在れば fail-closed（越境/多重）。
+    成功呼出しが1つ以上ありかつ越境が無いときだけ True。`_mcp_tool_was_called`（Responses 形式）と
+    invoke 境界（`_assert_mcp_call_verified`）の双方がこのコアを使う（BE06-MAJ-001）。
+    """
+    if not isinstance(calls, list):
+        return False
+    matched = False
+    for item in calls:
+        name = str(_item_get(item, "name") or "")
+        if name != action:
+            return False  # 認可 action 以外の MCP 呼出し（越境/多重）→ fail-closed
+        if _item_get(item, "error"):
+            return False  # 失敗フラグが立っていれば成功扱いしない
+        status = _item_get(item, "status")
+        # status があれば completed 必須（failed/incomplete は成功扱いしない）。
+        if status is not None and str(status) != "completed":
+            return False
+        if payload is not None and not _args_match_payload(item, payload):
+            return False  # 実引数が認可 payload と食い違う（改変/省略）→ fail-closed
+        matched = True
+    return matched
+
+
+def _mcp_tool_was_called(resp: Any, action: str, payload: dict[str, Any] | None = None) -> bool:
+    """Responses の出力に **認可 action の MCP ツール呼び出しが成功裏に**実在するか検査する。
+
+    MCP では `server_url` 配下の任意ツールをモデルが選び得る。broker が認可したのは特定 action
+    （search / nl2sql 等）なので、その action が呼ばれ **completed** したことを応答で裏取りする
+    （別ツール選択・無呼出・failed/incomplete を `ok` 扱いしない。B-003 / MCP-001 / 越境防止）。
+    `payload` を渡すと、実引数が認可 payload と **完全一致**（追加/欠落/改変を拒否）も要求する
+    （BE06-R003 / BE06-REV-004）。`arguments` が載らない応答は照合不能のため fail-closed。
+
+    実装は Responses 出力から MCP 呼出しアイテム（type に "mcp"）だけを抽出し、共有コア
+    `_mcp_calls_verified` で検査する（多重/越境呼出しの拒否を含む。BE06-BLK-001）。MCP 呼出しが
+    1つも無ければ False（無呼出しを成功扱いしない）。直結 transport caller がこの検証を使う。
+
+    残リスク（MCP-001・人間ゲート）: 本検査は post-hoc（応答に載った引数の照合）。副作用の**事前**
+    防止には Responses を介さず MCP tool call へ直接引数を渡す実装が要る（実 MCP 配備=人間ゲート
+    対応。既定 caller は fail-closed。SKIPPED.md 参照）。
+    """
+    output = getattr(resp, "output", None) or []
+    calls = [item for item in output if "mcp" in str(_item_get(item, "type") or "")]
+    if not calls:
+        return False  # MCP 呼出しが1つも無い（平文回答のみ等）→ fail-closed
+    return _mcp_calls_verified(calls, action, payload)
+
+
 def _default_mcp_caller(
     spec: dict[str, Any], action: str, payload: dict[str, Any]
 ) -> dict[str, Any]:
-    """既定 McpCaller。Responses API(type:"mcp")で MCP ツールを起動する配管。
+    """既定 McpCaller は **fail-closed**（BE06-BLK-001）。
 
-    実 MCP サーバーへの到達(エンドポイント配備+実認証)は CON-03。単体テストは mock を注入し、
-    本関数自身はネットワーク呼び出しの形を持つだけ(実エンドポイント未配備の E2E では使わない)。
-    model は **Responses 対応モデル**を MODELS で解決して oci_id を渡す(chat 専用既定だと 404 になる
-    のを防ぐ。CON02-MAJ-002)。
+    Responses API(type:"mcp")経由はツール引数の生成をモデルに委ねるため、認可 payload との一致検査が
+    **post-hoc（実行後）**になり、改変・越境を実行境界で事前に防げない（prompt injection 等）。
+    事前束縛には Responses を介さない **MCP 直結 transport**（実エンドポイント配備＋実認証＝CON-03/
+    人間ゲート）が要る。それまで **本番の既定 caller は実行せず拒否**する（多層防御）。テスト/E2E は
+    mock caller を注入して上位の認可・最小権限・引数照合（`_mcp_tool_was_called`）を検証する。
     """
-    from ..genai import make_inference_client
+    raise ConnectorInvokeError(
+        f"既定 MCP caller は無効（fail-closed。action='{action}'）。実 MCP は引数を実行前に束縛する"
+        "直結 transport が要る＝人間ゲート（CON-03）。mcp_caller を注入して使う"
+    )
 
-    oci_id = _resolve_responses_model(MCP_DEFAULT_MODEL)
-    client = make_inference_client(with_project=True)
-    instruction = (
-        f"MCP ツール '{action}' を次の引数で1回だけ実行してください: "
-        f"{json.dumps(payload, ensure_ascii=False)}"
-    )
-    resp = client.responses.create(
-        model=oci_id,
-        input=instruction,
-        tools=[spec],
-        store=False,
-    )
-    return {"mcp": True, "output_text": getattr(resp, "output_text", "")}
+
+def _assert_mcp_call_verified(
+    output: dict[str, Any], action: str, payload: dict[str, Any]
+) -> None:
+    """**中央 invoke 境界**で MCP 応答の成功裏取りを強制する（BE06-MAJ-001）。
+
+    注入 caller（mock / 実 MCP 直結 transport）が返した応答について、(1) `ok` の明示、(2) 実際に
+    行った MCP 呼出しの **記録**（`calls`＝[{name,status,arguments}] / または Responses 形式の
+    `output`）を含むこと、(3) 記録が **認可 action の completed 呼出しのみ**で実引数が payload と
+    完全一致（越境/多重/改変/無呼出しを拒否）であることを検査する。**単なる `{"ok": true}` は成功に
+    しない**（実行された tool/引数を裏取りできないため）。検査は `_mcp_calls_verified`/
+    `_args_match_payload`（単体テスト済み）を実行経路から呼ぶ＝注入 caller への検証丸投げを止める。
+
+    呼出し記録の提供は caller の応答契約: 安全な事前束縛（モデルを介さない引数固定）を行う実 MCP
+    直結 transport は実エンドポイント＝人間ゲート（CON-03）。既定 caller は fail-closed。
+    """
+    if not output.get("ok"):
+        raise ConnectorInvokeError("MCP transport 応答が成功(ok)を明示しない（fail-closed）")
+    calls = output.get("calls")
+    if calls is None:
+        # Responses 形式（output アイテム列）も受ける。MCP 呼出しアイテムだけ抽出する。
+        raw_output = output.get("output")
+        if isinstance(raw_output, list):
+            calls = [i for i in raw_output if "mcp" in str(_item_get(i, "type") or "")]
+    if not isinstance(calls, list) or not calls:
+        raise ConnectorInvokeError(
+            "MCP 応答に実呼出しの記録(calls)が無い（ok だけでは成功にしない。fail-closed）"
+        )
+    if not _mcp_calls_verified(calls, action, payload):
+        raise ConnectorInvokeError(
+            "MCP 応答が認可 action の完全一致呼出しを裏取り不能（越境/改変/無呼出し。fail-closed）"
+        )
 
 
 # --- 認可(fail-closed) ---------------------------------------------------
@@ -256,7 +387,17 @@ def _resolve_secret(
     ref = auth.secret_ref
     if not ref:  # pragma: no cover - 定義検証で kind!=none は secretRef 必須
         raise ConnectorInvokeError("auth.secretRef が無いのに認証が必要")
-    token = secret_resolver(ref)
+    # secret_resolver の失敗(未知 ref の KeyError / OCI Vault の権限拒否・一時障害 等)を
+    # ConnectorInvokeError へ **連鎖なしで** 正規化する。元例外の文言・連鎖には Vault 内部情報や
+    # 実値が混入し得るため from None で断ち、参照名(非機密)だけを出す(CON02 / M-002)。
+    try:
+        token = secret_resolver(ref)
+    except ConnectorInvokeError:
+        raise
+    except Exception:
+        raise ConnectorInvokeError(
+            f"secret_resolver が secretRef '{ref}' を解決できなかった"
+        ) from None
     if not token or not str(token).strip():
         # 参照名は宣言の一部(非機密)なので例外文に出してよい。実値は出さない。
         raise ConnectorInvokeError(f"secret_resolver が secretRef '{ref}' を解決できなかった")
@@ -401,6 +542,9 @@ def invoke_connector_action(
             "server_label": definition.provider,
             "server_url": definition.endpoint,
             "require_approval": "never",
+            # 最小権限: MCP サーバーが公開する他ツールではなく、broker が認可した action だけを
+            # モデルに許す(越境防止。B-003)。差し替え mcp_caller も同じ spec を受け取る。
+            "allowed_tools": [action],
         }
         if token:
             spec["headers"] = {"Authorization": f"Bearer {token}"}
@@ -409,6 +553,14 @@ def invoke_connector_action(
 
     if not isinstance(output, dict):  # pragma: no cover - transport 契約違反
         raise ConnectorInvokeError("transport 応答は dict でなければならない")
+
+    # mcp transport は **中央 invoke 境界で成功を裏取り**する（BE06-MAJ-001）: `ok` の明示に加え、
+    # caller が返す呼出し記録（calls / Responses output）が **認可 action の完全一致呼出しのみ**で
+    # あることを `_mcp_calls_verified`/`_args_match_payload`（実行経路から）強制する。単なる
+    # `{"ok": true}` は成功にしない（越境/改変/無呼出しを拒否）。既定 caller は fail-closed（実 MCP
+    # 直結＝人間ゲート。SKIPPED.md）。
+    if definition.transport == "mcp":
+        _assert_mcp_call_verified(output, action, payload)
 
     # secret 非漏洩契約の最終強制: transport が spec/header を echo してトークンを混入させても、
     # 戻り値・例外にトークンを残さない(CON02 review-2 MAJ)。token があるときだけ走査・redact する。

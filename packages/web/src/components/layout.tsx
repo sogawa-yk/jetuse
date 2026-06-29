@@ -29,6 +29,7 @@ const NAV: { to: string; key: string; icon: IconName }[] = [
   { to: '/video', key: 'nav.video', icon: 'video' },
   { to: '/ocr', key: 'nav.ocr', icon: 'ocr' },
   { to: '/marketplace', key: 'nav.market', icon: 'market' },
+  { to: '/external-apps', key: 'nav.externalapps', icon: 'market' },
   { to: '/grants', key: 'nav.grants', icon: 'checklist' },
   { to: '/admin', key: 'nav.admin', icon: 'admin' },
   { to: '/settings', key: 'nav.settings', icon: 'settings' },

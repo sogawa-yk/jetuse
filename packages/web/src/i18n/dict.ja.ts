@@ -538,4 +538,14 @@ export const ja = {
   'grants.revoking': '失効中…',
   'grants.loadError': '読み込みに失敗しました',
   'grants.actionFailed': '操作に失敗しました',
+  // 外部アプリ連携（external-app / ASSET-01・BE-06）
+  'nav.externalapps': '外部アプリ',
+  'extapp.title': '外部アプリ連携',
+  'extapp.subtitle': '埋め込み＋OIDC SSO で既存アプリを起動（伝ぴょん 等）',
+  'extapp.loading': '読み込み中…',
+  'extapp.error': '一覧の取得に失敗しました',
+  'extapp.empty': '構成済みの外部アプリがありません（.env or マーケット install で追加）',
+  'extapp.open': '開く',
+  'extapp.embed': '起動',
+  'extapp.ssoGated': 'SSO 起動は可能です。ただしログイン状態の確立には実 SSO 設定（IdP・Vault、管理者の人間ゲート）が必要です（ADR-0021）。',
 } as const

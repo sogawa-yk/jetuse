@@ -18,7 +18,13 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from jetuse_core import agents, usecases
-from jetuse_core.plugins import connector_store, installer, scaffold, store
+from jetuse_core.plugins import (
+    connector_store,
+    external_app_store,
+    installer,
+    scaffold,
+    store,
+)
 from jetuse_core.plugins.installer import (
     AlreadyInstalled,
     SignatureRejected,
@@ -151,6 +157,37 @@ def _connector_manifest(version="1.0.0", *, permissions=None, action_perms=None)
     }
 
 
+def _external_app_manifest(version="1.0.0"):
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "id": "acme/denpyon",
+        "version": version,
+        "kind": "external-app",
+        "name": "伝ぴょん 連携",
+        "description": "サンプル external-app",
+        "publisher": "acme-corp",
+        "jetuse": {"minVersion": "0.3.0"},
+        "permissions": [],
+        "contributes": {
+            "external-app": {
+                "app": "denpyon",
+                "embed": "iframe",
+                "url": "https://denpyon.example.com/app",
+                "title": "伝ぴょん",
+                "sso": {
+                    "mode": "oidc",
+                    "issuer": "https://idp.example.com",
+                    "clientIdRef": "denpyon-oidc-client-id",
+                    "secretRef": "denpyon-oidc-client-secret",
+                    "audience": "https://denpyon.example.com",
+                    "scopes": ["openid", "email"],
+                    "claimMapping": {"sub": "preferred_username"},
+                },
+            }
+        },
+    }
+
+
 def make_signed_registry(manifest_dicts):
     """署名付き manifest を配るレジストリと、対応する RegistryClient を返す。"""
     private_key = Ed25519PrivateKey.generate()
@@ -194,6 +231,11 @@ _CONNECTOR_COLS = [
     "definition", "registered_by", "created_at",
 ]
 
+_EXTERNAL_APP_COLS = [
+    "id", "plugin_id", "source_version", "name", "app", "embed",
+    "definition", "registered_by", "created_at",
+]
+
 
 class FakeDB:
     def __init__(self):
@@ -204,6 +246,8 @@ class FakeDB:
         self.sample_app_instances: list[dict] = []
         self.sample_app_seed_rows: list[dict] = []
         self.connector_instances: list[dict] = []
+        # BE-06: external-app(external_app_store)取込先を同じインメモリ ADB で表す。
+        self.external_app_instances: list[dict] = []
         self._seq = 0
 
 
@@ -351,6 +395,33 @@ class FakeCursor:
                     if not (r["plugin_id"] == b["pid"] and r["source_version"] == b["ver"])
                 ]
             self.rowcount = before - len(self.db.connector_instances)
+        # --- BE-06: external-app(external_app_store)取込先 ---
+        elif s.startswith("INSERT INTO external_app_instances"):
+            self.db._seq += 1
+            self.db.external_app_instances.append({
+                "id": b["id"], "plugin_id": b["pid"], "source_version": b["ver"],
+                "name": b["name"], "app": b["app"], "embed": b["embed"],
+                "definition": b["defn"], "registered_by": b["registrar"],
+                "created_at": self.db._seq,
+            })
+            self.rowcount = 1
+        elif s.startswith("SELECT") and "FROM external_app_instances" in s:
+            rows = self.db.external_app_instances
+            if "WHERE id = :id" in s:
+                rows = [r for r in rows if r["id"] == b["id"]]
+            self._result = [tuple(r[c] for c in _EXTERNAL_APP_COLS) for r in rows]
+        elif s.startswith("DELETE FROM external_app_instances"):
+            before = len(self.db.external_app_instances)
+            if "WHERE id = :id" in s:
+                self.db.external_app_instances = [
+                    r for r in self.db.external_app_instances if r["id"] != b["id"]
+                ]
+            else:  # WHERE plugin_id = :pid AND source_version = :ver
+                self.db.external_app_instances = [
+                    r for r in self.db.external_app_instances
+                    if not (r["plugin_id"] == b["pid"] and r["source_version"] == b["ver"])
+                ]
+            self.rowcount = before - len(self.db.external_app_instances)
         else:  # pragma: no cover
             raise AssertionError(f"unexpected SQL: {s}")
 
@@ -399,6 +470,7 @@ def fake_db(monkeypatch):
     monkeypatch.setattr(agents, "connect", fake_connect)
     monkeypatch.setattr(scaffold, "connect", fake_connect)
     monkeypatch.setattr(connector_store, "connect", fake_connect)
+    monkeypatch.setattr(external_app_store, "connect", fake_connect)
     return db
 
 
@@ -620,6 +692,32 @@ def test_install_connector_then_uninstall_roundtrip(fake_db):
     assert store.find_install("acme/slackish", "1.0.0") is None
 
 
+def test_install_external_app_then_uninstall_roundtrip(fake_db):
+    """BE-06: 署名付き external-app を install → external_app_instances 出現 → uninstall で消滅。"""
+    client, *_ = make_signed_registry([_external_app_manifest()])
+
+    rec = install(client, "acme/denpyon", "1.0.0", installed_by="sa@example.com")
+
+    assert rec["signature_verified"] is True
+    inst_id = fake_db.external_app_instances[0]["id"]
+    assert rec["ingested"] == [("external_app_instances", inst_id)]
+
+    inst = fake_db.external_app_instances[0]
+    assert inst["plugin_id"] == "acme/denpyon"
+    assert inst["source_version"] == "1.0.0"
+    assert inst["app"] == "denpyon"
+    assert inst["embed"] == "iframe"
+    assert inst["registered_by"] == "sa@example.com"
+    definition = json.loads(inst["definition"])
+    # 実シークレット値は保存せず参照名のみ（ASSET-01 / §14.2 の契約）。
+    assert definition["sso"]["secretRef"] == "denpyon-oidc-client-secret"
+    assert "client_secret" not in json.dumps(definition)
+
+    assert uninstall("acme/denpyon", "1.0.0") is True
+    assert fake_db.external_app_instances == []
+    assert store.find_install("acme/denpyon", "1.0.0") is None
+
+
 def test_install_sample_app_signature_verified_before_scaffold(fake_db):
     # 署名不正の sample-app は scaffold 展開前に拒否され、ADB に何も書かれない(fail-closed)。
     client, *_ = make_signed_registry([_sample_app_manifest()])
@@ -700,6 +798,28 @@ def test_record_failure_compensation_connector(fake_db, monkeypatch):
     with pytest.raises(RuntimeError):
         install(client, "acme/slackish", "1.0.0", installed_by="sa")
     assert fake_db.connector_instances == []
+    assert fake_db.installed == []
+
+
+def test_record_failure_compensation_external_app(fake_db, monkeypatch):
+    # record_install が L2(external-app)作成後に失敗しても、補償で external-app 行が消える
+    # (_delete_created の external_app_instances 分岐の回帰 / BE-06 m-001)。既存行は巻き込まない。
+    client, *_ = make_signed_registry([_external_app_manifest()])
+    # 同版の別 external-app 行を先に置き、補償が「いま作った行」だけを消すことを確かめる。
+    fake_db.external_app_instances.append({
+        "id": "preexisting", "plugin_id": "acme/denpyon", "source_version": "1.0.0",
+        "name": "old", "app": "denpyon", "embed": "iframe",
+        "definition": "{}", "registered_by": "other", "created_at": 0,
+    })
+
+    def boom(*a, **k):
+        raise RuntimeError("simulated record_install failure")
+
+    monkeypatch.setattr(installer.store, "record_install", boom)
+    with pytest.raises(RuntimeError):
+        install(client, "acme/denpyon", "1.0.0", installed_by="sa")
+    # 既存行は残り、今回作成した行だけが補償削除される。
+    assert [r["id"] for r in fake_db.external_app_instances] == ["preexisting"]
     assert fake_db.installed == []
 
 

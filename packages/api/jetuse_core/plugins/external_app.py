@@ -22,7 +22,9 @@
 
 from __future__ import annotations
 
+import hmac
 import re
+from collections.abc import Callable
 from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -387,8 +389,11 @@ def build_sso_handoff(
         "grant_type": TOKEN_EXCHANGE_GRANT,
         "audience": sso.audience,
         "scope": " ".join(sso.scopes),
-        "requested_token_type": ACCESS_TOKEN_TYPE,
-        "subject_token_type": ID_TOKEN_TYPE,
+        # shape と実 exchange（exchange_sso_token）で token type を一致させる（BE06-003）:
+        # 連携先へ渡すのは身元 id_token なので requested=id_token、subject は JetUse セッションの
+        # access token（Web の Bearer）なので subject=access_token。
+        "requested_token_type": ID_TOKEN_TYPE,
+        "subject_token_type": ACCESS_TOKEN_TYPE,
         # 実トークン/実シークレットではなく **参照名** のみを載せる。
         "subject_token_ref": subject_token_ref,
         "client_id_ref": sso.client_id_ref,
@@ -412,4 +417,417 @@ def build_sso_handoff(
         "mapped_claims": mapped_claims,
         # 実値を持たないことを示す不変条件（証跡で機械検査できるようにする）。
         "contains_secret_values": False,
+    }
+
+
+# --- 公開 API: 実 token-exchange 配線（BE-06） -----------------------------
+#
+# build_sso_handoff は「要求の shape」を **参照名のまま** 決定的に組み立てる（IdP へ通信しない）。
+# 本節はその先＝**実 RFC 8693 token-exchange を実行する配線**を提供する。連携層（connector_runtime）
+# と同じ「実シークレットを持たない／差し替え可能な継ぎ目で実値を解決する」契約を踏襲する:
+#   - client_secret は `secret_resolver`（secretRef→実 client_secret。install 時 Vault 束ね＝
+#     人間ゲート）。
+#   - subject_token（JetUse の実 id_token）は呼び出し側がランタイムで与える（保存しない）。
+#   - 実 IdP への HTTP は差し替え可能な `token_exchange_caller` 経由。**既定は fail-closed**（実通信
+#     しない）。テスト/mock E2E は caller を注入。実 IdP 接続・実 client_secret 投入は人間ゲート。
+# 戻り値・例外には **入力シークレット（client_secret / subject_token）を出さない**（最終防壁で
+# redact）。
+
+#: secretRef（参照名）→ 実 client_secret の解決関数。install 時の Vault 束ね（人間ゲート）に
+#: 差し替えられる継ぎ目。**実値はここで初めて現れ、戻り値・例外・ログには出さない**。
+SsoSecretResolver = Callable[[str], str]
+
+#: token-exchange の実呼び出し。(token_endpoint, request_body) -> token レスポンス dict。
+#: request_body は実 client_secret / 実 subject_token を含む（IdP へ送る本物の要求）。
+#: 既定は fail-closed（実 IdP へ実通信しない）。テスト/E2E は mock を注入する。
+TokenExchangeCaller = Callable[[str, dict[str, Any]], dict[str, Any]]
+
+#: id_token の検証関数。(id_token, issuer, audience) -> **検証済み claims dict**。署名（JWKS）・
+#: issuer・audience・exp 等を fail-closed で確認し、検証済みクレームを返す継ぎ目。返した claims の
+#: nonce/sub を exchange_sso_token が「現在のトランザクション/認証利用者」へ束ねる（BE06-BLK-001）。
+#: 検証不能（署名/iss/aud/exp 不正）は例外送出（呼出側 fail-closed）。**実 JWKS 取得は実 IdP 通信＝
+#: 人間ゲート**のため既定は None。承認後に JWKS ベース verifier を注入する（BE06-004）。
+IdTokenVerifier = Callable[[str, str, str], dict[str, Any]]
+
+#: token-exchange レスポンスから取り出す発行トークンのキー候補（OIDC/OAuth 慣行）。
+_ISSUED_TOKEN_KEYS = ("id_token", "access_token", "token")
+#: redact 置換文字列（connector_runtime と同じ意匠）。
+_REDACTED = "***redacted***"
+
+
+def _redact_values(obj: Any, secrets: tuple[str, ...]) -> Any:
+    """obj 内に出現する `secrets` の各文字列を再帰的に伏字へ置換する（str/dict/list/tuple 走査）。
+
+    IdP/caller がエラー文や応答に client_secret / subject_token を echo しても、戻り値・例外文字列に
+    入力シークレットが残らないための最終防壁（connector_runtime._redact_secret と同契約）。
+    """
+    live = tuple(s for s in secrets if s)
+    if not live:
+        return obj
+    if isinstance(obj, str):
+        out = obj
+        for s in live:
+            out = out.replace(s, _REDACTED)
+        return out
+    if isinstance(obj, dict):
+        return {_redact_values(k, live): _redact_values(v, live) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_redact_values(v, live) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_redact_values(v, live) for v in obj)
+    return obj
+
+
+def _denied_token_exchange_caller(
+    token_endpoint: str, body: dict[str, Any]
+) -> dict[str, Any]:
+    """既定 TokenExchangeCaller。実 IdP へは通信しない（SSO 実設定は人間ゲート）。
+
+    テスト/mock E2E は caller を注入する。実 IdP 接続・実 client_secret 投入・実 id_token 発行は
+    人間ゲート（Identity Domain＝テナンシ変更・Vault 束ね）。
+    """
+    raise SsoHandoffError(
+        "token_exchange_caller が未設定。実 OIDC token-exchange は caller の注入が必要"
+        "（実 IdP 接続・実 client_secret 投入・実トークン発行は人間ゲート＝SSO 実設定）"
+    )
+
+
+#: 実 token-exchange の HTTP timeout（connect, read）秒。Gateway/SSE 上限内に収める保守的値。
+HTTP_TOKEN_EXCHANGE_TIMEOUT = (5, 15)
+
+
+def http_token_exchange_caller(
+    token_endpoint: str, body: dict[str, Any]
+) -> dict[str, Any]:
+    """本番 TokenExchangeCaller。OIDC token endpoint へ RFC 8693 token-exchange を実 HTTP で投げる。
+
+    `body` は実 client_secret / 実 subject_token を含む application/x-www-form-urlencoded 要求。
+    timeout を明示し、HTTP/OAuth エラー（非 2xx・OAuth error・不正 JSON）を `SsoHandoffError`
+    へ正規化する（fail-closed）。**実 IdP 到達は人間ゲート**（SSO 実設定）であり、本関数を実 IdP に
+    向けて呼ぶ前提（実 client_secret 投入・実 subject_token）が満たされるのは承認後。HTTP は httpx
+    （本体の直接依存。BE06-REV-007）。secret は呼び出し側 exchange_sso_token が戻り値・例外から
+    redact する。
+    """
+    import httpx
+
+    try:
+        resp = httpx.post(
+            token_endpoint,
+            data=body,
+            headers={"Accept": "application/json"},
+            timeout=HTTP_TOKEN_EXCHANGE_TIMEOUT,
+            # redirect を無効化する（実 secret/subject_token を載せた要求が 3xx で別ホストへ
+            # 再送されるのを防ぐ。SEC-001）。token endpoint は最終到達先のみ許す。
+            follow_redirects=False,
+        )
+    except httpx.HTTPError as e:
+        # 例外文に secret が載らないよう型名のみを出す（呼び出し側でも redact するが二重防御）。
+        raise SsoHandoffError(
+            f"token endpoint への接続に失敗: {type(e).__name__}"
+        ) from None
+    try:
+        data = resp.json()
+    except ValueError:
+        raise SsoHandoffError(
+            f"token-exchange 応答が JSON でない（status={resp.status_code}）"
+        ) from None
+    if not (200 <= resp.status_code < 300) or (isinstance(data, dict) and data.get("error")):
+        # 2xx 以外は拒否する（redirect 無効化時に JSON を伴う 3xx を成功と誤認しない。BE06-R006）。
+        # OAuth エラーは error/error_description を返す（実トークンは含まない想定）。
+        err = data.get("error") if isinstance(data, dict) else None
+        raise SsoHandoffError(
+            f"token-exchange が拒否された（status={resp.status_code} error={err}）"
+        )
+    if not isinstance(data, dict):
+        raise SsoHandoffError("token-exchange 応答は JSON オブジェクトでなければならない")
+    return data
+
+
+def jwks_id_token_verifier(jwks_url: str) -> IdTokenVerifier:
+    """JWKS から発行 id_token の **署名/iss/aud/exp** を検証する verifier を作る（BE06-R002）。
+
+    実 JWKS（実 IdP）への通信を伴うため `jwks_url` は実 IdP 設定（人間ゲート）で与える。検証は
+    fail-closed: 署名不正・iss/aud 不一致・期限切れは PyJWT が例外送出し、呼び出し側
+    （exchange_sso_token）が fail-closed。検証成功時は **検証済み claims（nonce/sub 含む）**を返す
+    （exchange_sso_token がトランザクション/利用者束ねに使う。BE06-BLK-001）。
+    """
+    import jwt
+    from jwt import PyJWKClient
+
+    client = PyJWKClient(jwks_url, cache_keys=True)
+
+    def _verify(token: str, issuer: str, audience: str) -> dict[str, Any]:
+        key = client.get_signing_key_from_jwt(token)
+        # exp/iat/iss/aud/sub の **存在を必須**にする（BE06-REV-002）。PyJWT の verify_exp は exp が
+        # 在るときだけ検査するため、require で欠落自体を拒否する（exp 無しトークンを通さない）。
+        # nonce も **存在必須**（exchange_sso_token がトランザクション束ねに使う。BE06-BLK-001）。
+        claims: dict[str, Any] = jwt.decode(
+            token,
+            key.key,
+            algorithms=["RS256", "ES256"],
+            audience=audience or None,
+            issuer=issuer or None,
+            options={
+                "verify_aud": bool(audience),
+                "require": ["exp", "iat", "iss", "aud", "sub", "nonce"],
+            },
+        )
+        return claims
+
+    return _verify
+
+
+def _resolve_sso_secret(
+    secret_resolver: SsoSecretResolver, ref: str, ref_label: str
+) -> Any:
+    """secretRef / clientIdRef を実値へ解決する（保護境界）。
+
+    resolver の例外（未知 ref・Vault 権限拒否・一時障害）の文言・連鎖に実 secret や Vault 内部情報が
+    混入し得るため、**型に依らず**（resolver が SsoHandoffError を投げても）固定文言の
+    `SsoHandoffError` へ **連鎖なし（from None）** で正規化し、参照名（非機密）だけを出す
+    （M-003 / BE06-005）。実値（戻り値）はここでは検査せず、呼び出し側が空判定する。
+    """
+    err: SsoHandoffError
+    try:
+        return secret_resolver(ref)
+    except Exception:
+        # resolver 由来の例外は型を問わず固定文言へ正規化（元例外の args/連鎖を一切引き継がない）。
+        err = SsoHandoffError(
+            f"secret_resolver が {ref_label} '{ref}' を解決できなかった（fail-closed）"
+        )
+    # **except の外**で連鎖を断ってから raise する（except 内 raise は元例外を __context__
+    # に再設定し secret を含む元例外が残るため。connector_runtime._call_transport と同じ）。
+    err.__cause__ = None
+    err.__context__ = None
+    raise err
+
+
+def _resolve_token_endpoint(sso: OidcSsoBridge) -> str:
+    """token endpoint を決定する。明示 tokenEndpoint があればそれ、無ければ fail-closed。
+
+    OIDC discovery（issuer + /.well-known/openid-configuration）からの解決は **実 IdP への通信**を
+    伴うため自走では行わない（人間ゲート）。tokenEndpoint 未指定で実 exchange を要求したら、
+    どこへ POST すべきか決められないので fail-closed にする（誤った固定パスを生成しない）。
+    """
+    if sso.token_endpoint is not None:
+        return sso.token_endpoint
+    raise SsoHandoffError(
+        "実 token-exchange には sso.tokenEndpoint が必要（discovery 解決は実 IdP 通信＝"
+        "人間ゲート）。shape のみが必要なら build_sso_handoff を使う"
+    )
+
+
+def exchange_sso_token(
+    definition: ExternalAppDefinition,
+    subject: dict[str, Any],
+    *,
+    state: str,
+    nonce: str,
+    subject_token: str,
+    secret_resolver: SsoSecretResolver,
+    token_exchange_caller: TokenExchangeCaller | None = None,
+    subject_token_ref: str = "jetuse-session-id-token",
+    subject_token_type: str = ACCESS_TOKEN_TYPE,
+    id_token_verifier: IdTokenVerifier | None = None,
+    expected_subject: str | None = None,
+) -> dict[str, Any]:
+    """OIDC SSO ブリッジの **実 RFC 8693 token-exchange** を実行し、発行トークン入り結果を返す。
+
+    build_sso_handoff が組み立てた「参照名のままの要求 shape」を実値で具体化して実行する:
+      1. build_sso_handoff で shape ＋ claimMapping 適用済みクレームを得る（検証を再利用）。
+      2. `secret_resolver(secretRef)` で **実 client_secret** を解決する（Vault 束ね＝人間ゲートの
+         継ぎ目）。
+      3. `subject_token`（JetUse の実トークン。呼び出し側がランタイムで与える・保存しない）
+         と実 client_secret を要求本体へ埋め `token_exchange_caller(token_endpoint, body)` で実行。
+         `subject_token_type` は subject_token の実種別（既定 access_token。Web の Bearer は access
+         token のため。AUTH-001）。`requested_token_type` は **id_token**（身元を渡す。M-001）。
+      4. レスポンスから **id_token** を取り出す（issued_token_type を厳格検証。SSO-001）。
+      5. verifier が返す **検証済み claims** を現在の Tx/利用者へ束ねる（BE06-BLK-001）:
+         claims.nonce が要求 `nonce` と一致し claims.sub が `expected_subject` と一致することを
+         **handoff 成果物を返す前に強制**（別利用者の有効 id_token・リプレイを排除）。
+
+    **トランザクション/本人束ね（BE06-BLK-001）**: issued_token_type の自己申告・署名検証だけでは、
+    同一 issuer/client の **別利用者**・**別 Tx（リプレイ）** の有効 id_token を受理し得る。
+    これを塞ぐため、(a) **nonce 完全一致**（要求 nonce ↔ id_token の nonce claim。定数時間比較）と
+    (b) **sub 対応検証**（id_token の sub ↔ `expected_subject`。対応 sub は IdP ごとに
+    定義する mapping＝人間ゲートなので **呼出側が注入**。未指定は fail-closed）を必須に
+    する。これは実 IdP の有無に依らない **認証境界の必須検証**であり mock で検証できる。
+
+    **シークレット非漏洩契約**: 戻り値・例外に **入力 client_secret / subject_token を出さない**
+    （最終防壁 `_redact_values` で走査・redact）。発行された連携用トークン（IdP の応答）は SSO
+    ハンドオフの成果物そのものなので戻り値に載せる（`contains_secret_values=True`）。
+
+    既定 caller は fail-closed（実 IdP へ通信しない）。実 IdP 接続・client_secret 投入・id_token
+    発行・実 sub mapping は人間ゲート（SSO 実設定＝Identity Domain・Vault）。
+    """
+    sso = definition.sso
+    if sso is None:
+        raise SsoHandoffError(
+            f"external-app '{definition.app}' は sso を宣言していない（SSO ブリッジ不能）"
+        )
+    if not callable(secret_resolver):
+        raise SsoHandoffError(
+            "secret_resolver は呼び出し可能でなければならない（secretRef→実 secret）"
+        )
+    if not isinstance(subject_token, str) or not subject_token.strip():
+        raise SsoHandoffError("subject_token（JetUse セッションの実 id_token）は必須の文字列")
+    # **id_token 検証関数を常に必須**にする（caller の種類に依存しない。BE06-REV-003）。caller を
+    # 関数同一性で判定するとラッパー/partial/別 HTTP 実装で検証を素通りできるため、公開 API の
+    # fail-closed 契約として verifier 未注入は常に交換前に拒否する。issued_token_type の自己申告だけ
+    # では侵害/設定ミスの token endpoint が任意文字列を通す穴を塞げない。JWKS 取得は実 IdP 通信＝
+    # 人間ゲートのため、テストは True を返す明示 verifier を注入して交換機構を確認する。
+    if id_token_verifier is None:
+        raise SsoHandoffError(
+            "token-exchange には id_token 検証関数（署名/iss/aud/exp）が必須（fail-closed）"
+        )
+
+    # 1. shape ＋ mapped_claims（build_sso_handoff の fail-closed 検証をそのまま通す）。
+    handoff = build_sso_handoff(
+        definition, subject, state=state, nonce=nonce, subject_token_ref=subject_token_ref
+    )
+    token_endpoint = _resolve_token_endpoint(sso)
+
+    # 2. 実 client_secret / client_id を解決（実値はここで初めて現れる）。**解決は保護境界内**で
+    #    行う: resolver の例外（未知 ref・Vault 権限拒否・一時障害）の文言・連鎖には実 secret や
+    #    Vault 内部情報が混入し得るため、from None で連鎖を断ち参照名（非機密）だけを出す（M-003）。
+    client_secret = _resolve_sso_secret(secret_resolver, sso.secret_ref, "secretRef")
+    if not isinstance(client_secret, str) or not client_secret.strip():
+        raise SsoHandoffError(
+            f"secret_resolver が secretRef '{sso.secret_ref}' を解決できなかった（fail-closed）"
+        )
+    # client_id は機密ではない（OIDC 公開識別子）が、解決経路は同じ secret_resolver を使う。
+    client_id = _resolve_sso_secret(secret_resolver, sso.client_id_ref, "clientIdRef")
+    if not isinstance(client_id, str) or not client_id.strip():
+        raise SsoHandoffError(
+            f"secret_resolver が clientIdRef '{sso.client_id_ref}' を解決不能（fail-closed）"
+        )
+
+    # 3. 実値を埋めた token-exchange 要求本体。SSO は **id_token**（身元）を連携先へ渡すため
+    #    requested_token_type は id_token を要求する（受け入れ条件: id_token を取得。M-001）。
+    #    subject_token_type は subject_token の実種別（既定 access_token。AUTH-001）。
+    #    **nonce を要求に含める**（IdP が id_token の nonce claim に束ねる。BE06-REV-002）。
+    request_body = {
+        "grant_type": TOKEN_EXCHANGE_GRANT,
+        "audience": sso.audience,
+        "scope": " ".join(sso.scopes),
+        "requested_token_type": ID_TOKEN_TYPE,
+        "subject_token_type": subject_token_type,
+        "subject_token": subject_token,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "nonce": nonce,
+    }
+
+    caller = token_exchange_caller or _denied_token_exchange_caller
+    secrets = (client_secret, subject_token)
+    err: SsoHandoffError | None = None
+    try:
+        raw = caller(token_endpoint, request_body)
+    except SsoHandoffError as e:
+        # 既知の fail-closed は型を保ちつつ args を redact する。
+        e.args = tuple(_redact_values(a, secrets) for a in e.args)
+        err = e
+    except Exception as e:  # noqa: BLE001 - caller の任意例外を redact して正規化する
+        err = SsoHandoffError(
+            f"token-exchange の実行に失敗: {_redact_values(str(e), secrets)}"
+        )
+    if err is not None:
+        # **except の外**で連鎖を断つ（except 内 raise は元例外を __context__ に再設定し、secret を
+        # 含む元例外が連鎖経由で残るため。connector_runtime._call_transport と同じ）。
+        err.__cause__ = None
+        err.__context__ = None
+        raise err
+
+    if not isinstance(raw, dict):
+        raise SsoHandoffError("token-exchange 応答は dict でなければならない")
+    # 入力シークレットが応答に echo されても残さない（client_id は機密でないので redact 対象外）。
+    response = _redact_values(raw, secrets)
+    # SSO ハンドオフは **id_token**（身元）を渡す契約（M-001）。issued_token_type を **厳格**に
+    # 検証する（SSO-001）: issued_token_type が存在し ID_TOKEN_TYPE と完全一致のときだけ受理する。
+    # 種別が無い／access_token 等の不一致は、id_token フィールドの有無に関わらず fail-closed
+    # （IdP が要求を無視して access token を返す不整合を通さない）。発行 id_token は RFC 8693 では
+    # `access_token` フィールドに載るため、種別一致時はそこ（または明示 id_token）から取り出す。
+    issued_token_type = response.get("issued_token_type")
+    if issued_token_type != ID_TOKEN_TYPE:
+        raise SsoHandoffError(
+            "token-exchange 応答の issued_token_type が id_token でない（fail-closed。"
+            "SSO は身元トークンの引き渡しが要）"
+        )
+    cand = response.get("id_token") or response.get("access_token")
+    issued = cand if isinstance(cand, str) and cand else None
+    if not issued:
+        raise SsoHandoffError("token-exchange 応答に発行 id_token が無い（fail-closed）")
+
+    # 発行 id_token の **暗号学的検証**（署名/iss/aud/exp）。issued_token_type だけでは設定
+    # 不良・侵害 token endpoint が任意文字列を返す経路を塞げない（BE06-REV-002）。verifier は
+    # 上で必須化済み（未注入は交換前に拒否。BE06-REV-003）。ここでは fail-closed で検証する。
+    # **id_token の aud は RP の client_id**（OIDC）であり token-exchange の audience（リソース
+    # URL=sso.audience）ではない（BE06-BLK-002）。解決済み client_id を期待 audience として渡す。
+    # verifier は **検証済み claims（nonce/sub 含む）** を返す契約（BE06-BLK-001）。
+    try:
+        claims = id_token_verifier(issued, sso.issuer, client_id)
+    except Exception:
+        raise SsoHandoffError(
+            "発行 id_token の検証に失敗（fail-closed）"
+        ) from None
+    if not isinstance(claims, dict):
+        # bool 等を返す旧 verifier は契約違反（nonce/sub 束ねができない）→ fail-closed。
+        raise SsoHandoffError(
+            "id_token_verifier は検証済み claims（dict）を返さなければならない（fail-closed）"
+        )
+
+    # **トランザクション束ね（BE06-BLK-001）**: 要求に載せた nonce と id_token の nonce claim が完全
+    # 一致することを強制する（別トランザクション/リプレイの有効 id_token を排除）。欠落・型不一致・
+    # 値不一致はいずれも fail-closed（定数時間比較で nonce のタイミング差も出さない）。
+    token_nonce = claims.get("nonce")
+    if not isinstance(token_nonce, str) or not token_nonce:
+        raise SsoHandoffError(
+            "発行 id_token に nonce claim が無い（トランザクション束ね不能。fail-closed）"
+        )
+    if not hmac.compare_digest(token_nonce, nonce):
+        raise SsoHandoffError(
+            "発行 id_token の nonce が要求と一致しない（リプレイ/別トランザクション。fail-closed）"
+        )
+
+    # **本人束ね（BE06-BLK-001）**: id_token の sub が「現在の認証利用者に対応する sub」（呼出側が
+    # IdP 別 mapping で注入する `expected_subject`）と一致を強制する（同一 issuer/client 向けの
+    # 別利用者の有効 id_token を排除）。expected_subject は実 IdP の sub mapping＝人間ゲートのため
+    # 呼出側が与える（未指定は fail-closed）。mock E2E はテストが対応 sub を注入して機構を検証する。
+    token_sub = claims.get("sub")
+    if not isinstance(token_sub, str) or not token_sub:
+        raise SsoHandoffError(
+            "発行 id_token に sub claim が無い（本人束ね不能。fail-closed）"
+        )
+    if not isinstance(expected_subject, str) or not expected_subject.strip():
+        raise SsoHandoffError(
+            "expected_subject（認証利用者に対応する id_token の sub。IdP 別 mapping＝人間ゲート）"
+            "が未指定（本人束ね不能。fail-closed）"
+        )
+    if not hmac.compare_digest(token_sub, expected_subject):
+        raise SsoHandoffError(
+            "発行 id_token の sub が現在の認証利用者と一致しない（別利用者トークン。fail-closed）"
+        )
+
+    # 戻り値は **明示的な許可リスト**に縮小する（SSO-002）。token_response 全体（access_token /
+    # refresh_token 等）は返さない。発行 id_token はハンドオフの成果物として返すが、
+    # refresh_token 等は載せない。
+    return {
+        "app": definition.app,
+        "mode": sso.mode,
+        "embed": definition.embed,
+        "url": definition.url,
+        "state": state,
+        "nonce": nonce,
+        "token_endpoint": token_endpoint,
+        "audience": sso.audience,
+        "scope": request_body["scope"],
+        "mapped_claims": handoff["mapped_claims"],
+        # IdP が発行した連携用 id_token（SSO ハンドオフの成果物）。入力シークレットは含まない。
+        "issued_token": issued,
+        "issued_token_type": issued_token_type,
+        # 検証・束ね済みの本人識別子（id_token の sub＝expected_subject 一致済み。BE06-BLK-001）。
+        # handoff store の subject はこれを使う（mapped_claims と id_token 本人の食い違いを防ぐ）。
+        "issued_subject": token_sub,
+        # 発行トークン（成果物）を載せる以上、参照名のみの shape とは異なり実トークンを含む。
+        "contains_secret_values": True,
     }

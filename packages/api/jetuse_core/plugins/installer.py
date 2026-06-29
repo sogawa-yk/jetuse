@@ -26,11 +26,13 @@ kind 別の取込先のみを分岐する(sample-app→scaffold / connector→co
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from .. import agents, usecases
-from . import connector_store, scaffold, store
+from . import connector_store, external_app_store, scaffold, store
 from .connector import ConnectorError
+from .external_app import ExternalAppError
 from .manifest import PluginManifest, verify_signature
 from .registry_client import RegistryError
 from .sample_app import SampleAppError
@@ -99,6 +101,16 @@ def _ingest_contributes(
         except ConnectorError as e:
             raise IngestError(f"connector の取込に失敗したため拒否: {e}") from e
         created.append(("connector_instances", rec["id"]))
+    elif kind == "external-app":
+        # external-app（ASSET-01 / BE-06）: 構造検証を通して external_app_instances へ登録する。
+        # 検証を迂回構築した manifest でも 500 にせず IngestError へ正規化する（F-001 と同方針）。
+        try:
+            rec = external_app_store.register_external_app(manifest, registered_by=owner)
+        # ExternalAppError（定義不正）に加え、store の入力検証 ValueError（name 長さ超過
+        # 等）も IngestError へ正規化する（marketplace API が 500 でなく 400 を返す。BE06-007）。
+        except (ExternalAppError, ValueError) as e:
+            raise IngestError(f"external-app の取込に失敗したため拒否: {e}") from e
+        created.append(("external_app_instances", rec["id"]))
     else:  # manifest 検証で kind は既知集合に限定済み。防御的に拒否する。
         raise IngestError(f"取込に未対応の kind: {kind}")
     return created
@@ -127,6 +139,7 @@ def _delete_ingested(plugin_id: str, version: str) -> int:
         + agents.delete_by_source(plugin_id, version)
         + scaffold.delete_by_source(plugin_id, version)
         + connector_store.delete_by_source(plugin_id, version)
+        + external_app_store.delete_by_source(plugin_id, version)
     )
 
 
@@ -146,6 +159,8 @@ def _delete_created(created: list[tuple[str, str]]) -> None:
             scaffold.delete_instance(rid)
         elif table == "connector_instances":
             connector_store.remove_connector(rid)
+        elif table == "external_app_instances":
+            external_app_store.remove_external_app(rid)
 
 
 def install(
@@ -157,6 +172,7 @@ def install(
     owner: str | None = None,
     visibility: str = "private",
     available_capabilities: frozenset[str] | set[str] | None = None,
+    authorize: Callable[[PluginManifest], None] | None = None,
 ) -> dict[str, Any]:
     """レジストリからプラグインを取得・署名検証し、スナップショット取込する(D6/D7)。
 
@@ -174,7 +190,9 @@ def install(
     返り値はインストール記録(store.record_install の戻り)に `ingested`
     ((table,id) の一覧)を加えた dict。`owner` 未指定なら installed_by を取込定義の所有者にする。
     `available_capabilities` は sample-app 取込時の合成バリデーションでホスト能力集合として使う
-    (None なら全コア能力)。
+    (None なら全コア能力)。`authorize` は **署名検証済み manifest** を引数に取る認可フックで、
+    取込前に1度だけ呼ぶ(拒否は例外送出)。kind 別の運用者ゲート等を **取込と同一 manifest** に対して
+    強制でき、二重 download による TOCTOU を防ぐ(BE06-BLK-004)。
     """
     owner = owner or installed_by
     manifest = client.download(plugin_id, version)
@@ -195,6 +213,11 @@ def install(
         raise SignatureRejected(
             f"署名検証に失敗したため取込拒否: {manifest.id}@{manifest.version}"
         )
+
+    # --- 認可フック(BE06-BLK-004): **署名検証済みの・実際に取込む manifest** に対して認可する。
+    #     kind 別の運用者ゲート等。拒否は例外送出。二重 download せず TOCTOU を防ぐ。 ---
+    if authorize is not None:
+        authorize(manifest)
 
     # --- 二重取込の防止(取込前にチェックして ADB を汚さない) ---
     if store.find_install(manifest.id, manifest.version) is not None:
