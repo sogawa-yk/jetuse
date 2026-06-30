@@ -15,7 +15,8 @@ ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
 STAGE="${1:?usage: begin_stage.sh <stage-id>}"
-BASE="${BASE_BRANCH:-feat/loop-engineering}"
+# 既定の派生元(=ステージ統合の根)。Experience Builder 系列は main 派生の dev を根にする。
+BASE="${BASE_BRANCH:-dev}"
 BR="feat/${STAGE}"
 WT_ROOT="${LOOP_WORKTREE_ROOT:-$(cd "$ROOT/.." && pwd)/$(basename "$ROOT")-loops}"
 WT="$(realpath -m "${WT_ROOT}/_${STAGE}")"

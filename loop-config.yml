@@ -65,7 +65,8 @@ budget:
 # 共有しないため、複数の loop を同時に回しても互いの変更を壊さない。
 worktree:
   enabled: true                       # 推奨起動経路。start-loop.sh <task> で worktree 起動。
-  base_branch: feat/loop-engineering  # 既定の派生元。依存連鎖は BASE_BRANCH=feat/<dep> で上書き。
+  base_branch: dev                    # 既定の派生元(=作業の根)。Experience Builder 系列は main 派生の dev。
+                                      # 依存連鎖は BASE_BRANCH=feat/<dep> で上書き。
   root: ""                            # worktree 配置先。空なら <repo>/../<repo名>-loops。
                                       # 上書きは LOOP_WORKTREE_ROOT 環境変数（loop-config は書き換えない）。
   bootstrap: true                     # 作成時に隔離環境を用意（api=.venv+editable / web=node_modules）。

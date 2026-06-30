@@ -7,8 +7,8 @@
 #    （ステージ自走中も越えない。CLAUDE.md「やってはいけないこと」）。
 #  - ステージ統合 worktree（feat/<stage>）の中で claude を起動する。
 #
-# 使い方: [BASE_BRANCH=feat/loop-engineering] .claude/loop/start-stage.sh <stage-id>
-#   例: .claude/loop/start-stage.sh stage-2
+# 使い方: [BASE_BRANCH=dev] .claude/loop/start-stage.sh <stage-id>
+#   例: .claude/loop/start-stage.sh stage-0   （既定の根は dev。BASE_BRANCH で上書き可）
 # 起動後、セッション内で /stage-runner を実行（または「ステージ2を回して」）すると自走する。
 set -euo pipefail
 
