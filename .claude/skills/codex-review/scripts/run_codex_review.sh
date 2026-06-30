@@ -23,16 +23,23 @@ N="$(( $(find "$REV_DIR" -maxdepth 1 -name 'review-*.json' 2>/dev/null | wc -l) 
 
 # --- レビュー対象の差分を決める -------------------------------------------
 SCOPE="${DIFF_SCOPE:-uncommitted}"
+# build 生成物（packages/web/dist の minified 出力）はレビュー対象外＝巨大1行 diff として乗ると
+# codex 入力 1,048,576 字上限超過＋空判定ハングの主因になる。生成物はソースでないため除外する
+# （deploy/CI が使う tracked dist は不変・untrack はしない）。
+EXCL=(':(exclude)packages/web/dist')
 case "$SCOPE" in
-  staged)      DIFF="$(git diff --staged)" ;;
-  worktree)    DIFF="$(git diff)" ;;
-  uncommitted|*) DIFF="$(git diff HEAD)" ;;
+  staged)      DIFF="$(git diff --staged -- . "${EXCL[@]}")" ;;
+  worktree)    DIFF="$(git diff -- . "${EXCL[@]}")" ;;
+  uncommitted|*) DIFF="$(git diff HEAD -- . "${EXCL[@]}")" ;;
 esac
 
 INPUT_DIFF="${REV_DIR}/review-${N}.input.diff"
 printf '%s\n' "$DIFF" > "$INPUT_DIFF"
 
-if [ -z "${DIFF//[$'\t\r\n ']/}" ]; then
+# 空判定は INPUT_DIFF に対する grep 短絡で行う（非空白が1文字でもあれば即返る）。
+# 旧実装 `[ -z "${DIFF//[$'\t\r\n ']/}" ]` は数MBの $DIFF で bash グローバル置換が O(n²) になり
+# codex 呼び出し前に 99% CPU で無限ハングしていた（実測 2.7MB で 27 分超）。
+if ! grep -q '[^[:space:]]' "$INPUT_DIFF"; then
   echo "WARN: 差分が空。レビューをスキップ（review-${N} は生成しない）。" >&2
   echo "VERDICT: N/A (empty diff)"
   exit 0
@@ -122,6 +129,15 @@ PAYLOAD="${REV_DIR}/review-${N}.payload.txt"
     printf '(証跡なし: %s が空。デプロイ/E2E 未実施または対象外。完了主張ならその妥当性を厳しく見ること)\n' "$E2E_DIR"
   fi
 } > "$PAYLOAD"
+
+# codex 入力は 1,048,576 字上限。超過すると input_too_large で verdict=ERROR になるため、
+# 不可解な失敗でなく明示警告を出す（主因は生成物 diff。EXCL で除外済みだが大型の正当 diff でも起こりうる）。
+PAYLOAD_BYTES="$(wc -c < "$PAYLOAD")"
+CODEX_INPUT_MAX=1000000
+if [ "$PAYLOAD_BYTES" -gt "$CODEX_INPUT_MAX" ]; then
+  echo "WARN: レビュー入力が ${PAYLOAD_BYTES} バイトで codex 上限(${CODEX_INPUT_MAX})を超過。" >&2
+  echo "WARN: diff を絞る（DIFF_SCOPE=staged 等）か、生成物が混入していないか確認してください。" >&2
+fi
 
 set +e
 codex "${CODEX_ARGS[@]}" >"$RAW" 2>&1 < "$PAYLOAD"
