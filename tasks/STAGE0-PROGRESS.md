@@ -10,8 +10,8 @@ status: `todo` | `in_progress` | `blocked` | `done`
 | 順 | タスク | 依存 | 人間ゲート | status |
 |---|---|---|---|---|
 | 1 | EXB-00 ベースライン確定＋ADR-0022 | — | ADR-0022 承認 | done |
-| 2 | EXB-01 MVP契約スキーマ(JSON Schema) | EXB-00 | コミット／spec逸脱ratification | blocked |
-| 3 | EXB-02 RAG Reference Descriptor(静的)＋Catalogローダー | EXB-01 | コミット | todo |
+| 2 | EXB-01 MVP契約スキーマ(JSON Schema) | EXB-00 | コミット(spec逸脱 施主承認済) | done |
+| 3 | EXB-02 RAG Reference Descriptor(静的)＋Catalogローダー | EXB-01 | コミット | in_progress |
 
 > 依存が直列なので1波1タスクで進む（EXB-00 → EXB-01 → EXB-02）。EXB-00 の ADR-0022 は方針確定の
 > 真の決定を含むため **人間ゲート**（stage-runner はドラフトまで進め、承認はステージ報告でまとめて仰ぐ）。
