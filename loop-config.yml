@@ -32,6 +32,13 @@ review:
   diff_scope: uncommitted     # uncommitted(=git diff HEAD) | staged | worktree
   blocker_blocks_completion: true
 
+# ponytail(DietrichGebert/ponytail)統合: maker 側の実装最小化規律。採点は Codex のまま(判定を動かさない)。
+# loop-protocol 手順2(実装時の ponytail 適用)/手順2.5(codex 前の ponytail-review 自己短縮)が参照する。
+ponytail:
+  enabled: true
+  intensity: full       # lite | full | ultra。実装時 ponytail の既定強度(ultra は要件まで削るため人間明示時のみ)
+  self_review: true     # codex-review 前に ponytail-review を当て runs/<id>/reviews/ponytail-<n>.txt に証跡(非採点)
+
 budget:
   max_turns: 20
   max_tokens: 2000000
