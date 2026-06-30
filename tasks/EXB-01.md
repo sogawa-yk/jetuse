@@ -8,7 +8,8 @@ MVP の主要契約を JSON Schema として確定する。サービス実装は
 api
 
 ## 受け入れ条件（検証可能な述語で書く）
-- [ ] `specs/` 配下に次の JSON Schema を定義する（spec-driven の正本）:
+- [ ] `specs/17-experience-builder/` に次の JSON Schema の**仕様**を定義する（spec-driven の正本＝仕様の所在）。
+  機械可読 `.json` の実体は配布同梱のため実装パッケージに置く（**ADR-0023・施主承認 2026-06-30**）:
   - `Experience`（実装方針 §6.1 の YAML 構造に対応: metadata / ui / channels / resources / actions / bindings）。
   - `DemoBundle` と `DemoEvidencePack`（再現可能な構成・データ Version・検証結果・未検証事項を含む最小形）。
   - `answer.with-citations@1` の **configSchema / inputSchema / outputSchema / eventSchema**
