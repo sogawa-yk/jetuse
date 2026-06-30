@@ -48,13 +48,13 @@ superpowers:
   enabled: true
   # 毎ターンの実装で踏む規律(歯は付けない=採点は Codex のまま)。loop-protocol 手順2 が参照。
   per_turn_skills:
-    - test-driven-development        # 非自明ロジックは RED-GREEN-REFACTOR。実環境E2E証跡と相補。
+    - superpowers:test-driven-development        # 非自明ロジックは RED-GREEN-REFACTOR。実環境E2E証跡と相補。
   # タスク特性で随時 reach する規律。loop-protocol 手順2 / stage・loop-runner の起票前段。
   on_demand_skills:
-    - brainstorming                  # 要件が曖昧なとき(着手前の設計詰め)
-    - writing-plans                  # 多段タスクの分解(タスク起票の前段)
-    - systematic-debugging           # 不具合の根本原因解析(symptom でなく root cause)
-    - verification-before-completion # 完了主張前の自己検証(こちらの実環境E2Eゲートの前段)
+    - superpowers:brainstorming                  # 要件が曖昧なとき(着手前の設計詰め)
+    - superpowers:writing-plans                  # 多段タスクの分解(タスク起票の前段)
+    - superpowers:systematic-debugging           # 不具合の根本原因解析(symptom でなく root cause)
+    - superpowers:verification-before-completion # 完了主張前の自己検証(こちらの実環境E2Eゲートの前段)
 
 budget:
   max_turns: 20
