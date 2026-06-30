@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jetuse.oracle.com/schemas/experience-builder/answer-with-citations.config.schema.json",
+  "title": "answer.with-citations@1 configSchema",
+  "description": "Builder が束縛する設定 (実装方針 §7.1)。Knowledge Space や retrieval profile は Builder が固定し、生成 UI には毎回指定させない。",
+  "type": "object",
+  "required": ["knowledge"],
+  "additionalProperties": true,
+  "properties": {
+    "knowledge": {
+      "type": "object",
+      "description": "参照する KnowledgeSpace。論理名または固定版。",
+      "required": ["space"],
+      "additionalProperties": true,
+      "properties": {
+        "space": { "type": "string", "minLength": 1 },
+        "version": { "type": "string" }
+      }
+    },
+    "retrieval": {
+      "type": "object",
+      "description": "retrieval profile (任意)。",
+      "additionalProperties": true,
+      "properties": {
+        "topK": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

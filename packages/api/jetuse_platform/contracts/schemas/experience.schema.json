@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jetuse.oracle.com/schemas/experience-builder/experience.schema.json",
+  "title": "Experience",
+  "description": "顧客別 Web / SaaS Experience とその構成 (実装方針 §6.1)。MVP に必要な最小フィールドのみ。",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "ui", "channels", "resources", "actions"],
+  "additionalProperties": true,
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "enum": ["jetuse.oracle.com/v1alpha1"]
+    },
+    "kind": {
+      "const": "Experience"
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["name", "title"],
+      "additionalProperties": true,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 }
+      }
+    },
+    "ui": {
+      "type": "object",
+      "required": ["package"],
+      "additionalProperties": true,
+      "properties": {
+        "package": { "type": "string", "minLength": 1 },
+        "designSystem": { "type": "string" },
+        "entryRoute": { "type": "string" }
+      }
+    },
+    "channels": {
+      "type": "object",
+      "required": ["web"],
+      "additionalProperties": false,
+      "properties": {
+        "web": {
+          "type": "object",
+          "required": ["enabled"],
+          "additionalProperties": true,
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        },
+        "slack": {
+          "type": "object",
+          "required": ["adapter"],
+          "additionalProperties": true,
+          "properties": {
+            "adapter": { "type": "string", "minLength": 1 },
+            "messagePattern": { "type": "string" },
+            "detailRoute": { "type": "string" }
+          }
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "required": ["fixtures", "knowledge"],
+      "additionalProperties": true,
+      "properties": {
+        "fixtures": {
+          "type": "object",
+          "description": "UI 表示用デモデータ(FixtureSet)への論理名参照。",
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        },
+        "knowledge": {
+          "type": "object",
+          "description": "RAG が参照する KnowledgeSpace への論理名/版参照(最低1つ・空文字不可)。",
+          "minProperties": 1,
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "actions": {
+      "type": "object",
+      "description": "UI 上の論理 Action と実行対象の対応 (ActionBinding)。",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["target"],
+        "additionalProperties": true,
+        "properties": {
+          "target": {
+            "type": "object",
+            "required": ["kind", "ref"],
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["capability", "workflow", "agent", "hosted"]
+              },
+              "ref": { "type": "string", "minLength": 1 }
+            }
+          },
+          "bindings": {
+            "type": "object",
+            "description": "Builder が束縛する設定 (例: knowledge: manuals)。生成 UI には毎回指定させない。",
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  }
+}

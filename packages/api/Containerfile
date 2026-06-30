@@ -7,6 +7,7 @@ WORKDIR /app
 COPY packages/jetuse_shared /jetuse_shared
 COPY packages/api/pyproject.toml ./
 COPY packages/api/jetuse_core ./jetuse_core
+COPY packages/api/jetuse_platform ./jetuse_platform
 COPY packages/api/service ./service
 COPY packages/api/fn ./fn
 COPY packages/api/entrypoint.sh ./entrypoint.sh
