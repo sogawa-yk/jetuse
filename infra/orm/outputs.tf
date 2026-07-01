@@ -29,5 +29,5 @@ output "adb_id" {
 }
 
 output "note" {
-  value = "初回は ADB 作成とDBブートストラップに10〜15分かかります。app_url を開き、demo_username/demo_password でログインしてください。"
+  value = "前提: 管理者が infra/orm-bootstrap を適用済み。初回は ADB 作成とDBブートストラップに10〜15分かかります。app_url を開き、demo_username/demo_password でログインしてください。"
 }

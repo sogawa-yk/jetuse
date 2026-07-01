@@ -1,12 +1,32 @@
 variable "tenancy_ocid" {
-  description = "動的グループはテナンシ直下に作成される"
+  description = "Tenancy OCID. Dynamic groups and tenancy-level policies are created here."
   type        = string
 }
 
 variable "compartment_ocid" {
-  type = string
+  description = "Dedicated compartment in which JetUse runs."
+  type        = string
 }
 
 variable "prefix" {
-  type = string
+  description = "Prefix for dynamic group and policy names."
+  type        = string
+}
+
+variable "enable_semantic_store" {
+  description = "Create the dynamic group and policies required by OCI Generative AI semantic stores (SQL Search)."
+  type        = bool
+  default     = true
+}
+
+variable "create_deployer_policy" {
+  description = "Grant an existing group permission to deploy JetUse into the dedicated compartment with Resource Manager."
+  type        = bool
+  default     = false
+}
+
+variable "deployer_group_subject" {
+  description = "OCI policy group subject after 'Allow group', for example Default/JetUseDeployers or id ocid1.group..."
+  type        = string
+  default     = ""
 }
