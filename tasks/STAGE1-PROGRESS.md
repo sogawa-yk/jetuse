@@ -15,7 +15,7 @@ status: `todo` | `in_progress` | `blocked` | `done`
 |---|---|---|---|---|
 | 1 | EXB-03 Run/RunEvent/Artifact モデル＋ Action/Run API（rag.answer 限定・SSE） | Stage 0 | コミット | **done** |
 | 2 | EXB-04 RAG Provider Adapter（jetuse_core 委譲・OCI 直呼びしない・main 回帰比較） | EXB-02 | コミット・実OCI接続 | **blocked** |
-| 3 | EXB-05 Typed Action Client（answer.with-citations@1 専用・生URL非露出） | EXB-01, EXB-03 | コミット | **in_progress**(W2) |
+| 3 | EXB-05 Typed Action Client（answer.with-citations@1 専用・生URL非露出） | EXB-01, EXB-03 | コミット | **done** |
 
 - **EXB-03 done**: codex review-12 PASS・363 tests・ruff clean。feat/stage-1 統合済（merge 006643f）。
   残置 major EXB03-001..004（購読枠 close 例外時リーク/スナップショット隔離/反復上限/サロゲート）は未対応で報告。
