@@ -11,7 +11,7 @@ status: `todo` | `in_progress` | `blocked` | `done`
 |---|---|---|---|---|
 | 1 | EXB-00 ベースライン確定＋ADR-0022 | — | ADR-0022 承認 | done |
 | 2 | EXB-01 MVP契約スキーマ(JSON Schema) | EXB-00 | コミット(spec逸脱 施主承認済) | done |
-| 3 | EXB-02 RAG Reference Descriptor(静的)＋Catalogローダー | EXB-01 | コミット | in_progress |
+| 3 | EXB-02 RAG Reference Descriptor(静的)＋Catalogローダー | EXB-01 | コミット | done |
 
 > 依存が直列なので1波1タスクで進む（EXB-00 → EXB-01 → EXB-02）。EXB-00 の ADR-0022 は方針確定の
 > 真の決定を含むため **人間ゲート**（stage-runner はドラフトまで進め、承認はステージ報告でまとめて仰ぐ）。
@@ -37,3 +37,9 @@ status: `todo` | `in_progress` | `blocked` | `done`
   ①スキーマ正本を specs/ でなく実装パッケージに同梱（配布のため。EXB-01「specs/が正本」からの逸脱＝spec-driven
   人間レビュー事項）②jsonschema を直接依存に明示宣言（既存推移依存・新規パッケージ増ではないが文言と衝突）。
   + leap second 非対応（既知の狭め・実害なし）。→ EXB-02 は EXB-01 ratification 待ちで停止。**ステージ報告へ**。
+- 2026-07-01 EXB-02 done: RAG Reference Descriptor(静的・同梱)＋静的 Catalog ローダー＋読取ルート
+  (GET /api/v1/catalog/...・require_user 必須)。Codex review **PASS**(review-4: blocker0/major0)。
+  4ラウンドで是正: 認証迂回(F-001)→verify_descriptors の action/scenario 未検証→(id,version)重複の
+  無警告上書き→action version 未検証→wheel-skip マスキング→service.routes が wheel 未同梱(潜在穴・全ルートに効く修正)。
+  api 318 passed・ruff クリーン・実 wheel で descriptor 同梱証明。a15c35c で feat/stage-0 へ commit。
+  残 minor(wheel テストでルート同梱まで未検証)は follow-up。→ **ステージ0 全タスク done。ステージ完了報告へ。**
