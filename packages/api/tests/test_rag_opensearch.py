@@ -39,6 +39,16 @@ def test_generate_no_hits_returns_message():
     assert cites == []
 
 
+def test_generate_propagates_top_k_to_search():
+    # EXB-04: generate(top_k=) は search(k=top_k) へ伝播する(既定は _TOP_K)
+    with mock.patch.object(rag_opensearch, "search", return_value=[]) as m:
+        rag_opensearch.generate("u", "質問", top_k=7)
+        assert m.call_args.kwargs.get("k") == 7
+        m.reset_mock()
+        rag_opensearch.generate("u", "質問")
+        assert "k" not in m.call_args.kwargs  # 未指定はデフォルト k を使う
+
+
 def test_generate_with_hits_builds_answer_and_dedup_citations():
     hits = [
         {"text": "規程A本文", "filename": "kitei.pdf", "file_id": "f1", "score": 0.9},

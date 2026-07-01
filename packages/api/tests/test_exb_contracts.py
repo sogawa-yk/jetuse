@@ -266,6 +266,17 @@ def test_config_missing_knowledge_rejected():
         validate_action_with_citations_config({"retrieval": {"topK": 5}})
 
 
+def test_config_topk_upper_bound():
+    # EXB-04/ADR-0024(施主承認): retrieval.topK は上限 100。境界は許可、超過は拒否。
+    validate_action_with_citations_config(
+        {"knowledge": {"space": "s"}, "retrieval": {"topK": 100}}
+    )
+    with pytest.raises(ValidationError):
+        validate_action_with_citations_config(
+            {"knowledge": {"space": "s"}, "retrieval": {"topK": 101}}
+        )
+
+
 # -------------------------------------------- answer.with-citations@1 (input)
 def test_input_ok():
     validate_action_with_citations_input({"question": "保証期間を教えてください"})
