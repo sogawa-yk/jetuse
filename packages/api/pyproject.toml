@@ -34,7 +34,7 @@ dependencies = [
 dev = ["pytest", "pytest-cov", "ruff", "uvicorn"]
 
 [tool.setuptools]
-packages = ["jetuse_core", "jetuse_core.plugins", "service", "service.routes", "fn", "jetuse_platform", "jetuse_platform.contracts", "jetuse_platform.reference_descriptors"]
+packages = ["jetuse_core", "jetuse_core.plugins", "service", "service.routes", "fn", "jetuse_platform", "jetuse_platform.contracts", "jetuse_platform.reference_descriptors", "jetuse_platform.providers", "jetuse_platform.providers.rag_answer"]
 
 [tool.setuptools.package-data]
 "jetuse_platform.contracts" = ["schemas/*.json"]

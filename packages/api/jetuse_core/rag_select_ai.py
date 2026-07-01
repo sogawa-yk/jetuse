@@ -144,8 +144,17 @@ def split_sources(answer: str) -> tuple[str, list[dict[str, Any]]]:
     return body, citations
 
 
-def generate(owner: str, prompt: str) -> tuple[str, list[dict[str, Any]]]:
-    """Select AI narrateで回答を生成し、(本文, citations) を返す"""
+def generate(
+    owner: str, prompt: str, *, top_k: int | None = None
+) -> tuple[str, list[dict[str, Any]]]:
+    """Select AI narrateで回答を生成し、(本文, citations) を返す。
+
+    narrate は retrieval 件数(topK)を外部指定できないため、top_k 指定は黙殺せず拒否する
+    (指定が効かないまま回答するのを防ぐ。EXB-04 Adapter はこれを honor 不能と扱う)。
+    """
+    if top_k is not None:
+        # narrate は件数指定不可。指定自体を拒否する(値の正当性以前に非対応)。
+        raise ValueError("select_ai backend does not support retrieval.topK")
     profile = ensure_profile(owner)
     with connect() as conn:
         conn.call_timeout = GENERATE_TIMEOUT_MS

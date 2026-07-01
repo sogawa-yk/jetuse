@@ -171,12 +171,17 @@ def search(owner: str, query: str, k: int = _TOP_K) -> list[dict[str, Any]]:
             for h in hits]
 
 
-def generate(owner: str, prompt: str) -> tuple[str, list[dict[str, Any]]]:
+def generate(
+    owner: str, prompt: str, *, top_k: int | None = None
+) -> tuple[str, list[dict[str, Any]]]:
     """k-NN検索した文脈でLLM回答を生成し、(本文, citations) を返す。
 
     rag_select_ai.generate と同一シグネチャ(main.pyのRAGディスパッチで共用)。
+    top_k 指定時は k-NN の取得件数に反映する(未指定は既定 _TOP_K)。
     """
-    hits = search(owner, prompt)
+    if top_k is not None and top_k < 1:
+        raise ValueError("top_k must be >= 1")
+    hits = search(owner, prompt, k=top_k) if top_k is not None else search(owner, prompt)
     if not hits:
         return ("アップロードされた文書から関連する情報が見つかりませんでした。", [])
     context = "\n\n".join(f"[{i + 1}] ({h['filename']}) {h['text']}" for i, h in enumerate(hits))
