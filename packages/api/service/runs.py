@@ -458,9 +458,28 @@ def execute(store: RunStore, run: Run, provider: RunProvider, owner_sub: str) ->
         store.finalize(run_id, "run.failed", failed, "failed")
 
 
+def _select_provider() -> RunProvider:
+    """config-gated Provider 選択(EXB-04)。`rag_answer_backend` 指定なら実 Provider、空なら stub。
+
+    backend は settings の**明示 opt-in** `rag_answer_backend`("select_ai"/"opensearch")で決める。
+    generic な adb_dsn 等からの推測はしない(別機能用に ADB を持つ環境で誤って RAG を切替えない)。
+    空(既定/テスト環境)は StubProvider を返すため EXB-03 の stub 前提テストは不変。
+    明示指定が不正/構築失敗のときは**握り潰さず送出**する(stub にフォールバックして実 RAG 失敗を
+    架空回答で隠さない。EXB04-045)。実 RAG 委譲は jetuse_platform の Provider(OCI 直叩きなし)。
+    """
+    from jetuse_core.settings import get_settings
+
+    backend = (get_settings().rag_answer_backend or "").strip()
+    if not backend:
+        return StubProvider()
+    from jetuse_platform.providers.rag_answer import CoreRagAnswerProvider
+
+    return CoreRagAnswerProvider(backend=backend)  # 未知 backend は ValueError(fail loud)
+
+
 # ルート横断で共有する in-memory シングルトン(MVP)。テストは Provider を差し替え可能。
 _STORE = RunStore()
-_PROVIDER: RunProvider = StubProvider()
+_PROVIDER: RunProvider = _select_provider()
 # 同時実行を上限付きで捌く(POST ごとの無制限スレッド生成を防ぐ)。超過分はキューで待機。
 _EXECUTOR = ThreadPoolExecutor(max_workers=_MAX_CONCURRENCY, thread_name_prefix="run-exec")
 

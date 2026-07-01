@@ -22,7 +22,7 @@
       "description": "retrieval profile (任意)。",
       "additionalProperties": true,
       "properties": {
-        "topK": { "type": "integer", "minimum": 1 }
+        "topK": { "type": "integer", "minimum": 1, "maximum": 100 }
       }
     }
   }
