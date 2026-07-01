@@ -76,7 +76,9 @@ cd packages/web && npm run build && npm run lint
 
 ## 5. 変更の進め方(Gitフロー)
 
-- **1タスク = 1ブランチ → 完了時に main へマージ**(PR運用。動作確認ログ添付)。
+- **1タスク = 1ブランチ + PR**。Public または両版向けは `main` から分岐して `main` へ入れ、直後に `main → dev` の同期PRを出す。Internal 固有・先行機能は `dev` から分岐して `dev` のみに入れる。
+- `dev` 全体を `main` へ merge しない。Internal 機能を後から Public 化するときは、対象変更だけを最新 `main` 上へ移植する。
+- 詳細、hotfix、tag 規約は **[branching-and-releases.md](./branching-and-releases.md)** を参照。
 - spec-driven: 仕様にない実装判断が要るときは実装せず `docs/decisions/` にADR案を書いて人間レビューを依頼。
 - **人間承認が必要な操作**: 本番相当の `terraform apply`、IAMポリシー変更、Identity Domain設定変更、スパイク用以外のリソース削除。
 - 検証用クラウドリソースを自分で作るときは **`jetuse-spike-` プレフィックス必須**。
@@ -117,6 +119,7 @@ ops/dev-env-down.sh <you>   # 破棄(共有基盤・スキーマは保持)
 | 技術知見まとめ | [KNOWLEDGE.md](../KNOWLEDGE.md) |
 | 実機ハマり集 | [tips.md](../tips.md) |
 | 自分専用E2E環境 | [dev-environments.md](./dev-environments.md) |
+| Public / Internal Gitフロー | [branching-and-releases.md](./branching-and-releases.md) |
 | 計画(正本) | [plan.md](../plan.md) |
 | カスタマイズ | [customize.md](./customize.md) |
 

@@ -5,7 +5,7 @@
 ## 開発方式
 
 - **spec-driven**: 各タスクは `specs/` 配下の仕様を正とする。仕様にない実装判断が必要になったら、実装せず `docs/decisions/` にADR案を書いて人間レビューを要求する。
-- **1タスク = 1ブランチ**。完了時にmainへマージ。GitHubリモート接続後はPR運用（動作確認ログ添付必須）に移行。
+- **1タスク = 1ブランチ + PR**。Public 変更は `main` から分岐して `main` へ入れ、直後に `main → dev` で同期する。Internal 固有変更は `dev` から分岐して `dev` のみに入れる。`dev` 全体を `main` へ merge しない。正本は `docs/guides/branching-and-releases.md`。
 - **実機検証主義**: 「ドキュメントにそう書いてある」は完了条件にならない。OCI実環境での実行結果をもって完了とする。検証結果は `docs/verification/` にレポートとして残す。
 - **比較ドキュメント主義**（ユーザー指示 2026-06-11）: 複数のOCIサービス/方式の選択肢から1つを採用する場合は、`docs/comparison/` に比較ドキュメントを残す（プリセールス転用可能な粒度。可能なら定量比較付き）。実機の発見・Tipsは `docs/tips.md` に追記。
 - **コミット前チェック**: lint / type check / unit test を通す。フロントは `npm run build` 成功まで。
@@ -41,6 +41,7 @@ packages/web/        # React SPA
 packages/api/        # FastAPI
 infra/terraform/     # Terraformモジュール
 infra/orm/           # Resource Managerスタック
+infra/orm-bootstrap/ # Public版の管理者向けIAM bootstrap
 ```
 
 ## タスクチケット書式

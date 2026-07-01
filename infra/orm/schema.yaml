@@ -2,9 +2,10 @@ title: "JetUse on OCI — ワンクリックデプロイ"
 description: >-
   生成AIアプリ JetUse を OCI 上に一括構築します（VCN / Autonomous Database /
   API Gateway / Container Instance / Functions / Object Storage / Identity Domain）。
+  管理者が IAM Bootstrap を一度適用した後、通常の部門ユーザーが実行できます。
   デプロイ後、出力の app_url を開き demo ユーザーでログインしてください。
 schemaVersion: 1.1.0
-version: "20260101"
+version: "20260701"
 
 logoUrl: ""
 
@@ -14,6 +15,7 @@ variableGroups:
   - title: "必須"
     variables:
       - compartment_ocid
+      - home_region
   - title: "アプリ設定"
     variables:
       - prefix
@@ -22,7 +24,6 @@ variableGroups:
       - adb_admin_password
   - title: "オプション（詳細）"
     variables:
-      - enable_iam
       - enable_opensearch
       - rate_limit_rps
       - ocir_namespace
@@ -35,13 +36,18 @@ variableGroups:
     variables:
       - tenancy_ocid
       - region
-      - home_region
 
 variables:
   compartment_ocid:
     type: oci:identity:compartment:id
     title: "コンパートメント"
     description: "リソースを作成するコンパートメント"
+    required: true
+
+  home_region:
+    type: oci:identity:region:name
+    title: "テナンシのホームリージョン"
+    description: "Identity Domain の作成先。OCI Console のテナンシ詳細で Home region を確認してください。現在開いているリージョンとは限りません。"
     required: true
 
   prefix:
@@ -69,12 +75,6 @@ variables:
     title: "ADB ADMIN パスワード（任意）"
     description: "空欄なら自動生成します（出力に表示）。12〜30文字・英大小+数字"
     required: false
-
-  enable_iam:
-    type: boolean
-    title: "IAM動的グループ/ポリシーを作成"
-    description: "テナンシ管理者のみ。権限が無い場合はオフ（GenAI/Object機能は別途ポリシーが必要）"
-    default: true
 
   enable_opensearch:
     type: boolean
@@ -129,12 +129,6 @@ variables:
   region:
     type: oci:identity:region:name
     title: "Region"
-    visible: false
-
-  home_region:
-    type: string
-    title: "Home region"
-    default: "us-ashburn-1"
     visible: false
 
 outputs:
