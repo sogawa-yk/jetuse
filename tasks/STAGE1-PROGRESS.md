@@ -3,17 +3,19 @@
 Experience Builder の第二ステージ＝**RAG Action 縦切りバックエンド**（`rag.answer` のみ。Phase 1+2 の RAG 部分）。
 base=`dev`、ステージ統合 `feat/stage-1`。
 
-> ⚠ **このキューはまだ実行可能ではない**。docs（実装方針 §14「Gate を満たすまで汎用基盤を拡張しない」）に従い、
-> 先のステージを先行 over-spec しない方針のため、詳細チケット `tasks/EXB-03/04/05.md` は **Stage 0（契約）が
-> done になってから**作成する。Stage 0 で確定する Run イベント語彙・スキーマ・Descriptor に依存して中身が決まる。
+> ✅ **実行可能**（2026-07-01）。Stage 0（契約）は done で `dev` にマージ済み（PR #29）。確定した Run イベント語彙
+> （`run-event.schema.json`）・スキーマ（`answer-with-citations.*`）・Descriptor（`rag-answer.json`）に基づき、
+> 詳細チケット `tasks/EXB-03/04/05.md` を起票済み。stage-runner が `feat/stage-1` へ自走統合する。
 
-status: `todo` | `in_progress` | `blocked` | `done`（現状すべて `planned`）
+status: `todo` | `in_progress` | `blocked` | `done`
 
-| 順 | タスク（予定） | 依存 | 人間ゲート | status |
+依存解決: EXB-03(dep=Stage 0✓) と EXB-04(dep=EXB-02✓) は **第1波で並行**。EXB-05(dep=EXB-01✓,EXB-03) は EXB-03 done 後の第2波。
+
+| 順 | タスク | 依存 | 人間ゲート | status |
 |---|---|---|---|---|
-| 1 | EXB-03 Run/RunEvent/Artifact モデル＋ Action/Run API（rag.answer 限定・SSE） | Stage 0 | コミット | planned |
-| 2 | EXB-04 RAG Provider Adapter（jetuse_core 委譲・OCI 直呼びしない・main 回帰比較） | EXB-02 | コミット・実OCI接続 | planned |
-| 3 | EXB-05 Typed Action Client（answer.with-citations@1 専用・生URL非露出） | EXB-01, EXB-03 | コミット | planned |
+| 1 | EXB-03 Run/RunEvent/Artifact モデル＋ Action/Run API（rag.answer 限定・SSE） | Stage 0 | コミット | todo |
+| 2 | EXB-04 RAG Provider Adapter（jetuse_core 委譲・OCI 直呼びしない・main 回帰比較） | EXB-02 | コミット・実OCI接続 | todo |
+| 3 | EXB-05 Typed Action Client（answer.with-citations@1 専用・生URL非露出） | EXB-01, EXB-03 | コミット | todo |
 
 ## 予定スコープ（概要・正本は Stage 0 確定後のチケット）
 - **EXB-03**: `POST /api/v1/experiences/{id}/actions/{actionId}/runs` / `GET /runs/{id}` /
