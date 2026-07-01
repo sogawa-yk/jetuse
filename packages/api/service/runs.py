@@ -144,8 +144,11 @@ class _Subscription:
         return next(self._gen)
 
     def close(self) -> None:
-        self._gen.close()  # 開始済みなら finally が走る。未開始でも下の release で確実に解放。
-        self._release()
+        # _gen.close() が例外を投げても release を必ず1回走らせる(枠リーク防止)。release は冪等。
+        try:
+            self._gen.close()  # 開始済みなら finally が走る。未開始でも下の release で確実に解放。
+        finally:
+            self._release()
 
 
 class _RunRecord:
@@ -250,13 +253,14 @@ class RunStore:
                 raise SubscriptionCapacityError("too many concurrent subscribers")
             self._sub_count += 1
 
-        released = threading.Event()
+        released = [False]
 
         def release() -> None:
-            # 冪等: close / 正常終了 / 切断 のうち最初の一回だけ枠を返す。
-            if not released.is_set():
-                released.set()
-                with self._sub_lock:
+            # 冪等かつ原子的: 判定と減算を同一ロック内で行い、close/gen finally/切断が競合しても
+            # 枠は最初の一回だけ返す(二重減算・リークを防ぐ)。
+            with self._sub_lock:
+                if not released[0]:
+                    released[0] = True
                     self._sub_count -= 1
 
         def gen() -> Iterator[RunEvent | None]:

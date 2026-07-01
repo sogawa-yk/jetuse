@@ -21,6 +21,7 @@ from service.runs import (
     RunStore,
     StubProvider,
     SubscriptionCapacityError,
+    _Subscription,
     execute,
 )
 
@@ -383,6 +384,38 @@ def test_store_subscriber_cap_atomic_and_close_releases_unstarted():
     s3 = store.iter_events(run.run_id, _OWNER)  # 空いたので受付可能
     s2.close()
     s3.close()
+
+
+def test_subscription_close_releases_even_if_gen_close_raises():
+    # EXB03-003(review-12): _gen.close() が例外を投げても release が必ず1回走る(枠リーク防止)。
+    calls = []
+
+    class _RaisingGen:
+        def close(self):
+            raise RuntimeError("gen close boom")
+
+    sub = _Subscription(_RaisingGen(), lambda: calls.append(1))
+    with pytest.raises(RuntimeError):
+        sub.close()
+    assert calls == [1]  # 例外が伝播しても release は実行済み
+
+
+def test_subscription_double_close_releases_once():
+    # EXB03-003(review-12): close 二重呼び/gen finally 重複でも枠は1回だけ返す(二重減算しない)。
+    store = RunStore(max_subscribers=2)
+    run = store.create(_EXP, _ACTION, {"question": "x"}, _OWNER)
+
+    s = store.iter_events(run.run_id, _OWNER)  # 予約 → count=1
+    s.close()
+    s.close()  # 冪等: count は 0 のまま(-1 にしない)
+
+    # count が正確に 0 なら、cap=2 の 3件目は必ず拒否される(二重減算していれば通ってしまう)。
+    a = store.iter_events(run.run_id, _OWNER)
+    b = store.iter_events(run.run_id, _OWNER)
+    with pytest.raises(SubscriptionCapacityError):
+        store.iter_events(run.run_id, _OWNER)
+    a.close()
+    b.close()
 
 
 def test_append_rejects_terminal_event_types():
