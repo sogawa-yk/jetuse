@@ -32,6 +32,30 @@ review:
   diff_scope: uncommitted     # uncommitted(=git diff HEAD) | staged | worktree
   blocker_blocks_completion: true
 
+# ponytail(DietrichGebert/ponytail)統合: maker 側の実装最小化規律。採点は Codex のまま(判定を動かさない)。
+# loop-protocol 手順2(実装時の ponytail 適用)/手順2.5(codex 前の ponytail-review 自己短縮)が参照する。
+ponytail:
+  enabled: true
+  intensity: full       # lite | full | ultra。実装時 ponytail の既定強度(ultra は要件まで削るため人間明示時のみ)
+  self_review: true     # codex-review 前に ponytail-review を当て runs/<id>/reviews/ponytail-<n>.txt に証跡(非採点)
+
+# Superpowers(obra/Superpowers)統合: 開発者規律の「層」を無改造 install して合成(C案・施主承認 2026-06-30)。
+# こちらのループは採点(Codex)/実環境E2Eゲート/fail-closed/loop-doctor の「強制と運用の殻」を担い、
+# Superpowers の規律スキルを invoke するだけ(フォークしない/上書きしない=upstream 更新を /plugin update で無税享受)。
+# 導入: /plugin install superpowers@claude-plugins-official (公式) または
+#       /plugin marketplace add obra/superpowers-marketplace && /plugin install superpowers@superpowers-marketplace
+superpowers:
+  enabled: true
+  # 毎ターンの実装で踏む規律(歯は付けない=採点は Codex のまま)。loop-protocol 手順2 が参照。
+  per_turn_skills:
+    - superpowers:test-driven-development        # 非自明ロジックは RED-GREEN-REFACTOR。実環境E2E証跡と相補。
+  # タスク特性で随時 reach する規律。loop-protocol 手順2 / stage・loop-runner の起票前段。
+  on_demand_skills:
+    - superpowers:brainstorming                  # 要件が曖昧なとき(着手前の設計詰め)
+    - superpowers:writing-plans                  # 多段タスクの分解(タスク起票の前段)
+    - superpowers:systematic-debugging           # 不具合の根本原因解析(symptom でなく root cause)
+    - superpowers:verification-before-completion # 完了主張前の自己検証(こちらの実環境E2Eゲートの前段)
+
 budget:
   max_turns: 20
   max_tokens: 2000000
