@@ -1,84 +1,104 @@
-# OCI Resource Manager ワンクリックデプロイ（INFRA-03）
+# OCI Resource Manager で JetUse Public 版をデプロイ
 
-README の「Deploy to Oracle Cloud」ボタンから、OCI Resource Manager(ORM) スタックとして
-JetUse を一括デプロイする仕組みのリファレンス。スタック定義は `infra/orm/`。
+GitHub の **Deploy to Oracle Cloud** ボタンから、JetUse を OCI Resource Manager（ORM）スタックとして構築する。通常の利用者にテナンシ管理権限を要求しないよう、IAM とアプリ本体を二つのスタックに分離している。
 
-## ボタンの動作
+| 段階 | 作業ディレクトリ | 実行者 | 頻度 |
+|---|---|---|---|
+| IAM Bootstrap | `infra/orm-bootstrap` | テナンシ IAM 管理者 | 対象コンパートメントごとに1回 |
+| JetUse 本体 | `infra/orm` | `JetUseDeployers` 等の通常ユーザー | 環境ごと |
 
-ボタンURLは `https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=<main.zipアーカイブ>`。
-ORM が公開リポジトリ `main` の zip を取得し、スタック作成ウィザードを開く。
-**作業ディレクトリに `infra/orm` を選択**（zip内にネストするため）。`schema.yaml` が入力UIを生成する。
+## 1. 管理者: IAM Bootstrap
 
-入力は **コンパートメントのみ必須**。パスワード類は `random_password` で自動生成し、
-コンテナイメージは公開GHCRの既定値を使う。Apply で以下を作成:
+最初に [iam.md](./iam.md) の手順で runtime Dynamic Group / Policy と、通常デプロイ担当グループの Policy を作成する。管理者自身が毎回 JetUse をデプロイする必要はない。
 
-- ネットワーク（VCN/サブネット/NSG/ゲートウェイ各種）
-- Autonomous Database 26ai（mTLS）＋ ウォレット生成
-- Object Storage（spa / app-data / speech）＋ SPA配信用PAR
-- Container Instance（FastAPI / 公開イメージ）、Functions（ルーター / 公開イメージ）
-- API Gateway（`/api/*`→CI・Functions、`/`→SPAバケット）
-- Identity Domain ＋ **OIDCアプリ(PKCE/public) ＋ デモユーザー**（`enable_auth=true` 時）
-- IAM 動的グループ＋ポリシー（GenAI/ADB/Object/Secret）
-- ADBウォレット・SPA(dist)・`config.json` を Terraform がバケットへアップロード
+Bootstrap の構成ソースも `main.zip` を使用し、作業ディレクトリだけ `infra/orm-bootstrap` にする。Apply 後は IAM の反映を数分待つ。
 
-## 「ORMはTerraformのみ」をどう乗り越えているか（4つの自動化）
+## 2. 通常利用者: Deploy to Oracle Cloud
 
-1. **コンテナイメージ**: `.github/workflows/release.yml` が main への push で API/fn-router を
-   **GHCR(public)** へ publish。ORM既定の `api_image_url`/`fn_router_image` が公開イメージを指す。
-   Container Instance は公開イメージを認証なしで pull。
-2. **DB初期化**: `packages/api/entrypoint.sh` が `RUN_DB_BOOTSTRAP=true` のとき
-   `jetuse_core/bootstrap.py` を実行。ADMINでウォレット取得→`JETUSE_APP`/`JETUSE_QUERY` 作成・権限・
-   ネットワークACL→`ENABLE_RESOURCE_PRINCIPAL`→`migrate` を**冪等**に実施（ADB ACTIVE待ちリトライ付き）。
-3. **SPA配信 + OIDC client_id**: SPAは実行時に `/config.json` を読む（`packages/web/src/auth.tsx`）。
-   Terraform が コミット済み `packages/web/dist`（release.ymlが更新）と、OIDCアプリの client_id を
-   含む `config.json` をバケットへアップロード（`infra/orm/spa.tf`）。
-   → Container Instance は client_id に依存せず（issuer/JWKSのみ）、依存の循環を回避。
-4. **OIDC自動登録**: `infra/terraform/modules/identity-domain-app` が `oci_identity_domains_app`
-   (PKCE/public)・デモユーザー・付与を作成。redirect は API Gateway ホスト。
+README のボタンは次の URL で公開 `main` ブランチの zip を ORM に渡す。
 
-## 前提・初回セットアップ（1回のみ）
+```text
+https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/sogawa-yk/jetuse/archive/refs/heads/main.zip
+```
 
-- 本リポジトリを **public** にする（ORMがzipを取得するため）。
-- GHCR パッケージ `jetuse-api` / `jetuse-fn-router` を **public** に設定（初回 push 後に
-  GitHub → Packages → Package settings、または `gh api -X PATCH /user/packages/container/<name> -f visibility=public`）。
-- デプロイ実行者は **テナンシ管理者**（IAM動的グループはテナンシレベル）。
-- Generative AI 提供リージョン（大阪 ap-osaka-1 等）を選ぶ。
+作成ウィザードで以下を指定する。
+
+1. Stack compartment に Bootstrap と同じ JetUse 専用コンパートメントを選ぶ。
+2. Working directory に `infra/orm` を指定する。
+3. 変数画面で同じコンパートメントを選ぶ。`prefix` は識別しやすいよう Bootstrap と同じ値を推奨する。
+4. `home_region` は OCI Console のテナンシ詳細に表示される Home region を選ぶ。現在 Console で開いているリージョンとは限らない。
+5. Plan の作成物と課金対象を確認して Apply する。
+
+Resource Manager が自動入力するリージョンはリソースの配備リージョンであり、テナンシのホームリージョンではない。そのため `home_region` は必須の画面入力としている。
+
+## 入力
+
+| 入力 | 必須 | 説明 |
+|---|---|---|
+| `compartment_ocid` | Yes | Bootstrap と同じ JetUse 専用コンパートメント |
+| `home_region` | Yes | Identity Domain の作成に使うテナンシホームリージョン |
+| `prefix` | Yes | リソース名。Bootstrap と同じ値を推奨。既定 `jetuse` |
+| `demo_email` | Yes（認証時） | 初期デモユーザーのメール |
+| `adb_admin_password` | No | 空なら安全なランダム値を生成 |
+| `enable_opensearch` | No | 常設課金が発生するため既定 false |
+| `ocir_*` / image URL | 通常は変更不要 | Public 版の公開 OCIR image を参照 |
+
+`enable_iam` はアプリスタックから削除した。IAM をここで有効にして通常利用者の Apply が途中で失敗する構成には戻さない。
+
+## 作成されるリソース
+
+- VCN、public/private subnet、NSG、Internet/NAT/Service Gateway
+- Autonomous Database 26ai（mTLS）と wallet
+- Object Storage（SPA、app-data、speech）と SPA 配信用 PAR
+- Container Instance（FastAPI）と OCI Functions（router）
+- API Gateway（`/api/*` と SPA）
+- Logging log group / logs、Monitoring 送信先
+- Identity Domain、OIDC public client（PKCE）、初期デモユーザー
+- 任意の OpenSearch cluster
+- ADB wallet、SPA、runtime `config.json` の Object Storage 配置
+
+Dynamic Group と IAM Policy は作らない。Bootstrap stack が所有するため、本体 stack を Destroy しても IAM は残り、同じコンパートメントへの再デプロイで再利用できる。
 
 ## デプロイ後
 
-1. 出力 `app_url` を開く。初回は ADB 初期化のため数分〜15分は DB系が 503 になりうる。
-2. `enable_auth=true` の場合、`demo_username`/`demo_password`(出力) でログイン。
+1. Output の `app_url` を開く。
+2. `demo_username` / `demo_password` でログインする。
+3. 初回は ADB 作成と DB bootstrap に 10〜15 分程度かかり、その間 DB 系 API が一時的に 503 になることがある。
 
-## 残存事項・既知のリスク（フォールバック）
+JetUse のエンドユーザーは OCI Console のアカウントや IAM Policy を必要としない。OIDC ユーザーの追加・運用は作成された Identity Domain 内で行う。
 
-- **OIDC（最高リスク）**: `oci_identity_domains_app` の PKCE 設定はプロバイダ差で
-  「ログインは通るがトークン拒否」等が起こりうる。うまくいかない場合は **`enable_auth=false`**
-  でデプロイすれば認証なしで完全に使える状態になる（OIDCアプリ/ユーザーは作成されない）。
-  PKCEを実機確認後に `enable_auth=true` を既定にする運用。
-- **Select AI クレデンシャル**: APIキー版 `JETUSE_OCI_CRED` は RP 環境で作れないため、bootstrap が
-  `ENABLE_RESOURCE_PRINCIPAL` で `OCI$RESOURCE_PRINCIPAL` を有効化（`SELECT_AI_CREDENTIAL` で参照）。
-  ADBのリソースプリンシパルでGenAIを呼ぶには IAM 側の許可が要る（iamモジュールで付与）。
-  失敗時も chat / RAG(Vector Store/OpenSearch) 等のコア機能は動作する。
-- **SPA dist の鮮度**: `packages/web/dist` は **生成物**（release.yml が main で再生成・コミット）。
-  手編集しない。フロント変更は push 後に release.yml が dist を更新する。
-- **GHCR公開pull不可の場合**: 既定イメージURLを OCIR public 等へ変更（schema の image URL を上書き）。
+## 自動化の仕組み
 
-## ローカル検証
+1. **Container images**: `.github/workflows/release.yml` が Public `main` の API / Functions image を公開 OCIR に publish する。
+2. **DB bootstrap**: `packages/api/entrypoint.sh` が初回起動時に ADB user、権限、schema migration を冪等に作成する。
+3. **SPA と OIDC**: Terraform が `packages/web/dist` と OIDC client ID を含む `config.json` を Object Storage に配置する。
+4. **OIDC registration**: Identity Domain、PKCE client、初期ユーザーと grant を Terraform で作成する。
+5. **Runtime authorization**: Container Instances / Functions / ADB は Bootstrap で作られた resource principal Policy を使用する。
+
+## セキュリティ上の注意
+
+- JetUse 専用コンパートメントを使う。デプロイ担当グループはそのコンパートメント内でリソースを管理できる。
+- ORM state / job output には ADB とデモユーザーの生成パスワードが含まれる。Stack / Job を読めるグループを限定する。
+- `enable_auth=true` が Public 標準。認証を無効にすると API が公開状態になるため、隔離した検証環境以外では使用しない。
+- `enable_opensearch=true` は常設課金と service limit を Plan 前に確認する。
+- Bootstrap と異なる対象コンパートメントへ本体を作ると resource principal が Policy に入らない。`prefix` は権限判定には使わないが、運用上は揃える。
+
+## ローカル静的検証
 
 ```bash
-cd infra/orm
-terraform init -backend=false && terraform validate   # 静的検証
-# 使い捨てコンパートメントで実検証(ambient auth):
-terraform init && terraform apply -var compartment_ocid=<OCID> -var tenancy_ocid=<OCID> -var region=<region>
-# 確認後:
-terraform destroy -var ...
+terraform -chdir=infra/orm-bootstrap init -backend=false
+terraform -chdir=infra/orm-bootstrap validate
+
+terraform -chdir=infra/orm init -backend=false
+terraform -chdir=infra/orm validate
 ```
+
+実際の `plan` / `apply` は対象テナンシの権限と値が必要。IAM Bootstrap の Apply と本番相当リソースの Apply は組織の承認手順に従う。
 
 ## 関連ファイル
 
-- `infra/orm/` … ORMスタック（`main.tf`/`locals.tf`/`spa.tf`/`variables.tf`/`outputs.tf`/`providers.tf`/`schema.yaml`）
-- `infra/terraform/modules/identity-domain-app/` … OIDCアプリ＋デモユーザー
-- `infra/terraform/modules/adb/` … ウォレット生成出力を追加
-- `packages/api/entrypoint.sh` / `jetuse_core/bootstrap.py` … DB自己ブートストラップ
-- `packages/web/src/auth.tsx` … 実行時 `/config.json` 読み込み
-- `.github/workflows/release.yml` … 公開イメージ＋dist
+- `infra/orm-bootstrap/`: 管理者向け IAM stack
+- `infra/orm/`: 通常利用者向け JetUse stack
+- `infra/terraform/modules/iam/`: Dynamic Group / Policy の正本
+- [iam.md](./iam.md): 権限一覧、手動設定、トラブルシュート
+- `.github/workflows/release.yml`: Public image と SPA dist の release

@@ -1,217 +1,130 @@
-# 【人間作業】IAM設定手順（統合版: SQL Search + アプリ実行基盤）
+# JetUse Public 版の IAM Bootstrap
 
-テナンシの動的グループ/ポリシー数制限を考慮し、**動的グループ1つ + ポリシー1本**に統合した版（2026-06-10）。
-旧 `sql-search-iam.md`（SemanticStore enrichment用）と `app-iam.md`（INFRA-01のCI/Functions用）を置き換える。
-Terraform側の定義は `infra/terraform/modules/iam/main.tf`（`enable_iam=false` で切り離し中）と同期している。
+Public 版では、テナンシ IAM の設定と JetUse 本体のデプロイを分離する。
 
-## 1. 動的グループ 1つ（テナンシ / Default Identity Domain）
+1. テナンシ管理者が対象コンパートメントごとに `infra/orm-bootstrap` を一度だけ Apply
+2. 通常のデプロイ担当者が GitHub の **Deploy to Oracle Cloud** から `infra/orm` を Apply
+3. JetUse のエンドユーザーは OCI IAM 権限を必要とせず、作成された OIDC ユーザーでログイン
 
-名前: `jetuse-dg`（任意）
+これにより、JetUse をデプロイする部門ユーザーへ Dynamic Group / Policy の管理権限を渡さずに済む。
 
-マッチングルール（3つのリソースタイプを `Any` で束ね、jetuse-protoコンパートメントに限定）:
+## 管理者が準備するもの
 
-```
-Any {all {resource.type='generativeaisemanticstore', resource.compartment.id='<jetuse-protoのOCID>'},
-     all {resource.type='computecontainerinstance', resource.compartment.id='<jetuse-protoのOCID>'},
-     all {resource.type='fnfunc', resource.compartment.id='<jetuse-protoのOCID>'}}
-```
+- JetUse 専用コンパートメント。デプロイ担当者へ `all-resources` を許可するため、共有コンパートメントは使用しない。
+- 既存の OCI IAM グループ（例: `Default/JetUseDeployers`）と、そのグループへの利用者追加。
+- テナンシのホームリージョン名。Resource Manager が自動入力するのは `tenancy_ocid`、`compartment_ocid`、`region`、`current_user_ocid` のみで、ホームリージョンは含まれない。
+- Bootstrap 実行者には Dynamic Group と Policy を作成できるテナンシ IAM 権限が必要。
 
-- `generativeaisemanticstore`: SQL Search enrichment（SPIKE-04完結に必要）
-- `computecontainerinstance`: FastAPI（SSE系）のリソースプリンシパル
-- `fnfunc`: OCI Functions（非ストリーミングAPI）のリソースプリンシパル
+Resource Manager の state と job 出力には生成パスワード等が含まれる。`JetUseDeployers` には対象スタックの state を参照できる人だけを所属させる。
 
-## 2. ポリシー 1本（jetuse-protoコンパートメント。名前: jetuse-policy 等）
+## 推奨: Resource Manager で Bootstrap
 
-ステートメント6文（1ポリシーに複数文を入れられるため本数は1）:
+GitHub の `main.zip` を構成ソースにしてスタックを作り、作業ディレクトリに `infra/orm-bootstrap` を指定する。
 
-```
-allow dynamic-group jetuse-dg to use generative-ai-family in compartment jetuse-proto
-allow dynamic-group jetuse-dg to use database-tools-family in compartment jetuse-proto
-allow dynamic-group jetuse-dg to read database-family in compartment jetuse-proto
-allow dynamic-group jetuse-dg to read autonomous-database-family in compartment jetuse-proto
-allow dynamic-group jetuse-dg to read secret-family in compartment jetuse-proto
-allow dynamic-group jetuse-dg to manage objects in compartment jetuse-proto
-```
+| 入力 | 例 | 説明 |
+|---|---|---|
+| `compartment_ocid` | JetUse 専用コンパートメント | Runtime とデプロイ権限の境界 |
+| `home_region` | `us-ashburn-1` | OCI Console のテナンシ詳細で確認 |
+| `prefix` | `jetuse-sales` | Dynamic Group 名が衝突しないテナンシ内で一意な値。アプリ本体と同じ値を推奨 |
+| `deployer_group_subject` | `Default/JetUseDeployers` | 既存グループ。`Allow group` より後の部分 |
+| `enable_semantic_store` | `true` | SQL Search 不使用なら false |
 
-> Identity Domainが Default 以外の場合は `dynamic-group '<domain名>'/'jetuse-dg'` の表記にする。
+Plan で次の IAM リソースだけが作成されることを確認してから Apply する。
 
-### 統合のトレードオフ（承知の上で採用）
+- `${prefix}-runtime-dg`: Container Instances と Functions
+- `${prefix}-adb-dg`: Autonomous Database の resource principal
+- `${prefix}-semantic-store-dg`: Semantic Store（任意）
+- `${prefix}-runtime-policy`: コンパートメント内の runtime 権限
+- `${prefix}-runtime-tenancy-policy`: Object Storage namespace の read のみ
+- `${prefix}-deployer-policy`: 通常デプロイ担当グループの権限
 
-3種のプリンシパルが権限の和集合を持つ（例: Container InstanceにもDBTools権限が付く）。
-コンパートメントスコープ内に閉じており、プロトタイプ段階では許容。Phase 8（セキュリティ強化）で最小権限への分割を再検討する。
+IAM の反映には数分かかることがある。Apply 完了後に `infra/orm` を実行する。
 
-## 代替案: 動的グループを1つも作れない場合
+## デプロイ担当グループへ付与する権限
 
-ポリシーの `where` 条件で `request.principal` を直接判定すれば**動的グループゼロ**にできる。
-各文に以下の形の条件を付ける（ポリシー1本・6文は同じ）:
+Bootstrap は次の Policy をテナンシ直下に作る。`<group>` と `<compartment_ocid>` を置換すれば、管理者が手動作成する場合にも使える。
 
-```
-allow any-user to use generative-ai-family in compartment jetuse-proto
-  where all {request.principal.compartment.id='<jetuse-protoのOCID>',
-             any {request.principal.type='generativeaisemanticstore',
-                  request.principal.type='computecontainerinstance',
-                  request.principal.type='fnfunc'}}
-```
-
-`any-user` 表記になるが、where条件で対象コンパートメントのリソースプリンシパル3種に限定される。
-（採用した場合はエージェントに伝えてください。Terraform定義をこちらの形に合わせます）
-
-## 重要: 作成順序（2026-06-10実測）
-
-**SemanticStoreは必ずIAM整備の「後」に作成すること。** IAM整備前に作成したストアは、整備後もenrichmentがFAILEDのまま（詳細空・再試行無効）になり、**ストアの作り直しでしか直らない**。
-
-## 3. 完了後にエージェントへ伝えること
-
-「**IAM整備完了**」の一言で以下を再開する:
-
-1. SemanticStore enrichment再実行（FULL_BUILD, SH）→ SUCCEEDEDまでポーリング
-2. `generateSqlFromNl` 日本語10問評価 → `docs/verification/SPIKE-04.md` 完成
-3. CI/Functionsのリソースプリンシパル署名検証（`packages/api/jetuse_core/genai.py` のTODO）
-
-参照: https://docs.oracle.com/en-us/iaas/Content/generative-ai/semantic-store-permissions.htm
-
-## 追記（2026-06-11、AGT-02）: MCP認証情報のVault保存に必要な追加ステートメント
-
-認証付きMCPサーバー登録（アプリがVault secretを作成）を有効にする場合、ポリシーに以下を追加:
-
-```
-allow dynamic-group jetuse-dg to manage secret-family in compartment jetuse-proto
+```text
+Allow group <group> to inspect compartments in tenancy
+Allow group <group> to inspect tenancies in tenancy
+Allow group <group> to read objectstorage-namespaces in tenancy
+Allow group <group> to manage orm-stacks in compartment id <compartment_ocid>
+Allow group <group> to manage orm-jobs in compartment id <compartment_ocid>
+Allow group <group> to manage all-resources in compartment id <compartment_ocid>
 ```
 
-追加されるまでアプリは認証なしMCPサーバーのみ受け付ける（501で案内）。
+`all-resources` は VCN、ADB、Object Storage、Container Instances、Functions、API Gateway、Logging、Identity Domain とその OIDC アプリを一つの専用コンパートメントに構築するために使用する。テナンシに対する `manage all-resources` や `manage domains in tenancy` は付与しない。
 
-## 追記（2026-06-12、AGT-04）: ホスト型エージェント（Applications/Deployments）に必要な追加設定
+より細かい分離が必要な組織では、この文を各サービスの resource-family に分解できる。ただし JetUse の機能追加時に Policy も追随させる必要があるため、Public 版の標準は専用コンパートメント境界とする。
 
-hosted-deployment作成時、サービスがOCIRイメージをpull/スキャンできず artifact FAILED になることを実機確認済み
-（エラー: "container image could not be accessed or validated"）。有効化には以下の2点を追加:
+## Runtime Dynamic Group
 
-1. **動的グループ `jetuse-dg` のマッチングルールに2リソースタイプを追加**:
+権限の和集合を避けるため、アプリ実行基盤、ADB、Semantic Store を分離する。
 
-```
-all {resource.type='generativeaihostedapplication', resource.compartment.id='<jetuse-protoのOCID>'},
-all {resource.type='generativeaihosteddeployment', resource.compartment.id='<jetuse-protoのOCID>'}
-```
+### Container Instances / Functions
 
-2. **ポリシー `jetuse-policy` にステートメント追加**:
-
-```
-allow dynamic-group jetuse-dg to read repos in compartment jetuse-proto
+```text
+Any {all {resource.type='computecontainerinstance', resource.compartment.id='<compartment_ocid>'},
+     all {resource.type='fnfunc', resource.compartment.id='<compartment_ocid>'}}
 ```
 
-> エージェントコンテナからのLLM呼び出し（リソースプリンシパル）は既存の
-> `use generative-ai-family` 文でカバーされる。
+主な権限は次のとおり。
 
-**→ 2026-06-12 適用完了・E2E成功**（注意: 動的グループ変更の反映に5〜10分。ポリシー文のみでは不可で、
-マッチングルールへの2タイプ追加が必須 — 実際に片方だけで3回FAILEDした）。検証詳細は docs/verification/agt-04.md。
+- Generative AI の推論、Projects、Guardrails、hosted agent invocation
+- Vector Store / Vector Store File / File の作成・削除
+- ADB wallet の取得
+- Object Storage の RAG 原本、音声、wallet の読み書き
+- Speech、Document Understanding、Language
+- Logging ingestion、Monitoring custom metrics
+- 事前作成済み Vault secret の read（secret の作成権限は付与しない）
 
-参照: https://docs.oracle.com/en-us/iaas/Content/generative-ai/deploy-permissions.htm
+### Autonomous Database
 
-## 追記（2026-06-12、VOICE-01）: 議事録機能（OCI Speech）に必要な追加ステートメント
-
-Container Instance（リソースプリンシパル）からバッチ文字起こしジョブを作成・参照するために必要:
-
-```
-allow dynamic-group jetuse-dg to manage ai-service-speech-family in compartment jetuse-proto
-allow dynamic-group jetuse-dg to read buckets in compartment jetuse-proto
-allow dynamic-group jetuse-dg to read tag-namespaces in compartment jetuse-proto
-allow dynamic-group jetuse-dg to inspect tag-namespaces in compartment jetuse-proto
+```text
+All {resource.type='autonomousdatabase', resource.compartment.id='<compartment_ocid>'}
 ```
 
-> **実機検証で確定（2026-06-12）**: 1文目だけではジョブ作成は通るが処理が
-> `INTERNAL_ERROR`（percent=0）でFAILEDする。公式ポリシー要件は
-> `manage object-family` + tag-namespaces read/inspect
-> （https://docs.oracle.com/en-us/iaas/Content/speech/using/policies.htm ）。
-> 既存の `manage objects` との差分はバケットレベル権限のため、最小追加は
-> `read buckets` + tag-namespaces 2文（それでも失敗する場合は
-> `manage objects` を `manage object-family` に置換する）。
-> 適用されるまで実環境の音声アップロードは503（「IAM未整備の可能性」メッセージ）になる。
-> ローカル開発（~/.oci ユーザー認証）は影響なし（SPIKE-06/VOICE-01で実証済み）。
+ADB の `OCI$RESOURCE_PRINCIPAL` が Select AI / DBMS_CLOUD_AI から Generative AI と Object Storage を参照するために使用する。
 
-## 追記（2026-06-13、ARCH-02）: API Gateway→Functions呼び出しに必要なポリシー
+### Semantic Store（任意）
 
-API GWの `ORACLE_FUNCTIONS_BACKEND` ルートがfunctionをinvokeするための公式要件
-（無いとGWが一律 `500 Internal Server Error` を返す — 実測で確認。function直接invokeは正常）:
-
-```
-ALLOW any-user to use functions-family in compartment jetuse-proto where ALL {request.principal.type= 'ApiGateway', request.resource.compartment.id = '<jetuse-protoコンパートメントのOCID>'}
+```text
+All {resource.type='generativeaisemanticstore', resource.compartment.id='<compartment_ocid>'}
 ```
 
-> 参照: https://docs.oracle.com/en-us/iaas/Content/APIGateway/Tasks/apigatewayaddingfunctionbackend.htm
-> 適用されるまで、fnルーター担当セグメント（presets / dbchat / tts）はGW経由で500になる。
-> ※CI側に同エンドポイントが残っているため、ポリシー適用前にユーザー影響を避けたい場合は
->   tfvarsの `fn_router_image` を空にしてapplyすればCIルートに戻る（現状はfn優先のまま）。
+Database Tools、secret、Database / Autonomous Database metadata、Generative AI inference の read/use を付与する。Semantic Store は IAM の反映後に作成する。IAM より先に作ると enrichment が失敗したままになり、再作成が必要になった実測がある。
 
-## 追記（2026-06-13、OPS-02）: 可観測性のマネージドサービス書き込みに必要なポリシー
+実際の Policy 文の正本は [../../infra/terraform/modules/iam/main.tf](../../infra/terraform/modules/iam/main.tf)。手作業で転記せず、可能な限り Bootstrap を使用する。
 
-アプリ（CI/Functions、動的グループ `jetuse-dg`）が OCI Logging / Monitoring へ直接書き込むために必要:
+## オプション機能
 
-```
-allow dynamic-group jetuse-dg to use log-content in compartment jetuse-proto
-allow dynamic-group jetuse-dg to use metrics in compartment jetuse-proto
-```
+### 認証付き MCP サーバーの登録
 
-- `use log-content`: `jetuse_core/obs.py` の PutLogs（カスタムログ ingestion）用
-- `use metrics`: 同 PostMetricData（カスタムメトリクス名前空間 `jetuse_dev`）用
-- **適用前の挙動**: 送信は失敗するがベストエフォートのためサービスは正常稼働（stderrに `oci log ship failed` / `oci metric ship failed` が出るのみ）。ログはCI/Fnのstdout経由でサービスログには乗る
-- 適用後: アプリのJSON Linesが `jetuse-dev-app` カスタムログに、呼出数/トークン数が Monitoring `jetuse_dev` 名前空間（次元: feature/model/status）に届く
+現状の Public 標準は事前作成済み secret の read のみ。アプリ自身に secret を作成させる場合は、リスクを確認した上で runtime Dynamic Group に次を追加する。
 
-> 参照: Logging Ingestion / Monitoring の各サービスポリシー
-
-## 追記（2026-06-13、GAP-04）: マネージド・ホスト型エージェントの常設に必要な人間作業
-
-案1（Hosted Applicationを常設し「マネージド・エージェント」として配線）の前提。AGT-04で一度実施し
-クリーンアップ済みのため再整備が必要。**IAMポリシー変更/Identity Domain設定変更のため人間作業。**
-
-### 1. IDCS リソース+クライアント兼用アプリ（jetuse-dev-domain内）
-- 名前例: `jetuse-agent`（confidential、is-o-auth-client + is-o-auth-resource）
-- audience: `jetuse-agent` / allowed-scope(fqs): `jetuse-agentinvoke`（scope=`invoke`）
-- grant: client_credentials。client_id/secret を控える（アプリの `HOSTED_AGENT_CLIENT_ID/SECRET` に設定）
-
-### 2. 動的グループ `jetuse-dg` のマッチングルールに2タイプ追加（jetuse-proto限定）
-```
-all {resource.type='generativeaihostedapplication', resource.compartment.id='<jetuse-protoのOCID>'},
-all {resource.type='generativeaihosteddeployment', resource.compartment.id='<jetuse-protoのOCID>'}
-```
-（※反映に5〜10分。ポリシー文だけでなくマッチングルールへの2タイプ追加が必須 — AGT-04の実ハマり）
-
-### 3. ポリシー（既存の `read repos` が無ければ追加）
-```
-allow dynamic-group jetuse-dg to read repos in compartment jetuse-proto
+```text
+Allow dynamic-group jetuse-runtime-dg to manage secret-family in compartment id <compartment_ocid>
 ```
 
-> 上記適用後、エージェント側で `ops/deploy-hosted-agent.sh`（常設用にリポジトリ名
-> `jetuse-dev-hosted-agent`・audience `jetuse-agent` へ調整した版）でデプロイし、
-> `.env`/tfvars の `HOSTED_AGENT_*` に APP OCID と IDCS資格情報を設定 → framework=hosted が有効化。
+### Hosted Application / Deployment の作成
 
-## 追記（2026-06-16、ENH-10）: 翻訳の OCI Language 方式（任意）に必要なポリシー
+Public ORM は hosted deployment 自体を作成しない。別途作成する場合は hosted application / deployment 専用 Dynamic Group と、OCIR repository の read を追加する。過去の実測では Dynamic Group 反映に 5〜10 分かかる場合がある。手順は [hosted-agent-oauth.md](./hosted-agent-oauth.md) を参照。
 
-リアルタイム文字起こしの逐次翻訳（`jetuse_core/translate.py`）で **backend=oci_language** を
-使う場合のみ必要。既定の **backend=llm**（llama-3.3-70b）は既存 `use generative-ai-family`
-でカバー済みのため、このポリシーが無くても翻訳機能は動く。
+## トラブルシュート
 
-```
-allow dynamic-group jetuse-dg to use ai-service-language-family in compartment jetuse-proto
-```
+| 症状 | 確認点 |
+|---|---|
+| IAM 作成が 403 / home region エラー | Bootstrap の `home_region` がテナンシのホームリージョンか |
+| 通常利用者が Stack / Apply を作れない | グループ所属と `${prefix}-deployer-policy`、スタックのコンパートメント |
+| Chat / RAG が 404 NotAuthorizedOrNotFound | runtime DG の matching rule、IAM 反映待ち、対象コンパートメント |
+| 議事録 job が INTERNAL_ERROR | Speech、objects、buckets、tag-namespaces の Policy |
+| API Gateway の Functions route が 500 | `request.principal.type = 'ApiGateway'` の functions-family Policy |
+| SQL Search enrichment が失敗 | Semantic Store が IAM より後に作成されたか |
 
-> **実機検証で確定（2026-06-16）**: 未付与だと CI のRPからの
-> `batch_language_translation` が **404 NotAuthorizedOrNotFound** で失敗する
-> （ローカルのユーザー認証では成功するため SPIKE-E5 では露見しなかった）。
-> 現在は `translate()` が ServiceError を捕捉して **自動的にLLM方式へフォールバック**
-> するため、ユーザーには翻訳が壊れて見えない（CIログに `falling back to llm` 警告のみ）。
-> 上記適用後は OCI Language 方式（翻訳特化・最速）が選択時にそのまま機能する。
-> 参照: https://docs.oracle.com/en-us/iaas/Content/language/using/policies.htm
+## 参考
 
-## 追記（2026-06-16、ENH-07）: OCR（OCI Document Understanding）に必要なポリシー
-
-OCR画面（`jetuse_core/docunderstand.py` / `POST /api/ocr`）が CI のRPから `analyze_document`
-（同期OCR）を呼ぶために必要。
-
-```
-allow dynamic-group jetuse-dg to use ai-service-document-family in compartment jetuse-proto
-```
-
-> **SPIKE-E4で確定（2026-06-16）**: ローカル（ユーザー認証）では成功するが、未付与のCI（RP）では
-> `analyze_document` が **404 NotAuthorizedOrNotFound**（翻訳ENH-10と同型）。
-> `docunderstand.ocr()` は 401/404 を「IAM未整備の可能性」の422へ変換するため、
-> 未付与でもアプリは500を出さず安全に失敗する。付与後はOCRがそのまま機能。
-> 参照: https://docs.oracle.com/en-us/iaas/Content/document-understanding/using/about_doc_understanding.htm
+- [Resource Manager の Terraform 変数](https://docs.oracle.com/en-us/iaas/Content/ResourceManager/Concepts/terraformconfigresourcemanager.htm)
+- [Resource Manager Policy Reference](https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/resourcemanagerpolicyreference.htm)
+- [OCI Generative AI IAM Policies](https://docs.oracle.com/en-us/iaas/Content/generative-ai/iam-policies.htm)
+- [Semantic Store Permissions](https://docs.oracle.com/en-us/iaas/Content/generative-ai/semantic-store-permissions.htm)
+- [OCI Speech Policies](https://docs.oracle.com/en-us/iaas/Content/speech/using/policies.htm)

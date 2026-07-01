@@ -106,6 +106,7 @@ module "identity_domain" {
 module "iam" {
   count            = var.enable_iam ? 1 : 0
   source           = "../../modules/iam"
+  providers        = { oci = oci.home }
   tenancy_ocid     = var.tenancy_ocid
   compartment_ocid = var.compartment_ocid
   prefix           = var.prefix
