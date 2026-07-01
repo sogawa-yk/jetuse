@@ -72,6 +72,7 @@ from .routes import (
     conversations,
     dbchat,
     minutes,
+    runs,
     usecases,
     voice,
 )
@@ -122,6 +123,7 @@ def create_app() -> FastAPI:
     app.include_router(voice.router)
     app.include_router(usecases.router)
     app.include_router(catalog.router)
+    app.include_router(runs.router)
 
     return app
 
