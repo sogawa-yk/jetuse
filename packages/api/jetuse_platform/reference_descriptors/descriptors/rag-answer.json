@@ -1,0 +1,31 @@
+{
+  "id": "rag.answer",
+  "version": "1.0.0",
+  "displayName": "引用付きRAG回答",
+  "executionMode": "stream",
+  "action": "answer.with-citations@1",
+  "configSchema": "answer-with-citations.config",
+  "inputSchema": "answer-with-citations.input",
+  "outputSchema": "answer-with-citations.output",
+  "eventSchema": "answer-with-citations.event",
+  "examples": [
+    {
+      "name": "製品FAQへの回答",
+      "input": { "question": "保証期間を教えてください" },
+      "output": {
+        "answer": "保証期間は購入日から1年です。",
+        "citations": [{ "source": "product-manual.pdf#p3", "score": 0.82 }]
+      }
+    }
+  ],
+  "supportedScenarios": ["support-answer-with-citations"],
+  "experienceChannels": ["web"],
+  "limitations": [
+    "本番性能、可用性、顧客固有の検索精度は未検証",
+    "実RAG接続はEXB-04のProvider Adapterで実施(本Descriptorは契約のみ)"
+  ],
+  "handoffTriggers": [
+    "顧客固有システムとの本番連携",
+    "非機能要件(性能/可用性/セキュリティ)を含む構成判断"
+  ]
+}
