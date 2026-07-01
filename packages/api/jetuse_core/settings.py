@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     # OpenSearch RAG(ENH-05)。例 http://10.1.1.x:9200。空ならOpenSearchバックエンド無効
     opensearch_endpoint: str = ""
 
+    # Experience Builder rag.answer Provider の backend 明示指定(EXB-04)。
+    # 空=StubProvider(既定)。"select_ai"/"opensearch" で実 RAG Provider を配線する。
+    # generic な adb_dsn 等からの推測はしない(別機能用 ADB を誤って RAG に流用しないため)。
+    rag_answer_backend: str = ""
+
     # feature flags
     auth_required: bool = False  # INFRA-02(OIDC)完了までの暫定。本番はtrue必須
 

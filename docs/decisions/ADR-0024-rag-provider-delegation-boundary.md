@@ -75,15 +75,16 @@ EXB-04 は `answer.with-citations@1`（`rag.answer`）の実 RAG 実行を、既
    （OpenSearch は `index.max_result_window`）が結果件数上限を持つため、**アプリ層で丸めず値どおり honor** する
    （クランプは schema 有効値の暗黙改変になるため採らない。Codex EXB04-006/016/019/026 の整理）。
 
-4. **seam は実装方針 §8.1 `CapabilityProvider` を実装する。** `CoreRagAnswerProvider` に `descriptor` ＋ async
-   `start(context, input) -> RunHandle` / `resume` / `cancel` を持たせ、config は Builder 束縛値として**構築時に
-   固定**（§7.1）。`RunContext`（run_id/principal/emit/resolve_owner/cancelled）と `RunHandle`（run_id/status/
-   output）を seam 型として定義。Run-plane（run_id 採番・seq/ts・SSE 化・run.started/completed/failed 写像）は
-   **EXB-03 の担当**（本タスク非ゴール）で、EXB-03 の Run/SSE ルートが自前の `RunContext.emit` で `start()` を
-   駆動する。`resume` は単発 Capability のため非対応（NotImplementedError）、`cancel` は message.delta ループを
-   打ち切る。base(feat/stage-1) にも feat/EXB-03 にも具象 Run seam（`service.runs.RunProvider` 等）は未存在の
-   ため本タスクで seam を定義し**統合時に §8.1 と配線整合**させる（tasks/EXB-04.md）。input は inputSchema 準拠
-   dict（`{question, conversationId?}`）で受ける。
+4. **seam は EXB-03 が実体化した `RunProvider` に適合させる（実装方針 §8.1 の実現形）。**
+   §8.1 `CapabilityProvider` は概念契約で、**merge 済の EXB-03（`service/runs.py`）が同期
+   `RunProvider.run(ctx) -> Iterator[dict]` として実体化**した。よって `CoreRagAnswerProvider` はこの
+   `RunProvider` を実装する: capability 固有イベント（`retrieval.started`/`retrieval.completed`/
+   `message.delta`）の dict を yield するだけで、**lifecycle（run.started/completed/failed）・出力組立
+   （delta 累積→answer, retrieval→citations）・イベント順序検証・(将来の)cancel は engine が所有**する。
+   `principal = ctx.owner_sub`、config は `ctx.config`（Experience 束縛。MVP 未束縛時は自分の Knowledge
+   =`space=owner_sub`）。**配線は config-gated**: backend が settings で構成済みなら実 `CoreRagAnswerProvider`、
+   未構成なら `StubProvider`（`service/runs.py` の `_select_provider()`）。当初 draft の async
+   `start/resume/cancel` 形は EXB-03 の実 seam に置換した（両契約=RunProvider と answer-with-citations を壊さない）。
 
 5. **Empty（ヒット無し）は空 citations ＋「該当なし」系本文で正常終了**する（`run.failed` にしない）。
    backend が本文を返せば尊重し、空なら既定文言（「該当する情報が見つかりませんでした。」）に置換する。
