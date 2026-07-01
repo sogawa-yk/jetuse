@@ -1,0 +1,97 @@
+title: "JetUse IAM Bootstrap — 管理者向け"
+description: >-
+  JetUse の Dynamic Group / runtime policy と、通常デプロイ担当グループの権限を作成します。
+  テナンシ管理者が対象コンパートメントごとに一度だけ Apply してください。
+  アプリ本体はこのスタックの完了後に infra/orm からデプロイします。
+schemaVersion: 1.1.0
+version: "20260701"
+locale: "en"
+
+variableGroups:
+  - title: "管理者による必須設定"
+    variables:
+      - compartment_ocid
+      - home_region
+      - prefix
+  - title: "通常デプロイ担当グループ"
+    variables:
+      - create_deployer_policy
+      - deployer_group_subject
+  - title: "オプション"
+    variables:
+      - enable_semantic_store
+  - title: "Resource Manager 自動入力"
+    visible: false
+    variables:
+      - tenancy_ocid
+
+variables:
+  compartment_ocid:
+    type: oci:identity:compartment:id
+    title: "JetUse 専用コンパートメント"
+    description: "all-resources 権限をこのコンパートメント内だけに限定します。共有コンパートメントは選ばないでください。"
+    required: true
+
+  home_region:
+    type: oci:identity:region:name
+    title: "テナンシのホームリージョン"
+    description: "OCI Console のテナンシ詳細で Home region を確認してください。現在開いているリージョンとは限りません。"
+    required: true
+
+  prefix:
+    type: string
+    title: "IAM リソース名プレフィックス"
+    description: "テナンシ内で一意にします。複数環境では jetuse-sales のように部門名を含め、アプリ本体にも同じ値を推奨します。"
+    default: "jetuse"
+    required: true
+
+  create_deployer_policy:
+    type: boolean
+    title: "通常デプロイ担当グループへ権限を付与"
+    description: "テナンシ管理権限ではなく、選択した JetUse 専用コンパートメント内だけのデプロイ権限を付与します。"
+    default: true
+
+  deployer_group_subject:
+    type: string
+    title: "既存 OCI IAM グループ"
+    description: "事前に作成したグループを Domain/Group 形式で指定します（例: Default/JetUseDeployers）。"
+    default: "Default/JetUseDeployers"
+    required: true
+    visible: create_deployer_policy
+
+  enable_semantic_store:
+    type: boolean
+    title: "SQL Search 用 Semantic Store 権限"
+    description: "SQL Search を使用しない場合はオフにすると Dynamic Group を1つ減らせます。"
+    default: true
+
+  tenancy_ocid:
+    type: oci:identity:tenancy:id
+    title: "Tenancy"
+    visible: false
+
+outputs:
+  runtime_dynamic_group:
+    type: string
+    title: "Runtime Dynamic Group"
+  adb_dynamic_group:
+    type: string
+    title: "ADB Dynamic Group"
+  semantic_store_dynamic_group:
+    type: string
+    title: "Semantic Store Dynamic Group"
+  deployer_policy_id:
+    type: string
+    title: "Deployer Policy OCID"
+  next_step:
+    type: string
+    title: "次の手順"
+
+outputGroups:
+  - title: "Bootstrap 結果"
+    outputs:
+      - runtime_dynamic_group
+      - adb_dynamic_group
+      - semantic_store_dynamic_group
+      - deployer_policy_id
+      - next_step

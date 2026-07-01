@@ -1,4 +1,4 @@
-# JetUse on OCI — Generative AI Use-Case Platform (OCI prototype)
+# JetUse on OCI — Generative AI Use-Case Platform (Public edition)
 
 A web app prototype that bundles internal generative-AI use cases on top of OCI Enterprise AI
 (OpenAI-compatible agentic API): chat / use-case engine / RAG / DB chat (NL2SQL) /
@@ -6,6 +6,18 @@ agents (multiple frameworks) / voice (minutes, live transcription, voice chat) /
 image & video analysis — all on OCI managed services.
 
 > [日本語 README](./README.md) ｜ Architecture: [docs/architecture/system.md](./docs/architecture/system.md)
+
+## Deploy to Oracle Cloud
+
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/sogawa-yk/jetuse/archive/refs/heads/main.zip)
+
+Deployment is split so the application deployer does not need tenancy-administrator privileges:
+
+1. A tenancy IAM administrator applies `infra/orm-bootstrap` once for the dedicated JetUse compartment.
+2. Members of the configured deployer group apply `infra/orm` from the same public `main.zip`.
+3. End users sign in through the generated OIDC application and require no OCI IAM permissions.
+
+The application stack requires the target compartment, the tenancy home region, and the same resource prefix used by the bootstrap. See [the Resource Manager guide](./docs/setup/orm.md) and [the IAM request checklist](./docs/setup/iam.md).
 
 ## Features
 
@@ -84,5 +96,4 @@ the `docs/comparison/` selection studies, [docs/guides/customize.md](./docs/guid
 
 ## License / status
 
-Internal prototype to validate an AI use-case platform on OCI and produce presales material.
-OSS release is subject to internal review (checkpoint ④).
+`main` is the formal Public edition and `dev` is the next Internal release line. See the repository license for usage terms.

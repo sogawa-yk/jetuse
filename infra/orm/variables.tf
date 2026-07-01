@@ -10,7 +10,11 @@ variable "region" {
 variable "home_region" {
   description = "テナンシのホームリージョン(Identity Domain作成用)"
   type        = string
-  default     = "us-ashburn-1"
+
+  validation {
+    condition     = trimspace(var.home_region) != ""
+    error_message = "home_region はテナンシ詳細に表示されるホームリージョンを指定してください。"
+  }
 }
 
 # --- ユーザー入力 ---
@@ -48,12 +52,6 @@ variable "enable_opensearch" {
   description = "OpenSearch RAGクラスタ(常設課金・高コスト)。既定OFF"
   type        = bool
   default     = false
-}
-
-variable "enable_iam" {
-  description = "IAM動的グループ+ポリシー(テナンシレベル)を作成。テナンシ管理者でない場合はfalseに"
-  type        = bool
-  default     = true
 }
 
 variable "rate_limit_rps" {

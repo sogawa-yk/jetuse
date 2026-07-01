@@ -1,6 +1,6 @@
 name: release
 
-# INFRA-03(ORMワンクリック): main へ push されたら
+# Public版(ORMワンクリック): main へ push されたら
 #  - API / fn-router コンテナイメージを GHCR と OCIR(ap-osaka-1) の両方へ publish
 #    OCI Functions は OCIR必須・Container Instance も OCIR を参照する(ADR-0011)。
 #  - SPA(dist)をビルドしてリポジトリへコミット(ORMのzipに同梱し Terraform が配信)

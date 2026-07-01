@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
 
 jobs:
@@ -58,6 +58,11 @@ jobs:
           terraform validate
       - name: validate orm (ワンクリックスタック)
         working-directory: infra/orm
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+      - name: validate orm bootstrap (管理者向けIAMスタック)
+        working-directory: infra/orm-bootstrap
         run: |
           terraform init -backend=false -input=false
           terraform validate
