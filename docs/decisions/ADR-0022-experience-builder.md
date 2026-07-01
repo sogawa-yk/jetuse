@@ -1,7 +1,8 @@
 # ADR-0022: Experience Builder（v2）を dev 上で MVP-first に進める
 
-- 状態: **ドラフト（人間承認待ち）**
-- 日付: 2026-06-30
+- 状態: **Accepted（施主承認 2026-07-01）**。§4 は施主指摘を反映して更新済み（AI ロジックは再利用・API 層は
+  新設統合 API・MVP はアダプタ・後続で統合 API へ寄せるリファクタリングフェーズを明示）。
+- 日付: 2026-06-30（起票）／ 2026-07-01（承認）
 - 関連: [プロダクトコンセプト](../architecture/jetuse-product-concept.md) / [実装方針](../architecture/experience-builder-implementation-strategy.md) / [初期構想](../architecture/ai-application-builder-vision.md)
 - 起票: stage-runner / stage-0 / EXB-00
 
@@ -35,8 +36,18 @@ Web / SaaS Experience を生成**する「Reference-Guided Experience Builder」
    - **既存 Marketplace（ADR-0013 の plugin/registry 実装）は v1 機能として維持**し、削除・改変しない。
      v2 では Experience Template / Channel Adapter 等を流通させる**汎用化・拡張は行わない**（コンセプト §14
      「Marketplace は最初の MVP の中心ではない」）。v2 と既存 Marketplace の統合判断は Gate 成立後。
-4. **再利用方針**: `main` の AI 実装（GenAI クライアント / RAG / NL2SQL / OCR / 音声 / Repository 等）は
-   書き直さず Provider Adapter から委譲する。新設は主に外向け API・契約・Descriptor・SDK に限る。
+4. **再利用と API 統合方針**（施主指摘で明確化 2026-07-01）: 「書き直さない」対象は **AI ロジック**であり、
+   **API 層はむしろ新設の統合 API に寄せる**。両者を区別する。
+   - **AI ロジックは書き直さない**: `main` の GenAI クライアント / RAG / NL2SQL / OCR / 音声 / Repository は
+     Provider Adapter から `jetuse_core` を委譲再利用する（実装方針 §3.5）。実機検証済みの中身を壊さない。
+   - **API 層は新設の統合 API**: Action / Run API・契約・Descriptor・SDK を新しい **JetUse API** として作る
+     （実装方針 §3.1「共通化するのは実行契約」）。これが将来の**唯一の実行入口**になる。
+   - **MVP**: まず Provider Adapter で RAG 縦切り1本を速く通す。既存 UI は当面 `main` の画面別ルート
+     （`/api/chat` 等）のまま**並存**させる（実装方針 §12.4）。
+   - **後続フェーズ（縦切りが安定後・明示的に挟むリファクタリング）**: Action / Run API を
+     **canonical な JetUse API に昇格**させ、**既存 UI もそれ経由に移行**、画面別の旧個別ルートは段階的に廃止する。
+     ＝アダプタは MVP の踏み台であり、「既存 UI とビルダー生成 UI が**同じ統合 API を呼ぶ**」形へ寄せる
+     フェーズを計画に含める（旧ルート廃止は Builder 生成 UI が必要機能を網羅した後に判断・実装方針 §12.4）。
 5. **品質ゲート**: Build 成功だけを完成としない。実 AI 接続・代表シナリオ・引用・
    Streaming/Loading/Empty/Error/Retry・デモ台本・Preflight を確認した版だけを Demo Bundle として固定する
    （実装方針 §3.8）。各タスクは Codex レビュー PASS ＋ 実環境 E2E（または理由付き SKIPPED）を完了条件とする。
@@ -50,7 +61,10 @@ Web / SaaS Experience を生成**する「Reference-Guided Experience Builder」
 - 既知の技術的負債: semver 比較が `registry_client`（api）と `jetuse_registry`（registry）に二重実装で残る
   （別途判断）。本 ADR の範囲外。
 
-## 未決・人間が承認すべき点
+## 承認記録
 
-- 本方針（dev 根・MVP=RAG縦切り・汎用基盤を Gate まで作らない・main 再利用）の承認。
-- ステージ進行（Stage 0→1→2→3）の着手承認。
+- 2026-07-01 施主承認: 本方針（dev 根・MVP=引用付きRAG縦切り1本・汎用基盤を Gate まで作らない・既存
+  Marketplace は v1 維持・main の AI ロジック再利用）を承認。§4 は「AI ロジックは書き直さず、API 層は
+  新設統合 API に寄せる。MVP はアダプタ、後続で Action/Run API を canonical 化し既存 UI も移行する
+  リファクタリングフェーズを明示」に更新のうえ承認（ロードマップ Stage 4 に反映）。
+- これにより stage-0 を `dev` へ統合（PR）してよい。Stage 1（EXB-03/04/05）着手も承認。
