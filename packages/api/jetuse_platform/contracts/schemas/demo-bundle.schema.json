@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jetuse.oracle.com/schemas/experience-builder/demo-bundle.schema.json",
+  "title": "DemoBundle",
+  "description": "Quality Gate と最終確認を通過した版を固定した、再現可能なデモ構成 (実装方針 §3.8/§6)。Gate 通過版だけが DemoBundle。",
+  "type": "object",
+  "required": ["kind", "name", "experience", "dataVersions", "actionBindings", "qualityGate"],
+  "additionalProperties": true,
+  "properties": {
+    "kind": { "const": "DemoBundle" },
+    "name": { "type": "string", "minLength": 1 },
+    "experience": {
+      "type": "object",
+      "description": "固定した Experience とその版。再現性のため version を必須にする。",
+      "required": ["ref", "version"],
+      "additionalProperties": true,
+      "properties": {
+        "ref": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "dataVersions": {
+      "type": "object",
+      "description": "再現に必要な Fixture / Knowledge の固定版。MVP は knowledge を必須とし、各版は空でない文字列。",
+      "required": ["knowledge"],
+      "additionalProperties": true,
+      "properties": {
+        "fixtures": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        },
+        "knowledge": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "actionBindings": {
+      "type": "array",
+      "description": "固定した Action / Channel Binding の一覧。",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["actionId", "target"],
+        "additionalProperties": true,
+        "properties": {
+          "actionId": { "type": "string", "minLength": 1 },
+          "target": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "qualityGate": {
+      "type": "object",
+      "description": "Quality Gate / Preflight の検証結果。通過版のみ DemoBundle に固定できる(§3.8)。",
+      "required": ["passed"],
+      "additionalProperties": true,
+      "properties": {
+        "passed": { "const": true }
+      }
+    }
+  }
+}

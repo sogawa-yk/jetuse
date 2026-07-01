@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jetuse.oracle.com/schemas/experience-builder/answer-with-citations.input.schema.json",
+  "title": "answer.with-citations@1 inputSchema",
+  "description": "実行時に UI が渡す入力 (実装方針 §7.1)。Builder が束縛する config とは分離する。",
+  "type": "object",
+  "required": ["question"],
+  "additionalProperties": false,
+  "properties": {
+    "question": { "type": "string", "minLength": 1 },
+    "conversationId": { "type": "string" }
+  }
+}

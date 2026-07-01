@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jetuse.oracle.com/schemas/experience-builder/run-event.schema.json",
+  "title": "RunEvent",
+  "description": "Action / Run API の標準 Run イベント語彙 (実装方針 §7.4)。標準イベントは実行状況のみを表し、Capability 固有データは data または Descriptor の eventSchema/outputSchema で表す。",
+  "type": "object",
+  "required": ["run_id", "type", "seq", "ts"],
+  "additionalProperties": true,
+  "properties": {
+    "run_id": { "type": "string", "minLength": 1 },
+    "type": {
+      "type": "string",
+      "enum": [
+        "run.started",
+        "message.delta",
+        "retrieval.started",
+        "retrieval.completed",
+        "tool.started",
+        "tool.completed",
+        "approval.required",
+        "artifact.created",
+        "run.completed",
+        "run.failed",
+        "run.cancelled"
+      ]
+    },
+    "seq": { "type": "integer", "minimum": 0 },
+    "ts": { "type": "string", "format": "date-time", "minLength": 1 },
+    "data": {
+      "type": "object",
+      "description": "イベント固有の最小ペイロード。type ごとの詳細は Capability の eventSchema を正とする。",
+      "additionalProperties": true
+    }
+  }
+}

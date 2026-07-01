@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jetuse.oracle.com/schemas/experience-builder/answer-with-citations.event.schema.json",
+  "title": "answer.with-citations@1 eventSchema",
+  "description": "この Capability 固有の Run イベント payload (実装方針 §7.1)。標準 Run 語彙のうち本 Capability が出すものに、固有 data を載せる。",
+  "type": "object",
+  "required": ["type", "data"],
+  "additionalProperties": true,
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": ["message.delta", "retrieval.started", "retrieval.completed"]
+    },
+    "data": { "type": "object", "additionalProperties": true }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "message.delta" } } },
+      "then": {
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": ["text"],
+            "properties": { "text": { "type": "string" } }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "retrieval.completed" } } },
+      "then": {
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": ["citations"],
+            "properties": {
+              "citations": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["source"],
+                  "properties": {
+                    "source": { "type": "string", "minLength": 1 },
+                    "score": { "type": "number" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jetuse.oracle.com/schemas/experience-builder/demo-evidence-pack.schema.json",
+  "title": "DemoEvidencePack",
+  "description": "動作した構成・顧客確認・制約・未検証事項・専任チームへの引き継ぎを記録する (実装方針 §6/§16.5)。実接続とシミュレーション、確認済みと未検証を区別する。",
+  "type": "object",
+  "required": [
+    "kind",
+    "bundle",
+    "workingConfiguration",
+    "customerConfirmations",
+    "limitations",
+    "unverified",
+    "handoff"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "kind": { "const": "DemoEvidencePack" },
+    "bundle": {
+      "type": "object",
+      "description": "対象 DemoBundle と動作した Reference Implementation/版。引き継ぎのため実装名と版を必須にする。",
+      "required": ["ref", "referenceImplementation", "version"],
+      "additionalProperties": true,
+      "properties": {
+        "ref": { "type": "string", "minLength": 1 },
+        "referenceImplementation": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "workingConfiguration": {
+      "type": "object",
+      "description": "実際に動作した構成。各要素ごとに実接続(real)かシミュレーション(simulation)かを必須で区別する(§16.5)。",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["connection"],
+        "additionalProperties": true,
+        "properties": {
+          "connection": { "type": "string", "enum": ["real", "simulation"] }
+        }
+      }
+    },
+    "customerConfirmations": {
+      "type": "array",
+      "description": "顧客が評価・確認した UI/操作/データ/追加要件(確認済み事項)。",
+      "items": { "type": "string" }
+    },
+    "limitations": {
+      "type": "array",
+      "description": "確認済みの制約。",
+      "items": { "type": "string" }
+    },
+    "unverified": {
+      "type": "array",
+      "description": "未検証事項 (Solution Validity を要する項目)。",
+      "items": { "type": "string" }
+    },
+    "handoff": {
+      "type": "object",
+      "description": "専任チームへの引き継ぎ情報。",
+      "additionalProperties": true,
+      "required": ["nextVerificationItems"],
+      "properties": {
+        "nextVerificationItems": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}
