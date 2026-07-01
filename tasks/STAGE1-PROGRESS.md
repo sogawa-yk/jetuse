@@ -14,12 +14,14 @@ status: `todo` | `in_progress` | `blocked` | `done`
 | 順 | タスク | 依存 | 人間ゲート | status |
 |---|---|---|---|---|
 | 1 | EXB-03 Run/RunEvent/Artifact モデル＋ Action/Run API（rag.answer 限定・SSE） | Stage 0 | コミット | **done** |
-| 2 | EXB-04 RAG Provider Adapter（jetuse_core 委譲・OCI 直呼びしない・main 回帰比較） | EXB-02 | コミット・実OCI接続 | **blocked** |
+| 2 | EXB-04 RAG Provider Adapter（jetuse_core 委譲・OCI 直呼びしない・main 回帰比較） | EXB-02 | コミット・実OCI接続 | **done** |
 | 3 | EXB-05 Typed Action Client（answer.with-citations@1 専用・生URL非露出） | EXB-01, EXB-03 | コミット | **done** |
 
 - **EXB-03 done**: codex review-12 PASS・363 tests・ruff clean。feat/stage-1 統合済（merge 006643f）。
   残置 major EXB03-001..004（購読枠 close 例外時リーク/スナップショット隔離/反復上限/サロゲート）は未対応で報告。
-- **EXB-04 blocked**: adr_approval ゲート（ADR-0024 未承認）。統合しない。詳細は STATE.md。
+- **EXB-04 done**: ADR-0024 施主承認(2026-07-01)後にリワーク → topK上限(maximum:100)追加・実 Provider を EXB-03 の
+  RunProvider seam へ config-gated 配線(rag_answer_backend 未設定=stub / 設定時=実 CoreRagAnswerProvider)。
+  codex review-11 PASS・api 395 tests・ruff clean。実 Knowledge E2E は本ホストに backend/.env 無く SKIPPED(残ゲート)。
 
 ## 予定スコープ（概要・正本は Stage 0 確定後のチケット）
 - **EXB-03**: `POST /api/v1/experiences/{id}/actions/{actionId}/runs` / `GET /runs/{id}` /
