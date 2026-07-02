@@ -6,6 +6,8 @@ module "iam" {
   tenancy_ocid           = var.tenancy_ocid
   compartment_ocid       = var.compartment_ocid
   prefix                 = var.prefix
+  enable_dynamic_group   = var.enable_dynamic_group
+  enable_runtime_policy  = var.enable_runtime_policy
   enable_semantic_store  = var.enable_semantic_store
   create_deployer_policy = var.create_deployer_policy
   deployer_group_subject = var.deployer_group_subject
