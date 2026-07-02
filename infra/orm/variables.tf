@@ -7,16 +7,6 @@ variable "region" {
   type = string
 }
 
-variable "home_region" {
-  description = "テナンシのホームリージョン(Identity Domain作成用)"
-  type        = string
-
-  validation {
-    condition     = trimspace(var.home_region) != ""
-    error_message = "home_region はテナンシ詳細に表示されるホームリージョンを指定してください。"
-  }
-}
-
 # --- ユーザー入力 ---
 variable "compartment_ocid" {
   description = "リソースを作成するコンパートメント"
@@ -52,6 +42,25 @@ variable "enable_dynamic_group" {
   description = "Runtime / ADB / Semantic StoreのDynamic Groupとテナンシスコープのnamespace参照ポリシーを作成する"
   type        = bool
   default     = true
+}
+
+# enable_dynamic_group=false のとき、runtime policyが参照する既存Dynamic Group名。
+variable "existing_runtime_dynamic_group" {
+  description = "既存のRuntime Dynamic Group名(enable_dynamic_group=falseの場合必須)"
+  type        = string
+  default     = ""
+}
+
+variable "existing_adb_dynamic_group" {
+  description = "既存のADB Dynamic Group名(enable_dynamic_group=falseの場合必須)"
+  type        = string
+  default     = ""
+}
+
+variable "existing_semantic_store_dynamic_group" {
+  description = "既存のSemantic Store Dynamic Group名(enable_dynamic_group=falseかつenable_semantic_store=trueの場合必須)"
+  type        = string
+  default     = ""
 }
 
 variable "enable_runtime_policy" {

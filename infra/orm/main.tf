@@ -57,6 +57,10 @@ module "iam" {
   enable_runtime_policy  = var.enable_runtime_policy
   enable_semantic_store  = var.enable_semantic_store
   create_deployer_policy = false
+
+  existing_runtime_dynamic_group        = var.existing_runtime_dynamic_group
+  existing_adb_dynamic_group            = var.existing_adb_dynamic_group
+  existing_semantic_store_dynamic_group = var.existing_semantic_store_dynamic_group
 }
 
 module "network" {

@@ -17,8 +17,13 @@ provider "oci" {
   region = var.region
 }
 
-# Identity系のCREATEはホームリージョン必須
+# Identity系のCREATEはホームリージョン必須。ユーザー入力は誤入力で失敗するため
+# region subscriptionsから自動導出する(deployer policyの inspect tenancies で参照可)。
+data "oci_identity_region_subscriptions" "this" {
+  tenancy_id = var.tenancy_ocid
+}
+
 provider "oci" {
   alias  = "home"
-  region = var.home_region
+  region = [for r in data.oci_identity_region_subscriptions.this.region_subscriptions : r.region_name if r.is_home_region][0]
 }

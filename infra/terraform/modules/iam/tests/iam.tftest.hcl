@@ -141,13 +141,16 @@ run "runtime_policy_only_with_existing_dynamic_groups" {
   command = plan
 
   variables {
-    tenancy_ocid           = "ocid1.tenancy.oc1..publiciamtest"
-    compartment_ocid       = "ocid1.compartment.oc1..publiciamtest"
-    prefix                 = "jetuse-spike-iam04"
-    enable_dynamic_group   = false
-    enable_runtime_policy  = true
-    enable_semantic_store  = true
-    create_deployer_policy = false
+    tenancy_ocid                          = "ocid1.tenancy.oc1..publiciamtest"
+    compartment_ocid                      = "ocid1.compartment.oc1..publiciamtest"
+    prefix                                = "jetuse-spike-iam04"
+    enable_dynamic_group                  = false
+    enable_runtime_policy                 = true
+    enable_semantic_store                 = true
+    create_deployer_policy                = false
+    existing_runtime_dynamic_group        = "preexisting-runtime-dg"
+    existing_adb_dynamic_group            = "preexisting-adb-dg"
+    existing_semantic_store_dynamic_group = "preexisting-semantic-store-dg"
   }
 
   assert {
@@ -165,14 +168,40 @@ run "runtime_policy_only_with_existing_dynamic_groups" {
   }
 
   assert {
-    condition     = contains(oci_identity_policy.runtime[0].statements, "Allow dynamic-group jetuse-spike-iam04-runtime-dg to use generative-ai-family in compartment id ocid1.compartment.oc1..publiciamtest")
-    error_message = "The runtime policy must reference the conventionally named pre-existing dynamic group."
+    condition     = contains(oci_identity_policy.runtime[0].statements, "Allow dynamic-group preexisting-runtime-dg to use generative-ai-family in compartment id ocid1.compartment.oc1..publiciamtest")
+    error_message = "The runtime policy must reference the explicitly named pre-existing dynamic group."
+  }
+
+  assert {
+    condition     = contains(oci_identity_policy.runtime[0].statements, "Allow dynamic-group preexisting-semantic-store-dg to use database-tools-family in compartment id ocid1.compartment.oc1..publiciamtest")
+    error_message = "The semantic store statements must reference the explicitly named pre-existing dynamic group."
+  }
+
+  assert {
+    condition     = alltrue([for statement in oci_identity_policy.runtime[0].statements : !strcontains(statement, "jetuse-spike-iam04")])
+    error_message = "No prefix-derived dynamic group name may be referenced when dynamic group creation is disabled."
   }
 
   assert {
     condition     = length(oci_identity_policy.runtime_tenancy) == 0
     error_message = "No tenancy-scoped policy may be planned for a compartment-only runtime-policy deployment."
   }
+}
+
+run "runtime_policy_requires_existing_dynamic_group_names" {
+  command = plan
+
+  variables {
+    tenancy_ocid           = "ocid1.tenancy.oc1..publiciamtest"
+    compartment_ocid       = "ocid1.compartment.oc1..publiciamtest"
+    prefix                 = "jetuse-spike-iam06"
+    enable_dynamic_group   = false
+    enable_runtime_policy  = true
+    enable_semantic_store  = true
+    create_deployer_policy = false
+  }
+
+  expect_failures = [oci_identity_policy.runtime]
 }
 
 run "runtime_iam_fully_disabled" {
