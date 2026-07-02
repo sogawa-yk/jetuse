@@ -1,7 +1,8 @@
-# ADR-0014: Public 配布の IAM 分離と Public / Internal リリースライン
+# ADR-0014: Public配布のIAM選択とPublic / Internalリリースライン
 
 - Status: Accepted
 - Date: 2026-07-01
+- Updated: 2026-07-02
 
 ## Context
 
@@ -9,7 +10,7 @@ Public 版は GitHub の Deploy to Oracle Cloud ボタンから OCI Resource Man
 
 同時に、`dev` では `main` から派生した Internal 向けの新機能を開発している。Public 版と Internal 版はいずれも正式リリースであり、Internal 版に Public 機能が含まれても問題ない。
 
-従来の `infra/orm` はアプリリソースと Dynamic Group / Policy を同時に作るため、通常利用者にもテナンシレベルの IAM 権限を要求した。また `main` と `dev` の変更方向が明文化されておらず、後の merge conflict と意図しない Public 公開のリスクがあった。
+IAMとアプリを別Stackにすると最小権限の責務は明確になる一方、Deployボタン、state、prefix、実行順序が増える。Terraformは実行ユーザーのOCI権限を超えて操作できないため、1つのStack内でIAM作成範囲を選べば、権限差を保ったまま操作を単純化できる。また`main`と`dev`の変更方向が未定義だと、merge conflictと意図しないPublic公開のリスクがある。
 
 ## Decision
 
@@ -17,14 +18,17 @@ Public 版は GitHub の Deploy to Oracle Cloud ボタンから OCI Resource Man
 2. `dev` を Internal 次期版の統合・正式リリース元とする。
 3. Public 変更は `main` で完成させ、`main → dev` の forward merge で同期する。
 4. Internal 固有変更は `dev` に入れ、Public 化するときだけ対象変更を最新 `main` 上へ選択的に移植する。`dev → main` の全体 merge は行わない。
-5. IAM は管理者向け `infra/orm-bootstrap` と通常利用者向け `infra/orm` に分離する。
-6. Bootstrap は runtime / ADB / Semantic Store の Dynamic Group を分け、通常デプロイ担当グループには JetUse 専用コンパートメント内の権限だけを付与する。
-7. Resource Manager がホームリージョンを自動入力しないため、両スタックで `home_region` を明示入力する。
+5. IAMとアプリ本体は1つの`infra/orm` Stackで管理する。
+6. 実行ユーザーの権限と既存IAMに応じて、Dynamic GroupとRuntime Policyの作成を独立して切り替える。
+7. runtime / ADB / Semantic StoreのDynamic Groupは分離する。
+8. Resource Managerがホームリージョンを自動入力しないため、`home_region`を明示入力する。
 
 ## Consequences
 
-- 通常のデプロイ担当者はテナンシ管理者でなくても JetUse を Apply できる。
-- 管理者作業は対象コンパートメントごとの初回 Bootstrap に限定される。
+- デプロイ操作は1つのStackと1つのDeployボタンで完結する。
+- テナンシ管理者はIAMとアプリを同時に作成できる。
+- 権限が限定された利用者は、管理者が事前作成したIAMに対応するフラグを無効にして同じStackを使用できる。
+- 権限のないIAM操作を有効にするとPlan / ApplyがOCIの権限エラーになる。
 - JetUseDeployers は専用コンパートメント内のリソースと ORM state を管理できるため、グループ所属とコンパートメント境界の管理が必要。
 - Public 変更の後に sync PR が1本増えるが、Conflict を変更直後に解消できる。
 - Internal 固有機能を Public 化する際は選択的な移植と Public 向け受け入れ確認が必要。
@@ -32,9 +36,9 @@ Public 版は GitHub の Deploy to Oracle Cloud ボタンから OCI Resource Man
 
 ## Alternatives considered
 
-### アプリ stack が IAM も作る
+### IAMとアプリを別Stackに分離
 
-操作は1回だが、全利用者にテナンシ IAM 権限が必要になるため不採用。
+最小権限の責務分離にはなるが、Deployボタン、state、prefix、実行順序が増えて利用者体験が複雑になるため不採用。1つのStack内の作成フラグで権限差を扱う。
 
 ### runtime principal を1つの Dynamic Group に統合
 

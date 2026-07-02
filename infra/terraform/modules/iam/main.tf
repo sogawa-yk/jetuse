@@ -1,6 +1,5 @@
-# JetUse の実行時プリンシパルは責務ごとに分離する。
-# IAM の作成自体は infra/orm-bootstrap からテナンシ管理者が一度だけ行い、
-# 通常のアプリ用 ORM スタックには含めない。
+# JetUseの実行時プリンシパルは責務ごとに分離する。
+# 呼び出し元stackは実行者の権限と既存IAMに応じて、作成範囲を個別に切り替える。
 
 locals {
   runtime_dynamic_group_name        = "${var.prefix}-runtime-dg"
@@ -96,7 +95,7 @@ resource "oci_identity_policy" "runtime" {
 }
 
 # Object Storage namespace はテナンシ単位のため、コンパートメントポリシーとは分離する。
-# Dynamic Group をTerraformで作成する管理者bootstrap時に一緒に作成する。
+# Dynamic GroupをTerraformで作成する場合に一緒に作成する。
 # enable_dynamic_group=false の場合は、既存Dynamic Groupと共に事前作成済みであることを前提とする。
 resource "oci_identity_policy" "runtime_tenancy" {
   count = var.enable_dynamic_group ? 1 : 0

@@ -17,14 +17,12 @@ trap 'rm -rf "${work_dir}"' EXIT
 
 source_tree="${work_dir}/source"
 app_stage="${work_dir}/jetuse-orm"
-bootstrap_stage="${work_dir}/jetuse-iam-bootstrap"
-mkdir -p "${source_tree}" "${app_stage}" "${bootstrap_stage}"
+mkdir -p "${source_tree}" "${app_stage}"
 
 # Copy only tracked Terraform files. This prevents local .terraform directories
 # and other ignored build artifacts from leaking into the public archives.
 git -C "${repo_root}" archive --format=tar HEAD \
   infra/orm \
-  infra/orm-bootstrap \
   infra/terraform/modules \
   | tar -xf - -C "${source_tree}"
 
@@ -38,31 +36,19 @@ sed -i 's#../terraform/modules/#./terraform/modules/#g' "${app_stage}/main.tf"
 sed -i 's#${path.module}/../../packages/web/dist#${path.module}/packages/web/dist#g' \
   "${app_stage}/spa.tf"
 
-cp -R "${source_tree}/infra/orm-bootstrap/." "${bootstrap_stage}/"
-mkdir -p "${bootstrap_stage}/terraform/modules"
-cp -R "${source_tree}/infra/terraform/modules/iam" \
-  "${bootstrap_stage}/terraform/modules/"
-sed -i 's#../terraform/modules/#./terraform/modules/#g' "${bootstrap_stage}/main.tf"
-
-for stage in "${app_stage}" "${bootstrap_stage}"; do
-  if find "${stage}" -type d -name .terraform -print -quit | grep -q .; then
-    echo "unexpected .terraform directory in ${stage}" >&2
-    exit 1
-  fi
-  if grep -R -n -E \
-    'source[[:space:]]*=[[:space:]]*"\.\./terraform/modules|spa_dist_dir[[:space:]]*=.*\.\./\.\./packages/web/dist' \
-    "${stage}"; then
-    echo "repository-relative path remains in ${stage}" >&2
-    exit 1
-  fi
-done
+if find "${app_stage}" -type d -name .terraform -print -quit | grep -q .; then
+  echo "unexpected .terraform directory in ${app_stage}" >&2
+  exit 1
+fi
+if grep -R -n -E \
+  'source[[:space:]]*=[[:space:]]*"\.\./terraform/modules|spa_dist_dir[[:space:]]*=.*\.\./\.\./packages/web/dist' \
+  "${app_stage}"; then
+  echo "repository-relative path remains in ${app_stage}" >&2
+  exit 1
+fi
 
 (cd "${app_stage}" && zip -q -r "${work_dir}/jetuse-orm.zip" .)
-(cd "${bootstrap_stage}" && zip -q -r "${work_dir}/jetuse-iam-bootstrap.zip" .)
 
 install -m 0644 "${work_dir}/jetuse-orm.zip" "${output_dir}/jetuse-orm.zip"
-install -m 0644 "${work_dir}/jetuse-iam-bootstrap.zip" \
-  "${output_dir}/jetuse-iam-bootstrap.zip"
 
 echo "Created ${output_dir}/jetuse-orm.zip"
-echo "Created ${output_dir}/jetuse-iam-bootstrap.zip"

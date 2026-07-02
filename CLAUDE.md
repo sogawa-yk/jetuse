@@ -40,8 +40,7 @@ spikes/              # Phase 0 検証スクリプト
 packages/web/        # React SPA
 packages/api/        # FastAPI
 infra/terraform/     # Terraformモジュール
-infra/orm/           # Resource Managerスタック
-infra/orm-bootstrap/ # Public版の管理者向けIAM bootstrap
+infra/orm/           # IAMとアプリを含むResource Managerスタック
 ```
 
 ## タスクチケット書式

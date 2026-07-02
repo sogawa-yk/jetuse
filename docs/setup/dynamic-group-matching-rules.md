@@ -98,7 +98,7 @@ Any {
 }
 ```
 
-`jetuse:test`はdev/publicのPolicy対象に含めない。デプロイ手順、Dynamic Group構成、Policy文は社外ユーザーへ配布するIAM Bootstrapと同じにし、OCIDとリソース名だけを変更する。
+`jetuse:test`はdev/publicのPolicy対象に含めない。デプロイ手順、Dynamic Group構成、Policy文はPublic版のIAM Terraform moduleと同じにし、OCIDとリソース名だけを変更する。
 
 ## Resource Typeの対応
 
@@ -137,7 +137,7 @@ Deploy to Oracle Cloudを実行する担当者はOCI IAMの通常グループへ
 
 ## Terraform実装との関係
 
-現在の `infra/terraform/modules/iam` と `infra/orm-bootstrap` は、Runtime / ADB / Semantic Storeを分離するstrict構成である。この文書のcompact構成を自動作成するには、Terraformへ次のような切替を追加する必要がある。
+現在の`infra/orm`と`infra/terraform/modules/iam`は、Runtime / ADB / Semantic Storeを分離するstrict構成である。この文書のcompact構成を自動作成するには、Terraformへ次のような切替を追加する必要がある。
 
 ```hcl
 dynamic_group_mode = "combined" # 1環境1Dynamic Group
@@ -150,4 +150,4 @@ dynamic_group_mode = "strict"   # Runtime / ADB / Semantic Storeを分離
 
 - [OCI: Writing Matching Rules to Define Dynamic Groups](https://docs.oracle.com/iaas/Content/Identity/dynamicgroups/Writing_Matching_Rules_to_Define_Dynamic_Groups.htm)
 - [Public版 IAM要件](./public-iam-requirements.md)
-- [IAM Bootstrap詳細](./iam.md)
+- [IAM設定詳細](./iam.md)

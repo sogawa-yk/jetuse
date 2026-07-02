@@ -1,105 +1,84 @@
-# OCI Resource Manager で JetUse Public 版をデプロイ
+# OCI Resource ManagerでJetUse Public版をデプロイ
 
-GitHub の **Deploy to Oracle Cloud** ボタンから、JetUse を OCI Resource Manager（ORM）スタックとして構築する。通常の利用者にテナンシ管理権限を要求しないよう、IAM とアプリ本体を二つのスタックに分離している。
+GitHubの**Deploy JetUse to Oracle Cloud**ボタンから、IAMとJetUse本体を1つのOCI Resource Manager（ORM）Stackとして構築する。
 
-| 段階 | Deployパッケージ | 実行者 | 頻度 |
-|---|---|---|---|
-| IAM Bootstrap | `jetuse-iam-bootstrap.zip` | テナンシ IAM 管理者 | 対象コンパートメントごとに1回 |
-| JetUse 本体 | `jetuse-orm.zip` | `JetUseDeployers` 等の通常ユーザー | 環境ごと |
+[![Deploy JetUse to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/sogawa-yk/jetuse/releases/download/orm-main/jetuse-orm.zip)
 
-## 1. 管理者: IAM Bootstrap
+専用ZIPの直下にTerraformと`schema.yaml`があるため、Working directoryの指定は不要。
 
-最初に [iam.md](./iam.md) の手順で runtime Dynamic Group / Policy と、通常デプロイ担当グループの Policy を作成する。管理者自身が毎回 JetUse をデプロイする必要はない。
+## IAM作成範囲
 
-READMEの**Deploy JetUse IAM Bootstrap to Oracle Cloud**ボタンを使用する。専用ZIPの直下にTerraformと`schema.yaml`があるため、Working directoryの指定は不要。Apply後はIAMの反映を数分待つ。
+同じStackの変数画面で、実行ユーザーの権限と既存IAMに合わせて選択する。
 
-## 2. 通常利用者: Deploy to Oracle Cloud
+| 実行条件 | `enable_dynamic_group` | `enable_runtime_policy` | 動作 |
+|---|---:|---:|---|
+| テナンシIAM管理者 | `true` | `true` | Dynamic Group、テナンシPolicy、コンパートメントPolicyを作成 |
+| Dynamic Group作成済み | `false` | `true` | 既存Dynamic Groupを参照してコンパートメントPolicyだけ作成 |
+| Runtime IAM作成済み | `false` | `false` | IAMを変更せずアプリリソースだけ作成 |
+| Dynamic Groupだけ作成 | `true` | `false` | Dynamic GroupとテナンシPolicyだけ作成 |
 
-READMEの**Deploy JetUse to Oracle Cloud**ボタンは、次のURLで公開`main`ブランチから生成された専用ZIPをORMへ渡す。
+`enable_semantic_store=false`にすると、SQL Search用Semantic StoreのDynamic GroupとPolicy文を作成しない。
 
-```text
-https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/sogawa-yk/jetuse/releases/download/orm-main/jetuse-orm.zip
-```
+Terraformは権限を迂回しない。実行ユーザーに権限がないIAM操作を有効にした場合、そのリソースのPlanまたはApplyがOCIの`403`で失敗する。権限の詳細は [IAMガイド](./iam.md) を参照。
 
-作成ウィザードで以下を指定する。
+## 作成手順
 
-1. Stack compartment に Bootstrap と同じ JetUse 専用コンパートメントを選ぶ。
-2. 変数画面で同じコンパートメントを選ぶ。`prefix` は識別しやすいよう Bootstrap と同じ値を推奨する。
-3. `home_region` は OCI Console のテナンシ詳細に表示される Home region を選ぶ。現在 Console で開いているリージョンとは限らない。
-4. Plan の作成物と課金対象を確認して Apply する。
+1. READMEの**Deploy JetUse to Oracle Cloud**ボタンを開く。
+2. Stack compartmentとリソース作成先にJetUse専用コンパートメントを選ぶ。
+3. `home_region`にテナンシのホームリージョンを指定する。
+4. IAM作成範囲を上表から選ぶ。新規テナンシの管理者は既定値のままでよい。
+5. `prefix`をテナンシ内で一意にする。既存Dynamic Groupを使う場合は既存名のprefixと一致させる。
+6. Planで作成先、IAM、課金対象を確認してApplyする。
 
-Resource Manager が自動入力するリージョンはリソースの配備リージョンであり、テナンシのホームリージョンではない。そのため `home_region` は必須の画面入力としている。
+Resource Managerが自動入力する`region`はリソースの配備リージョンであり、テナンシのホームリージョンではない。Identity DomainとIAM操作のため、`home_region`は別に入力する。
 
-## 入力
+## 主な入力
 
-| 入力 | 必須 | 説明 |
-|---|---|---|
-| `compartment_ocid` | Yes | Bootstrap と同じ JetUse 専用コンパートメント |
-| `home_region` | Yes | Identity Domain の作成に使うテナンシホームリージョン |
-| `prefix` | Yes | リソース名。Bootstrap と同じ値を推奨。既定 `jetuse` |
-| `demo_email` | Yes（認証時） | 初期デモユーザーのメール |
-| `adb_admin_password` | No | 空なら安全なランダム値を生成 |
-| `enable_opensearch` | No | 常設課金が発生するため既定 false |
-| `ocir_*` / image URL | 通常は変更不要 | Public 版の公開 OCIR image を参照 |
+| 入力 | 既定 | 説明 |
+|---|---:|---|
+| `compartment_ocid` | 必須 | JetUseリソースの作成先 |
+| `home_region` | 必須 | Identity DomainとIAMの操作先 |
+| `prefix` | `jetuse` | リソース、Dynamic Group、Policy名のprefix |
+| `enable_dynamic_group` | `true` | Dynamic Groupとnamespace参照Policyを作成 |
+| `enable_runtime_policy` | `true` | 対象コンパートメントにRuntime Policyを作成 |
+| `enable_semantic_store` | `true` | SQL Search用Semantic Store権限を含める |
+| `enable_auth` | `true` | Identity Domain、OIDCアプリ、デモユーザーを作成 |
+| `enable_opensearch` | `false` | 常設課金のOpenSearchを作成 |
+| `adb_admin_password` | 空 | 空の場合は安全なランダム値を生成 |
 
-`enable_iam` はアプリスタックから削除した。IAM をここで有効にして通常利用者の Apply が途中で失敗する構成には戻さない。
+`enable_auth=true`はIdentity Domainを作成するため、実行ユーザーにテナンシのDomain管理権限が必要。権限がなく認証も不要な隔離検証環境では`false`にできる。
 
 ## 作成されるリソース
 
+- 選択に応じたDynamic GroupとIAM Policy
 - VCN、public/private subnet、NSG、Internet/NAT/Service Gateway
-- Autonomous Database 26ai（mTLS）と wallet
-- Object Storage（SPA、app-data、speech）と SPA 配信用 PAR
-- Container Instance（FastAPI）と OCI Functions（router）
-- API Gateway（`/api/*` と SPA）
-- Logging log group / logs、Monitoring 送信先
-- Identity Domain、OIDC public client（PKCE）、初期デモユーザー
-- 任意の OpenSearch cluster
-- ADB wallet、SPA、runtime `config.json` の Object Storage 配置
-
-Dynamic Group と IAM Policy は作らない。Bootstrap stack が所有するため、本体 stack を Destroy しても IAM は残り、同じコンパートメントへの再デプロイで再利用できる。
+- Autonomous Database 26aiとwallet
+- Object Storage（SPA、app-data、speech）
+- Container Instance、OCI Functions、API Gateway
+- Logging / Monitoring
+- Identity Domain、OIDC public client、初期デモユーザー（`enable_auth=true`）
+- OpenSearch cluster（`enable_opensearch=true`）
 
 ## デプロイ後
 
-1. Output の `app_url` を開く。
-2. `demo_username` / `demo_password` でログインする。
-3. 初回は ADB 作成と DB bootstrap に 10〜15 分程度かかり、その間 DB 系 API が一時的に 503 になることがある。
+1. Outputの`app_url`を開く。
+2. `demo_username` / `demo_password`でログインする。
+3. 初回はIAM反映、ADB作成、DB初期化に10〜15分程度かかる。反映中は一部APIが一時的に失敗することがある。
 
-JetUse のエンドユーザーは OCI Console のアカウントや IAM Policy を必要としない。OIDC ユーザーの追加・運用は作成された Identity Domain 内で行う。
+## Stack更新時の注意
 
-## 自動化の仕組み
+同じStackで`enable_dynamic_group=true`から`false`へ変更すると、TerraformはそのStackが管理しているDynamic GroupとテナンシPolicyを削除するPlanを作る。既存IAMへ管理を移す場合は、Planを確認し、必要に応じて先にTerraform stateを移管する。
 
-1. **Deploy packages**: `.github/workflows/release.yml` がTerraformと`schema.yaml`をルートに持つ2つの専用ZIPを`orm-main`リリースへpublishする。
-2. **Container images**: 同workflowがPublic `main` の API / Functions image を公開 OCIR に publish する。
-3. **DB bootstrap**: `packages/api/entrypoint.sh` が初回起動時に ADB user、権限、schema migration を冪等に作成する。
-4. **SPA と OIDC**: Terraform が `packages/web/dist` と OIDC client ID を含む `config.json` を Object Storage に配置する。
-5. **OIDC registration**: Identity Domain、PKCE client、初期ユーザーと grant を Terraform で作成する。
-6. **Runtime authorization**: Container Instances / Functions / ADB は Bootstrap で作られた resource principal Policy を使用する。
+StackをDestroyすると、そのStackで作成したIAMも削除対象になる。共有IAMをこのStackに作らせない場合は、初回から該当フラグを`false`にする。
 
-## セキュリティ上の注意
+## 配布と検証
 
-- JetUse 専用コンパートメントを使う。デプロイ担当グループはそのコンパートメント内でリソースを管理できる。
-- ORM state / job output には ADB とデモユーザーの生成パスワードが含まれる。Stack / Job を読めるグループを限定する。
-- `enable_auth=true` が Public 標準。認証を無効にすると API が公開状態になるため、隔離した検証環境以外では使用しない。
-- `enable_opensearch=true` は常設課金と service limit を Plan 前に確認する。
-- Bootstrap と異なる対象コンパートメントへ本体を作ると resource principal が Policy に入らない。`prefix` は権限判定には使わないが、運用上は揃える。
+`.github/workflows/release.yml`が`main`から`jetuse-orm.zip`を生成し、`orm-main`リリースへ公開する。CIはZIPを展開し、ルートの`schema.yaml`にIAM変数があることと、展開したTerraformが`validate`できることを確認する。
 
-## ローカル静的検証
+ローカルでは次を実行する。
 
 ```bash
-terraform -chdir=infra/orm-bootstrap init -backend=false
-terraform -chdir=infra/orm-bootstrap validate
-
 terraform -chdir=infra/orm init -backend=false
 terraform -chdir=infra/orm validate
+bash scripts/package-orm-stacks.sh /tmp/jetuse-orm
 ```
-
-実際の `plan` / `apply` は対象テナンシの権限と値が必要。IAM Bootstrap の Apply と本番相当リソースの Apply は組織の承認手順に従う。
-
-## 関連ファイル
-
-- `infra/orm-bootstrap/`: 管理者向け IAM stack
-- `infra/orm/`: 通常利用者向け JetUse stack
-- `infra/terraform/modules/iam/`: Dynamic Group / Policy の正本
-- `scripts/package-orm-stacks.sh`: Deploy専用ZIPの生成
-- [iam.md](./iam.md): 権限一覧、手動設定、トラブルシュート
-- `.github/workflows/release.yml`: Public image と SPA dist の release

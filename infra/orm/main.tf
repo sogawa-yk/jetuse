@@ -44,6 +44,21 @@ resource "random_password" "demo" {
   override_special = "#_-"
 }
 
+# IAMもアプリ本体と同じResource Manager stackで管理する。
+# 実行者の権限と既存IAMに応じて、Dynamic Groupとruntime policyを個別に切り替える。
+module "iam" {
+  source    = "../terraform/modules/iam"
+  providers = { oci = oci.home }
+
+  tenancy_ocid           = var.tenancy_ocid
+  compartment_ocid       = var.compartment_ocid
+  prefix                 = var.prefix
+  enable_dynamic_group   = var.enable_dynamic_group
+  enable_runtime_policy  = var.enable_runtime_policy
+  enable_semantic_store  = var.enable_semantic_store
+  create_deployer_policy = false
+}
+
 module "network" {
   source              = "../terraform/modules/network"
   compartment_ocid    = var.compartment_ocid
@@ -66,6 +81,8 @@ module "adb" {
   # ウォレットをTerraformで生成し、base64テキストでバケットへ配置する(コンテナはobject readのみでOK)
   generate_wallet = true
   wallet_password = random_password.wallet.result
+
+  depends_on = [module.iam]
 }
 
 # OCIRリポジトリ(jetuse-api / jetuse-fn-router)はスタックでは作らない(ADR-0011, 2026-06-25)。
@@ -93,6 +110,8 @@ module "functions" {
     AUTH_MODE = "resource_principal"
     LOG_OCID  = module.observability.app_log_id
   })
+
+  depends_on = [module.iam]
 }
 
 module "container_instance" {
@@ -104,6 +123,8 @@ module "container_instance" {
   image_url             = local.api_image_url
   environment_variables = merge(local.api_environment, { LOG_OCID = module.observability.app_log_id })
   memory_gb             = 4
+
+  depends_on = [module.iam]
 }
 
 module "opensearch" {
@@ -154,6 +175,3 @@ module "identity_domain_app" {
   demo_email    = var.demo_email
   demo_password = random_password.demo.result
 }
-
-# Dynamic Group / runtime policy はテナンシ管理者向けの infra/orm-bootstrap で作成する。
-# アプリ本体から分離することで、このスタックの実行者にテナンシ IAM 権限を要求しない。

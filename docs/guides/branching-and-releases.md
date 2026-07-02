@@ -53,7 +53,7 @@ main → hotfix/* → main → dev
 
 ### Public
 
-1. feature PR の CI、Terraform `infra/orm` / `infra/orm-bootstrap` validate、必要な OCI 実機確認を完了する。
+1. feature PRのCI、Terraform `infra/orm`と生成済みDeploy ZIPのvalidate、必要なOCI実機確認を完了する。
 2. `main` へ mergeする。release workflow成功後、Deployボタンが参照する`orm-main`の専用ZIPが更新される。
 3. 公開リリース点に annotated tag `public-vX.Y.Z` を付け、release note を作る。
 4. `main → dev` sync PR を merge する。

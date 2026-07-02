@@ -1,6 +1,6 @@
 mock_provider "oci" {}
 
-run "full_public_bootstrap_contract" {
+run "full_public_iam_contract" {
   command = plan
 
   variables {
@@ -133,7 +133,7 @@ run "dynamic_groups_only" {
 
   assert {
     condition     = length(oci_identity_policy.runtime_tenancy) == 1
-    error_message = "The tenancy-scoped namespace policy must be bootstrapped with the dynamic groups."
+    error_message = "The tenancy-scoped namespace policy must be created with the dynamic groups."
   }
 }
 

@@ -1,11 +1,11 @@
 title: "JetUse on OCI — ワンクリックデプロイ"
 description: >-
   生成AIアプリ JetUse を OCI 上に一括構築します（VCN / Autonomous Database /
-  API Gateway / Container Instance / Functions / Object Storage / Identity Domain）。
-  管理者が IAM Bootstrap を一度適用した後、通常の部門ユーザーが実行できます。
+  API Gateway / Container Instance / Functions / Object Storage / Identity Domain / IAM）。
+  実行ユーザーの権限や既存IAMに応じて、Dynamic GroupとPolicyの作成範囲を選択できます。
   デプロイ後、出力の app_url を開き demo ユーザーでログインしてください。
 schemaVersion: 1.1.0
-version: "20260701"
+version: "20260702"
 
 logoUrl: ""
 
@@ -22,6 +22,11 @@ variableGroups:
       - enable_auth
       - demo_email
       - adb_admin_password
+  - title: "IAM設定（実行ユーザーの権限に応じて選択）"
+    variables:
+      - enable_dynamic_group
+      - enable_runtime_policy
+      - enable_semantic_store
   - title: "オプション（詳細）"
     variables:
       - enable_opensearch
@@ -61,6 +66,24 @@ variables:
     type: boolean
     title: "OIDC認証を有効化"
     description: "Identity Domain + OIDCアプリ + デモユーザーを作成し、ログインを必須にする"
+    default: true
+
+  enable_dynamic_group:
+    type: boolean
+    title: "Dynamic Groupを作成"
+    description: "テナンシIAM権限がある場合はオン。オフの場合は同じprefixのruntime / ADB / Semantic Store Dynamic Groupとnamespace参照Policyが既存であることが前提です。"
+    default: true
+
+  enable_runtime_policy:
+    type: boolean
+    title: "ランタイムPolicyを作成"
+    description: "対象コンパートメントにPolicyを作成できる場合はオン。オフの場合はJetUseのruntime Policyが既存であることが前提です。"
+    default: true
+
+  enable_semantic_store:
+    type: boolean
+    title: "SQL Search用Semantic Store権限"
+    description: "SQL Searchを使用しない場合はオフにするとDynamic GroupとPolicy文を減らせます。"
     default: true
 
   demo_email:
@@ -141,6 +164,12 @@ outputs:
   demo_password:
     type: string
     title: "デモパスワード"
+  runtime_dynamic_group:
+    type: string
+    title: "Runtime Dynamic Group"
+  runtime_policy_id:
+    type: string
+    title: "Runtime Policy OCID"
 
 outputGroups:
   - title: "デプロイ結果"
@@ -148,3 +177,5 @@ outputGroups:
       - app_url
       - demo_username
       - demo_password
+      - runtime_dynamic_group
+      - runtime_policy_id
