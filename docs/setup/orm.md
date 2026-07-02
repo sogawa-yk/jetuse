@@ -2,32 +2,31 @@
 
 GitHub の **Deploy to Oracle Cloud** ボタンから、JetUse を OCI Resource Manager（ORM）スタックとして構築する。通常の利用者にテナンシ管理権限を要求しないよう、IAM とアプリ本体を二つのスタックに分離している。
 
-| 段階 | 作業ディレクトリ | 実行者 | 頻度 |
+| 段階 | Deployパッケージ | 実行者 | 頻度 |
 |---|---|---|---|
-| IAM Bootstrap | `infra/orm-bootstrap` | テナンシ IAM 管理者 | 対象コンパートメントごとに1回 |
-| JetUse 本体 | `infra/orm` | `JetUseDeployers` 等の通常ユーザー | 環境ごと |
+| IAM Bootstrap | `jetuse-iam-bootstrap.zip` | テナンシ IAM 管理者 | 対象コンパートメントごとに1回 |
+| JetUse 本体 | `jetuse-orm.zip` | `JetUseDeployers` 等の通常ユーザー | 環境ごと |
 
 ## 1. 管理者: IAM Bootstrap
 
 最初に [iam.md](./iam.md) の手順で runtime Dynamic Group / Policy と、通常デプロイ担当グループの Policy を作成する。管理者自身が毎回 JetUse をデプロイする必要はない。
 
-Bootstrap の構成ソースも `main.zip` を使用し、作業ディレクトリだけ `infra/orm-bootstrap` にする。Apply 後は IAM の反映を数分待つ。
+READMEの**Deploy JetUse IAM Bootstrap to Oracle Cloud**ボタンを使用する。専用ZIPの直下にTerraformと`schema.yaml`があるため、Working directoryの指定は不要。Apply後はIAMの反映を数分待つ。
 
 ## 2. 通常利用者: Deploy to Oracle Cloud
 
-README のボタンは次の URL で公開 `main` ブランチの zip を ORM に渡す。
+READMEの**Deploy JetUse to Oracle Cloud**ボタンは、次のURLで公開`main`ブランチから生成された専用ZIPをORMへ渡す。
 
 ```text
-https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/sogawa-yk/jetuse/archive/refs/heads/main.zip
+https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/sogawa-yk/jetuse/releases/download/orm-main/jetuse-orm.zip
 ```
 
 作成ウィザードで以下を指定する。
 
 1. Stack compartment に Bootstrap と同じ JetUse 専用コンパートメントを選ぶ。
-2. Working directory に `infra/orm` を指定する。
-3. 変数画面で同じコンパートメントを選ぶ。`prefix` は識別しやすいよう Bootstrap と同じ値を推奨する。
-4. `home_region` は OCI Console のテナンシ詳細に表示される Home region を選ぶ。現在 Console で開いているリージョンとは限らない。
-5. Plan の作成物と課金対象を確認して Apply する。
+2. 変数画面で同じコンパートメントを選ぶ。`prefix` は識別しやすいよう Bootstrap と同じ値を推奨する。
+3. `home_region` は OCI Console のテナンシ詳細に表示される Home region を選ぶ。現在 Console で開いているリージョンとは限らない。
+4. Plan の作成物と課金対象を確認して Apply する。
 
 Resource Manager が自動入力するリージョンはリソースの配備リージョンであり、テナンシのホームリージョンではない。そのため `home_region` は必須の画面入力としている。
 
@@ -69,11 +68,12 @@ JetUse のエンドユーザーは OCI Console のアカウントや IAM Policy 
 
 ## 自動化の仕組み
 
-1. **Container images**: `.github/workflows/release.yml` が Public `main` の API / Functions image を公開 OCIR に publish する。
-2. **DB bootstrap**: `packages/api/entrypoint.sh` が初回起動時に ADB user、権限、schema migration を冪等に作成する。
-3. **SPA と OIDC**: Terraform が `packages/web/dist` と OIDC client ID を含む `config.json` を Object Storage に配置する。
-4. **OIDC registration**: Identity Domain、PKCE client、初期ユーザーと grant を Terraform で作成する。
-5. **Runtime authorization**: Container Instances / Functions / ADB は Bootstrap で作られた resource principal Policy を使用する。
+1. **Deploy packages**: `.github/workflows/release.yml` がTerraformと`schema.yaml`をルートに持つ2つの専用ZIPを`orm-main`リリースへpublishする。
+2. **Container images**: 同workflowがPublic `main` の API / Functions image を公開 OCIR に publish する。
+3. **DB bootstrap**: `packages/api/entrypoint.sh` が初回起動時に ADB user、権限、schema migration を冪等に作成する。
+4. **SPA と OIDC**: Terraform が `packages/web/dist` と OIDC client ID を含む `config.json` を Object Storage に配置する。
+5. **OIDC registration**: Identity Domain、PKCE client、初期ユーザーと grant を Terraform で作成する。
+6. **Runtime authorization**: Container Instances / Functions / ADB は Bootstrap で作られた resource principal Policy を使用する。
 
 ## セキュリティ上の注意
 
@@ -100,5 +100,6 @@ terraform -chdir=infra/orm validate
 - `infra/orm-bootstrap/`: 管理者向け IAM stack
 - `infra/orm/`: 通常利用者向け JetUse stack
 - `infra/terraform/modules/iam/`: Dynamic Group / Policy の正本
+- `scripts/package-orm-stacks.sh`: Deploy専用ZIPの生成
 - [iam.md](./iam.md): 権限一覧、手動設定、トラブルシュート
 - `.github/workflows/release.yml`: Public image と SPA dist の release

@@ -28,7 +28,7 @@ Public 版は GitHub の Deploy to Oracle Cloud ボタンから OCI Resource Man
 - JetUseDeployers は専用コンパートメント内のリソースと ORM state を管理できるため、グループ所属とコンパートメント境界の管理が必要。
 - Public 変更の後に sync PR が1本増えるが、Conflict を変更直後に解消できる。
 - Internal 固有機能を Public 化する際は選択的な移植と Public 向け受け入れ確認が必要。
-- Deploy ボタンが `main.zip` を参照するため、`main` は常にデプロイ可能でなければならない。
+- Deployボタン用の専用ZIPを`main`から生成するため、`main`は常にデプロイ可能でなければならない。
 
 ## Alternatives considered
 

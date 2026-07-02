@@ -145,11 +145,10 @@ Allow group <deployer-group> to manage all-resources in compartment id <compartm
 
 ## 7. JetUseアプリのデプロイ
 
-1. READMEの**Deploy to Oracle Cloud**ボタンを開く。
-2. Working directoryに`infra/orm`を指定する。
-3. Stack / resource compartmentに同じJetUse専用コンパートメントを指定する。
-4. `home_region`にテナンシのホームリージョンを指定する。
-5. Planを確認してApplyする。
+1. READMEの**Deploy JetUse to Oracle Cloud**ボタンを開く。
+2. Stack / resource compartmentに同じJetUse専用コンパートメントを指定する。
+3. `home_region`にテナンシのホームリージョンを指定する。
+4. Planを確認してApplyする。
 
 compact Dynamic Groupを手動作成済みの場合、現行の`infra/orm-bootstrap`は実行しない。現行実装はRuntime / ADB / Semantic Storeを分けるstrict構成であり、追加のDynamic Groupを作成する。compact / existing-group対応が実装された後にBootstrapへ切り替える。
 

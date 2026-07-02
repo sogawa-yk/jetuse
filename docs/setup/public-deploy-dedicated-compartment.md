@@ -176,20 +176,12 @@ oci_identity_policy.deployer[*]
 
 Runtime Policyの反映を5～10分待ってから、JetUse Application Stackを作成する。
 
-1. READMEの**Deploy to Oracle Cloud**ボタンを開く。
-2. Stack compartmentにJetUse専用コンパートメントを指定する。
-3. Working directoryに`infra/orm`を指定する。
-4. `compartment_ocid`に同じ専用コンパートメントを指定する。
-5. `home_region`にテナンシのホームリージョンを指定する。
-6. `prefix`にIAM Bootstrapと同じ値を指定する。
-7. 必要に応じてオプションを設定する。
-
-| 変数 | 推奨値／注意 |
-|---|---|
-| `enable_auth` | Public利用では`true`を推奨 |
-| `enable_opensearch` | 高コストのため必要時のみ`true` |
-| `rate_limit_rps` | Public公開では`0`にしない |
-| `api_image_url` / `fn_router_image` | 通常は既定値。組織指定イメージがある場合だけ変更 |
+1. READMEの**Deploy JetUse to Oracle Cloud**ボタンを開く。
+2. Stack compartmentにJetUse専用コンパートメントを選択する。
+3. Variableの`compartment_ocid`に同じ専用コンパートメントを指定する。
+4. `home_region`にテナンシのホームリージョンを指定する。
+5. Planを実行し、作成先が専用コンパートメント内であることを確認する。
+6. Applyを実行する。
 
 8. Planを実行する。
 9. 作成先がJetUse専用コンパートメント内であることを確認する。

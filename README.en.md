@@ -9,13 +9,19 @@ image & video analysis — all on OCI managed services.
 
 ## Deploy to Oracle Cloud
 
-[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/sogawa-yk/jetuse/archive/refs/heads/main.zip)
-
 Deployment is split so the application deployer does not need tenancy-administrator privileges:
 
-1. A tenancy IAM administrator applies `infra/orm-bootstrap` once for the dedicated JetUse compartment.
-2. Members of the configured deployer group apply `infra/orm` from the same public `main.zip`.
+1. A tenancy IAM administrator applies the IAM Bootstrap once for the dedicated JetUse compartment.
+
+   [![Deploy JetUse IAM Bootstrap to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/sogawa-yk/jetuse/releases/download/orm-main/jetuse-iam-bootstrap.zip)
+
+2. Members of the configured deployer group deploy the JetUse application.
+
+   [![Deploy JetUse to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/sogawa-yk/jetuse/releases/download/orm-main/jetuse-orm.zip)
+
 3. End users sign in through the generated OIDC application and require no OCI IAM permissions.
+
+Each button uses a dedicated archive with Terraform and `schema.yaml` at its root, so no Resource Manager working directory is required.
 
 The application stack requires the target compartment, the tenancy home region, and the same resource prefix used by the bootstrap. See [the Resource Manager guide](./docs/setup/orm.md) and [the IAM request checklist](./docs/setup/iam.md).
 

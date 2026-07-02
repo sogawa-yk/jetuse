@@ -3,7 +3,8 @@ name: release
 # Public版(ORMワンクリック): main へ push されたら
 #  - API / fn-router コンテナイメージを GHCR と OCIR(ap-osaka-1) の両方へ publish
 #    OCI Functions は OCIR必須・Container Instance も OCIR を参照する(ADR-0011)。
-#  - SPA(dist)をビルドしてリポジトリへコミット(ORMのzipに同梱し Terraform が配信)
+#  - SPA(dist)をビルドし、Terraformと共にDeploy専用zipへ同梱
+#  - IAM Bootstrap / JetUse本体のzipをGitHubのorm-mainリリースへpublish
 # 必要な GitHub Secrets:
 #  - OCIR_USERNAME: "<namespace>/<user>"(Identity Domain利用時は
 #                   "<namespace>/oracleidentitycloudservice/<user>")
@@ -13,6 +14,10 @@ name: release
 on:
   push:
     branches: [main]
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -76,6 +81,26 @@ jobs:
           cache-dependency-path: packages/web/package-lock.json
       - run: npm ci
       - run: npm run build
+      - name: Build Deploy to OCI archives
+        working-directory: .
+        run: bash scripts/package-orm-stacks.sh "$RUNNER_TEMP/orm-packages"
+      - name: Publish Deploy to OCI archives
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if ! gh release view orm-main >/dev/null 2>&1; then
+            gh release create orm-main \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --title "Deploy to OCI packages (main)" \
+              --notes "Continuously updated Resource Manager packages for the main branch. Use the README deployment buttons."
+          fi
+          gh release upload orm-main \
+            "$RUNNER_TEMP/orm-packages/jetuse-orm.zip" \
+            "$RUNNER_TEMP/orm-packages/jetuse-iam-bootstrap.zip" \
+            --clobber
       - name: Commit dist (self-contained ORM zip)
         working-directory: .
         run: |
