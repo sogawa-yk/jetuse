@@ -1,10 +1,12 @@
 # JetUseの実行時プリンシパルは責務ごとに分離する。
 # 呼び出し元stackは実行者の権限と既存IAMに応じて、作成範囲を個別に切り替える。
 
+# enable_dynamic_group=false のときはprefix合成せず、呼び出し元が明示した既存DG名を参照する
+# (存在しないDGを参照するpolicyはCreatePolicyが 400 "No permissions found" で失敗するため)。
 locals {
-  runtime_dynamic_group_name        = "${var.prefix}-runtime-dg"
-  adb_dynamic_group_name            = "${var.prefix}-adb-dg"
-  semantic_store_dynamic_group_name = "${var.prefix}-semantic-store-dg"
+  runtime_dynamic_group_name        = var.enable_dynamic_group ? "${var.prefix}-runtime-dg" : var.existing_runtime_dynamic_group
+  adb_dynamic_group_name            = var.enable_dynamic_group ? "${var.prefix}-adb-dg" : var.existing_adb_dynamic_group
+  semantic_store_dynamic_group_name = var.enable_dynamic_group ? "${var.prefix}-semantic-store-dg" : var.existing_semantic_store_dynamic_group
 }
 
 resource "oci_identity_dynamic_group" "runtime" {
@@ -92,6 +94,17 @@ resource "oci_identity_policy" "runtime" {
     oci_identity_dynamic_group.adb,
     oci_identity_dynamic_group.semantic_store,
   ]
+
+  lifecycle {
+    precondition {
+      condition = alltrue([
+        trimspace(local.runtime_dynamic_group_name) != "",
+        trimspace(local.adb_dynamic_group_name) != "",
+        !var.enable_semantic_store || trimspace(local.semantic_store_dynamic_group_name) != "",
+      ])
+      error_message = "enable_dynamic_group=false requires existing_runtime_dynamic_group and existing_adb_dynamic_group (and existing_semantic_store_dynamic_group when enable_semantic_store=true) to name pre-existing dynamic groups."
+    }
+  }
 }
 
 # Object Storage namespace はテナンシ単位のため、コンパートメントポリシーとは分離する。

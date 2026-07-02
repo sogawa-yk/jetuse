@@ -34,8 +34,7 @@ Administratorsグループのメンバーは通常追加設定不要。委任す
 1. JetUse専用コンパートメントを作成または選択する。
 2. READMEの**Deploy JetUse to Oracle Cloud**ボタンを開く。
 3. Stack / resource compartmentにJetUse専用コンパートメントを指定する。
-4. `home_region`にテナンシのホームリージョンを指定する。
-5. IAM設定は次の既定値を使用する。
+4. IAM設定は次の既定値を使用する。
 
    ```text
    enable_dynamic_group  = true
@@ -43,8 +42,8 @@ Administratorsグループのメンバーは通常追加設定不要。委任す
    enable_semantic_store = true   # SQL Searchを使わない場合はfalse
    ```
 
-6. PlanでIAMの作成先とアプリの作成先を確認する。
-7. Applyする。
+5. PlanでIAMの作成先とアプリの作成先を確認する。
+6. Applyする。
 
 権限がないIAM操作はOCIの`403`になる。権限を追加しない場合は、管理者が該当IAMを事前作成してフラグを`false`にする。
 

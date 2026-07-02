@@ -93,12 +93,11 @@ Allow group <deployer-group> to manage policies in tenancy
 1. READMEの**Deploy JetUse to Oracle Cloud**ボタンを開く。
 2. Stack compartmentにJetUse専用コンパートメントを選択する。
 3. Variableの`compartment_ocid`に同じ専用コンパートメントを指定する。
-4. `home_region`にテナンシのホームリージョンを指定する。
-5. `enable_dynamic_group=false`にする。
-6. Runtime Policyが事前作成済みなら`enable_runtime_policy=false`、このコンパートメントでPolicyを管理できるなら`true`にする。
-7. Identity Domain管理権限がない場合は、隔離検証用途に限り`enable_auth=false`にする。認証が必要な場合は管理者へDomain権限を依頼する。
-8. Planを実行し、権限のないIAM作成が含まれないことと、作成先が専用コンパートメント内であることを確認する。
-9. Applyを実行する。
+4. `enable_dynamic_group=false`にし、事前作成済みのDynamic Group名（runtime / ADB / Semantic Store）を入力する。
+5. Runtime Policyが事前作成済みなら`enable_runtime_policy=false`、このコンパートメントでPolicyを管理できるなら`true`にする。
+6. Identity Domain管理権限がない場合は、隔離検証用途に限り`enable_auth=false`にする。認証が必要な場合は管理者へDomain権限を依頼する。
+7. Planを実行し、権限のないIAM作成が含まれないことと、作成先が専用コンパートメント内であることを確認する。
+8. Applyを実行する。
 
 ## 5. デプロイ後チェック
 
@@ -119,7 +118,7 @@ Allow group <deployer-group> to manage policies in tenancy
 | Applyで特定リソースだけ403/404 | 専用コンパートメントの`manage all-resources`不足 | テナンシ管理者 |
 | Apply成功後、Chat/RAG/OCR等が404 | Dynamic Group / Runtime Policy不足または反映待ち | テナンシ管理者 |
 | API Gateway経由のFunctionsが500 | API Gateway→Functions Policy不足 | テナンシ管理者 |
-| Identity Domain作成がhome regionエラー | `home_region`が誤り | テナンシ管理者 |
+| Policy作成が400 "No permissions found" | 入力した既存Dynamic Group名が存在しない | テナンシ管理者 |
 
 問い合わせ時は、Stack OCID、Job OCID、失敗したTerraform resource名、OCIエラーコード、request IDを共有する。Terraform stateや生成パスワードは共有しない。
 

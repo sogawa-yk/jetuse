@@ -15,7 +15,6 @@ variableGroups:
   - title: "必須"
     variables:
       - compartment_ocid
-      - home_region
   - title: "アプリ設定"
     variables:
       - prefix
@@ -25,6 +24,9 @@ variableGroups:
   - title: "IAM設定（実行ユーザーの権限に応じて選択）"
     variables:
       - enable_dynamic_group
+      - existing_runtime_dynamic_group
+      - existing_adb_dynamic_group
+      - existing_semantic_store_dynamic_group
       - enable_runtime_policy
       - enable_semantic_store
   - title: "オプション（詳細）"
@@ -49,12 +51,6 @@ variables:
     description: "リソースを作成するコンパートメント"
     required: true
 
-  home_region:
-    type: oci:identity:region:name
-    title: "テナンシのホームリージョン"
-    description: "Identity Domain の作成先。OCI Console のテナンシ詳細で Home region を確認してください。現在開いているリージョンとは限りません。"
-    required: true
-
   prefix:
     type: string
     title: "リソース名プレフィックス"
@@ -71,8 +67,32 @@ variables:
   enable_dynamic_group:
     type: boolean
     title: "Dynamic Groupを作成"
-    description: "テナンシIAM権限がある場合はオン。オフの場合は同じprefixのruntime / ADB / Semantic Store Dynamic Groupとnamespace参照Policyが既存であることが前提です。"
+    description: "テナンシIAM権限がある場合はオン。オフの場合は既存のDynamic Group名を下の欄に入力してください（namespace参照Policyも既存であることが前提です）。"
     default: true
+
+  existing_runtime_dynamic_group:
+    type: string
+    title: "既存のRuntime Dynamic Group名"
+    description: "Container Instances / Functions用の既存Dynamic Group名（Dynamic Groupを作成しない場合は必須）"
+    visible:
+      not:
+        - enable_dynamic_group
+
+  existing_adb_dynamic_group:
+    type: string
+    title: "既存のADB Dynamic Group名"
+    description: "Autonomous Database用の既存Dynamic Group名（Dynamic Groupを作成しない場合は必須）"
+    visible:
+      not:
+        - enable_dynamic_group
+
+  existing_semantic_store_dynamic_group:
+    type: string
+    title: "既存のSemantic Store Dynamic Group名"
+    description: "SQL Search用の既存Dynamic Group名（Dynamic Groupを作成せずSemantic Store権限を有効にする場合は必須）"
+    visible:
+      not:
+        - enable_dynamic_group
 
   enable_runtime_policy:
     type: boolean
