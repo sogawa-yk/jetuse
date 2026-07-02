@@ -9,21 +9,15 @@ image & video analysis — all on OCI managed services.
 
 ## Deploy to Oracle Cloud
 
-Deployment is split so the application deployer does not need tenancy-administrator privileges:
+[![Deploy JetUse to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/sogawa-yk/jetuse/releases/download/orm-main/jetuse-orm.zip)
 
-1. A tenancy IAM administrator applies the IAM Bootstrap once for the dedicated JetUse compartment.
+One Resource Manager stack contains both IAM and the JetUse application. No working directory is required. Select the IAM controls according to the executing user's permissions:
 
-   [![Deploy JetUse IAM Bootstrap to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/sogawa-yk/jetuse/releases/download/orm-main/jetuse-iam-bootstrap.zip)
+- Tenancy IAM administrator: leave `enable_dynamic_group` and `enable_runtime_policy` enabled.
+- Existing dynamic groups: disable `enable_dynamic_group` and create only the compartment runtime policy.
+- All IAM pre-created: disable both controls and create only application resources.
 
-2. Members of the configured deployer group deploy the JetUse application.
-
-   [![Deploy JetUse to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/sogawa-yk/jetuse/releases/download/orm-main/jetuse-orm.zip)
-
-3. End users sign in through the generated OIDC application and require no OCI IAM permissions.
-
-Each button uses a dedicated archive with Terraform and `schema.yaml` at its root, so no Resource Manager working directory is required.
-
-The application stack requires the target compartment, the tenancy home region, and the same resource prefix used by the bootstrap. See [the Resource Manager guide](./docs/setup/orm.md) and [the IAM request checklist](./docs/setup/iam.md).
+An IAM operation fails during plan or apply when the executing user lacks its permission. End users sign in through the generated OIDC application and require no OCI IAM permissions. See [the Resource Manager guide](./docs/setup/orm.md) and [the IAM guide](./docs/setup/iam.md).
 
 ## Features
 

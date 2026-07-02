@@ -1,152 +1,93 @@
-# JetUse Public 版の IAM Bootstrap
+# JetUse Public版のIAM設定
 
-> Public利用者・部門管理者向けの提出用チェックリストと全Policy一覧は
-> [public-iam-requirements.md](./public-iam-requirements.md) を参照。
-> 特定コンパートメントの`manage all-resources`だけを持つ利用者は
-> [専用コンパートメント管理者向け手順](./public-deploy-dedicated-compartment.md)を参照。
+Public版はIAMとアプリ本体を1つの`infra/orm` Stackで管理する。別のBootstrap Stackは使用しない。
 
-Public 版では、テナンシ IAM の設定と JetUse 本体のデプロイを分離する。
+TerraformコードにIAMリソースが含まれていても、実行ユーザーのOCI権限を超えて作成されることはない。Resource Managerの変数で作成範囲を選択し、権限のない操作を有効にした場合はPlanまたはApplyが権限エラーになる。
 
-1. テナンシ管理者が対象コンパートメントごとに `infra/orm-bootstrap` を一度だけ Apply
-2. 通常のデプロイ担当者が GitHub の **Deploy to Oracle Cloud** から `infra/orm` を Apply
-3. JetUse のエンドユーザーは OCI IAM 権限を必要とせず、作成された OIDC ユーザーでログイン
+## 作成範囲を選ぶ変数
 
-これにより、JetUse をデプロイする部門ユーザーへ Dynamic Group / Policy の管理権限を渡さずに済む。
+| 変数 | 既定 | 作成物 |
+|---|---:|---|
+| `enable_dynamic_group` | `true` | Runtime / ADB / Semantic StoreのDynamic Groupと、テナンシスコープのObject Storage namespace参照Policy |
+| `enable_runtime_policy` | `true` | JetUse専用コンパートメント内のRuntime Policy |
+| `enable_semantic_store` | `true` | SQL Search用Semantic Store Dynamic GroupとPolicy文 |
 
-## 管理者が準備するもの
+`enable_dynamic_group`と`enable_runtime_policy`は独立して指定できる。
 
-- JetUse 専用コンパートメント。デプロイ担当者へ `all-resources` を許可するため、共有コンパートメントは使用しない。
-- 既存の OCI IAM グループ（例: `Default/JetUseDeployers`）と、そのグループへの利用者追加。
-- テナンシのホームリージョン名。Resource Manager が自動入力するのは `tenancy_ocid`、`compartment_ocid`、`region`、`current_user_ocid` のみで、ホームリージョンは含まれない。
-- Bootstrap 実行者には Dynamic Group と Policy を作成できるテナンシ IAM 権限が必要。
+| Dynamic Group | Runtime Policy | 使用例 |
+|---:|---:|---|
+| `true` | `true` | 新規テナンシで管理者がすべて作成 |
+| `true` | `false` | テナンシ管理者がDynamic Groupだけ作成 |
+| `false` | `true` | コンパートメント管理者が既存Dynamic Group向けPolicyだけ作成 |
+| `false` | `false` | IAMが作成済みでアプリだけ作成 |
 
-Resource Manager の state と job 出力には生成パスワード等が含まれる。`JetUseDeployers` には対象スタックの state を参照できる人だけを所属させる。
+`false / true`では、同じ`prefix`のDynamic Groupと`${prefix}-runtime-tenancy-policy`が作成済みであることが前提。
 
-## 推奨: Resource Manager で Bootstrap
+## 必要な実行ユーザー権限
 
-READMEの**Deploy JetUse IAM Bootstrap to Oracle Cloud**ボタンを使用する。ボタンが指定する`jetuse-iam-bootstrap.zip`はTerraformと`schema.yaml`をZIP直下に収録しているため、Working directoryの指定は不要。
+### すべて作成する場合
 
-| 入力 | 例 | 説明 |
-|---|---|---|
-| `compartment_ocid` | JetUse 専用コンパートメント | Runtime とデプロイ権限の境界 |
-| `home_region` | `us-ashburn-1` | OCI Console のテナンシ詳細で確認 |
-| `prefix` | `jetuse-sales` | Dynamic Group 名が衝突しないテナンシ内で一意な値。アプリ本体と同じ値を推奨 |
-| `enable_dynamic_group` | `true` | Dynamic Groupとテナンシスコープのnamespace参照ポリシーを作成 |
-| `enable_runtime_policy` | `true` | JetUse専用コンパートメントのruntimeポリシーを作成 |
-| `deployer_group_subject` | `Default/JetUseDeployers` | 既存グループ。`Allow group` より後の部分 |
-| `enable_semantic_store` | `true` | SQL Search 不使用なら false |
+最も簡単なのはテナンシのAdministratorsグループに所属するユーザーが実行する方法。委任する場合は、少なくとも次の操作を許可する。
 
-`enable_dynamic_group` と `enable_runtime_policy` は独立して指定できる。
+- Dynamic Groupの作成・更新・削除
+- root compartmentの`${prefix}-runtime-tenancy-policy`の管理
+- JetUse専用コンパートメントの`${prefix}-runtime-policy`の管理
+- JetUseアプリリソースの管理
+- `enable_auth=true`の場合はIdentity Domainの管理
+- Resource Manager Stack / Jobの管理
 
-| Dynamic Group | Runtime Policy | 動作 |
-|---|---|---|
-| `true` | `true` | 管理者がすべてのruntime IAMを作成（標準） |
-| `true` | `false` | Dynamic Groupとnamespace参照ポリシーだけを管理者が事前作成 |
-| `false` | `true` | 既存Dynamic Groupを参照し、コンパートメント内のruntimeポリシーだけ作成 |
-| `false` | `false` | runtime IAMをこのスタックでは作成しない |
+組織のIAM設計に合わせて個別Policyを作る場合は [Public版IAM要件](./public-iam-requirements.md) のPolicy一覧を使用する。
 
-`false / true`では、同じ`prefix`のDynamic Groupと`${prefix}-runtime-tenancy-policy`が
-事前作成済みであること。`create_deployer_policy`はこの2フラグと独立している。
-管理者用とコンパートメント管理者用は別のResource Manager Stack（別state）にする。
-既にDynamic Groupを管理している同一stateで`enable_dynamic_group=false`へ変更すると、Terraformは
-管理対象のDynamic Groupを削除する計画を立てるため、管理移管には先にstateの分離が必要となる。
+### コンパートメントの`manage all-resources`だけを持つ場合
 
-Plan で次の IAM リソースだけが作成されることを確認してから Apply する。
-
-- `${prefix}-runtime-dg`: Container Instances と Functions
-- `${prefix}-adb-dg`: Autonomous Database の resource principal
-- `${prefix}-semantic-store-dg`: Semantic Store（任意）
-- `${prefix}-runtime-policy`: コンパートメント内の runtime 権限
-- `${prefix}-runtime-tenancy-policy`: Object Storage namespace の read のみ
-- `${prefix}-deployer-policy`: 通常デプロイ担当グループの権限
-
-IAM の反映には数分かかることがある。Apply 完了後に `infra/orm` を実行する。
-
-## デプロイ担当グループへ付与する権限
-
-Bootstrap は次の Policy をテナンシ直下に作る。`<group>` と `<compartment_ocid>` を置換すれば、管理者が手動作成する場合にも使える。
+テナンシ全体のDynamic Groupやroot compartmentのPolicyは作成できないため、通常は次の値を使う。
 
 ```text
-Allow group <group> to inspect compartments in tenancy
-Allow group <group> to inspect tenancies in tenancy
-Allow group <group> to read objectstorage-namespaces in tenancy
-Allow group <group> to manage orm-stacks in compartment id <compartment_ocid>
-Allow group <group> to manage orm-jobs in compartment id <compartment_ocid>
-Allow group <group> to manage all-resources in compartment id <compartment_ocid>
+enable_dynamic_group  = false
+enable_runtime_policy = true   # 対象コンパートメントでPolicyを管理できる場合
 ```
 
-`all-resources` は VCN、ADB、Object Storage、Container Instances、Functions、API Gateway、Logging、Identity Domain とその OIDC アプリを一つの専用コンパートメントに構築するために使用する。テナンシに対する `manage all-resources` や `manage domains in tenancy` は付与しない。
+Runtime Policyも事前作成済みなら両方`false`にする。`enable_auth=true`でIdentity Domainを新規作成するには、別途Domain管理権限が必要。
 
-より細かい分離が必要な組織では、この文を各サービスの resource-family に分解できる。ただし JetUse の機能追加時に Policy も追随させる必要があるため、Public 版の標準は専用コンパートメント境界とする。
+## 作成されるIAM
 
-## Runtime Dynamic Group
+| リソース | 目的 |
+|---|---|
+| `${prefix}-runtime-dg` | Container Instances / Functionsのresource principal |
+| `${prefix}-adb-dg` | Autonomous Databaseのresource principal |
+| `${prefix}-semantic-store-dg` | SQL Search Semantic Store（任意） |
+| `${prefix}-runtime-policy` | JetUse実行時権限。JetUse専用コンパートメント内 |
+| `${prefix}-runtime-tenancy-policy` | Object Storage namespaceのread。root compartment |
 
-権限の和集合を避けるため、アプリ実行基盤、ADB、Semantic Store を分離する。
+Runtime PolicyにはGenerative AI、Vector Store、ADB、Object Storage、Speech、Document、Language、Logging、Monitoring、Secrets、API GatewayからFunctionsへの呼び出し権限が含まれる。Policy文の正本は [IAM Terraform module](../../infra/terraform/modules/iam/main.tf)。
 
-### Container Instances / Functions
+## 既存IAMを使う場合
+
+Dynamic Group名は`prefix`から決まるため、既存名とStackの`prefix`を一致させる。
 
 ```text
-Any {all {resource.type='computecontainerinstance', resource.compartment.id='<compartment_ocid>'},
-     all {resource.type='fnfunc', resource.compartment.id='<compartment_ocid>'}}
+<prefix>-runtime-dg
+<prefix>-adb-dg
+<prefix>-semantic-store-dg
 ```
 
-主な権限は次のとおり。
+SQL Searchを使用しない場合は`enable_semantic_store=false`にする。
 
-- Generative AI の推論、Projects、Guardrails、hosted agent invocation
-- Vector Store / Vector Store File / File の作成・削除
-- ADB wallet の取得
-- Object Storage の RAG 原本、音声、wallet の読み書き
-- Speech、Document Understanding、Language
-- Logging ingestion、Monitoring custom metrics
-- 事前作成済み Vault secret の read（secret の作成権限は付与しない）
+## StateとDestroy
 
-### Autonomous Database
+フラグを`true`にして作成したIAMはアプリと同じTerraform stateで管理される。StackのDestroyではIAMも削除対象になる。
 
-```text
-All {resource.type='autonomousdatabase', resource.compartment.id='<compartment_ocid>'}
-```
-
-ADB の `OCI$RESOURCE_PRINCIPAL` が Select AI / DBMS_CLOUD_AI から Generative AI と Object Storage を参照するために使用する。
-
-### Semantic Store（任意）
-
-```text
-All {resource.type='generativeaisemanticstore', resource.compartment.id='<compartment_ocid>'}
-```
-
-Database Tools、secret、Database / Autonomous Database metadata、Generative AI inference の read/use を付与する。Semantic Store は IAM の反映後に作成する。IAM より先に作ると enrichment が失敗したままになり、再作成が必要になった実測がある。
-
-実際の Policy 文の正本は [../../infra/terraform/modules/iam/main.tf](../../infra/terraform/modules/iam/main.tf)。手作業で転記せず、可能な限り Bootstrap を使用する。
-
-## オプション機能
-
-### 認証付き MCP サーバーの登録
-
-現状の Public 標準は事前作成済み secret の read のみ。アプリ自身に secret を作成させる場合は、リスクを確認した上で runtime Dynamic Group に次を追加する。
-
-```text
-Allow dynamic-group jetuse-runtime-dg to manage secret-family in compartment id <compartment_ocid>
-```
-
-### Hosted Application / Deployment の作成
-
-Public ORM は hosted deployment 自体を作成しない。別途作成する場合は hosted application / deployment 専用 Dynamic Group と、OCIR repository の read を追加する。過去の実測では Dynamic Group 反映に 5〜10 分かかる場合がある。手順は [hosted-agent-oauth.md](./hosted-agent-oauth.md) を参照。
+同じStackでフラグを`true`から`false`へ変更すると、対象IAMの削除Planになる。単に「今後管理しない」という意味にはならないため、既存IAMへ移管する場合はstate移管を先に行う。
 
 ## トラブルシュート
 
-| 症状 | 確認点 |
+| 症状 | 主な原因 |
 |---|---|
-| IAM 作成が 403 / home region エラー | Bootstrap の `home_region` がテナンシのホームリージョンか |
-| 通常利用者が Stack / Apply を作れない | グループ所属と `${prefix}-deployer-policy`、スタックのコンパートメント |
-| Chat / RAG が 404 NotAuthorizedOrNotFound | runtime DG の matching rule、IAM 反映待ち、対象コンパートメント |
-| 議事録 job が INTERNAL_ERROR | Speech、objects、buckets、tag-namespaces の Policy |
-| API Gateway の Functions route が 500 | `request.principal.type = 'ApiGateway'` の functions-family Policy |
-| SQL Search enrichment が失敗 | Semantic Store が IAM より後に作成されたか |
+| Dynamic Group作成が403 | `enable_dynamic_group=true`だがテナンシIAM権限がない |
+| root compartmentのPolicy作成が403 | namespace参照Policyを作る権限がない |
+| Runtime Policy作成が403 | 対象コンパートメントのPolicy管理権限がない |
+| Identity Domain作成が403 | `enable_auth=true`だがDomain管理権限がない |
+| Apply後にChat/RAGが403 | Dynamic Group / Runtime Policy不足、prefix不一致、またはIAM反映待ち |
+| `false / true`でPolicyが無効 | 参照する既存Dynamic Groupが存在しない |
 
-## 参考
-
-- [Resource Manager の Terraform 変数](https://docs.oracle.com/en-us/iaas/Content/ResourceManager/Concepts/terraformconfigresourcemanager.htm)
-- [Resource Manager Policy Reference](https://docs.oracle.com/en-us/iaas/Content/Identity/policyreference/resourcemanagerpolicyreference.htm)
-- [OCI Generative AI IAM Policies](https://docs.oracle.com/en-us/iaas/Content/generative-ai/iam-policies.htm)
-- [Semantic Store Permissions](https://docs.oracle.com/en-us/iaas/Content/generative-ai/semantic-store-permissions.htm)
-- [OCI Speech Policies](https://docs.oracle.com/en-us/iaas/Content/speech/using/policies.htm)
+IAM反映には数分かかることがある。Apply完了直後にresource principalが認可されない場合は、Dynamic GroupのMatching RuleとPolicyを確認してから5〜10分待つ。

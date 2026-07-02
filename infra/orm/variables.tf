@@ -48,6 +48,24 @@ variable "enable_auth" {
   default     = true
 }
 
+variable "enable_dynamic_group" {
+  description = "Runtime / ADB / Semantic StoreのDynamic Groupとテナンシスコープのnamespace参照ポリシーを作成する"
+  type        = bool
+  default     = true
+}
+
+variable "enable_runtime_policy" {
+  description = "JetUse専用コンパートメントにランタイムポリシーを作成する"
+  type        = bool
+  default     = true
+}
+
+variable "enable_semantic_store" {
+  description = "SQL Search用Semantic StoreのDynamic Group / Policyを有効にする"
+  type        = bool
+  default     = true
+}
+
 variable "enable_opensearch" {
   description = "OpenSearch RAGクラスタ(常設課金・高コスト)。既定OFF"
   type        = bool

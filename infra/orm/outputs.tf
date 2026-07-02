@@ -24,10 +24,26 @@ output "identity_domain_url" {
   value = local.domain_url
 }
 
+output "runtime_dynamic_group" {
+  value = module.iam.runtime_dynamic_group
+}
+
+output "adb_dynamic_group" {
+  value = module.iam.adb_dynamic_group
+}
+
+output "semantic_store_dynamic_group" {
+  value = module.iam.semantic_store_dynamic_group
+}
+
+output "runtime_policy_id" {
+  value = module.iam.runtime_policy_id
+}
+
 output "adb_id" {
   value = module.adb.adb_id
 }
 
 output "note" {
-  value = "前提: 管理者が infra/orm-bootstrap を適用済み。初回は ADB 作成とDBブートストラップに10〜15分かかります。app_url を開き、demo_username/demo_password でログインしてください。"
+  value = "初回はIAM反映、ADB作成、DB初期化に10〜15分かかります。app_urlを開き、demo_username/demo_passwordでログインしてください。"
 }
