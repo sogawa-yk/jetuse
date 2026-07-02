@@ -2,6 +2,11 @@
 
 この資料は、JetUse Public版を **Deploy to Oracle Cloud** で利用する際に「誰にどのOCI IAM権限が必要か」をまとめた提出用チェックリストである。Terraform実装の詳細は [iam.md](./iam.md)、デプロイ手順は [orm.md](./orm.md) を参照する。
 
+利用者の権限に応じて、最初に次のどちらかを選ぶ。
+
+- テナンシ権限がなく、専用コンパートメントの`manage all-resources`を持つ: [専用コンパートメント管理者向けガイド](./public-deploy-dedicated-compartment.md)
+- Dynamic Group / Policyを作成できるテナンシ管理者: [テナンシ管理者向けガイド](./public-deploy-tenancy-admin.md)
+
 ## 結論
 
 | 役割 | OCI IAMユーザー | 必要なPolicy | Dynamic Group |
