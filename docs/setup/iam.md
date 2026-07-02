@@ -1,5 +1,8 @@
 # JetUse Public 版の IAM Bootstrap
 
+> Public利用者・部門管理者向けの提出用チェックリストと全Policy一覧は
+> [public-iam-requirements.md](./public-iam-requirements.md) を参照。
+
 Public 版では、テナンシ IAM の設定と JetUse 本体のデプロイを分離する。
 
 1. テナンシ管理者が対象コンパートメントごとに `infra/orm-bootstrap` を一度だけ Apply
