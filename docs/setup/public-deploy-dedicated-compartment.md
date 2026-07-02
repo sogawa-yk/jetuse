@@ -91,13 +91,12 @@ Allow group <deployer-group> to manage policies in tenancy
 
 ## 4. Deploy to Oracle Cloud
 
-1. READMEの**Deploy to Oracle Cloud**ボタンを開く。
+1. READMEの**Deploy JetUse to Oracle Cloud**ボタンを開く。
 2. Stack compartmentにJetUse専用コンパートメントを選択する。
-3. Working directoryに`infra/orm`を指定する。
-4. Variableの`compartment_ocid`に同じ専用コンパートメントを指定する。
-5. `home_region`にテナンシのホームリージョンを指定する。
-6. Planを実行し、作成先が専用コンパートメント内であることを確認する。
-7. Applyを実行する。
+3. Variableの`compartment_ocid`に同じ専用コンパートメントを指定する。
+4. `home_region`にテナンシのホームリージョンを指定する。
+5. Planを実行し、作成先が専用コンパートメント内であることを確認する。
+6. Applyを実行する。
 
 通常利用者は`infra/orm-bootstrap`を実行しない。実行するとDynamic Group / Policyの作成で`403`または`404 NotAuthorizedOrNotFound`になる。
 

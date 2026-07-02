@@ -71,3 +71,23 @@ jobs:
         run: |
           terraform init -backend=false -input=false
           terraform test
+      - name: Build Deploy to OCI archives
+        run: bash scripts/package-orm-stacks.sh "$RUNNER_TEMP/orm-packages"
+      - name: Validate packaged JetUse stack
+        run: |
+          mkdir -p "$RUNNER_TEMP/orm-app"
+          unzip -q "$RUNNER_TEMP/orm-packages/jetuse-orm.zip" -d "$RUNNER_TEMP/orm-app"
+          test -f "$RUNNER_TEMP/orm-app/schema.yaml"
+          test -f "$RUNNER_TEMP/orm-app/main.tf"
+          terraform -chdir="$RUNNER_TEMP/orm-app" init -backend=false -input=false
+          terraform -chdir="$RUNNER_TEMP/orm-app" validate
+      - name: Validate packaged IAM Bootstrap stack
+        run: |
+          mkdir -p "$RUNNER_TEMP/orm-bootstrap"
+          unzip -q "$RUNNER_TEMP/orm-packages/jetuse-iam-bootstrap.zip" -d "$RUNNER_TEMP/orm-bootstrap"
+          test -f "$RUNNER_TEMP/orm-bootstrap/schema.yaml"
+          test -f "$RUNNER_TEMP/orm-bootstrap/main.tf"
+          grep -q '^  enable_dynamic_group:' "$RUNNER_TEMP/orm-bootstrap/schema.yaml"
+          grep -q '^  enable_runtime_policy:' "$RUNNER_TEMP/orm-bootstrap/schema.yaml"
+          terraform -chdir="$RUNNER_TEMP/orm-bootstrap" init -backend=false -input=false
+          terraform -chdir="$RUNNER_TEMP/orm-bootstrap" validate

@@ -22,7 +22,7 @@ Resource Manager の state と job 出力には生成パスワード等が含ま
 
 ## 推奨: Resource Manager で Bootstrap
 
-GitHub の `main.zip` を構成ソースにしてスタックを作り、作業ディレクトリに `infra/orm-bootstrap` を指定する。
+READMEの**Deploy JetUse IAM Bootstrap to Oracle Cloud**ボタンを使用する。ボタンが指定する`jetuse-iam-bootstrap.zip`はTerraformと`schema.yaml`をZIP直下に収録しているため、Working directoryの指定は不要。
 
 | 入力 | 例 | 説明 |
 |---|---|---|
