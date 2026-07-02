@@ -2,6 +2,8 @@
 
 > Public利用者・部門管理者向けの提出用チェックリストと全Policy一覧は
 > [public-iam-requirements.md](./public-iam-requirements.md) を参照。
+> 特定コンパートメントの`manage all-resources`だけを持つ利用者は
+> [専用コンパートメント管理者向け手順](./public-deploy-dedicated-compartment.md)を参照。
 
 Public 版では、テナンシ IAM の設定と JetUse 本体のデプロイを分離する。
 
