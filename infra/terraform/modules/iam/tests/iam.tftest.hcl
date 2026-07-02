@@ -13,21 +13,21 @@ run "full_public_bootstrap_contract" {
   }
 
   assert {
-    condition     = oci_identity_dynamic_group.runtime.name == "jetuse-spike-iam01-runtime-dg"
+    condition     = oci_identity_dynamic_group.runtime[0].name == "jetuse-spike-iam01-runtime-dg"
     error_message = "Runtime dynamic group name must use the configured prefix."
   }
 
   assert {
     condition = (
-      strcontains(oci_identity_dynamic_group.runtime.matching_rule, "resource.type='computecontainerinstance'") &&
-      strcontains(oci_identity_dynamic_group.runtime.matching_rule, "resource.type='fnfunc'") &&
-      !strcontains(oci_identity_dynamic_group.runtime.matching_rule, "resource.type='autonomousdatabase'")
+      strcontains(oci_identity_dynamic_group.runtime[0].matching_rule, "resource.type='computecontainerinstance'") &&
+      strcontains(oci_identity_dynamic_group.runtime[0].matching_rule, "resource.type='fnfunc'") &&
+      !strcontains(oci_identity_dynamic_group.runtime[0].matching_rule, "resource.type='autonomousdatabase'")
     )
     error_message = "Runtime dynamic group must contain only Container Instances and Functions principals."
   }
 
   assert {
-    condition     = oci_identity_dynamic_group.adb.matching_rule == "All {resource.type='autonomousdatabase', resource.compartment.id='ocid1.compartment.oc1..publiciamtest'}"
+    condition     = oci_identity_dynamic_group.adb[0].matching_rule == "All {resource.type='autonomousdatabase', resource.compartment.id='ocid1.compartment.oc1..publiciamtest'}"
     error_message = "ADB must have an isolated resource-principal dynamic group."
   }
 
@@ -37,27 +37,27 @@ run "full_public_bootstrap_contract" {
   }
 
   assert {
-    condition     = length(oci_identity_policy.runtime.statements) == 22
+    condition     = length(oci_identity_policy.runtime[0].statements) == 22
     error_message = "Full Public runtime policy must contain the reviewed 22 statements."
   }
 
   assert {
-    condition     = contains(oci_identity_policy.runtime.statements, "Allow dynamic-group jetuse-spike-iam01-runtime-dg to manage generative-ai-vectorstore in compartment id ocid1.compartment.oc1..publiciamtest")
+    condition     = contains(oci_identity_policy.runtime[0].statements, "Allow dynamic-group jetuse-spike-iam01-runtime-dg to manage generative-ai-vectorstore in compartment id ocid1.compartment.oc1..publiciamtest")
     error_message = "Runtime policy must allow application-managed Vector Stores."
   }
 
   assert {
-    condition     = contains(oci_identity_policy.runtime.statements, "Allow dynamic-group jetuse-spike-iam01-runtime-dg to manage ai-service-speech-family in compartment id ocid1.compartment.oc1..publiciamtest")
+    condition     = contains(oci_identity_policy.runtime[0].statements, "Allow dynamic-group jetuse-spike-iam01-runtime-dg to manage ai-service-speech-family in compartment id ocid1.compartment.oc1..publiciamtest")
     error_message = "Runtime policy must allow Speech jobs and TTS."
   }
 
   assert {
-    condition     = contains(oci_identity_policy.runtime.statements, "Allow any-user to use functions-family in compartment id ocid1.compartment.oc1..publiciamtest where ALL {request.principal.type = 'ApiGateway', request.resource.compartment.id = 'ocid1.compartment.oc1..publiciamtest'}")
+    condition     = contains(oci_identity_policy.runtime[0].statements, "Allow any-user to use functions-family in compartment id ocid1.compartment.oc1..publiciamtest where ALL {request.principal.type = 'ApiGateway', request.resource.compartment.id = 'ocid1.compartment.oc1..publiciamtest'}")
     error_message = "API Gateway must be allowed to invoke the Functions router."
   }
 
   assert {
-    condition     = oci_identity_policy.runtime_tenancy.statements == tolist(["Allow dynamic-group jetuse-spike-iam01-runtime-dg to read objectstorage-namespaces in tenancy"])
+    condition     = oci_identity_policy.runtime_tenancy[0].statements == tolist(["Allow dynamic-group jetuse-spike-iam01-runtime-dg to read objectstorage-namespaces in tenancy"])
     error_message = "The runtime tenancy policy must remain read-only and namespace-only."
   }
 
@@ -94,12 +94,108 @@ run "minimal_without_semantic_store_or_deployer_policy" {
   }
 
   assert {
-    condition     = length(oci_identity_policy.runtime.statements) == 17
+    condition     = length(oci_identity_policy.runtime[0].statements) == 17
     error_message = "Minimal runtime policy must contain runtime and ADB statements only."
   }
 
   assert {
     condition     = length(oci_identity_policy.deployer) == 0
     error_message = "Deployer policy must be omitted when disabled."
+  }
+}
+
+run "dynamic_groups_only" {
+  command = plan
+
+  variables {
+    tenancy_ocid           = "ocid1.tenancy.oc1..publiciamtest"
+    compartment_ocid       = "ocid1.compartment.oc1..publiciamtest"
+    prefix                 = "jetuse-spike-iam03"
+    enable_dynamic_group   = true
+    enable_runtime_policy  = false
+    enable_semantic_store  = true
+    create_deployer_policy = false
+  }
+
+  assert {
+    condition = (
+      length(oci_identity_dynamic_group.runtime) == 1 &&
+      length(oci_identity_dynamic_group.adb) == 1 &&
+      length(oci_identity_dynamic_group.semantic_store) == 1
+    )
+    error_message = "All requested dynamic groups must be created independently of the compartment runtime policy."
+  }
+
+  assert {
+    condition     = length(oci_identity_policy.runtime) == 0
+    error_message = "The compartment runtime policy must be omitted when disabled."
+  }
+
+  assert {
+    condition     = length(oci_identity_policy.runtime_tenancy) == 1
+    error_message = "The tenancy-scoped namespace policy must be bootstrapped with the dynamic groups."
+  }
+}
+
+run "runtime_policy_only_with_existing_dynamic_groups" {
+  command = plan
+
+  variables {
+    tenancy_ocid           = "ocid1.tenancy.oc1..publiciamtest"
+    compartment_ocid       = "ocid1.compartment.oc1..publiciamtest"
+    prefix                 = "jetuse-spike-iam04"
+    enable_dynamic_group   = false
+    enable_runtime_policy  = true
+    enable_semantic_store  = true
+    create_deployer_policy = false
+  }
+
+  assert {
+    condition = (
+      length(oci_identity_dynamic_group.runtime) == 0 &&
+      length(oci_identity_dynamic_group.adb) == 0 &&
+      length(oci_identity_dynamic_group.semantic_store) == 0
+    )
+    error_message = "No tenancy-level dynamic groups may be planned when their creation is disabled."
+  }
+
+  assert {
+    condition     = length(oci_identity_policy.runtime) == 1
+    error_message = "The compartment runtime policy must still be created when enabled independently."
+  }
+
+  assert {
+    condition     = contains(oci_identity_policy.runtime[0].statements, "Allow dynamic-group jetuse-spike-iam04-runtime-dg to use generative-ai-family in compartment id ocid1.compartment.oc1..publiciamtest")
+    error_message = "The runtime policy must reference the conventionally named pre-existing dynamic group."
+  }
+
+  assert {
+    condition     = length(oci_identity_policy.runtime_tenancy) == 0
+    error_message = "No tenancy-scoped policy may be planned for a compartment-only runtime-policy deployment."
+  }
+}
+
+run "runtime_iam_fully_disabled" {
+  command = plan
+
+  variables {
+    tenancy_ocid           = "ocid1.tenancy.oc1..publiciamtest"
+    compartment_ocid       = "ocid1.compartment.oc1..publiciamtest"
+    prefix                 = "jetuse-spike-iam05"
+    enable_dynamic_group   = false
+    enable_runtime_policy  = false
+    enable_semantic_store  = true
+    create_deployer_policy = false
+  }
+
+  assert {
+    condition = (
+      length(oci_identity_dynamic_group.runtime) == 0 &&
+      length(oci_identity_dynamic_group.adb) == 0 &&
+      length(oci_identity_dynamic_group.semantic_store) == 0 &&
+      length(oci_identity_policy.runtime) == 0 &&
+      length(oci_identity_policy.runtime_tenancy) == 0
+    )
+    error_message = "All runtime IAM resources must be omitted when both controls are disabled."
   }
 }

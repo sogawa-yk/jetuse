@@ -104,10 +104,12 @@ module "identity_domain" {
 }
 
 module "iam" {
-  count            = var.enable_iam ? 1 : 0
-  source           = "../../modules/iam"
-  providers        = { oci = oci.home }
-  tenancy_ocid     = var.tenancy_ocid
-  compartment_ocid = var.compartment_ocid
-  prefix           = var.prefix
+  count                 = var.enable_dynamic_group || var.enable_runtime_policy ? 1 : 0
+  source                = "../../modules/iam"
+  providers             = { oci = oci.home }
+  tenancy_ocid          = var.tenancy_ocid
+  compartment_ocid      = var.compartment_ocid
+  prefix                = var.prefix
+  enable_dynamic_group  = var.enable_dynamic_group
+  enable_runtime_policy = var.enable_runtime_policy
 }

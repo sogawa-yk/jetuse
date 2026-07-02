@@ -125,6 +125,13 @@ All {resource.type='generativeaisemanticstore', resource.compartment.id='<compar
 
 SQL Searchを使用しない場合は `enable_semantic_store=false` として省略できる。Semantic StoreはIAM反映後に作成する。
 
+Bootstrapの作成範囲は次の2変数で分離できる。
+
+- `enable_dynamic_group`: Runtime / ADB / Semantic StoreのDynamic Groupと、テナンシスコープのObject Storage namespace参照ポリシー
+- `enable_runtime_policy`: JetUse専用コンパートメント内のRuntime Policy
+
+コンパートメント管理者が後者だけを作成する場合は、テナンシ管理者が前者を先に適用し、同じ`prefix`を使用する。
+
 ## 5. Runtime Policy
 
 ### 5.1 Runtime / ADB / API Gateway（JetUse専用コンパートメント）
