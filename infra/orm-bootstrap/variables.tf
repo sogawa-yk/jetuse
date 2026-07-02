@@ -29,6 +29,18 @@ variable "prefix" {
   }
 }
 
+variable "enable_dynamic_group" {
+  description = "Runtime / ADB / Semantic Store の Dynamic Group とテナンシスコープのnamespace参照ポリシーを作成する"
+  type        = bool
+  default     = true
+}
+
+variable "enable_runtime_policy" {
+  description = "JetUse専用コンパートメントにランタイムポリシーを作成する"
+  type        = bool
+  default     = true
+}
+
 variable "create_deployer_policy" {
   description = "既存グループへ JetUse 専用コンパートメントの Resource Manager デプロイ権限を付与する"
   type        = bool
