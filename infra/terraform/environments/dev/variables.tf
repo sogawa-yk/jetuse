@@ -89,8 +89,14 @@ variable "enable_identity_domain" {
   default     = true
 }
 
-variable "enable_iam" {
-  description = "動的グループ+ポリシー。エージェント用ユーザーにはテナンシ権限がなく404になるため既定false(2026-06-10実測)。人間が docs/setup/app-iam.md で実施"
+variable "enable_dynamic_group" {
+  description = "Runtime用動的グループをテナンシ直下に作成。エージェント用ユーザーにはテナンシ権限がないため既定false"
+  type        = bool
+  default     = false
+}
+
+variable "enable_runtime_policy" {
+  description = "既存動的グループを参照するランタイムポリシーを対象コンパートメントに作成。既存ポリシーとの競合を避けるため既定false"
   type        = bool
   default     = false
 }

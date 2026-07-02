@@ -13,5 +13,7 @@ adb_admin_password = "change-me"
 #   conversations = "ocid1.fnfunc.oc1..xxxxxxxx"
 # }
 
-# テナンシ管理権限がなければ false(docs/setup/ の手順書で人間が実施)
-# enable_iam = false
+# IAMは動的グループ(テナンシ権限)とランタイムポリシー(コンパートメント権限)を個別管理できる。
+# 既存IAMを使う環境では両方falseのままにする。
+# enable_dynamic_group  = false
+# enable_runtime_policy = false

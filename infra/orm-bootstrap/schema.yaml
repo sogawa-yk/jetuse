@@ -17,6 +17,10 @@ variableGroups:
     variables:
       - create_deployer_policy
       - deployer_group_subject
+  - title: "Runtime IAM 作成範囲"
+    variables:
+      - enable_dynamic_group
+      - enable_runtime_policy
   - title: "オプション"
     variables:
       - enable_semantic_store
@@ -44,6 +48,18 @@ variables:
     description: "テナンシ内で一意にします。複数環境では jetuse-sales のように部門名を含め、アプリ本体にも同じ値を推奨します。"
     default: "jetuse"
     required: true
+
+  enable_dynamic_group:
+    type: boolean
+    title: "Dynamic Groupを作成"
+    description: "テナンシ権限が必要です。オフの場合は <prefix>-runtime-dg / adb-dg / semantic-store-dg とnamespace参照ポリシーを事前作成してください。"
+    default: true
+
+  enable_runtime_policy:
+    type: boolean
+    title: "ランタイムポリシーを作成"
+    description: "JetUse専用コンパートメント内に既存Dynamic Groupを参照するランタイムポリシーを作成します。"
+    default: true
 
   create_deployer_policy:
     type: boolean
