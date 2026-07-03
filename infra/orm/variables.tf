@@ -44,21 +44,9 @@ variable "enable_dynamic_group" {
   default     = true
 }
 
-# enable_dynamic_group=false のとき、runtime policyが参照する既存Dynamic Group名。
-variable "existing_runtime_dynamic_group" {
-  description = "既存のRuntime Dynamic Group名(enable_dynamic_group=falseの場合必須)"
-  type        = string
-  default     = ""
-}
-
-variable "existing_adb_dynamic_group" {
-  description = "既存のADB Dynamic Group名(enable_dynamic_group=falseの場合必須)"
-  type        = string
-  default     = ""
-}
-
-variable "existing_semantic_store_dynamic_group" {
-  description = "既存のSemantic Store Dynamic Group名(enable_dynamic_group=falseかつenable_semantic_store=trueの場合必須)"
+# enable_dynamic_group=false のとき、runtime policyの全statementが参照する既存Dynamic Group名。
+variable "existing_dynamic_group" {
+  description = "既存のDynamic Group名(enable_dynamic_group=falseの場合必須。Container Instance / Functions / ADB / Semantic Storeを含むmatching ruleであること)"
   type        = string
   default     = ""
 }

@@ -1,12 +1,13 @@
 # JetUseの実行時プリンシパルは責務ごとに分離する。
 # 呼び出し元stackは実行者の権限と既存IAMに応じて、作成範囲を個別に切り替える。
 
-# enable_dynamic_group=false のときはprefix合成せず、呼び出し元が明示した既存DG名を参照する
-# (存在しないDGを参照するpolicyはCreatePolicyが 400 "No permissions found" で失敗するため)。
+# enable_dynamic_group=false のときはprefix合成せず、呼び出し元が明示した単一の既存DG名を
+# 全statementで参照する(存在しないDGを参照するpolicyはCreatePolicyが 400 "No permissions found"
+# で失敗するため)。責務別の3DG分離はstackがDGを作成する場合のみ。
 locals {
-  runtime_dynamic_group_name        = var.enable_dynamic_group ? "${var.prefix}-runtime-dg" : var.existing_runtime_dynamic_group
-  adb_dynamic_group_name            = var.enable_dynamic_group ? "${var.prefix}-adb-dg" : var.existing_adb_dynamic_group
-  semantic_store_dynamic_group_name = var.enable_dynamic_group ? "${var.prefix}-semantic-store-dg" : var.existing_semantic_store_dynamic_group
+  runtime_dynamic_group_name        = var.enable_dynamic_group ? "${var.prefix}-runtime-dg" : var.existing_dynamic_group
+  adb_dynamic_group_name            = var.enable_dynamic_group ? "${var.prefix}-adb-dg" : var.existing_dynamic_group
+  semantic_store_dynamic_group_name = var.enable_dynamic_group ? "${var.prefix}-semantic-store-dg" : var.existing_dynamic_group
 }
 
 resource "oci_identity_dynamic_group" "runtime" {
@@ -83,11 +84,12 @@ resource "oci_identity_policy" "runtime" {
   compartment_id = var.compartment_ocid
   name           = "${var.prefix}-runtime-policy"
   description    = "JetUse least-privilege runtime permissions"
-  statements = concat(
+  # 単一の既存DGを参照する場合、責務間で同一になる文をまとめる。
+  statements = distinct(concat(
     local.runtime_statements,
     local.adb_statements,
     local.semantic_store_statements,
-  )
+  ))
 
   depends_on = [
     oci_identity_dynamic_group.runtime,
@@ -97,12 +99,8 @@ resource "oci_identity_policy" "runtime" {
 
   lifecycle {
     precondition {
-      condition = alltrue([
-        trimspace(local.runtime_dynamic_group_name) != "",
-        trimspace(local.adb_dynamic_group_name) != "",
-        !var.enable_semantic_store || trimspace(local.semantic_store_dynamic_group_name) != "",
-      ])
-      error_message = "enable_dynamic_group=false requires existing_runtime_dynamic_group and existing_adb_dynamic_group (and existing_semantic_store_dynamic_group when enable_semantic_store=true) to name pre-existing dynamic groups."
+      condition     = var.enable_dynamic_group || trimspace(var.existing_dynamic_group) != ""
+      error_message = "enable_dynamic_group=false requires existing_dynamic_group to name a pre-existing dynamic group covering the JetUse runtime principals."
     }
   }
 }

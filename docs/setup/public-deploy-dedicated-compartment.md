@@ -93,7 +93,7 @@ Allow group <deployer-group> to manage policies in tenancy
 1. READMEの**Deploy JetUse to Oracle Cloud**ボタンを開く。
 2. Stack compartmentにJetUse専用コンパートメントを選択する。
 3. Variableの`compartment_ocid`に同じ専用コンパートメントを指定する。
-4. `enable_dynamic_group=false`にし、事前作成済みのDynamic Group名（runtime / ADB / Semantic Store）を入力する。
+4. `enable_dynamic_group=false`にし、事前作成済みのDynamic Group名を`existing_dynamic_group`に入力する。
 5. Runtime Policyが事前作成済みなら`enable_runtime_policy=false`、このコンパートメントでPolicyを管理できるなら`true`にする。
 6. Identity Domain管理権限がない場合は、隔離検証用途に限り`enable_auth=false`にする。認証が必要な場合は管理者へDomain権限を依頼する。
 7. Planを実行し、権限のないIAM作成が含まれないことと、作成先が専用コンパートメント内であることを確認する。
