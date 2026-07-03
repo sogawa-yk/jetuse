@@ -42,7 +42,7 @@ run "full_public_iam_contract" {
   }
 
   assert {
-    condition     = contains(oci_identity_policy.runtime[0].statements, "Allow dynamic-group jetuse-spike-iam01-runtime-dg to manage generative-ai-vectorstore in compartment id ocid1.compartment.oc1..publiciamtest")
+    condition     = contains(oci_identity_policy.runtime[0].statements, "Allow dynamic-group jetuse-spike-iam01-runtime-dg to manage generative-ai-vector-store in compartment id ocid1.compartment.oc1..publiciamtest")
     error_message = "Runtime policy must allow application-managed Vector Stores."
   }
 

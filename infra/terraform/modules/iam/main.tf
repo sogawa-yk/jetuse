@@ -44,7 +44,10 @@ locals {
     # Chat / Responses / Projects / Guardrails / hosted agent invocation.
     "Allow dynamic-group ${local.runtime_dynamic_group_name} to use generative-ai-family in compartment id ${var.compartment_ocid}",
     # RAG の Vector Store と Files はアプリが作成・削除するため manage が必要。
-    "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage generative-ai-vectorstore in compartment id ${var.compartment_ocid}",
+    # resource-typeは "generative-ai-vector-store"(ハイフン付き)。隣の vectorstore-file / file は
+    # ハイフンなしが正で、公式リファレンスの命名が不統一なため注意(誤ると CreatePolicy が
+    # 400 "No permissions found" でポリシー全体を拒否する)。
+    "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage generative-ai-vector-store in compartment id ${var.compartment_ocid}",
     "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage generative-ai-vectorstore-file in compartment id ${var.compartment_ocid}",
     "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage generative-ai-file in compartment id ${var.compartment_ocid}",
     # ADB wallet 取得、RAG/議事録ファイル、AIサービス、可観測性。
