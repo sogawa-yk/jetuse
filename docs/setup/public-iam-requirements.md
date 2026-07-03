@@ -42,34 +42,18 @@ Allow group <deployer-group> to manage all-resources in compartment id <compartm
 
 ## Dynamic Group
 
-`<prefix>`はテナンシ内で一意にし、Stackの`prefix`と一致させる。
+`enable_dynamic_group=true`の場合、Stackが責務別の3つのDynamic Group（`<prefix>-runtime-dg` / `<prefix>-adb-dg` / `<prefix>-semantic-store-dg`）を作成する。
 
-### Runtime
-
-名前: `<prefix>-runtime-dg`
+`enable_dynamic_group=false`の場合は、**単一の**Dynamic Groupを事前作成し、その名前をStack変数`existing_dynamic_group`に入力する。名前は任意。Matching RuleにJetUseの全runtimeプリンシパルを含める。
 
 ```text
 Any {all {resource.type='computecontainerinstance', resource.compartment.id='<compartment_ocid>'},
-     all {resource.type='fnfunc', resource.compartment.id='<compartment_ocid>'}}
+     all {resource.type='fnfunc', resource.compartment.id='<compartment_ocid>'},
+     all {resource.type='autonomousdatabase', resource.compartment.id='<compartment_ocid>'},
+     all {resource.type='generativeaisemanticstore', resource.compartment.id='<compartment_ocid>'}}
 ```
 
-### Autonomous Database
-
-名前: `<prefix>-adb-dg`
-
-```text
-All {resource.type='autonomousdatabase', resource.compartment.id='<compartment_ocid>'}
-```
-
-### Semantic Store（SQL Search使用時）
-
-名前: `<prefix>-semantic-store-dg`
-
-```text
-All {resource.type='generativeaisemanticstore', resource.compartment.id='<compartment_ocid>'}
-```
-
-SQL Searchを使用しない場合は`enable_semantic_store=false`にできる。
+SQL Searchを使用しない場合は`enable_semantic_store=false`にし、`generativeaisemanticstore`の行を省略できる。
 
 ## Runtime Policy
 
@@ -80,7 +64,7 @@ JetUse専用コンパートメントの`${prefix}-runtime-policy`には次の権
 - API Gateway: 同じコンパートメントのFunctions呼び出し
 - Semantic Store: DB Tools、Database metadata、Secrets、Generative AI（有効時）
 
-root compartmentの`${prefix}-runtime-tenancy-policy`は次の1文だけを持つ。
+root compartmentの`${prefix}-runtime-tenancy-policy`は次の1文だけを持つ（事前作成時は`<既存Dynamic Group名>`で読み替える）。
 
 ```text
 Allow dynamic-group <prefix>-runtime-dg to read objectstorage-namespaces in tenancy
@@ -97,8 +81,8 @@ JetUse Public版をOCI Resource Managerからデプロイします。
 2. デプロイ担当グループ: <domain/group>
 3. IAM prefix: <prefix>
 4. 実行ユーザーがDynamic Groupを作成できない場合:
-   <prefix>-runtime-dg / adb-dg / semantic-store-dg と
-   <prefix>-runtime-tenancy-policyを事前作成してください。
+   JetUse用のDynamic Group（単一。Matching Ruleは本書のDynamic Group節）と
+   namespace参照Policyを事前作成し、Dynamic Group名を教えてください。
 5. 実行ユーザーがコンパートメントPolicyを作成できない場合:
    <prefix>-runtime-policyも事前作成してください。
 
@@ -111,7 +95,7 @@ enable_dynamic_group / enable_runtime_policyをfalseにします。
 - Dynamic GroupのMatching Ruleが対象コンパートメントだけを指している。
 - Runtime Policyの各文がJetUse専用コンパートメントに限定されている。
 - namespace参照Policyがread 1文だけである。
-- Stackの`prefix`と既存Dynamic Group名が一致している。
+- Stack変数`existing_dynamic_group`が既存Dynamic Group名と一致している。
 - IAM反映後5〜10分待ってからresource principalの動作を確認する。
 
 ## 公式資料

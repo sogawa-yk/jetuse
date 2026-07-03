@@ -24,9 +24,7 @@ variableGroups:
   - title: "IAM設定（実行ユーザーの権限に応じて選択）"
     variables:
       - enable_dynamic_group
-      - existing_runtime_dynamic_group
-      - existing_adb_dynamic_group
-      - existing_semantic_store_dynamic_group
+      - existing_dynamic_group
       - enable_runtime_policy
       - enable_semantic_store
   - title: "オプション（詳細）"
@@ -70,26 +68,10 @@ variables:
     description: "テナンシIAM権限がある場合はオン。オフの場合は既存のDynamic Group名を下の欄に入力してください（namespace参照Policyも既存であることが前提です）。"
     default: true
 
-  existing_runtime_dynamic_group:
+  existing_dynamic_group:
     type: string
-    title: "既存のRuntime Dynamic Group名"
-    description: "Container Instances / Functions用の既存Dynamic Group名（Dynamic Groupを作成しない場合は必須）"
-    visible:
-      not:
-        - enable_dynamic_group
-
-  existing_adb_dynamic_group:
-    type: string
-    title: "既存のADB Dynamic Group名"
-    description: "Autonomous Database用の既存Dynamic Group名（Dynamic Groupを作成しない場合は必須）"
-    visible:
-      not:
-        - enable_dynamic_group
-
-  existing_semantic_store_dynamic_group:
-    type: string
-    title: "既存のSemantic Store Dynamic Group名"
-    description: "SQL Search用の既存Dynamic Group名（Dynamic Groupを作成せずSemantic Store権限を有効にする場合は必須）"
+    title: "既存のDynamic Group名"
+    description: "Runtime Policyが参照する既存Dynamic Group名（Dynamic Groupを作成しない場合は必須）。Matching RuleにContainer Instance / Functions / ADB / Semantic Storeを含めてください"
     visible:
       not:
         - enable_dynamic_group

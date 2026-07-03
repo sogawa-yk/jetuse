@@ -31,20 +31,8 @@ variable "enable_semantic_store" {
   default     = true
 }
 
-variable "existing_runtime_dynamic_group" {
-  description = "Name of the pre-existing runtime dynamic group referenced by the runtime policy when enable_dynamic_group is false."
-  type        = string
-  default     = ""
-}
-
-variable "existing_adb_dynamic_group" {
-  description = "Name of the pre-existing ADB dynamic group referenced by the runtime policy when enable_dynamic_group is false."
-  type        = string
-  default     = ""
-}
-
-variable "existing_semantic_store_dynamic_group" {
-  description = "Name of the pre-existing semantic store dynamic group referenced by the runtime policy when enable_dynamic_group is false and enable_semantic_store is true."
+variable "existing_dynamic_group" {
+  description = "Name of the pre-existing dynamic group referenced by the runtime policy when enable_dynamic_group is false. Its matching rule must cover Container Instances, Functions and ADB (and semantic stores when enable_semantic_store is true)."
   type        = string
   default     = ""
 }
