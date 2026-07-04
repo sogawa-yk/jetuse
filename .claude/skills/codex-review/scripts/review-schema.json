@@ -1,0 +1,109 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "severity_counts", "findings", "summary", "e2e"],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["PASS", "FAIL"],
+      "description": "blocker が1件でもあれば必ず FAIL。blocker が0件なら PASS。"
+    },
+    "summary": {
+      "type": "string",
+      "description": "差分全体の所見を1〜3文で。"
+    },
+    "severity_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["blocker", "major", "minor"],
+      "properties": {
+        "blocker": { "type": "integer", "minimum": 0 },
+        "major": { "type": "integer", "minimum": 0 },
+        "minor": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "severity", "file", "line", "issue", "suggestion"],
+        "properties": {
+          "id": { "type": "string" },
+          "severity": { "type": "string", "enum": ["blocker", "major", "minor"] },
+          "file": { "type": "string" },
+          "line": { "type": "integer" },
+          "issue": { "type": "string" },
+          "suggestion": { "type": "string" }
+        }
+      }
+    },
+    "e2e": {
+      "type": "object",
+      "description": "添付された実環境 E2E 証跡(runs/<run-id>/e2e/)に対する所見。証跡が無い場合は attached=false。",
+      "additionalProperties": false,
+      "required": ["attached", "scenarios_reviewed", "adequacy", "notes", "live_check"],
+      "properties": {
+        "attached": {
+          "type": "boolean",
+          "description": "実環境 E2E 証跡が入力に添付されていたか。"
+        },
+        "scenarios_reviewed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "証跡から読み取れた実行シナリオ数（無ければ 0）。"
+        },
+        "adequacy": {
+          "type": "string",
+          "enum": ["sufficient", "insufficient", "not_applicable"],
+          "description": "複数シナリオ網羅・diff の裏づけとして十分か。未実施の正当な理由があれば not_applicable。"
+        },
+        "notes": {
+          "type": "string",
+          "description": "E2E 証跡の十分性に関する所見(不足シナリオ・未検証経路など)。"
+        },
+        "live_check": {
+          "type": "object",
+          "description": "Codex が Playwright MCP で実ブラウザ E2E を実施した結果。ターゲット URL 未提供時は performed=false。",
+          "additionalProperties": false,
+          "required": ["performed", "target_url", "result", "scenarios", "notes"],
+          "properties": {
+            "performed": {
+              "type": "boolean",
+              "description": "実ブラウザ E2E を実施したか（ターゲット URL があり browser ツールを使った場合 true）。"
+            },
+            "target_url": {
+              "type": "string",
+              "description": "検証対象 URL。未実施なら空文字。"
+            },
+            "result": {
+              "type": "string",
+              "enum": ["pass", "fail", "not_performed"],
+              "description": "主要フローが実ブラウザで通ったか。未実施は not_performed。fail なら blocker finding を立てること。"
+            },
+            "scenarios": {
+              "type": "array",
+              "description": "実施した各ブラウザシナリオ。",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "steps", "expected", "observed", "passed"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "steps": { "type": "string", "description": "navigate/click/evaluate 等の手順。" },
+                  "expected": { "type": "string" },
+                  "observed": { "type": "string" },
+                  "passed": { "type": "boolean" }
+                }
+              }
+            },
+            "notes": {
+              "type": "string",
+              "description": "実ブラウザ検証の所見（コンソール/HTTP エラー・未検証経路など）。"
+            }
+          }
+        }
+      }
+    }
+  }
+}
