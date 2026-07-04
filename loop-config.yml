@@ -1,0 +1,127 @@
+# ループエンジニアリング設定（loop-impl.md A-2 を本リポジトリ向けに具体化）
+# 変更時は loop-doctor 経由・人間承認後のみ（CLAUDE.md「やってはいけないこと」参照）。
+
+stage: report-only            # report-only | auto-fix | auto-commit（引き上げは人間ゲート §7）
+
+# ステージ承認ループ（stage-runner スキル）。loop-runner の上位。人間ゲートを「タスク単位」から
+# 「ステージ単位」へ引き上げる。導入は人間承認済み（2026-06-26 / loop-doctor）。
+# 自動統合は **ステージ専用ローカルブランチ限定**。リモート/PR/apply/ADR承認/IAM は自走中も停止。
+stage_runner:
+  enabled: true
+  integration_branch: "feat/<stage>"            # base=worktree.base_branch から分岐。push しない。
+  autonomy: auto_commit_to_stage_branch_only     # 自動 commit+merge はこの隔離ブランチだけ。
+  max_concurrency: 3                             # 1波の同時タスク数（loop-runner と同じ上限）。
+  # 自走中も必ず停止するハードゲート（越えない）。当該タスクは blocked にして他を進め、ステージ報告で提示。
+  hard_gates:
+    - push                  # リモート push
+    - pr_to_base            # base への PR / merge
+    - terraform_apply       # apply・課金
+    - billing
+    - iam_identity          # IAM / Identity Domain
+    - adr_approval          # 真の決定を伴う ADR 承認（ドラフト作成は可）
+  # 波間の自動統合でコンフリクト時: サブエージェントで解決試行→codex-review→緑なら継続/不能なら停止。
+  conflict_policy: subagent_resolve_then_review
+  report_at: stage_completion                    # ステージ完了で1回だけ人間へ報告・チェック。
+  stage_token_budget: 20000000                   # ステージ全体のトークン天井（タスクごとの budget に上乗せ）。
+
+review:
+  reviewer: codex
+  # 空文字なら codex の ~/.codex/config.toml の既定モデルを使う。
+  # 上書きは launch 時に CODEX_MODEL=... を渡す（loop-config を書き換えない）。
+  model: ""
+  diff_scope: uncommitted     # uncommitted(=git diff HEAD) | staged | worktree
+  blocker_blocks_completion: true
+
+# ponytail(DietrichGebert/ponytail)統合: maker 側の実装最小化規律。採点は Codex のまま(判定を動かさない)。
+# loop-protocol 手順2(実装時の ponytail 適用)/手順2.5(codex 前の ponytail-review 自己短縮)が参照する。
+ponytail:
+  enabled: true
+  intensity: full       # lite | full | ultra。実装時 ponytail の既定強度(ultra は要件まで削るため人間明示時のみ)
+  self_review: true     # codex-review 前に ponytail-review を当て runs/<id>/reviews/ponytail-<n>.txt に証跡(非採点)
+
+# Superpowers(obra/Superpowers)統合: 開発者規律の「層」を無改造 install して合成(C案・施主承認 2026-06-30)。
+# こちらのループは採点(Codex)/実環境E2Eゲート/fail-closed/loop-doctor の「強制と運用の殻」を担い、
+# Superpowers の規律スキルを invoke するだけ(フォークしない/上書きしない=upstream 更新を /plugin update で無税享受)。
+# 導入: /plugin install superpowers@claude-plugins-official (公式) または
+#       /plugin marketplace add obra/superpowers-marketplace && /plugin install superpowers@superpowers-marketplace
+superpowers:
+  enabled: true
+  # 毎ターンの実装で踏む規律(歯は付けない=採点は Codex のまま)。loop-protocol 手順2 が参照。
+  per_turn_skills:
+    - superpowers:test-driven-development        # 非自明ロジックは RED-GREEN-REFACTOR。実環境E2E証跡と相補。
+  # タスク特性で随時 reach する規律。loop-protocol 手順2 / stage・loop-runner の起票前段。
+  on_demand_skills:
+    - superpowers:brainstorming                  # 要件が曖昧なとき(着手前の設計詰め)
+    - superpowers:writing-plans                  # 多段タスクの分解(タスク起票の前段)
+    - superpowers:systematic-debugging           # 不具合の根本原因解析(symptom でなく root cause)
+    - superpowers:verification-before-completion # 完了主張前の自己検証(こちらの実環境E2Eゲートの前段)
+
+budget:
+  max_turns: 20
+  max_tokens: 2000000
+
+# 並行セッションの分離（component-map「Worktrees」/ 衝突実害を受けて導入）。
+# .claude/loop/start-loop.sh が参照する。タスク=1 worktree で、ブランチ・インデックス・作業ツリーを
+# 共有しないため、複数の loop を同時に回しても互いの変更を壊さない。
+worktree:
+  enabled: true                       # 推奨起動経路。start-loop.sh <task> で worktree 起動。
+  base_branch: dev                    # 既定の派生元(=作業の根)。Experience Builder 系列は main 派生の dev。
+                                      # 依存連鎖は BASE_BRANCH=feat/<dep> で上書き。
+  root: ""                            # worktree 配置先。空なら <repo>/../<repo名>-loops。
+                                      # 上書きは LOOP_WORKTREE_ROOT 環境変数（loop-config は書き換えない）。
+  bootstrap: true                     # 作成時に隔離環境を用意（api=.venv+editable / web=node_modules）。
+                                      # LOOP_SKIP_BOOTSTRAP=1 で無効化。
+
+# 本リポジトリはモノレポ。area ごとにテスト/lint コマンドが異なる。
+# /goal 完了条件には「変更した area の」コマンドを当てる（goal_template の {test_cmd}）。
+areas:
+  web:
+    path: packages/web
+    test_cmd: "npm --prefix packages/web run test"
+    lint_cmd: "npm --prefix packages/web run lint"
+    build_cmd: "npm --prefix packages/web run build"
+    # 完了ゲートの実環境デプロイ（jetuse-dev の固定 loop 環境を再利用）。
+    deploy_cmd: "ops/dev-env-up.sh loop"
+    # E2E はデプロイURLに対する複数シナリオ。具体は tasks/<id>.md の「E2E シナリオ」に従う。
+    e2e_cmd: ""
+  api:
+    path: packages/api
+    test_cmd: ".venv/bin/pytest packages/api/tests"
+    lint_cmd: ".venv/bin/ruff check packages/api"
+    # DB系は実 ADB を起こして実マイグレーション適用までをデプロイとする。
+    deploy_cmd: "ops/start-adb-if-stopped.sh && .venv/bin/python -m jetuse_core.migrate"
+    # E2E は実 ADB への CRUD 往復・冪等再適用など。具体は tasks/<id>.md の「E2E シナリオ」に従う。
+    e2e_cmd: ""
+
+# 実環境 E2E（jetuse-dev の実リソースを使った End-to-End 検証）。
+# Codex はコードを実行できない（read-only sandbox）。よって Claude が deploy+E2E を実施して
+# 証跡を runs/<run-id>/e2e/ に残し、Codex はその「証跡＋diff」を評価する。
+e2e:
+  enabled: true
+  cadence: completion_gate      # completion_gate | every_iteration | hybrid（採用: 完了ゲートで1回）
+  compartment: jetuse-dev       # 実環境はこのコンパートメントに閉じる
+  dev_env: loop                 # 固定の再利用 dev タグ/スキーマ（むやみに増やさない。作り直しは破棄→再作成）
+  evidence_dir: "runs/<run-id>/e2e"
+  min_scenarios: 2              # 「複数シナリオ」。実施可能な範囲で最低 2 本
+  best_effort: true             # タスク依存。実施不能な範囲は e2e/SKIPPED.md に理由明記（無言スキップ禁止）
+  # 並列実行（loop-runner Agent Teams）時の隔離: 共有 loop ADB を再利用しつつ DB タスクは
+  # タスク専用スキーマ JETUSE_<task> で分離（ADB は増やさない）。同時実行は最大 3。
+  parallel:
+    max_concurrency: 3
+    db_schema_isolation: "JETUSE_<task>"
+
+# 既定（task が area を指定しない場合）。複数 area にまたがる変更では && で連結する。
+test_cmd: "npm --prefix packages/web run test"
+
+goal_template: |
+  tasks/{task}.md の受け入れ条件をすべて満たし、かつ
+  (1) {test_cmd} が全件パス、
+  (2) 該当 area の lint がクリーン、
+  (3) STATE.md の review_verdict が PASS（最新の Codex レビューが合格）、
+  (4) 該当タスクを jetuse-dev 実環境（固定 loop 環境）へデプロイし、tasks/{task}.md の
+      「E2E シナリオ」を複数（e2e.min_scenarios 以上）実環境で実行して結果を runs/<run-id>/e2e/ に記録、
+      その証跡込みの Codex レビューが PASS であること。技術的に E2E 不能な範囲は
+      runs/<run-id>/e2e/SKIPPED.md に理由を明記する（ベストエフォート。無言スキップ禁止）
+  であること。
+  E2E は完了ゲートで1回（毎イテレーションではない）。リソースはむやみに増やさず固定 loop 環境を再利用する。
+  未承認のコミット・PR・push は一切行わないこと（人間ゲート）。

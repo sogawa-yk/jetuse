@@ -46,3 +46,18 @@ infra/orm/           # IAMとアプリを含むResource Managerスタック
 ## タスクチケット書式
 
 `docs/plan.md` §16 を参照。
+
+## ループエンジニアリング（loop-config.yml / docs/loop-engineering.md）
+
+実装は Claude Code（maker）、レビューは Codex（checker）。別ツール・別モデルで maker/checker を分離し、
+エージェントが毎ターン `loop-protocol` を辿って自走することでループが回る（採点者は Codex。判定を Claude が書き換えない）。
+
+- **仕組みの所在**: スキル `.claude/skills/{loop-protocol,loop-runner,stage-runner,codex-review,loop-doctor}`、
+  hooks `.claude/hooks/`、起動スクリプト `.claude/loop/`、設定 `loop-config.yml`。詳細は `docs/loop-engineering.md`。
+- **起動**: worktree 分離起動 `[GOAL="..."] .claude/loop/start-loop.sh <task>`（後始末 `end-loop.sh`）。
+  `LOOP_TASK` が無いセッションでは hooks は完全 no-op（通常開発に影響しない）。
+- **毎ターン**: `loop-protocol` の手順（実装→`codex-review`→履歴記録→STATE 更新）を厳守。
+  完了ゲート = review_verdict=PASS かつ area の test/lint 緑 かつ実環境 E2E 通過。PASS 後は非 blocker を追わず停止（手順5.5）。
+- **単一の真実源**: 現在状態は `STATE.md`、不変の実行履歴は `runs/<run-id>/`（追記のみ）。
+- **自己改善**: 成果物の問題は `loop-doctor` へ（コードでなく「ループの仕組み」を直す）。
+- **人間ゲート**: コミット / PR / push / リリース、および仕組み（スキル・hooks・完了条件・設定）の編集は承認なしに行わない。
