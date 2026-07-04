@@ -37,6 +37,8 @@ resource "oci_identity_domains_app" "spa" {
   is_login_target           = true
   show_in_my_apps           = true
   active                    = true
+  # OAuthは認証のみに使うため、初回ログイン時のスコープ同意画面を出さない
+  bypass_consent = true
 
   # destroy前に非アクティブ化(activeなアプリは削除できず destroy が400で失敗するため)。
   # destroy-time provisioner は self のみ参照可。oci CLI は RM 実行環境/ローカルとも利用可能。
