@@ -16,8 +16,8 @@ status: `todo` | `in_progress` | `blocked` | `done`
 |---|---|---|---|---|
 | 0 | [SP2-00 specs/18 起草（SP2 詳細仕様）+ キュー肉付け](SP2-00.md) | — | **spec 承認**（adr_approval 相当） | done |
 | 1 | [SP2-01 Demo エンティティ本格化 + CRUD ルート](SP2-01.md) | SP2-00 | コミット | done |
-| 2 | [SP2-02 箱のライフサイクル（lazy 解決・削除後始末・VPD 基盤）](SP2-02.md) | SP2-01 | コミット + **VPD 初回セットアップ・DBMS_LOCK 権限付与・旧 demo 資源クリーンアップ削除の承認**（specs/18 §3.2・§3.2.1・§4.3 — 承認対象と実変更の一致を完了条件で照合） | in_progress |
-| 3 | [SP2-03 DemoContext 解決先の実装 + dbchat デモスコープ化](SP2-03.md) | SP2-02 | コミット | todo |
+| 2 | [SP2-02 箱のライフサイクル（lazy 解決・削除後始末・VPD 基盤）](SP2-02.md) | SP2-01 | コミット + **VPD 初回セットアップ・DBMS_LOCK 権限付与・旧 demo 資源クリーンアップ削除の承認**（specs/18 §3.2・§3.2.1・§4.3 — 承認対象と実変更の一致を完了条件で照合） | done |
+| 3 | [SP2-03 DemoContext 解決先の実装 + dbchat デモスコープ化](SP2-03.md) | SP2-02 | コミット | in_progress |
 | 4 | [SP2-04 Internal テナンシ分離（Identity Domains 実接続）](SP2-04.md) | SP2-00 ＋ 人間の事前作業 | **iam_identity**（IdP 設定は人間） | blocked |
 
 > 第0波 = SP2-00（spec 承認まで停止）。第1波 = SP2-01 ∥ SP2-04（SP2-04 は人間の事前作業が
@@ -55,3 +55,10 @@ status: `todo` | `in_progress` | `blocked` | `done`
 - 2026-07-06: 第2波起動 = SP2-02（専用ペイン・in_progress）。タスク内人間ゲート
   （VPD 初回セットアップ・DBMS_LOCK EXECUTE 付与・旧 demo 資源クリーンアップ）は
   APPROVAL-REQUEST 提示で停止→人間承認後に実行の契約で起動。
+- 2026-07-06: SP2-02 完了（codex review-15 PASS / blocker 0 / major 6・minor 1 は residual。
+  実 ADB+実 GenAI E2E 104 チェック（JETUSE_SP2_02 隔離・DBMS_LOCK/DBMS_RLS/VPD 実機可否 12/12）。
+  統合後の再検証 = 363 passed・ruff クリーン。**Gate 1〜3（共有スキーマへの VPD 権限付与・
+  DBMS_LOCK EXECUTE 付与・旧 demo 資源クリーンアップ）は人間承認待ち・未実行** —
+  APPROVAL-REQUEST.md 提示済み（runs/2026-07-06T1751_SP2-02/e2e/）。承認・実行・APPROVAL.md 証跡は
+  ステージ報告の残ゲートとして提示。residual M001〜M006/N001 は SP2-02 worktree の STATE.md 参照。
+- 2026-07-06: 第3波起動 = SP2-03（専用ペイン・in_progress）。
