@@ -19,6 +19,8 @@ One Resource Manager stack contains both IAM and the JetUse application. No work
 
 An IAM operation fails during plan or apply when the executing user lacks its permission. End users sign in through the generated OIDC application and require no OCI IAM permissions. See [the Resource Manager guide](./docs/setup/orm.md) and [the IAM guide](./docs/setup/iam.md).
 
+The public images live in the Osaka OCIR (`kix.ocir.io`) and OCI Functions only accepts images from an OCIR in its own region. Outside Osaka the stack therefore **skips the Functions router automatically** — the affected API routes (`presets`/`dbchat`/`tts`) fall back to the Container Instance through the gateway's catch-all route, which has a 60s read timeout (chat SSE on `/api/chat/*` keeps its 300s route and is unaffected). To use the router elsewhere, mirror the image to your region's OCIR and set `fn_router_image`. A full apply outside Osaka has not been exercised yet (Issue #55 / ADR-0017).
+
 ## Features
 
 | Area | Capability |

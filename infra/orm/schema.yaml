@@ -123,7 +123,7 @@ variables:
   ocir_region_key:
     type: string
     title: "OCIR リージョンキー"
-    description: "OCIRレジストリのリージョンキー（ap-osaka-1 は kix）"
+    description: "OCIRレジストリのリージョンキー（ap-osaka-1 は kix）。デプロイリージョンと不一致の場合、Functions ルーターは自動で無効化されます（該当APIはContainer Instance直行にフォールバック）"
     default: "kix"
     required: true
 
@@ -143,7 +143,7 @@ variables:
   fn_router_image:
     type: string
     title: "Functions ルーターイメージ（上書き）"
-    description: "通常は空欄。空ならOCIRパスを自動合成（kix.ocir.io/<namespace>/<prefix>-fn-router:latest）"
+    description: "通常は空欄。空ならOCIRパスを自動合成（kix.ocir.io/<namespace>/<prefix>-fn-router:latest）。Osaka以外のリージョンでは、イメージを自リージョンOCIRへミラーしてここに指定（未指定ならルーター無効で続行）"
     required: false
 
   tenancy_ocid:

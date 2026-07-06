@@ -6,9 +6,21 @@ locals {
   # repo は手動管理(genu-proto)。パスはネームスペースベースでコンパートメント非依存。
   # repo名は image_repo_prefix(既定 jetuse)で合成し、リソース名の var.prefix とは分離する。
   # → prefix を変えてもイメージ参照(release.yml が push する jetuse-*)が壊れない。
-  ocir_registry   = "${var.ocir_region_key}.ocir.io/${var.ocir_namespace}"
-  api_image_url   = var.api_image_url != "" ? var.api_image_url : "${local.ocir_registry}/${var.image_repo_prefix}-api:latest"
-  fn_router_image = var.fn_router_image != "" ? var.fn_router_image : "${local.ocir_registry}/${var.image_repo_prefix}-fn-router:latest"
+  ocir_registry = "${var.ocir_region_key}.ocir.io/${var.ocir_namespace}"
+  api_image_url = var.api_image_url != "" ? var.api_image_url : "${local.ocir_registry}/${var.image_repo_prefix}-api:latest"
+
+  # OCI Functions は「関数と同一リージョンの OCIR イメージ」しか受け付けない(ADR-0011)。
+  # 既定イメージは Osaka(kix) にのみ publish しているため、デプロイリージョンのキーが
+  # ocir_region_key と一致しない場合は router を作らず、該当ルート(presets/dbchat/tts)は
+  # API Gateway の catch-all で Container Instance に委譲する(Issue #55 / ADR-0017)。
+  # 他リージョンで router を使うには、イメージを自リージョン OCIR へミラーして
+  # ocir_region_key + ocir_namespace(または fn_router_image)を指定する。
+  deploy_region_key = try(lower(one([
+    for r in data.oci_identity_region_subscriptions.this.region_subscriptions : r.region_key
+    if r.region_name == var.region
+  ])), "")
+  fn_router_default = lower(var.ocir_region_key) == local.deploy_region_key ? "${local.ocir_registry}/${var.image_repo_prefix}-fn-router:latest" : ""
+  fn_router_image   = var.fn_router_image != "" ? var.fn_router_image : local.fn_router_default
 
   # OIDC: enable_auth=false の間は空(SPAはdev-userモード)
   domain_url     = var.enable_auth ? module.identity_domain[0].domain_url : ""
