@@ -5,7 +5,7 @@ description: >-
   実行ユーザーの権限や既存IAMに応じて、Dynamic GroupとPolicyの作成範囲を選択できます。
   デプロイ後、出力の app_url を開き demo ユーザーでログインしてください。
 schemaVersion: 1.1.0
-version: "20260702"
+version: "20260706"
 
 logoUrl: ""
 
