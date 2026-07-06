@@ -54,6 +54,25 @@ class ConversationCreate(BaseModel):
     title: str | None = None
 
 
+class DemoCreate(BaseModel):
+    """Demo 作成(SP2-01 / specs/18 §2.2)。config の 1MB/dbchat 形状はルート側の共通検証。"""
+
+    name: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=1000)
+    visibility: Literal["private", "public"] = "private"
+    config: dict = Field(default_factory=dict)
+
+
+class DemoPatch(BaseModel):
+    """Demo 部分更新(specs/18 §2.2)。省略 = 変更しない(exclude_unset)。明示 null は
+    description のみ許可(クリア)。id/owner_sub/status は変更不可(入力スキーマに含めない)。"""
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=1000)
+    visibility: Literal["private", "public"] | None = None
+    config: dict | None = None
+
+
 class Nl2SqlRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     backend: Literal["sql_search", "select_ai"] = "sql_search"  # SQL-04比較モード

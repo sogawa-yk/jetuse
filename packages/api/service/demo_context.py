@@ -18,16 +18,23 @@ class DemoContext:
     demo_id: str
     owner_sub: str
     namespace: str  # RAG・会話の名前空間キー。将来の DB スキーマ名の元(specs/17 §5)
+    status: str  # specs/18 §2.3(SP2-01)。deleting は require_demo が 404 済み
 
 
 def require_demo(
     demo_id: str, user: Annotated[AuthContext, Depends(require_user)]
 ) -> DemoContext:
     demo = demos.get_demo(demo_id)
-    if not demo or (demo["owner_sub"] != user.subject and demo["visibility"] != "public"):
+    if (
+        not demo
+        # 解体中の箱への能力呼び出しが lazy 生成で箱を復活させる事故を封じる(specs/18 §2.3)
+        or demo["status"] == "deleting"
+        or (demo["owner_sub"] != user.subject and demo["visibility"] != "public")
+    ):
         raise HTTPException(status_code=404, detail="demo not found")
     return DemoContext(
-        demo_id=demo_id, owner_sub=demo["owner_sub"], namespace=f"demo_{demo_id}"
+        demo_id=demo_id, owner_sub=demo["owner_sub"], namespace=f"demo_{demo_id}",
+        status=demo["status"],
     )
 
 
