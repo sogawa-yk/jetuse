@@ -19,6 +19,8 @@ One Resource Manager stack contains both IAM and the JetUse application. No work
 
 An IAM operation fails during plan or apply when the executing user lacks its permission. End users sign in through the generated OIDC application and require no OCI IAM permissions. See [the Resource Manager guide](./docs/setup/orm.md) and [the IAM guide](./docs/setup/iam.md).
 
+Supported regions: **Osaka (ap-osaka-1), Tokyo (ap-tokyo-1), Ashburn (us-ashburn-1), and Chicago (us-chicago-1)**. The public images are pre-published to each region's OCIR (OCI Functions only accepts images from an OCIR in its own region) and the stack picks the deploy region's registry automatically. Other regions fail fast at plan time with an explicit message — to deploy there, mirror the images to your region's OCIR and set both `api_image_url` and `fn_router_image` (Issue #55 / ADR-0017).
+
 ## Features
 
 | Area | Capability |

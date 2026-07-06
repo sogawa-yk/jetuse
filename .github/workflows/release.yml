@@ -1,15 +1,18 @@
 name: release
 
 # Public版(ORMワンクリック): main へ push されたら
-#  - API / fn-router コンテナイメージを GHCR と OCIR(ap-osaka-1) の両方へ publish
-#    OCI Functions は OCIR必須・Container Instance も OCIR を参照する(ADR-0011)。
+#  - API / fn-router コンテナイメージを GHCR と対応4リージョンの OCIR
+#    (大阪 kix / 東京 nrt / アシュバーン iad / シカゴ ord)へ publish。
+#    OCI Functions は同一リージョンの OCIR 必須のため、対応リージョンぶん事前 push する
+#    (ADR-0011/0017)。ORM スタックはデプロイリージョンの OCIR を自動選択。
+#    前提: 各リージョンに OCIR リポジトリ(jetuse-api / jetuse-fn-router)を人間が事前作成
+#    (無いと push がルートコンパートメントへの自動作成を試み権限不足で失敗)。
 #  - SPA(dist)をビルドし、Terraformと共にDeploy専用zipへ同梱
 #  - IAMとJetUse本体を含む1つのzipをGitHubのorm-mainリリースへpublish
 # 必要な GitHub Secrets:
 #  - OCIR_USERNAME: "<namespace>/<user>"(Identity Domain利用時は
 #                   "<namespace>/oracleidentitycloudservice/<user>")
-#  - OCIR_TOKEN:    OCI Auth Token
-# 前提: OCIR リポジトリ(jetuse-api / jetuse-fn-router)が事前作成済み(module.ocir が作成)。
+#  - OCIR_TOKEN:    OCI Auth Token(全リージョン共通で有効)
 
 on:
   push:
@@ -24,8 +27,9 @@ permissions:
   packages: write
 
 env:
-  # OCIR(ap-osaka-1)。namespace は tenancy 固有(機密ではない)。別環境では Variables で上書き可。
-  OCIR_REGISTRY: ${{ vars.OCIR_REGISTRY || 'kix.ocir.io' }}
+  # 対応リージョン(ADR-0017): kix=大阪 nrt=東京 iad=アシュバーン ord=シカゴ。
+  # 追加/変更時は login・tags・infra/orm/locals.tf の ocir_supported_region_keys を揃えること。
+  # namespace は tenancy 固有(機密ではない)。別環境では Variables で上書き可。
   OCIR_NAMESPACE: ${{ vars.OCIR_NAMESPACE || 'idqcucnenh88' }}
 
 jobs:
@@ -38,12 +42,12 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Login to OCIR (ap-osaka-1)
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.OCIR_REGISTRY }}
-          username: ${{ secrets.OCIR_USERNAME }}
-          password: ${{ secrets.OCIR_TOKEN }}
+      - name: Login to OCIR (supported regions)
+        run: |
+          for r in kix nrt iad ord; do
+            echo "${{ secrets.OCIR_TOKEN }}" | docker login "${r}.ocir.io" \
+              --username "${{ secrets.OCIR_USERNAME }}" --password-stdin
+          done
       - name: Build & push API image
         uses: docker/build-push-action@v6
         with:
@@ -53,8 +57,14 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/jetuse-api:latest
             ghcr.io/${{ github.repository_owner }}/jetuse-api:${{ github.sha }}
-            ${{ env.OCIR_REGISTRY }}/${{ env.OCIR_NAMESPACE }}/jetuse-api:latest
-            ${{ env.OCIR_REGISTRY }}/${{ env.OCIR_NAMESPACE }}/jetuse-api:${{ github.sha }}
+            kix.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-api:latest
+            kix.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-api:${{ github.sha }}
+            nrt.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-api:latest
+            nrt.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-api:${{ github.sha }}
+            iad.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-api:latest
+            iad.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-api:${{ github.sha }}
+            ord.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-api:latest
+            ord.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-api:${{ github.sha }}
       - name: Build & push Functions router image
         uses: docker/build-push-action@v6
         with:
@@ -64,10 +74,19 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/jetuse-fn-router:latest
             ghcr.io/${{ github.repository_owner }}/jetuse-fn-router:${{ github.sha }}
-            ${{ env.OCIR_REGISTRY }}/${{ env.OCIR_NAMESPACE }}/jetuse-fn-router:latest
-            ${{ env.OCIR_REGISTRY }}/${{ env.OCIR_NAMESPACE }}/jetuse-fn-router:${{ github.sha }}
+            kix.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-fn-router:latest
+            kix.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-fn-router:${{ github.sha }}
+            nrt.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-fn-router:latest
+            nrt.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-fn-router:${{ github.sha }}
+            iad.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-fn-router:latest
+            iad.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-fn-router:${{ github.sha }}
+            ord.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-fn-router:latest
+            ord.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-fn-router:${{ github.sha }}
 
   spa:
+    # イメージの4リージョン push が失敗したら zip も公開しない(存在しないイメージを参照する
+    # スタックの配布を防ぐ — ADR-0017)
+    needs: images
     runs-on: ubuntu-latest
     defaults:
       run:
