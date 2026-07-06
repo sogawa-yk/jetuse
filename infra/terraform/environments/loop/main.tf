@@ -25,17 +25,17 @@ variable "admin_password" {
 }
 
 resource "oci_database_autonomous_database" "this" {
-  compartment_id           = var.compartment_ocid
-  db_name                  = "jetuseloop2"
-  display_name             = "jetuse-loop-adb"
-  db_version               = "26ai"
-  db_workload              = "OLTP"
-  compute_model            = "ECPU"
-  compute_count            = 2
-  data_storage_size_in_gb  = 20
-  is_auto_scaling_enabled  = false
-  license_model            = "LICENSE_INCLUDED"
-  admin_password           = var.admin_password
+  compartment_id          = var.compartment_ocid
+  db_name                 = "jetuseloop2"
+  display_name            = "jetuse-loop-adb"
+  db_version              = "26ai"
+  db_workload             = "OLTP"
+  compute_model           = "ECPU"
+  compute_count           = 2
+  data_storage_size_in_gb = 20
+  is_auto_scaling_enabled = false
+  license_model           = "LICENSE_INCLUDED"
+  admin_password          = var.admin_password
 }
 
 output "adb_ocid" { value = oci_database_autonomous_database.this.id }
