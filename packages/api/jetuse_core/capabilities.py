@@ -13,7 +13,7 @@ CAPABILITIES: list[dict] = [
         "summary": "LLM と対話する(SSE ストリーミング。モデル選択・システムプロンプト・画像入力可)",
         "when_to_use": "汎用の対話 UI。アシスタント・質問応答・文章生成などデモの基本形。",
         "example": {
-            "input": {"model": "openai.gpt-oss-120b",
+            "input": {"model": "gpt-oss-120b",
                       "messages": [{"role": "user", "content": "OCIの利点を3つ教えて"}]},
             "output": "SSE で data フレームにトークンが逐次届き、data: [DONE] で終端。",
         },
@@ -29,7 +29,7 @@ CAPABILITIES: list[dict] = [
         "summary": "アップロードした文書への検索 Q&A(引用付き回答)",
         "when_to_use": "社内文書・マニュアル・規程集など「手元の文書に基づいて答える」デモ。",
         "example": {
-            "input": {"model": "openai.gpt-oss-120b", "rag": True,
+            "input": {"model": "gpt-oss-120b", "rag": True,
                       "messages": [{"role": "user", "content": "経費精算の締め日は?"}]},
             "output": "文書由来の回答が SSE で届き、末尾に citations(引用元ファイル名)が付く。",
         },
@@ -66,7 +66,7 @@ CAPABILITIES: list[dict] = [
         "when_to_use": "複数ステップの調査・ツール連携を見せるデモ。"
                        "定義済みエージェントを選んで対話させる。",
         "example": {
-            "input": {"model": "openai.gpt-oss-120b", "agent_id": "<GET /api/agents のid>",
+            "input": {"model": "gpt-oss-120b", "agent_id": "<GET /api/agents のid>",
                       "messages": [
                           {"role": "user", "content": "最新のOCIリリースを調べて要約して"}]},
             "output": "ツール呼び出しの経過と最終回答が SSE で届く。",

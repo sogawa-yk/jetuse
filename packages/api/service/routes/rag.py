@@ -38,7 +38,12 @@ async def upload_file_response(ns: str, file: UploadFile) -> dict:
         raise HTTPException(status_code=413, detail="file too large (max 20MB)")
     if not content:
         raise HTTPException(status_code=422, detail="empty file")
-    return await asyncio.to_thread(rag.add_file, ns, name, content)
+    try:
+        return await asyncio.to_thread(rag.add_file, ns, name, content)
+    except rag.StoreNotReadyError as e:
+        raise HTTPException(
+            status_code=503, detail="vector store not ready, retry later"
+        ) from e
 
 
 async def delete_file_response(ns: str, file_id: str) -> dict:

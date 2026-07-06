@@ -33,7 +33,7 @@ SWT="$(realpath -m "${WT_ROOT}/_${STAGE}")"
   git add -A
   # loop 成果物＋E2E スクラッチ＋秘匿値の置き場を staged から外す（エージェントがリポジトリ内に
   # ADB wallet/接続情報を置く事故があったため明示除外。pathspec が無ければ無視）。
-  git reset -q -- STATE.md runs packages/web/dist scratchpad_e2e .env 2>/dev/null || true
+  git reset -q -- STATE.md runs packages/web/dist scratchpad_e2e .env .current_run_id 2>/dev/null || true
   git reset -q -- '*.zip' '*wallet*' 'conn.env' '*.pem' '*.key' 2>/dev/null || true
   # 安全網: staged 内容に明白な秘匿値が混入していたら**コミットせず中断**（exit 4）。
   if git diff --cached -U0 | grep -aErqi '(ADB_ADMIN_PASSWORD|ADB_WALLET_PASSWORD|BEGIN [A-Z ]*PRIVATE KEY|aws_secret_access_key|password\s*=\s*[^ ]{6,})'; then

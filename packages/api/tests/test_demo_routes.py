@@ -129,6 +129,17 @@ def test_demo_upload_same_validation_as_user_route():
     ).status_code == 422
 
 
+def test_demo_upload_returns_503_when_store_not_ready(monkeypatch):
+    def not_ready(ns, filename, content):
+        raise service_main.rag.StoreNotReadyError("dp propagation timeout")
+
+    monkeypatch.setattr(service_main.rag, "add_file", not_ready)
+    res = client.post(
+        "/api/demos/d1/rag/files", files={"file": ("a.md", b"x", "text/markdown")}
+    )
+    assert res.status_code == 503
+
+
 def test_cross_user_demo_is_404_for_chat_and_rag():
     # dev-user が user-a の private デモへアクセス(存在秘匿 = 404)
     assert client.post("/api/demos/theirs/chat", json=CHAT_BODY).status_code == 404

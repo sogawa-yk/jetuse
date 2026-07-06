@@ -70,6 +70,16 @@ def test_backstage_routes_not_in_catalog():
             assert not route["path"].startswith(backstage), route["path"]
 
 
+def test_example_model_keys_are_public_registry_keys():
+    # example の model は公開レジストリのキー(SP1-01-001: 内部IDを書くと400になる)
+    from jetuse_core.models import MODELS
+
+    for cap in CAPABILITIES:
+        model = cap["example"].get("input", {}).get("model")
+        if model is not None:
+            assert model in MODELS, f"{cap['capability']}: {model}"
+
+
 def test_requires_auth(monkeypatch):
     monkeypatch.setenv("AUTH_REQUIRED", "true")
     get_settings.cache_clear()

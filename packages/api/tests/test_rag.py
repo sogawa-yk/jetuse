@@ -72,6 +72,16 @@ def test_upload_rejects_bad_files():
     assert res3.status_code == 422
 
 
+def test_upload_returns_503_when_store_not_ready(monkeypatch):
+    def not_ready(owner, filename, content):
+        raise service_main.rag.StoreNotReadyError("dp propagation timeout")
+
+    monkeypatch.setattr(service_main.rag, "add_file", not_ready)
+    res = client.post("/api/rag/files", files={"file": ("a.md", b"x", "text/markdown")})
+    assert res.status_code == 503
+    assert "not ready" in res.json()["detail"]
+
+
 def test_rag_chat_requires_responses_model_and_store(fake_rag, monkeypatch):
     body = {"model": "llama-3.3-70b", "messages": [{"role": "user", "content": "q"}], "rag": True}
     assert client.post("/api/chat/stream", json=body).status_code == 400  # chat系は不可

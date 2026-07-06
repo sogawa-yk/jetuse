@@ -12,6 +12,7 @@ import time
 import uuid
 from typing import Any
 
+import oracledb
 from openai import NotFoundError
 
 from .db import connect
@@ -22,6 +23,11 @@ logger = logging.getLogger("jetuse.rag")
 
 ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md"}
 MAX_BYTES = 20 * 1024 * 1024
+
+
+class StoreNotReadyError(Exception):
+    """Vector Storeが使える状態にない(DP伝播リトライ枯渇・登録簿競合の異常)。
+    ルート側で503に正規化する(SP1-03 REV-007)。"""
 
 
 def _uid() -> str:
@@ -39,13 +45,21 @@ def get_store_id(owner: str) -> str | None:
         return row[0] if row else None
 
 
-def _save_store_id(owner: str, vs_id: str) -> None:
-    with connect() as conn:
-        conn.cursor().execute(
-            "INSERT INTO rag_stores(owner_sub, vector_store_id) VALUES (:o, :v)",
-            o=owner, v=vs_id,
-        )
-        conn.commit()
+def _save_store_id(owner: str, vs_id: str) -> bool:
+    """登録簿へ登録できたらTrue。同時作成で負けたら(ORA-00001)False(SP1-03 REV-008)。"""
+    try:
+        with connect() as conn:
+            conn.cursor().execute(
+                "INSERT INTO rag_stores(owner_sub, vector_store_id) VALUES (:o, :v)",
+                o=owner, v=vs_id,
+            )
+            conn.commit()
+        return True
+    except oracledb.IntegrityError as e:
+        (err,) = e.args
+        if getattr(err, "full_code", "") == "ORA-00001":
+            return False
+        raise
 
 
 def list_files(owner: str) -> list[dict[str, Any]]:
@@ -169,8 +183,18 @@ def ensure_store(owner: str) -> str:
             break
         except Exception:
             time.sleep(2)
-    _save_store_id(owner, vs.id)
-    return vs.id
+    if _save_store_id(owner, vs.id):
+        return vs.id
+    # 同時作成で負けた(REV-008): 自分の箱をbest-effortで片付け、勝者のstoreを使う
+    try:
+        cp.vector_stores.delete(vector_store_id=vs.id)
+    except Exception:
+        logger.exception("duplicate store cleanup failed (ignored)")
+    winner = get_store_id(owner)
+    if not winner:
+        # 競合したのに勝者行が無い(想定外)。未登録のIDを返さず503へ
+        raise StoreNotReadyError(f"rag_stores conflict for {owner[:32]} but no winner row")
+    return winner
 
 
 def add_file(owner: str, filename: str, content: bytes) -> dict[str, Any]:
@@ -188,7 +212,16 @@ def add_file(owner: str, filename: str, content: bytes) -> dict[str, Any]:
             break
         except NotFoundError:
             if attempt == 5:
-                raise
+                # リトライ枯渇(REV-007): DB行の無いファイルはAPIから辿れず孤立する —
+                # best-effortで即後始末し、503に正規化できる型付き例外へ
+                try:
+                    dp.files.delete(f.id)
+                except Exception:
+                    logger.exception("orphan file cleanup failed (ignored)")
+                _delete_original(owner, file_id, filename)
+                raise StoreNotReadyError(
+                    f"vector store {vs_id} not visible on DP after bounded retries"
+                ) from None
             logger.info("vector store not yet visible on DP, retrying (%s)", attempt + 1)
             time.sleep(5)
     _insert_file(owner, file_id, filename, f.id, len(content))
