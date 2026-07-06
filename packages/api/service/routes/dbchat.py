@@ -9,9 +9,10 @@ import oracledb
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
-from jetuse_core import audit, datasets, nl2sql
+from jetuse_core import audit, datasets, nl2sql, vpd
 from jetuse_core.auth import AuthContext, require_user
 from jetuse_core.logging import log_with
+from jetuse_core.owner_keys import OwnerKeyPreflightError, user_owner_key
 
 from ..schemas import (
     ChartSuggestRequest,
@@ -37,7 +38,7 @@ async def nl2sql_generate(
         # feedback 20260620 #3: 選択モデルでプロファイルを(必要なら)整える(#2: 準備待ちも内包)。
         # ensure_profile は再構築/ウォームアップでブロックしうるためワーカースレッド内で呼ぶ。
         def generator(q: str) -> str:
-            prof = datasets.ensure_profile(user.subject, req.model)
+            prof = datasets.ensure_profile(user_owner_key(user.subject), req.model)
             return nl2sql.generate_sql_select_ai(q, profile_name=prof)
     elif req.backend == "select_ai":
         def generator(q: str) -> str:
@@ -112,7 +113,8 @@ async def dbchat_preview(
 
 @router.get("/api/db/datasets")
 async def list_datasets(user: Annotated[AuthContext, Depends(require_user)]):
-    return {"datasets": await asyncio.to_thread(datasets.list_datasets, user.subject)}
+    return {"datasets": await asyncio.to_thread(
+        datasets.list_datasets, user_owner_key(user.subject))}
 
 
 @router.post("/api/db/datasets")
@@ -132,10 +134,12 @@ async def create_dataset(
     display = pathlib.Path(name).stem
     try:
         return await asyncio.to_thread(
-            datasets.create_dataset, user.subject, display, content
+            datasets.create_dataset, user_owner_key(user.subject), display, content
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
+    except (vpd.DatasetsSecurityError, OwnerKeyPreflightError):
+        raise  # main.py のハンドラで 503(fail-closed)
     except Exception as e:
         logger.exception("dataset create failed")
         raise HTTPException(status_code=502, detail=f"取り込みに失敗: {str(e)[:200]}") from e
@@ -149,10 +153,13 @@ async def generate_dataset(
     try:
         return await asyncio.to_thread(
             datasets.generate_dataset,
-            user.subject, req.description, req.display_name, req.rows, req.model,
+            user_owner_key(user.subject), req.description, req.display_name,
+            req.rows, req.model,
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
+    except (vpd.DatasetsSecurityError, OwnerKeyPreflightError):
+        raise
     except Exception as e:
         logger.exception("dataset generate failed")
         raise HTTPException(status_code=502, detail=f"生成に失敗: {str(e)[:200]}") from e
@@ -164,7 +171,10 @@ async def seed_datasets(
 ):
     """既定のサンプルデータセットを本人スキーマへ一括投入(feedback 20260620 #12)"""
     try:
-        return await asyncio.to_thread(datasets.seed_samples, user.subject, req.model)
+        return await asyncio.to_thread(
+            datasets.seed_samples, user_owner_key(user.subject), req.model)
+    except (vpd.DatasetsSecurityError, OwnerKeyPreflightError):
+        raise
     except Exception as e:
         logger.exception("dataset seed failed")
         raise HTTPException(status_code=502, detail=f"投入に失敗: {str(e)[:200]}") from e
@@ -175,7 +185,7 @@ async def dataset_preview(
     ds_id: str, user: Annotated[AuthContext, Depends(require_user)]
 ):
     try:
-        return await asyncio.to_thread(datasets.preview, user.subject, ds_id)
+        return await asyncio.to_thread(datasets.preview, user_owner_key(user.subject), ds_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
@@ -184,7 +194,13 @@ async def dataset_preview(
 async def delete_dataset(
     ds_id: str, user: Annotated[AuthContext, Depends(require_user)]
 ):
-    if not await asyncio.to_thread(datasets.delete_dataset, user.subject, ds_id):
+    try:
+        deleted = await asyncio.to_thread(
+            datasets.delete_dataset, user_owner_key(user.subject), ds_id)
+    except datasets.DatasetDeleteError as e:
+        # DROP 先行の失敗は登録簿行を残して 503(再試行で収束 — specs/18 §3.2 手順 2)
+        raise HTTPException(status_code=503, detail=str(e)[:300]) from e
+    if not deleted:
         raise HTTPException(status_code=404, detail="dataset not found")
     return {"deleted": True}
 
@@ -194,7 +210,9 @@ async def dbchat_execute(
     req: ExecuteSqlRequest, user: Annotated[AuthContext, Depends(require_user)]
 ):
     try:
-        result = await asyncio.to_thread(nl2sql.execute_readonly, req.sql)
+        # owner コンテキスト付き実行(specs/18 §4.3 — VPD 層1 の呼び出し元契約)
+        result = await asyncio.to_thread(
+            nl2sql.execute_readonly, req.sql, user_owner_key(user.subject))
     except nl2sql.SqlRejectedError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except oracledb.DatabaseError as e:

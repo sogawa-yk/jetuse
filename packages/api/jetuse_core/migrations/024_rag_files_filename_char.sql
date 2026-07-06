@@ -1,0 +1,1 @@
+ALTER TABLE rag_files MODIFY (filename VARCHAR2(400 CHAR));

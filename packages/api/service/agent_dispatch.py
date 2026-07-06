@@ -21,6 +21,7 @@ from jetuse_core import conversations as conv_repo
 from jetuse_core import tools as tool_registry
 from jetuse_core.auth import AuthContext
 from jetuse_core.models import MODELS
+from jetuse_core.owner_keys import user_owner_key
 
 from .schemas import ChatRequest
 from .sse import KEEPALIVE_FRAME, KEEPALIVE_SECONDS, SSE_HEADERS
@@ -49,9 +50,11 @@ def select_ai_stream_response(
             await asyncio.to_thread(
                 conv_repo.append_message, req.conversation_id, "user", sai_q
             )
+        # owner キーは必ず user_owner_key を通す(予約接頭辞 sub が demo owner と衝突し、
+        # RAG tool から demo profile を越境参照するのを防ぐ — rag_search と同じ規則)
         fut = asyncio.ensure_future(asyncio.to_thread(
             lambda: select_ai_agent.run(
-                user.subject, aid, sai_q, role=sai_role, tools=sai_tools)))
+                user_owner_key(user.subject), aid, sai_q, role=sai_role, tools=sai_tools)))
         try:
             while True:
                 done, _ = await asyncio.wait({fut}, timeout=KEEPALIVE_SECONDS)
@@ -98,7 +101,10 @@ async def hosted_agent_stream_response(
     enabled = [t for t in (agent_def.get("enabled_tools") or []) if t in CONTAINER_TOOLS]
     rag_store_id = None
     if tool_registry.RAG_SEARCH in enabled:
-        rag_store_id = await asyncio.to_thread(rag.get_store_id, user.subject)
+        # 資源キーは通常 RAG ルートと同じ owner キーヘルパーを必ず通す(specs/18 §3.2.1 —
+        # sub='demo_<uuid>' が demo namespace の store と衝突するのを防ぐ)。
+        rag_store_id = await asyncio.to_thread(
+            rag.resolve_store_for_read, user_owner_key(user.subject))
     model_key = agent_def.get("model")
     state = {
         "system_prompt": agent_def.get("instructions") or "",

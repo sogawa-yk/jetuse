@@ -330,15 +330,46 @@ def preview_table(table: str, limit: int = 20) -> dict[str, Any]:
     return execute_readonly(f'SELECT * FROM "{TARGET_SCHEMA}"."{name}" FETCH FIRST {n} ROWS ONLY')
 
 
-def execute_readonly(sql: str) -> dict[str, Any]:
-    """読取専用ユーザーで実行し、行数上限・タイムアウト付きで結果を返す"""
+def execute_readonly(sql: str, owner_key: str | None = None) -> dict[str, Any]:
+    """読取専用ユーザーで実行し、行数上限・タイムアウト付きで結果を返す。
+
+    VPD コンテキスト契約(specs/18 §4.3): owner_key があれば SQL の parse 前に必ず
+    そのリクエストの owner で SET_CONTEXT を上書きし、設定失敗時は SQL を実行しない。
+    finally で CLEAR_CONTEXT してから接続を返却する(プール接続は再利用されるため、
+    clear に失敗した接続はプールへ返さず破棄する)。owner_key=None は SH 等の
+    固定スキーマ照会(dataset 表は VPD の default-deny で必ず 0 行)。
+    """
+    from . import vpd  # 遅延 import(循環回避)
+
+    # 静的 allowlist 拒否(DB 非接触)を先に済ませ、DB へ渡す前に VPD 完全性を必須化する
+    # (specs/18 §4.3 — ポリシー欠落状態での fail-open を塞ぐ中央ゲート。SH 固定表照会も
+    # 含め、実際に SQL を実行する全経路がこのゲートを通る)。
     cleaned = sanitize_sql(sql)
-    with _get_query_pool().acquire() as conn:
+    vpd.integrity_gate()
+    pool = _get_query_pool()
+    conn = pool.acquire()
+    drop = False
+    try:
         conn.call_timeout = EXECUTE_TIMEOUT_MS
-        cur = conn.cursor()
-        cur.execute(cleaned)
-        columns = [d[0] for d in cur.description]
-        rows = cur.fetchmany(MAX_ROWS + 1)
+        if owner_key is not None:
+            try:
+                vpd.set_owner_context(conn, owner_key)
+            except Exception:
+                # SET_CONTEXT 失敗時は SQL を実行せず、context 残留の恐れがある接続を破棄する
+                drop = True
+                raise
+        try:
+            cur = conn.cursor()
+            cur.execute(cleaned)
+            columns = [d[0] for d in cur.description]
+            rows = cur.fetchmany(MAX_ROWS + 1)
+        finally:
+            if owner_key is not None:
+                try:
+                    vpd.clear_owner_context(conn)
+                except Exception:
+                    drop = True  # コンテキスト残留の越境を防ぐ: この接続は再利用しない
+                    logger.exception("clear_owner_context failed (dropping connection)")
         truncated = len(rows) > MAX_ROWS
         return {
             "columns": columns,
@@ -349,3 +380,12 @@ def execute_readonly(sql: str) -> dict[str, Any]:
             "row_count": min(len(rows), MAX_ROWS),
             "truncated": truncated,
         }
+    finally:
+        try:
+            # oracledb の pooled connection の返却は pool.release(conn)(conn.release は無い)
+            if drop:
+                pool.drop(conn)
+            else:
+                pool.release(conn)
+        except Exception:  # noqa: BLE001
+            logger.exception("query connection return failed")

@@ -79,7 +79,7 @@ def test_dbchat_select_ai_models():
 
 
 def test_dbchat_execute_rejected(monkeypatch):
-    def raise_rejected(sql):
+    def raise_rejected(sql, owner_key=None):  # Fn は owner_key を渡す(M003)
         raise router.nl2sql.SqlRejectedError("SELECTのみ")
 
     monkeypatch.setattr(router.nl2sql, "execute_readonly", raise_rejected)

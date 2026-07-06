@@ -18,14 +18,22 @@ import time
 import uuid
 from typing import Any
 
-from . import nl2sql
+from . import ddl_verify, nl2sql, vpd
 from .db import connect
+from .demo_lease import DemoLease, require_lease_for
+from .owner_keys import is_demo_namespace, owner_key_gate
 from .settings import get_settings
 
 logger = logging.getLogger("jetuse.datasets")
 
 MAX_ROWS = 5000
 MAX_COLS = 60
+# creating のまま残った登録行を残骸とみなす経過時間(specs/18 §3.2 手順 2)
+CREATING_STALE_S = 15 * 60
+
+
+class DatasetDeleteError(Exception):
+    """DROP 先行削除の失敗(登録簿行を残して 503 — 再試行で収束)。"""
 GEN_MODEL = "gemini-2.5-flash"  # サンプルデータ生成(CSV書式と列名指定の遵守が安定)
 MAX_GEN_ROWS = 200
 # Select AIがデータを認識するまで(プロファイル再構築直後)のウォームアップ上限(feedback 20260620 #2)
@@ -47,7 +55,11 @@ def _query_user() -> str:
 
 
 def _owner_tag(owner: str) -> str:
-    return hashlib.sha1(owner.encode()).hexdigest()[:8].upper()
+    """demo namespace は完全 sha1(40hex)。8hex 衝突は共有プロファイルの object_list を通じた
+    メタデータ漏えい + 削除波及になる(specs/18 §3.2 手順 2)。既存 user 資産の 8hex は
+    変えない(main 互換 — user 側の衝突リスクは main バックポート課題の residual)。"""
+    h = hashlib.sha1(owner.encode()).hexdigest()
+    return (h if is_demo_namespace(owner) else h[:8]).upper()
 
 
 def profile_name(owner: str) -> str:
@@ -82,6 +94,42 @@ def _ensure_meta(cur) -> None:
         END;
         """
     )
+    _ensure_state_column(cur)
+
+
+_STATE_CHECK = "state IN ('creating','ready')"
+
+
+def _ensure_state_column(cur) -> None:
+    """state 列の導入(specs/18 §3.2 手順 2)。冪等性は ORA コード無視でなく辞書検証で担保:
+    各ステップの前に現状を検証し、不足分だけを適用。形違いは停止して人間対応。
+
+    (1) NULL 許容で追加 → (2) 既存行 backfill(旧 writer は CREATE 成功後登録 = ready が正)
+    → (3) DEFAULT 'ready' → (4) NOT NULL + 正規名付き CHECK。
+    """
+    has = ddl_verify.verify_column(cur, "JETUSE_DATASETS", "STATE",
+                                   data_type="VARCHAR2", char_length=10, char_used="B")
+    if not has:
+        cur.execute("ALTER TABLE JETUSE_DATASETS ADD (state VARCHAR2(10))")
+    cur.execute("UPDATE JETUSE_DATASETS SET state = 'ready' WHERE state IS NULL")
+    cur.connection.commit()
+    st = ddl_verify.column_state(cur, "JETUSE_DATASETS", "STATE")
+    if (st.get("data_default") or "").strip("' ") != "ready":
+        cur.execute("ALTER TABLE JETUSE_DATASETS MODIFY (state DEFAULT 'ready')")
+    existing = ddl_verify.check_constraint_state(cur, "JETUSE_DATASETS", _STATE_CHECK)
+    if existing is None:
+        cur.execute(
+            "ALTER TABLE JETUSE_DATASETS ADD CONSTRAINT ck_jetuse_datasets_state "
+            f"CHECK ({_STATE_CHECK})"
+        )
+    elif existing != "CK_JETUSE_DATASETS_STATE":
+        raise ddl_verify.DdlShapeMismatch(
+            f"JETUSE_DATASETS: state CHECK が別名 {existing} で存在(期待 "
+            "CK_JETUSE_DATASETS_STATE)。停止(人間対応が必要)"
+        )
+    st = ddl_verify.column_state(cur, "JETUSE_DATASETS", "STATE")
+    if st["nullable"] == "Y":
+        cur.execute("ALTER TABLE JETUSE_DATASETS MODIFY (state NOT NULL)")
 
 
 def _rebuild_profile(owner: str, cur, model: str | None = None) -> list[str]:
@@ -90,8 +138,12 @@ def _rebuild_profile(owner: str, cur, model: str | None = None) -> list[str]:
     返り値は object_list に含めたテーブル名(ウォームアップ用)。model はモデル選択(#3)。
     """
     model = nl2sql.resolve_select_ai_model(model)
+    # ready のみ参照: 途中クラッシュの creating 幽霊行を object_list に混ぜて
+    # dbchat を壊さない(specs/18 §3.2 手順 2)
     cur.execute(
-        "SELECT table_name FROM JETUSE_DATASETS WHERE owner_sub = :o", o=owner
+        "SELECT table_name FROM JETUSE_DATASETS WHERE owner_sub = :o "
+        "AND state = 'ready'",
+        o=owner,
     )
     tables = [r[0] for r in cur.fetchall()]
     prof = profile_name(owner)
@@ -132,12 +184,16 @@ def _warmup_profile(prof: str, tables: list[str]) -> bool:
     return False
 
 
-def ensure_profile(owner: str, model: str | None = None) -> str:
+def ensure_profile(owner: str, model: str | None = None,
+                   lease: DemoLease | None = None) -> str:
     """本人データセット用プロファイルを指定モデルで用意し名前を返す(NL2SQL生成の直前に呼ぶ)。
 
     プロセス内キャッシュのモデルと異なる場合のみ作り直し+ウォームアップする
-    (モデル選択 feedback #3 / 準備待ち #2)。
+    (モデル選択 feedback #3 / 準備待ち #2)。demo namespace はリース保持が前提(specs/18 §3.2.1)。
     """
+    vpd.integrity_gate()
+    owner_key_gate()
+    require_lease_for(owner, lease)
     model = nl2sql.resolve_select_ai_model(model)
     prof = profile_name(owner)
     if _ds_profile_models.get(prof) == model:
@@ -145,6 +201,7 @@ def ensure_profile(owner: str, model: str | None = None) -> str:
     with connect() as conn:
         cur = conn.cursor()
         _ensure_meta(cur)
+        reconcile_creating(owner, cur=cur)  # creating 残骸は次のデータセット操作時に回収
         tables = _rebuild_profile(owner, cur, model)
         conn.commit()
     if tables:
@@ -155,7 +212,11 @@ def ensure_profile(owner: str, model: str | None = None) -> str:
 def create_dataset(
     owner: str, display_name: str, data: bytes,
     model: str | None = None, warmup: bool = True,
+    lease: DemoLease | None = None,
 ) -> dict[str, Any]:
+    vpd.integrity_gate()
+    owner_key_gate()
+    require_lease_for(owner, lease)  # demo namespace はリース保持が前提(specs/18 §3.2.1)
     text = data.decode("utf-8-sig", errors="replace")
     reader = csv.reader(io.StringIO(text))
     rows = [r for r in reader if any((c or "").strip() for c in r)]
@@ -203,16 +264,62 @@ def create_dataset(
     with connect() as conn:
         cur = conn.cursor()
         _ensure_meta(cur)
+        reconcile_creating(owner, cur=cur)  # creating 残骸の回収(specs/18 §3.2 手順 2)
+        if is_demo_namespace(owner):
+            # 箱あたり上限(specs/18 §3.1 — 同期削除の所要時間を構成的に有界化)
+            cur.execute(
+                "SELECT COUNT(*) FROM JETUSE_DATASETS WHERE owner_sub = :o", o=owner
+            )
+            if cur.fetchone()[0] >= get_settings().demo_max_datasets:
+                raise ValueError(
+                    f"データセット数の上限({get_settings().demo_max_datasets})に達しています"
+                )
         schema = _schema()
-        cur.execute(f'CREATE TABLE {schema}.{table} ({coldefs})')
-        if payload:
-            cur.executemany(f'INSERT INTO {schema}.{table} VALUES ({placeholders})', payload)
-        cur.execute(f'GRANT SELECT ON {schema}.{table} TO {_query_user()}')
+        # registry-first(specs/18 §3.2 手順 2): 登録簿 INSERT(state='creating')を commit して
+        # から CREATE TABLE → VPD → GRANT → ready。未登録の表を構造的に排除し、
+        # 登録簿を削除根拠にできるようにする(短縮 tag の接頭辞走査を削除根拠にしない)。
         cur.execute(
             """INSERT INTO JETUSE_DATASETS(ds_id, owner_sub, table_name, display_name,
-                 columns_json, row_count) VALUES (:i,:o,:t,:d,:c,:r)""",
+                 columns_json, row_count, state)
+               VALUES (:i,:o,:t,:d,:c,:r,'creating')""",
             i=ds_id, o=owner, t=table, d=(display_name or table)[:200],
             c=json.dumps(cols), r=len(payload),
+        )
+        conn.commit()
+        created_table = False
+        try:
+            cur.execute(f'CREATE TABLE {schema}.{table} ({coldefs})')
+            created_table = True  # これ以降の失敗のみ「自分が作った表」= DROP してよい
+            if payload:
+                cur.executemany(
+                    f'INSERT INTO {schema}.{table} VALUES ({placeholders})', payload
+                )
+            # ADD_POLICY 成功 → GRANT の順(specs/18 §4.3 — 無保護表を晒さない)。VPD 無効の
+            # Public/従来環境では DBMS_RLS/context/policy 未配備なので付与しない(無条件実行だと
+            # 最初の dataset 作成が必ず失敗する — codex review-10 B004。分離なし = 単一利用者前提)。
+            if get_settings().vpd_enabled:
+                vpd.apply_policy(cur, table)
+            cur.execute(f'GRANT SELECT ON {schema}.{table} TO {_query_user()}')
+        except Exception:
+            # 失敗収束。CREATE TABLE 自体の失敗(ORA-00955 名前衝突を含む)では table が他データ
+            # セットの実表かもしれず絶対に DROP しない(既存データ損失防止 — review-12 B001)。
+            # 自分が作った表だけ DROP し、他要因で DROP 失敗なら 'creating' 行を残し reconcile に
+            # 委ねる(孤児実表の放置防止)。ORA-00942(表なし)は消えている=行削除して良い。
+            drop_ok = True
+            if created_table:
+                try:
+                    cur.execute(f'DROP TABLE {schema}.{table} PURGE')
+                except Exception as de:  # noqa: BLE001
+                    drop_ok = "ORA-00942" in str(de)
+            if drop_ok:
+                try:
+                    cur.execute("DELETE FROM JETUSE_DATASETS WHERE ds_id = :i", i=ds_id)
+                    conn.commit()
+                except Exception:  # noqa: BLE001
+                    pass
+            raise
+        cur.execute(
+            "UPDATE JETUSE_DATASETS SET state = 'ready' WHERE ds_id = :i", i=ds_id
         )
         tables = _rebuild_profile(owner, cur, model)
         conn.commit()
@@ -302,12 +409,15 @@ def seed_samples(owner: str, model: str | None = None) -> dict[str, Any]:
 
 
 def list_datasets(owner: str) -> list[dict[str, Any]]:
+    """一覧は state='ready' のみ(creating 幽霊行を表示しない — specs/18 §3.2 手順 2)。"""
+    vpd.integrity_gate()  # 不整合時は dbchat/datasets 経路を 503 で停止(specs/18 §4.3)
     with connect() as conn:
         cur = conn.cursor()
         _ensure_meta(cur)
         cur.execute(
             """SELECT ds_id, table_name, display_name, columns_json, row_count
-               FROM JETUSE_DATASETS WHERE owner_sub = :o ORDER BY created DESC""",
+               FROM JETUSE_DATASETS WHERE owner_sub = :o AND state = 'ready'
+               ORDER BY created DESC""",
             o=owner,
         )
         return [
@@ -318,19 +428,40 @@ def list_datasets(owner: str) -> list[dict[str, Any]]:
 
 
 def preview(owner: str, ds_id: str, limit: int = 20) -> dict[str, Any]:
-    """データセット表の中身(サンプル行)を返す。ds_idは本人所有を検証(ENH-02拡張)。"""
+    """データセット表の中身(サンプル行)を返す。ds_idは本人所有を検証(ENH-02拡張)。
+
+    VPD 導入後は owner コンテキスト付きで実行する(登録簿で本人検証済みだが
+    同関数経由に統一 — specs/18 §4.3 呼び出し元の移行契約)。
+    """
     from . import nl2sql
 
+    vpd.integrity_gate()
     ds = next((d for d in list_datasets(owner) if d["id"] == ds_id), None)
     if not ds:
         raise ValueError("データセットが見つかりません")
     n = max(1, min(int(limit), 50))
     return nl2sql.execute_readonly(
-        f'SELECT * FROM {_schema()}."{ds["table_name"]}" FETCH FIRST {n} ROWS ONLY'
+        f'SELECT * FROM {_schema()}."{ds["table_name"]}" FETCH FIRST {n} ROWS ONLY',
+        owner_key=owner,
     )
 
 
-def delete_dataset(owner: str, ds_id: str) -> bool:
+def _drop_table_strict(cur, table: str) -> None:
+    """DROP TABLE PURGE。ORA-00942(不存在)のみ成功扱い、他は DatasetDeleteError。"""
+    try:
+        cur.execute(f'DROP TABLE {_schema()}.{table} PURGE')
+    except Exception as e:
+        if "ORA-00942" in str(e):
+            return
+        raise DatasetDeleteError(f"drop {table} failed: {str(e)[:200]}") from e
+
+
+def delete_dataset(owner: str, ds_id: str, lease: DemoLease | None = None) -> bool:
+    """DROP 先行(specs/18 §3.2 手順 2 の前提改修): ORA-00942 のみ成功扱い、
+    他の失敗は登録簿行を残して DatasetDeleteError(503) — 再試行で収束。"""
+    vpd.integrity_gate()
+    owner_key_gate()
+    require_lease_for(owner, lease)
     with connect() as conn:
         cur = conn.cursor()
         _ensure_meta(cur)
@@ -342,12 +473,86 @@ def delete_dataset(owner: str, ds_id: str) -> bool:
         if not row:
             return False
         table = row[0]
+        _drop_table_strict(cur, table)  # DROP 成功(or 不存在)を確認してから行を消す
         cur.execute("DELETE FROM JETUSE_DATASETS WHERE ds_id = :i AND owner_sub = :o",
                     i=ds_id, o=owner)
-        try:
-            cur.execute(f'DROP TABLE {_schema()}.{table} PURGE')
-        except Exception:  # noqa: BLE001
-            logger.exception("drop dataset table failed (ignored): %s", table)
         _rebuild_profile(owner, cur)
         conn.commit()
     return True
+
+
+# --- 後始末・回収の公開関数(demo_cleanup / vpd.verify_integrity が使う) ---
+
+
+def reconcile_creating(owner: str | None = None, *, cur=None,
+                       min_age_s: int = CREATING_STALE_S) -> int:
+    """creating のまま一定時間を過ぎた登録行を回収する(表があれば DROP → 行 DELETE。冪等)。
+
+    min_age_s=0 は demo DELETE / 起動時 reconcile 用(進行中 create はリース/単一インスタンス
+    前提で並行しない)。回収件数を返す。
+    """
+    if cur is None:
+        with connect() as conn:
+            return reconcile_creating(owner, cur=conn.cursor(), min_age_s=min_age_s)
+    if not ddl_verify.table_exists(cur, "JETUSE_DATASETS"):
+        return 0  # fresh schema: 登録簿がまだ無い(初回 dataset 作成前) — 回収対象なし
+    _ensure_meta(cur)  # 旧登録簿(STATE 列なし)を先に移行(SELECT state の ORA-00904 回避 — B001)
+    sql = ("SELECT ds_id, table_name FROM JETUSE_DATASETS WHERE state = 'creating' "
+           "AND created < SYSTIMESTAMP - NUMTODSINTERVAL(:age, 'SECOND')")
+    binds: dict[str, Any] = {"age": min_age_s}
+    if owner is not None:
+        sql += " AND owner_sub = :o"
+        binds["o"] = owner
+    cur.execute(sql, **binds)
+    rows = cur.fetchall()
+    for ds_id, table in rows:
+        _drop_table_strict(cur, table)
+        cur.execute("DELETE FROM JETUSE_DATASETS WHERE ds_id = :i", i=ds_id)
+    if rows:
+        cur.connection.commit()
+        logger.info("reconciled %d creating dataset leftovers", len(rows))
+    return len(rows)
+
+
+def registry_rows(owner: str) -> list[dict[str, Any]]:
+    """exact owner 一致の全登録行(state 不問)。demo DELETE 手順 2 の削除根拠。"""
+    with connect() as conn:
+        cur = conn.cursor()
+        _ensure_meta(cur)
+        cur.execute(
+            "SELECT ds_id, table_name, state FROM JETUSE_DATASETS WHERE owner_sub = :o",
+            o=owner,
+        )
+        return [{"id": r[0], "table_name": r[1], "state": r[2]} for r in cur.fetchall()]
+
+
+def delete_owner(owner: str) -> None:
+    """owner の DB 箱の後始末(specs/18 §3.2 手順 2): 登録簿の exact 一致行を列挙して
+    DROP TABLE PURGE(ORA-00942 成功扱い)→ 行削除 → プロファイル DROP(不存在は無視)。
+
+    呼び出し側(demo_cleanup)がリースを保持している前提。失敗は DatasetDeleteError(503)。
+    """
+    with connect() as conn:
+        cur = conn.cursor()
+        _ensure_meta(cur)
+        cur.execute(
+            "SELECT ds_id, table_name FROM JETUSE_DATASETS WHERE owner_sub = :o", o=owner
+        )
+        for ds_id, table in cur.fetchall():
+            _drop_table_strict(cur, table)
+            cur.execute("DELETE FROM JETUSE_DATASETS WHERE ds_id = :i", i=ds_id)
+        prof = profile_name(owner)
+        # 不存在は事前確認で無視(ORA コードの一律無視で権限/タイムアウト/DBMS_CLOUD_AI 障害を
+        # 隠さない — codex review-2 blocker)。存在する profile の DROP 失敗は 503 で行を保持。
+        cur.execute(
+            "SELECT COUNT(*) FROM user_cloud_ai_profiles WHERE profile_name = :p", p=prof
+        )
+        if cur.fetchone()[0]:
+            try:
+                cur.execute("BEGIN DBMS_CLOUD_AI.DROP_PROFILE(:p); END;", p=prof)
+            except Exception as e:
+                raise DatasetDeleteError(
+                    f"drop profile {prof} failed: {str(e)[:200]}"
+                ) from e
+        _ds_profile_models.pop(prof, None)
+        conn.commit()

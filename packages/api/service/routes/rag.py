@@ -11,21 +11,30 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
-from jetuse_core import rag
+from jetuse_core import demo_lease, rag
 from jetuse_core.auth import AuthContext, require_user
+from jetuse_core.owner_keys import owner_key_gate, user_owner_key
 
 logger = logging.getLogger("jetuse.service")
 router = APIRouter()
 
 
 async def list_files_response(ns: str) -> dict:
+    # read も移行ゲートを通す(未分類の予約接頭辞行が残る間は fail-closed=503)。書き込み経路
+    # (add_file/delete_file)は既に owner_key_gate を通す。read だけ素通りだと、旧命名の
+    # 予約接頭辞ユーザー資産(owner_sub='demo_<id>')が同 ID の demo 経路から参照され得る
+    # (越境。OwnerKeyPreflightError→503。実在 sub のみ環境では no-op — codex review-9 B001)。
+    await asyncio.to_thread(owner_key_gate)
     files = await asyncio.to_thread(rag.list_files, ns)
     files = await asyncio.to_thread(rag.refresh_statuses, ns, files)
     files = await asyncio.to_thread(rag.attach_backend_status, ns, files)
     return {"files": files}
 
 
-async def upload_file_response(ns: str, file: UploadFile) -> dict:
+async def upload_file_response(ns: str, file: UploadFile,
+                               demo_id: str | None = None) -> dict:
+    """アップロード本体(user/デモスコープ共有)。demo_id 指定時は demo 単位の排他リースを
+    操作の開始から完了まで保持する(specs/18 §3.2.1 — lazy 生成と DELETE の競合防止)。"""
     name = pathlib.Path(file.filename or "untitled").name
     ext = pathlib.Path(name).suffix.lower()
     if ext not in rag.ALLOWED_EXTENSIONS:
@@ -33,39 +42,71 @@ async def upload_file_response(ns: str, file: UploadFile) -> dict:
         if ext == ".docx":
             detail += " (docxはVector Store非対応 — SPIKE-03)"
         raise HTTPException(status_code=422, detail=detail)
+    if len(name) > rag.MAX_FILENAME_CHARS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"filename too long (max {rag.MAX_FILENAME_CHARS} chars)",
+        )
     content = await file.read()
     if len(content) > rag.MAX_BYTES:
         raise HTTPException(status_code=413, detail="file too large (max 20MB)")
     if not content:
         raise HTTPException(status_code=422, detail="empty file")
+
+    def work():
+        if demo_id is None:
+            return rag.add_file(ns, name, content)
+        with demo_lease.mutation(demo_id) as lease:  # 行なし/deleting は 404(2契約)
+            return rag.add_file(ns, name, content, lease=lease)
+
     try:
-        return await asyncio.to_thread(rag.add_file, ns, name, content)
+        return await asyncio.to_thread(work)
     except rag.StoreNotReadyError as e:
         raise HTTPException(
             status_code=503, detail="vector store not ready, retry later"
         ) from e
+    except rag.BoxLimitExceededError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
-async def delete_file_response(ns: str, file_id: str) -> dict:
-    if not await asyncio.to_thread(rag.delete_file, ns, file_id):
+async def delete_file_response(ns: str, file_id: str,
+                               demo_id: str | None = None) -> dict:
+    def work():
+        if demo_id is None:
+            return rag.delete_file(ns, file_id)
+        with demo_lease.mutation(demo_id):
+            return rag.delete_file(ns, file_id)
+
+    try:
+        deleted = await asyncio.to_thread(work)
+    except rag.ExternalDeleteError as e:
+        # 外部先行削除の失敗は行とカウンタを保持して 503(再試行で収束 — specs/18 §3.2)
+        raise HTTPException(status_code=503, detail=str(e)[:300]) from e
+    if not deleted:
         raise HTTPException(status_code=404, detail="file not found")
     return {"deleted": True}
 
 
+# user 単位ルートも資源キーの導出は owner キーヘルパーを必ず通す(specs/18 §3.2.1 —
+# sub='demo_<uuid>' のユーザーが同名 demo の資源キーと衝突するのを防ぐ。実在 sub は no-op)
+
+
 @router.get("/api/rag/files")
 async def list_rag_files(user: Annotated[AuthContext, Depends(require_user)]):
-    return await list_files_response(user.subject)
+    return await list_files_response(user_owner_key(user.subject))
 
 
 @router.post("/api/rag/files")
 async def upload_rag_file(
     file: UploadFile, user: Annotated[AuthContext, Depends(require_user)]
 ):
-    return await upload_file_response(user.subject, file)
+    return await upload_file_response(user_owner_key(user.subject), file)
 
 
 @router.delete("/api/rag/files/{file_id}")
 async def delete_rag_file(
     file_id: str, user: Annotated[AuthContext, Depends(require_user)]
 ):
-    return await delete_file_response(user.subject, file_id)
+    return await delete_file_response(user_owner_key(user.subject), file_id)
