@@ -62,6 +62,9 @@ def fake_repo(monkeypatch):
         "delete_conversation", "append_message", "log_usage", "set_oci_conversation",
     ):
         monkeypatch.setattr(service_main.conv_repo, name, getattr(repo, name))
+    # owner_key_gate は preflight(DB 接続)なのでこのユニットでは no-op(M004 ゲートは別テスト)
+    import service.routes.conversations as conv_routes
+    monkeypatch.setattr(conv_routes, "owner_key_gate", lambda: None)
     # OCI Conversation削除同期(CHAT-09)は実呼び出しせず記録のみ
     repo.deleted_oci: list[str] = []
     monkeypatch.setattr(

@@ -124,6 +124,51 @@ def update_title(owner: str, cid: str, title: str) -> bool:
         return cur.rowcount > 0
 
 
+CHUNK_ROWS = 1000
+
+
+def delete_demo_conversations(demo_id: str, chunk: int = CHUNK_ROWS) -> dict[str, int]:
+    """demo の会話後始末(specs/18 §3.2 手順 4)。
+
+    messages を明示チャンク(chunk 行 + commit)で先に削除し、ゼロ確認後に conversations の
+    demo_id 行を同様にチャンク削除する。CASCADE 任せは「1 会話に大量 message」で
+    タイムアウト → 全量ロールバックになる。チャンク commit ならタイムアウトしても進捗が残り、
+    再 DELETE が続きから収束する。usage_log は削除しない(監査/利用量の明示的な保持契約)。
+    """
+    deleted = {"messages": 0, "conversations": 0}
+    with connect() as conn:
+        cur = conn.cursor()
+        while True:
+            cur.execute(
+                """DELETE FROM messages WHERE conversation_id IN (
+                     SELECT id FROM conversations WHERE demo_id = :d)
+                   AND ROWNUM <= :n""",
+                d=demo_id, n=chunk,
+            )
+            if cur.rowcount == 0:
+                break
+            deleted["messages"] += cur.rowcount
+            conn.commit()
+        # messages ゼロを確認してから conversations を消す(手順 4 の順序)
+        cur.execute(
+            """SELECT COUNT(*) FROM messages WHERE conversation_id IN (
+                 SELECT id FROM conversations WHERE demo_id = :d)""",
+            d=demo_id,
+        )
+        if cur.fetchone()[0] != 0:
+            raise RuntimeError("demo messages remain after chunked delete")
+        while True:
+            cur.execute(
+                "DELETE FROM conversations WHERE demo_id = :d AND ROWNUM <= :n",
+                d=demo_id, n=chunk,
+            )
+            if cur.rowcount == 0:
+                break
+            deleted["conversations"] += cur.rowcount
+            conn.commit()
+    return deleted
+
+
 def log_usage(
     owner: str, cid: str | None, model: str, input_tokens: int, output_tokens: int
 ) -> None:

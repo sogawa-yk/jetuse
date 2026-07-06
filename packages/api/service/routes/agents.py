@@ -12,6 +12,7 @@ from jetuse_core import select_ai_agent
 from jetuse_core import tools as tool_registry
 from jetuse_core.auth import AuthContext, require_user
 from jetuse_core.logging import log_with
+from jetuse_core.owner_keys import user_owner_key
 from jetuse_core.webtools import SsrfBlockedError
 
 from ..schemas import AgentDefinition, McpServerCreate, ToolExecuteRequest
@@ -65,9 +66,10 @@ def update_agent(
 def delete_agent(aid: str, user: Annotated[AuthContext, Depends(require_user)]):
     if not agents_repo.delete_agent(user.subject, aid):
         raise HTTPException(status_code=404, detail="agent not found")
-    # Select AI Agent のDBオブジェクトを後始末(冪等。他種別では何もしない)
+    # Select AI Agent のDBオブジェクトを後始末(冪等。他種別では何もしない)。
+    # owner キーは run() と同じ user_owner_key を通す(名前一致 = 確実に drop される)
     try:
-        select_ai_agent.drop(user.subject, aid)
+        select_ai_agent.drop(user_owner_key(user.subject), aid)
     except Exception:
         logger.exception("select_ai drop failed (ignored)")
     return {"deleted": True}

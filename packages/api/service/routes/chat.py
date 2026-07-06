@@ -17,6 +17,7 @@ from jetuse_core.auth import AuthContext, require_user
 from jetuse_core.chat import GenParams, create_oci_conversation
 from jetuse_core.logging import log_with
 from jetuse_core.models import MODELS
+from jetuse_core.owner_keys import owner_key_gate, user_owner_key
 from jetuse_core.settings import get_settings
 
 from .. import agent_dispatch
@@ -64,7 +65,7 @@ async def chat_stream(  # noqa: ANN202
     user: Annotated[AuthContext, Depends(require_user)],
 ):
     """チャットストリーミング(CHAT-01)。LLMの2系統APIを正規化したSSEを返す。"""
-    return await stream_chat_response(req, user, user.subject)
+    return await stream_chat_response(req, user, user_owner_key(user.subject))
 
 
 async def stream_chat_response(  # noqa: ANN202
@@ -137,6 +138,10 @@ async def stream_chat_response(  # noqa: ANN202
 
     # Select AI / OpenSearch バックエンド: 非ストリーミングGENERATEを単発deltaで返す
     if req.rag and req.rag_backend in ("select_ai", "opensearch"):
+        # RAG 読取も owner_key 移行ゲートを通す(store 解決と同じ fail-closed 一貫性 — M007)。特に
+        # Select AI generate は ensure_profile で永続 profile/index を作るため、未分類 owner が
+        # escaped 側へ新規資産を作るのをストリーム開始前に塞ぐ(raise は 503 に正規化)。
+        await asyncio.to_thread(owner_key_gate)
         prompt = req.messages[-1].content
         _rag_gen = (rag_opensearch.generate if req.rag_backend == "opensearch"
                     else rag_select_ai.generate)
@@ -223,7 +228,7 @@ async def stream_chat_response(  # noqa: ANN202
     agent_rag_store: str | None = None
     eff_tools = agent_def["enabled_tools"] if agent_def else (req.enabled_tools or [])
     if (req.agent or agent_def) and eff_tools and "rag_search" in eff_tools:
-        agent_rag_store = await asyncio.to_thread(rag.get_store_id, rag_ns)
+        agent_rag_store = await asyncio.to_thread(rag.resolve_store_for_read, rag_ns)
 
     if agent_def and agent_def["mcp_server_ids"] and agent_def["mine"]:
         # 共有エージェントのMCP(所有者の私有資源)は実行ユーザーには適用しない(specs/11)
@@ -241,14 +246,14 @@ async def stream_chat_response(  # noqa: ANN202
             raise HTTPException(
                 status_code=400, detail="rag requires a responses-family model"
             )
-        rag_store = await asyncio.to_thread(rag.get_store_id, rag_ns)
+        rag_store = await asyncio.to_thread(rag.resolve_store_for_read, rag_ns)
         if not rag_store:
             raise HTTPException(status_code=400, detail="no documents uploaded")
 
     oci_conv: str | None = None
     if req.conversation_id and not req.agent_id:
         conv = await asyncio.to_thread(
-            conv_repo.get_conversation, user.subject, req.conversation_id
+            conv_repo.get_conversation, user_owner_key(user.subject), req.conversation_id
         )
         if not conv:
             raise HTTPException(status_code=404, detail="conversation not found")
@@ -269,7 +274,7 @@ async def stream_chat_response(  # noqa: ANN202
                     )
                     await asyncio.to_thread(
                         conv_repo.set_oci_conversation,
-                        user.subject, req.conversation_id, oci_conv,
+                        user_owner_key(user.subject), req.conversation_id, oci_conv,
                     )
                 except Exception:
                     logger.exception("oci conversation create failed (fallback stateless)")

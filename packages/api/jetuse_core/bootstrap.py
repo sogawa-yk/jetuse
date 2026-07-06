@@ -143,6 +143,79 @@ def bootstrap() -> None:
     except Exception:  # noqa: BLE001
         logger.exception("migrate 失敗(API起動は継続。解消までDB系は503)")
 
+    post_migrate_maintenance()
+
+
+def post_migrate_maintenance() -> None:
+    """SP2-02(specs/18): 承認済み定義の冪等再適用 + 起動時 reconcile。
+
+    各ステップは best-effort でログを残す — 失敗しても API は起動するが、
+    対応する経路は各ゲート(vpd.integrity_gate / owner_key_gate / upload_gate)が
+    fail-closed(503)に保つ。ここでは権限付与は行わない(初回セットアップは人間ゲート)。
+    """
+    from . import owner_keys, rag, rag_ledger, vpd
+
+    try:
+        vpd.reapply_definitions()
+        logger.info("vpd/lock approved definitions reapplied")
+    except Exception:  # noqa: BLE001
+        logger.exception("vpd definitions reapply 失敗(dbchat/datasets は 503 のまま)")
+    try:
+        problems = vpd.verify_integrity()
+        if problems:
+            logger.error("VPD integrity problems: %s", "; ".join(problems)[:500])
+    except Exception:  # noqa: BLE001
+        logger.exception("VPD integrity verify 失敗")
+    try:
+        owner_keys.owner_key_gate()
+    except owner_keys.OwnerKeyPreflightError:
+        logger.error("owner key preflight: 予約接頭辞行が未分類(該当経路は 503)")
+    except Exception:  # noqa: BLE001
+        logger.exception("owner key preflight 失敗")
+    try:
+        summary = rag_ledger.reconcile(
+            # locator ごとの project を走査(region/project 変更後も旧 File を辿る)
+            lambda loc=None: rag.list_all_external_files(rag._dp_for(loc)),
+            lambda ext_id, loc=None: rag.delete_external_file(ext_id, rag._dp_for(loc)),
+            lambda ok, rid, ext, loc=None: rag.delete_original_exact(
+                ok, rid, ext, locator=loc),
+            _recover_confirmed,
+        )
+        logger.info("rag ledger reconcile: %s", summary)
+    except Exception:  # noqa: BLE001
+        logger.exception("rag ledger reconcile 失敗(後で再実行可)")
+        try:
+            rag_ledger.close_upload_gate()  # reconcile 未完なら upload を fail-closed に
+        except Exception:  # noqa: BLE001 — DB 未到達なら gate は前回永続値を保持する
+            logger.exception("close_upload_gate 失敗(DB 未到達 — gate は前回値保持)")
+
+
+def _recover_confirmed(row: dict, has_file: bool) -> None:
+    """confirmed 行の回復マトリクス(specs/18 §3.1)。
+
+    (rag_files 行あり, File あり)=正常 / (行あり, File なし)=幽霊 → 個別削除手順で整合回収 /
+    (行なし, File あり)=File・原本を削除して解放 / (行なし, File なし)=解放のみ。
+    """
+    from . import rag, rag_ledger
+    from .db import connect
+
+    loc = row.get("locator") or None  # 行 locator で旧 project の File/原本も辿る(B002)
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT owner_sub FROM rag_files WHERE id = :id", id=row["id"])
+        db_row = cur.fetchone()
+    if db_row and has_file:
+        return  # 正常
+    if db_row:
+        # 幽霊(行あり・File なし): 個別削除手順(外部先行)で整合回収。delete_file は
+        # ledger の write-ahead locator を内部で引くため locator の再指定は不要
+        rag.delete_file(db_row[0], row["id"])
+        return
+    if has_file:
+        rag.delete_external_file(row["external_file_id"], rag._dp_for(loc))
+    rag.delete_original_exact(row["owner_key"], row["id"], row["ext"], locator=loc)
+    rag_ledger.release(row["id"])
+
 
 if __name__ == "__main__":
     from .logging import configure

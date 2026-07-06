@@ -91,9 +91,32 @@ def test_crud_roundtrip_and_demo_out_shape():
     assert patched.json()["description"] == "説明"  # 省略 = 変更しない
 
 
-def test_delete_route_is_not_exposed(fake_repo):
+def test_delete_route_delegates_to_cleanup(fake_repo, monkeypatch):
+    """DELETE は SP2-02 で後始末込みで初公開(specs/18 §2.1)。ルートは demo_cleanup へ委譲し、
+    非所有/不存在は同一の 404、後始末途中失敗は段階付き 503。"""
+    from jetuse_core import demo_cleanup
+
     d = fake_repo.create_demo("dev-user", "x")
-    assert client.delete(f"/api/demos/{d['id']}").status_code == 405
+    calls = {}
+
+    def fake_delete(demo_id, owner_sub):
+        if demo_id != d["id"] or owner_sub != "dev-user":
+            raise demo_cleanup.DemoNotFoundError(demo_id)
+        calls["args"] = (demo_id, owner_sub)
+        return {"deleted": True}
+
+    monkeypatch.setattr(demo_cleanup, "delete_demo_box", fake_delete)
+    assert client.delete(f"/api/demos/{d['id']}").json() == {"deleted": True}
+    assert calls["args"] == (d["id"], "dev-user")
+    assert client.delete("/api/demos/nope").status_code == 404
+
+    def fails(demo_id, owner_sub):
+        raise demo_cleanup.CleanupError("rag-store", RuntimeError("store delete failed"))
+
+    monkeypatch.setattr(demo_cleanup, "delete_demo_box", fails)
+    res = client.delete(f"/api/demos/{d['id']}")
+    assert res.status_code == 503
+    assert "rag-store" in res.json()["detail"]  # 段階を detail に含む(specs/18 §3.2)
 
 
 def test_list_is_own_only_and_updated_at_desc(fake_repo):

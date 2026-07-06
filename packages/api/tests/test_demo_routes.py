@@ -4,11 +4,14 @@ demos リポジトリと rag 層は fake、require_demo seam は実関数。
 箱 = `demo_<id>` 名前空間(rag の owner キー)がユーザー単位と分離されることを検証する。
 """
 
+import contextlib
+
 import pytest
 from fastapi.testclient import TestClient
 
 import service.demo_context as demo_context
 import service.main as service_main
+from jetuse_core import demo_lease
 from jetuse_core.models import DEFAULT_MODEL
 from service.main import app
 
@@ -41,7 +44,7 @@ class NsFakeRag:
     def refresh_statuses(self, ns, files):
         return files
 
-    def add_file(self, ns, filename, content):
+    def add_file(self, ns, filename, content, lease=None):
         box = self.files.setdefault(ns, {})
         fid = f"{ns}-f{len(box) + 1}"
         box[fid] = {
@@ -64,10 +67,25 @@ def fake_demos(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def fake_lease(monkeypatch):
+    """demo mutation の排他リース(SP2-02)を DB なしで代替(契約検証は test_demo_lease)。"""
+
+    @contextlib.contextmanager
+    def fake_mutation(demo_id, **kw):
+        yield demo_lease.DemoLease(demo_id=demo_id, _conn=None)
+
+    monkeypatch.setattr(demo_lease, "mutation", fake_mutation)
+
+
+@pytest.fixture(autouse=True)
 def fake_rag(monkeypatch):
     fake = NsFakeRag()
     for name in ("list_files", "refresh_statuses", "add_file", "delete_file", "get_store_id"):
         monkeypatch.setattr(service_main.rag, name, getattr(fake, name))
+    import service.routes.rag as rag_routes  # read 経路の移行ゲートは no-op に(DB 不要)
+    monkeypatch.setattr(rag_routes, "owner_key_gate", lambda: None)
+    # chat の RAG 読取(resolve_store_for_read)が通す移行ゲートも no-op(fake get_store_id を使う)
+    monkeypatch.setattr(service_main.rag, "owner_key_gate", lambda: None)
     yield fake
 
 
@@ -134,7 +152,7 @@ def test_demo_upload_same_validation_as_user_route():
 
 
 def test_demo_upload_returns_503_when_store_not_ready(monkeypatch):
-    def not_ready(ns, filename, content):
+    def not_ready(ns, filename, content, lease=None):
         raise service_main.rag.StoreNotReadyError("dp propagation timeout")
 
     monkeypatch.setattr(service_main.rag, "add_file", not_ready)

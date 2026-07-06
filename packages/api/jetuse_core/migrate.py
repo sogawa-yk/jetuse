@@ -54,6 +54,30 @@ _EXPECTED_POST: dict[str, dict] = {
     "021_conversations_idx_demo": {
         "indexes": {"IDX_CONV_DEMO": ("CONVERSATIONS", ["DEMO_ID"])}
     },
+    "022_demo_backend_targets": {
+        "columns": {
+            ("DEMO_BACKEND_TARGETS", "ID"): ("VARCHAR2", 36, "B", "N", None),
+            ("DEMO_BACKEND_TARGETS", "NAMESPACE"): ("VARCHAR2", 255, "B", "N", None),
+            ("DEMO_BACKEND_TARGETS", "KIND"): ("VARCHAR2", 20, "B", "N", None),
+            ("DEMO_BACKEND_TARGETS", "LOCATOR"): ("CLOB", None, None, "N", None),
+            ("DEMO_BACKEND_TARGETS", "LOCATOR_HASH"): ("VARCHAR2", 64, "B", "N", None),
+            ("DEMO_BACKEND_TARGETS", "CREATED_AT"): (
+                "TIMESTAMP(6)", None, None, "N", "SYSTIMESTAMP"
+            ),
+        },
+        "checks": {
+            "DEMO_BACKEND_TARGETS": [
+                "kind IN ('vector_store','files','select_ai','opensearch','objectstorage')",
+                "locator IS JSON",
+            ]
+        },
+    },
+    "023_dbt_idx": {
+        "indexes": {"IDX_DBT_NS": ("DEMO_BACKEND_TARGETS", ["NAMESPACE"])}
+    },
+    "024_rag_files_filename_char": {
+        "columns": {("RAG_FILES", "FILENAME"): ("VARCHAR2", 400, "C", "N", None)}
+    },
 }
 
 

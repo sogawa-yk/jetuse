@@ -6,12 +6,13 @@ CRUD は usecases のルート流儀({"demos": [...]} / mine)と同語彙。DELE
 (後始末を持たない行削除は SP1-03 の RAG 箱を孤児化する — 後始末込みで SP2-02。specs/18 §2.1)。
 """
 
+import asyncio
 import json
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
-from jetuse_core import demos, nl2sql
+from jetuse_core import demo_cleanup, demos, nl2sql
 from jetuse_core.auth import AuthContext, require_user
 
 from ..demo_context import DemoContext, require_demo, require_demo_owner
@@ -123,6 +124,22 @@ def update_demo(req: DemoPatch, ctx: OwnerCtx, user: User):
     return _demo_out(d, user.subject)
 
 
+@crud_router.delete("/api/demos/{demo_id}")
+async def delete_demo(demo_id: str, user: User):
+    """後始末込みの同期 DELETE(specs/18 §2.1・§3.2 — SP2-02 で初公開)。
+
+    require_demo を経由しない: 所有者の DELETE は status='deleting' の残骸にも受理する
+    必要がある(後始末途中失敗の再実行 = 収束)。存在秘匿は他ルートと同一の 404。
+    失敗はその段階を detail に含む 503(再 DELETE で収束)。
+    """
+    try:
+        return await asyncio.to_thread(demo_cleanup.delete_demo_box, demo_id, user.subject)
+    except demo_cleanup.DemoNotFoundError:
+        raise HTTPException(status_code=404, detail="demo not found") from None
+    except demo_cleanup.CleanupError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+
+
 @router.post("/chat")
 async def demo_chat(  # noqa: ANN202
     req: ChatRequest,
@@ -136,6 +153,20 @@ async def demo_chat(  # noqa: ANN202
             status_code=422,
             detail="conversation_id is not supported for demo-scoped chat yet (SP2)",
         )
+    # Select AI RAG は profile/index を lazy 生成しうる。SSE 本体はリースを跨がないが、
+    # 作成区間だけは demo 単位リース下で行い、解体中の箱を復活させ孤児化するのを防ぐ
+    # (specs/18 §3.2.1)。作成 → 解放 → ストリームの順(生成本体はリース外)。
+    if req.rag and req.rag_backend == "select_ai":
+        from jetuse_core import demo_lease, rag_select_ai
+
+        def _provision():
+            with demo_lease.mutation(ctx.demo_id) as lease:  # deleting は 404
+                rag_select_ai.ensure_profile(ctx.namespace, lease=lease)
+
+        try:
+            await asyncio.to_thread(_provision)
+        except demo_lease.DemoGoneError:
+            raise HTTPException(status_code=404, detail="demo not found") from None
     return await chat_routes.stream_chat_response(req, user, ctx.namespace)
 
 
@@ -146,9 +177,11 @@ async def demo_list_rag_files(ctx: Ctx):
 
 @router.post("/rag/files")
 async def demo_upload_rag_file(file: UploadFile, ctx: OwnerCtx):
-    return await rag_routes.upload_file_response(ctx.namespace, file)
+    # demo_id 指定で demo 単位の排他リースを保持(specs/18 §3.2.1)
+    return await rag_routes.upload_file_response(ctx.namespace, file, demo_id=ctx.demo_id)
 
 
 @router.delete("/rag/files/{file_id}")
 async def demo_delete_rag_file(file_id: str, ctx: OwnerCtx):
-    return await rag_routes.delete_file_response(ctx.namespace, file_id)
+    return await rag_routes.delete_file_response(ctx.namespace, file_id,
+                                                 demo_id=ctx.demo_id)

@@ -38,7 +38,9 @@ def test_execute_endpoint_guards(monkeypatch):
     res = client.post("/api/dbchat/execute", json={"sql": "DROP TABLE sh.sales"})
     assert res.status_code == 400
 
-    def fake_exec(sql):
+    def fake_exec(sql, owner_key=None):
+        # SP2-02: execute は呼び出し元 owner でコンテキストを設定する(specs/18 §4.3)
+        assert owner_key == "dev-user"
         return {"columns": ["C"], "rows": [["1"]], "row_count": 1, "truncated": False}
 
     monkeypatch.setattr(service_main.nl2sql, "execute_readonly", fake_exec)

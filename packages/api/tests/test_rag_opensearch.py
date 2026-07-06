@@ -54,3 +54,46 @@ def test_generate_with_hits_builds_answer_and_dedup_citations():
     assert body == "回答本文"
     # filename重複は1件に集約(kitei.pdf, annex.md)
     assert [c["filename"] for c in cites] == ["kitei.pdf", "annex.md"]
+
+
+def test_delete_file_fail_closed_on_head_error(monkeypatch):
+    """B001: index HEAD が 401/5xx なら「不存在」と誤認せず例外(検索可能なまま残さない)。"""
+    class C:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def head(self, p): return NS(status_code=503)
+    monkeypatch.setattr(rag_opensearch, "_client", lambda endpoint=None: C())
+    monkeypatch.setattr(rag_opensearch, "_index", lambda owner: "idx")
+    try:
+        rag_opensearch.delete_file("o", "f1")
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError:
+        pass
+
+
+def test_delete_file_fail_closed_on_delete_failures(monkeypatch):
+    """B001: _delete_by_query が failures を返したら例外(部分削除を成功にしない)。"""
+    class C:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def head(self, p): return NS(status_code=200)
+        def post(self, p, json):
+            return NS(status_code=200, json=lambda: {"failures": [{"cause": "x"}]})
+    monkeypatch.setattr(rag_opensearch, "_client", lambda endpoint=None: C())
+    monkeypatch.setattr(rag_opensearch, "_index", lambda owner: "idx")
+    try:
+        rag_opensearch.delete_file("o", "f1")
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError:
+        pass
+
+
+def test_delete_file_index_absent_is_idempotent_ok(monkeypatch):
+    """404(index 不存在)は削除済み扱いで成功(冪等)。"""
+    class C:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def head(self, p): return NS(status_code=404)
+    monkeypatch.setattr(rag_opensearch, "_client", lambda endpoint=None: C())
+    monkeypatch.setattr(rag_opensearch, "_index", lambda owner: "idx")
+    rag_opensearch.delete_file("o", "f1")  # 例外なし
