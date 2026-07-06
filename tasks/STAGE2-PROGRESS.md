@@ -15,8 +15,8 @@ status: `todo` | `in_progress` | `blocked` | `done`
 | 順 | タスク | 依存 | 人間ゲート | status |
 |---|---|---|---|---|
 | 0 | [SP2-00 specs/18 起草（SP2 詳細仕様）+ キュー肉付け](SP2-00.md) | — | **spec 承認**（adr_approval 相当） | done |
-| 1 | [SP2-01 Demo エンティティ本格化 + CRUD ルート](SP2-01.md) | SP2-00 | コミット | in_progress |
-| 2 | [SP2-02 箱のライフサイクル（lazy 解決・削除後始末・VPD 基盤）](SP2-02.md) | SP2-01 | コミット + **VPD 初回セットアップ・DBMS_LOCK 権限付与・旧 demo 資源クリーンアップ削除の承認**（specs/18 §3.2・§3.2.1・§4.3 — 承認対象と実変更の一致を完了条件で照合） | todo |
+| 1 | [SP2-01 Demo エンティティ本格化 + CRUD ルート](SP2-01.md) | SP2-00 | コミット | done |
+| 2 | [SP2-02 箱のライフサイクル（lazy 解決・削除後始末・VPD 基盤）](SP2-02.md) | SP2-01 | コミット + **VPD 初回セットアップ・DBMS_LOCK 権限付与・旧 demo 資源クリーンアップ削除の承認**（specs/18 §3.2・§3.2.1・§4.3 — 承認対象と実変更の一致を完了条件で照合） | in_progress |
 | 3 | [SP2-03 DemoContext 解決先の実装 + dbchat デモスコープ化](SP2-03.md) | SP2-02 | コミット | todo |
 | 4 | [SP2-04 Internal テナンシ分離（Identity Domains 実接続）](SP2-04.md) | SP2-00 ＋ 人間の事前作業 | **iam_identity**（IdP 設定は人間） | blocked |
 
@@ -48,3 +48,10 @@ status: `todo` | `in_progress` | `blocked` | `done`
   → SP2-01 以降のチケットが有効化。
 - 2026-07-06: 第1波起動 = SP2-01（専用ペイン・in_progress）。SP2-04 は人間の事前作業
   （specs/18 §5.2: Identity Domain アプリ登録・テストユーザー2名・secret 投入）未完のため **blocked**。
+- 2026-07-06: SP2-01 完了（codex review-2 PASS / blocker 0。単体 277 passed・ruff クリーン。
+  実 ADB E2E: migration 017〜021 fresh/冪等/fault-injection 23 チェック + 実トークン 2 ユーザー
+  CRUD 31 チェック ALL PASS）。統合後の再検証 = 280 passed・ruff クリーン。residual 4 件は
+  SP2-01 worktree の STATE.md 参照（③一覧ページング契約は spec 側判断が必要 — ステージ報告で提示）。
+- 2026-07-06: 第2波起動 = SP2-02（専用ペイン・in_progress）。タスク内人間ゲート
+  （VPD 初回セットアップ・DBMS_LOCK EXECUTE 付与・旧 demo 資源クリーンアップ）は
+  APPROVAL-REQUEST 提示で停止→人間承認後に実行の契約で起動。
