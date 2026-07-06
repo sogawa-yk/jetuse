@@ -44,3 +44,6 @@ spikes/data/*.wav
 
 # 個人フィードバック原文はリポジトリに含めない(ローカル管理)
 /docs/feedbacks/
+
+# loop 成果物（stage-runner 統合で混入防止）
+.current_run_id
