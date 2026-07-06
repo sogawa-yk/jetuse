@@ -64,7 +64,18 @@ from jetuse_core.chat import (  # noqa: F401
 from jetuse_core.logging import configure, log_with
 from jetuse_core.settings import get_settings
 
-from .routes import admin, agents, chat, conversations, dbchat, minutes, usecases, voice
+from .routes import (
+    admin,
+    agents,
+    capabilities,
+    chat,
+    conversations,
+    dbchat,
+    demos,
+    minutes,
+    usecases,
+    voice,
+)
 from .routes import rag as rag_routes
 
 logger = logging.getLogger("jetuse.service")
@@ -111,6 +122,8 @@ def create_app() -> FastAPI:
     app.include_router(minutes.router)
     app.include_router(voice.router)
     app.include_router(usecases.router)
+    app.include_router(capabilities.router)
+    app.include_router(demos.router)
 
     return app
 
