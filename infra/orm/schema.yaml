@@ -5,7 +5,7 @@ description: >-
   実行ユーザーの権限や既存IAMに応じて、Dynamic GroupとPolicyの作成範囲を選択できます。
   デプロイ後、出力の app_url を開き demo ユーザーでログインしてください。
 schemaVersion: 1.1.0
-version: "20260702"
+version: "20260706"
 
 logoUrl: ""
 
@@ -32,7 +32,6 @@ variableGroups:
       - enable_opensearch
       - rate_limit_rps
       - ocir_namespace
-      - ocir_region_key
       - image_repo_prefix
       - api_image_url
       - fn_router_image
@@ -120,13 +119,6 @@ variables:
     default: "idqcucnenh88"
     required: true
 
-  ocir_region_key:
-    type: string
-    title: "OCIR リージョンキー"
-    description: "OCIRレジストリのリージョンキー（ap-osaka-1 は kix）"
-    default: "kix"
-    required: true
-
   image_repo_prefix:
     type: string
     title: "OCIRイメージ repo プレフィックス"
@@ -137,13 +129,13 @@ variables:
   api_image_url:
     type: string
     title: "API コンテナイメージ（上書き）"
-    description: "通常は空欄。空ならOCIRパスを自動合成（kix.ocir.io/<namespace>/<prefix>-api:latest）"
+    description: "通常は空欄。空ならデプロイリージョンのOCIRパスを自動合成（<region-key>.ocir.io/<namespace>/<prefix>-api:latest。対応: 大阪/東京/アシュバーン/シカゴ）"
     required: false
 
   fn_router_image:
     type: string
     title: "Functions ルーターイメージ（上書き）"
-    description: "通常は空欄。空ならOCIRパスを自動合成（kix.ocir.io/<namespace>/<prefix>-fn-router:latest）"
+    description: "通常は空欄。空ならデプロイリージョンのOCIRパスを自動合成（対応: 大阪/東京/アシュバーン/シカゴ）。対応外リージョンでは自リージョンOCIRへミラーし api_image_url と合わせて指定"
     required: false
 
   tenancy_ocid:

@@ -6,7 +6,17 @@ locals {
   # repo は手動管理(genu-proto)。パスはネームスペースベースでコンパートメント非依存。
   # repo名は image_repo_prefix(既定 jetuse)で合成し、リソース名の var.prefix とは分離する。
   # → prefix を変えてもイメージ参照(release.yml が push する jetuse-*)が壊れない。
-  ocir_registry   = "${var.ocir_region_key}.ocir.io/${var.ocir_namespace}"
+  # OCI Functions は「関数と同一リージョンの OCIR イメージ」しか受け付けない(ADR-0011)ため、
+  # イメージは release.yml が対応4リージョン(大阪/東京/アシュバーン/シカゴ)の OCIR へ事前 push し、
+  # レジストリはデプロイリージョンの OCIR を自動選択する(Issue #55 / ADR-0017)。
+  # 対応外リージョンは main.tf の region_guard が plan 時に明示エラーにする
+  # (api_image_url と fn_router_image の両方を明示指定すれば対応外リージョンでも可)。
+  ocir_supported_region_keys = ["kix", "nrt", "iad", "ord"]
+  deploy_region_key = try(lower(one([
+    for r in data.oci_identity_region_subscriptions.this.region_subscriptions : r.region_key
+    if r.region_name == var.region
+  ])), "")
+  ocir_registry   = "${local.deploy_region_key}.ocir.io/${var.ocir_namespace}"
   api_image_url   = var.api_image_url != "" ? var.api_image_url : "${local.ocir_registry}/${var.image_repo_prefix}-api:latest"
   fn_router_image = var.fn_router_image != "" ? var.fn_router_image : "${local.ocir_registry}/${var.image_repo_prefix}-fn-router:latest"
 
