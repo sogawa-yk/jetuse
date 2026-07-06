@@ -21,6 +21,7 @@ CAPABILITIES: list[dict] = [
         "routes": [
             {"path": "/api/chat/stream", "method": "post"},
             {"path": "/api/chat/models", "method": "get"},
+            {"path": "/api/demos/{demo_id}/chat", "method": "post"},  # デモスコープ(SP1-03)
         ],
     },
     {
@@ -37,6 +38,10 @@ CAPABILITIES: list[dict] = [
             {"path": "/api/chat/stream", "method": "post"},
             {"path": "/api/rag/files", "method": "get"},
             {"path": "/api/rag/files", "method": "post"},
+            # デモスコープ(SP1-03)
+            {"path": "/api/demos/{demo_id}/chat", "method": "post"},
+            {"path": "/api/demos/{demo_id}/rag/files", "method": "get"},
+            {"path": "/api/demos/{demo_id}/rag/files", "method": "post"},
         ],
     },
     {

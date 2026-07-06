@@ -12,6 +12,8 @@ import time
 import uuid
 from typing import Any
 
+from openai import NotFoundError
+
 from .db import connect
 from .genai import make_cp_client, make_inference_client
 from .settings import get_settings
@@ -178,7 +180,17 @@ def add_file(owner: str, filename: str, content: bytes) -> dict[str, Any]:
     _backup_original(owner, file_id, filename, content)
     dp = make_inference_client(with_project=True)
     f = dp.files.create(file=(filename, content), purpose="assistants")
-    dp.vector_stores.files.create(vector_store_id=vs_id, file_id=f.id)
+    # CP completed直後はDP側にstoreが未伝播で404になる(SPIKE-03)。デモは箱ごとに新規store
+    # なので初回uploadが通常経路 — 有界リトライで吸収する(SP1-03 REV-005)。
+    for attempt in range(6):
+        try:
+            dp.vector_stores.files.create(vector_store_id=vs_id, file_id=f.id)
+            break
+        except NotFoundError:
+            if attempt == 5:
+                raise
+            logger.info("vector store not yet visible on DP, retrying (%s)", attempt + 1)
+            time.sleep(5)
     _insert_file(owner, file_id, filename, f.id, len(content))
     # OpenSearch RAG(ENH-05)にも取り込む(有効時のみ・best-effort)
     try:
