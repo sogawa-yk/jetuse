@@ -7,7 +7,8 @@ PASS したタスクを stage-runner がステージブランチへ自動 commit
 apply / IAM / Identity Domain は自走中も停止（人間ゲート）。
 
 > **spec-driven**: SP2 の詳細仕様は specs/17 §6 に概略しかない。**SP2-00（specs/18 起草・人間承認）が
-> 最初のゲート**であり、SP2-01 以降の受け入れ条件は specs/18 承認をもって確定する（起票時点の記述は暫定）。
+> 最初のゲート**。specs/18 は起草済み（SP2-00）で、SP2-01〜04 の受け入れ条件は specs/18 参照で
+> 肉付け済み — **有効になるのは specs/18 の人間承認をもって**（承認までは SP2-01 以降を起動しない）。
 
 status: `todo` | `in_progress` | `blocked` | `done`
 
@@ -15,18 +16,22 @@ status: `todo` | `in_progress` | `blocked` | `done`
 |---|---|---|---|---|
 | 0 | [SP2-00 specs/18 起草（SP2 詳細仕様）+ キュー肉付け](SP2-00.md) | — | **spec 承認**（adr_approval 相当） | todo |
 | 1 | [SP2-01 Demo エンティティ本格化 + CRUD ルート](SP2-01.md) | SP2-00 | コミット | todo |
-| 2 | [SP2-02 箱のプロビジョニング（demo_<id> スキーマ生成・削除後始末）](SP2-02.md) | SP2-01 | コミット | todo |
+| 2 | [SP2-02 箱のライフサイクル（lazy 解決・削除後始末・VPD 基盤）](SP2-02.md) | SP2-01 | コミット + **VPD 初回セットアップ・DBMS_LOCK 権限付与・旧 demo 資源クリーンアップ削除の承認**（specs/18 §3.2・§3.2.1・§4.3 — 承認対象と実変更の一致を完了条件で照合） | todo |
 | 3 | [SP2-03 DemoContext 解決先の実装 + dbchat デモスコープ化](SP2-03.md) | SP2-02 | コミット | todo |
 | 4 | [SP2-04 Internal テナンシ分離（Identity Domains 実接続）](SP2-04.md) | SP2-00 ＋ 人間の事前作業 | **iam_identity**（IdP 設定は人間） | todo |
 
 > 第0波 = SP2-00（spec 承認まで停止）。第1波 = SP2-01 ∥ SP2-04（SP2-04 は人間の事前作業が
 > 未完なら blocked にして先へ）。第2波 = SP2-02。第3波 = SP2-03。
 
-## ステージ完了条件（暫定 — specs/18 承認で確定。ステージ報告で人間が確認）
+## ステージ完了条件（specs/18 §6 で確定。ステージ報告で人間が確認）
 
 - specs/18 が人間承認済み。全タスク Codex review PASS・test/lint クリーン・実環境 E2E（または理由付き SKIPPED）通過。
-- 実環境で「デモ作成 → 箱（`demo_<id>` スキーマ）生成 → デモスコープ操作（chat/rag/dbchat）→ デモ削除で
-  後始末」の一連が確認できる。他ユーザーのデモ id は一貫して 404（fail-closed 回帰なし）。
+- 実環境で「デモ作成（即 ready）→ 箱の lazy 生成（RAG store / datasets 表 / 会話 —
+  `demo_<id>` は論理名前空間: specs/18 §3.1）→ デモスコープ操作（chat/rag/dbchat）→ デモ削除で
+  specs/18 §3.2 の後始末完走（表・vector store・登録簿行・会話が消え、再 DELETE が 404）」の
+  一連が確認できる。他ユーザーのデモ id は全ルート一貫して 404（fail-closed 回帰なし）。
+- SP2-04: 実 Identity Domain トークンで 401/200/404 マトリクスを実機確認（SP1 の SKIPPED 解消）。
+  Internal 配備設定で `AUTH_REQUIRED=true` が既定（Public/main の既定は不変）。
 - `dev` が常時デプロイ可能（main 由来機能の回帰なし。既存テスト・`npm run build` 緑）。
 
 ## スコープ境界（specs/17 §1・§6）
