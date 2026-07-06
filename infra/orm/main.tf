@@ -2,6 +2,17 @@
 # environments/dev の配線を流用しつつ、ワンクリック向けに自己完結(自動パスワード生成・
 # IAM/Identity Domain/OIDCアプリ/SPA配信を内包)。モジュールは ../terraform/modules を参照。
 
+# 対応リージョンチェック(ADR-0017)。対応外だとイメージ pull / CreateFunction が
+# apply 途中で不可解に失敗するため、plan 時に明示エラーで止める。
+resource "terraform_data" "region_guard" {
+  lifecycle {
+    precondition {
+      condition     = contains(local.ocir_supported_region_keys, local.deploy_region_key) || (var.api_image_url != "" && var.fn_router_image != "")
+      error_message = "JetUse のワンクリックデプロイは ap-osaka-1 / ap-tokyo-1 / us-ashburn-1 / us-chicago-1 のみ対応です(コンテナイメージの事前push先)。他リージョンでは、イメージを自リージョンOCIRへミラーし api_image_url と fn_router_image の両方を指定してください。"
+    }
+  }
+}
+
 # --- 自動生成パスワード(Oracle/IDCS規則: 英大小+数字+記号, " を含めない) ---
 resource "random_password" "adb_admin" {
   length           = 20

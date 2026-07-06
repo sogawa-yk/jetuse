@@ -75,15 +75,9 @@ variable "rate_limit_rps" {
   default     = 20
 }
 
-# コンテナイメージは OCIR(ap-osaka-1) に置く(ADR-0011)。Functions は OCIR必須・
-# Container Instance も同一OCIRを参照。private のまま Resource Principal で pull。
-# 既定は ocir_namespace / ocir_region_key から locals.tf で合成(override 可)。
-variable "ocir_region_key" {
-  description = "OCIRレジストリのリージョンキー(ap-osaka-1 は kix → kix.ocir.io)。Functions はデプロイリージョンと同一リージョンの OCIR しか使えないため、不一致の場合 fn-router は自動で無効化される(ルートはCIへフォールバック)"
-  type        = string
-  default     = "kix"
-}
-
+# コンテナイメージは対応4リージョン(kix/nrt/iad/ord)の OCIR へ事前 push(ADR-0011/0017)。
+# Functions は同一リージョンの OCIR 必須のため、レジストリはデプロイリージョンから自動導出
+# (locals.tf)。リージョンキーはユーザー入力にしない。
 variable "ocir_namespace" {
   description = "OCIRネームスペース(= Object Storage namespace。tenancy固有)"
   type        = string

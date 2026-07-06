@@ -1,7 +1,7 @@
-# ADR-0017: 非Osakaリージョンでは Functions ルーターを自動無効化する
+# ADR-0017: 対応リージョンを4つに固定し、OCIRレジストリをデプロイリージョンから自動導出する
 
 日付: 2026-07-06
-状態: 提案中（Issue #55 対応。PR merge をもって承認とする）
+状態: 承認済み（Issue #55 対応。方式は 2026-07-06 ユーザー決定。PR merge をもって確定）
 
 ## 背景
 
@@ -15,39 +15,52 @@ Issue #55: `ap-tokyo-1` で ORM スタックを apply すると
 
 ## 決定
 
-**デプロイリージョンのキーが `ocir_region_key` と一致しない場合、fn-router の既定イメージを
-空にして router を作成しない。**
+**対応リージョンを 大阪（kix）/ 東京（nrt）/ アシュバーン（iad）/ シカゴ（ord）の4つに固定し、
+イメージを4リージョンの OCIR へ事前 push、レジストリはデプロイリージョンから自動導出する。**
 
-- リージョンキーは既存の `data.oci_identity_region_subscriptions`（providers.tf）から導出
-  （デプロイ先は必ずサブスクライブ済みリージョンのため常に解決可能。ハードコード表不要）。
-- router 不在時、対象ルート（`presets` / `dbchat` / `tts`）は API Gateway の
-  catch-all `/api/{p*}` → Container Instance にフォールバックする（router のオプショナル化は
-  specs/02-infra §api-gateway「空ならルート生成しない」で既定義の挙動）。
-  機能は全て動作するが、フォールバック経路は catch-all の read timeout 60 秒の制約を受ける
-  （チャット SSE `/api/chat/{p*}` は専用ルートで従来どおり 300 秒・本変更の影響なし）。
-- 他リージョンで router を使う場合は、イメージを自リージョン OCIR へミラーして
-  `ocir_region_key` + `ocir_namespace`（または `fn_router_image`）を明示指定する。
-  明示指定は自動無効化より常に優先。
+- `release.yml` が API / fn-router イメージを GHCR に加えて **4リージョンの OCIR すべて**へ push。
+- ORM スタックはリージョンキーを**ユーザー入力にしない**（`ocir_region_key` 変数と schema 入力を
+  削除）。デプロイリージョンのキーは既存の `data.oci_identity_region_subscriptions`
+  （providers.tf でホームリージョン導出に使用済み）から導出し、レジストリ
+  `<region-key>.ocir.io` を自動選択する。ハードコードのリージョン→キー対応表は持たない。
+- 対応外リージョンでは `terraform_data.region_guard` の precondition が **plan 時に明示エラー**で
+  停止する（apply 途中の不可解な pull / CreateFunction 失敗を防ぐ）。イメージを自リージョン OCIR へ
+  ミラーして `api_image_url` と `fn_router_image` の両方を明示指定した場合のみガードを通過する。
+- ADR-0011 の「イメージは OCIR(ap-osaka-1)」を**4リージョンへ拡張**する更新。repo の手動管理・
+  public 公開・ネームスペースベース参照の方針は維持。
 
 ## 理由
 
-- **失敗するより機能縮退**: 既定値のまま任意リージョンで apply が通る。ワンクリック配布の
-  目的（ADR-0014）に対し、Osaka 限定の apply 失敗は最悪の UX。
-- 追加インフラ不要・差分最小。マルチリージョン publish（下記）を採用しても本フォールバックは
-  「イメージ未公開リージョン」の安全網として残る。
+- **どのリージョンでも同一機能**: fn-router が常に有効で、リージョンによる機能差
+  （SSE タイムアウト等）が生じない。プリセールス用途でデモ品質が揃う。
+- **入力ミスの根絶**: リージョンキーの手入力を廃し、デプロイリージョンから機械的に導出。
+- 4リージョン（日本2 + 米国2）は想定利用地域をカバーし、repo 管理コスト（2 repo × 4 リージョン）は
+  許容範囲。
 
 ## 却下した代替案
 
-- **マルチリージョン publish**（release.yml が nrt 等へも push + リージョンキー自動導出）:
-  真のワンクリックに最も近いが、各リージョンでの OCIR repo 手動作成（ADR-0011: repo は人間管理）、
-  テナンシのリージョンサブスクリプション、別テナンシからの cross-tenancy pull を Functions が
-  許すかの実機検証が必要。需要を見て将来対応（本 ADR のフォールバックと排他ではない）。
+- **非対応リージョンで fn-router を自動無効化（機能縮退でデプロイ続行）**: 本 ADR の初案。
+  追加インフラ不要だが、対象ルート（presets/dbchat/tts）が catch-all の read timeout 60 秒に
+  黙って縮退し、リージョンで挙動が変わる。ユーザーレビューで却下（2026-07-06）。
+- **全リージョン publish**: repo 事前作成と push 時間が線形に増える。需要のない地域まで
+  維持するコストに見合わない。需要が出たリージョンを4つの集合へ追加する運用とする。
 - **ドキュメントのみ**（ミラー手順の案内だけ）: 既定値での apply が失敗したままで解決にならない。
+
+## 前提となる人間側の作業（merge 前）
+
+1. **OCIR リポジトリの事前作成**（ADR-0011: repo は人間管理）: `jetuse-api` / `jetuse-fn-router` を
+   nrt / iad / ord の3リージョンに **public** で作成（kix は作成済み。テナンシは4リージョンとも
+   サブスクライブ済みを確認済み）。無いと release.yml の push がルートコンパートメントへの
+   自動作成を試み権限不足で失敗する。
+2. merge 後に release.yml が4リージョンへ push（以後 main への push ごとに自動）。
+
+## 既知の未検証点
+
+- **別テナンシからの cross-tenancy pull を Functions が許すか**は未検証（本リポジトリの検証は
+  同一テナンシのみ。Issue #55 の報告者はリージョンチェックで先に失敗しており切り分け不能）。
+  不可だった場合、別テナンシ利用者は従来どおりイメージミラー + 明示指定が必要。
+- 東京 / アシュバーン / シカゴでの実 apply（Resource Manager 経由・人間ゲート）。
 
 ## 検証
 
-`docs/verification/issue-55-region-aware-fn-router.md` 参照。リージョンキー導出と
-無効化判定は実テナンシの `oci_identity_region_subscriptions` に対して両リージョン分を評価し確認
-（Osaka=`kix`一致で既定イメージ合成、Tokyo=`nrt`不一致で空）。空→router 0→ルート無しの経路は
-既存実装（modules/functions の count、main.tf の fn_routes）。ap-tokyo-1 での実 apply は
-Resource Manager 経由のため人間ゲート。
+`docs/verification/issue-55-region-aware-fn-router.md` 参照。

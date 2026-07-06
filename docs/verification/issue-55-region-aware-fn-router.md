@@ -1,31 +1,37 @@
-# 検証: Issue #55 — 非Osakaリージョンでの fn-router 自動無効化（ADR-0017）
+# 検証: Issue #55 — 対応4リージョン固定とOCIRレジストリ自動導出（ADR-0017）
 
 日付: 2026-07-06 / 環境: dev インスタンス（実テナンシ、Terraform 1.15）
 
 ## 変更点
 
-`infra/orm/locals.tf`: デプロイリージョンのキーを既存の
-`data.oci_identity_region_subscriptions`（providers.tf でホームリージョン導出に使用済み）から導出し、
-`ocir_region_key` と不一致なら fn-router の既定イメージを空にする（= router 非作成、
-API Gateway の catch-all で CI にフォールバック）。明示指定 `fn_router_image` は常に優先。
+- `infra/orm/locals.tf`: レジストリのリージョンキーを既存の
+  `data.oci_identity_region_subscriptions`（providers.tf でホームリージョン導出に使用済み）から
+  自動導出し、`<region-key>.ocir.io` をイメージ URL に使用。`ocir_region_key` 変数は削除
+  （schema 入力からも除去）。明示指定 `api_image_url` / `fn_router_image` は常に優先。
+- `infra/orm/main.tf`: `terraform_data.region_guard` — 対応4リージョン（kix/nrt/iad/ord）外は
+  plan 時に precondition で明示エラー（両イメージ明示指定時は通過）。
+- `.github/workflows/release.yml`: イメージ push 先を OCIR 4リージョン（+GHCR）へ拡張。
 
 ## 実施した検証
 
-1. **`terraform validate` / `terraform fmt -check`（infra/orm）**: 通過。
-2. **リージョンキー導出と無効化判定（実データソース）**: locals.tf と同一式を実テナンシの
-   `oci_identity_region_subscriptions` に対して評価:
+1. **`terraform validate` / `terraform fmt`（infra/orm）・YAML 構文（schema.yaml / release.yml）**: 通過。
+2. **リージョンキー導出（実データソース・5リージョン評価）**: locals と同一式を実テナンシの
+   `oci_identity_region_subscriptions` に対して評価（証跡: `runs/2026-07-06T0805_ISSUE-55/e2e/`）:
 
-   | region | deploy_region_key | fn_router_default |
-   |---|---|---|
-   | ap-osaka-1 | `kix` | `kix.ocir.io/<ns>/jetuse-fn-router:latest`（従来どおり作成） |
-   | ap-tokyo-1 | `nrt` | 空（router 非作成） |
+   | region | 導出キー | 合成レジストリ | ガード |
+   |---|---|---|---|
+   | ap-osaka-1 | `kix` | `kix.ocir.io/...` | 通過 |
+   | ap-tokyo-1 | `nrt` | `nrt.ocir.io/...` | 通過 |
+   | us-ashburn-1 | `iad` | `iad.ocir.io/...` | 通過 |
+   | us-chicago-1 | `ord` | `ord.ocir.io/...` | 通過 |
+   | ap-seoul-1（対応外） | `icn` | —(ガードで停止) | **エラー** |
 
-   ※ `region_key` の実値は大文字（`KIX`/`NRT`）で返るため `lower()` 必須（実測）。
-3. **空→非作成→ルート無しの経路**: 既存実装で担保
-   （`modules/functions/main.tf` の `count = var.router_image == "" ? 0 : 1`、
-   `infra/orm/main.tf` の `fn_routes = router_function_id == "" ? {} : {...}`、
-   api-gateway の catch-all `/api/{p*}` → CI）。specs/02-infra §api-gateway
-   「空ならルート生成しない」の既定義挙動。
+   ※ `region_key` の実値は大文字（`KIX` 等）で返るため `lower()` 必須（実測）。
+3. **ガードの実動作（infra/orm 本体スタックの `terraform plan`・実テナンシ）**:
+   - `region=ap-seoul-1` → `Resource precondition failed` が発火し、対応4リージョンと
+     ミラー+明示指定の回避策を示すメッセージを plan 時に表示（Issue #55 の「apply 途中で
+     不可解に失敗」を plan 時の明示エラーへ置換）。
+   - `region=ap-tokyo-1` → ガードエラーなし、`terraform_data.region_guard` 計画済み。
 
 ## 制約（未実施）
 
@@ -35,5 +41,6 @@ API Gateway の catch-all で CI にフォールバック）。明示指定 `fn_
   CI / router / API GW deployment が plan から脱落する。CLI 実測で
   `oci os ns get --compartment-id <ocid>` も同エラー（引数なしは成功）。
   Resource Manager（デプロイヤ権限）では従来から成功している（docs/verification/orm-jetuse-apply.md）。
-- **ap-tokyo-1 での実 apply**: RM 経由のワンクリック実行が必要（人間ゲート）。
-  Issue #55 の失敗点 `CreateFunction` 自体が生成されなくなるため、同エラーの再発はない。
+- **release.yml の4リージョン push**: merge 後の Actions 実行で確認（事前に nrt/iad/ord への
+  OCIR repo 作成が必要 — ADR-0017「前提となる人間側の作業」）。
+- **東京/アシュバーン/シカゴでの RM 実 apply**: 人間ゲート。イメージ push 完了後に実施可能。
