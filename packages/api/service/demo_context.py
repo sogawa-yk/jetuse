@@ -29,3 +29,14 @@ def require_demo(
     return DemoContext(
         demo_id=demo_id, owner_sub=demo["owner_sub"], namespace=f"demo_{demo_id}"
     )
+
+
+def require_demo_owner(
+    ctx: Annotated[DemoContext, Depends(require_demo)],
+    user: Annotated[AuthContext, Depends(require_user)],
+) -> DemoContext:
+    """書き込み系は所有者のみ。公開デモの非所有者は閲覧・実行(chat/GET)まで
+    (usecases の「公開は取得・実行可、編集・削除は所有者のみ」と同じ規則。SP1-03 REV-002)。"""
+    if ctx.owner_sub != user.subject:
+        raise HTTPException(status_code=404, detail="demo not found")
+    return ctx

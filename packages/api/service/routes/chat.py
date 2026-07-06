@@ -64,6 +64,17 @@ async def chat_stream(  # noqa: ANN202
     user: Annotated[AuthContext, Depends(require_user)],
 ):
     """チャットストリーミング(CHAT-01)。LLMの2系統APIを正規化したSSEを返す。"""
+    return await stream_chat_response(req, user, user.subject)
+
+
+async def stream_chat_response(  # noqa: ANN202
+    req: ChatRequest, user: AuthContext, rag_ns: str
+):
+    """チャットSSE本体(user単位/デモスコープ共有 — SP1-03/specs/17 §5)。
+
+    rag_ns はRAG文書の名前空間キー: user単位ルートは user.subject、デモスコープは
+    DemoContext.namespace。監査・会話・エージェント/MCP解決は実ユーザーのまま。
+    """
     if req.model not in MODELS:
         raise HTTPException(status_code=400, detail=f"unknown model: {req.model}")
 
@@ -134,7 +145,7 @@ async def chat_stream(  # noqa: ANN202
         async def sa_gen():
             yield KEEPALIVE_FRAME
             task = asyncio.create_task(
-                asyncio.to_thread(_rag_gen, user.subject, prompt)
+                asyncio.to_thread(_rag_gen, rag_ns, prompt)
             )
             try:
                 while True:
@@ -147,7 +158,7 @@ async def chat_stream(  # noqa: ANN202
                         yield KEEPALIVE_FRAME  # 初回は索引構築で数分かかりうる
                 yield f"data: {json.dumps({'delta': body}, ensure_ascii=False)}\n\n"
                 if cites:
-                    cites = rag.resolve_citation_filenames(user.subject, cites)
+                    cites = rag.resolve_citation_filenames(rag_ns, cites)
                     yield (
                         f"data: {json.dumps({'citations': cites}, ensure_ascii=False)}\n\n"
                     )
@@ -212,7 +223,7 @@ async def chat_stream(  # noqa: ANN202
     agent_rag_store: str | None = None
     eff_tools = agent_def["enabled_tools"] if agent_def else (req.enabled_tools or [])
     if (req.agent or agent_def) and eff_tools and "rag_search" in eff_tools:
-        agent_rag_store = await asyncio.to_thread(rag.get_store_id, user.subject)
+        agent_rag_store = await asyncio.to_thread(rag.get_store_id, rag_ns)
 
     if agent_def and agent_def["mcp_server_ids"] and agent_def["mine"]:
         # 共有エージェントのMCP(所有者の私有資源)は実行ユーザーには適用しない(specs/11)
@@ -230,7 +241,7 @@ async def chat_stream(  # noqa: ANN202
             raise HTTPException(
                 status_code=400, detail="rag requires a responses-family model"
             )
-        rag_store = await asyncio.to_thread(rag.get_store_id, user.subject)
+        rag_store = await asyncio.to_thread(rag.get_store_id, rag_ns)
         if not rag_store:
             raise HTTPException(status_code=400, detail="no documents uploaded")
 
@@ -368,7 +379,7 @@ async def chat_stream(  # noqa: ANN202
                     usage = ev["usage"]
                 if "citations" in ev:  # 日本語ファイル名の文字化け対策(元名へ解決)
                     ev["citations"] = rag.resolve_citation_filenames(
-                        user.subject, ev["citations"]
+                        rag_ns, ev["citations"]
                     )
                 if cancel.is_set() or not put_event(ev):
                     cancelled = True
