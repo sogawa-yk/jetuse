@@ -15,10 +15,14 @@ from service.main import app
 client = TestClient(app)
 
 DEMOS = {
-    "d1": {"id": "d1", "owner_sub": "dev-user", "name": "mine", "visibility": "private"},
-    "d2": {"id": "d2", "owner_sub": "dev-user", "name": "mine2", "visibility": "private"},
-    "theirs": {"id": "theirs", "owner_sub": "user-a", "name": "A's", "visibility": "private"},
-    "pub": {"id": "pub", "owner_sub": "user-a", "name": "shared", "visibility": "public"},
+    "d1": {"id": "d1", "owner_sub": "dev-user", "name": "mine", "visibility": "private",
+           "status": "ready"},
+    "d2": {"id": "d2", "owner_sub": "dev-user", "name": "mine2", "visibility": "private",
+           "status": "ready"},
+    "theirs": {"id": "theirs", "owner_sub": "user-a", "name": "A's", "visibility": "private",
+               "status": "ready"},
+    "pub": {"id": "pub", "owner_sub": "user-a", "name": "shared", "visibility": "public",
+            "status": "ready"},
 }
 
 CHAT_BODY = {"model": DEFAULT_MODEL, "messages": [{"role": "user", "content": "hi"}]}
@@ -183,7 +187,7 @@ def test_public_demo_non_owner_can_read_and_chat_but_not_write(monkeypatch):
 def test_owner_can_write_own_public_demo(monkeypatch):
     monkeypatch.setitem(DEMOS, "mypub",
                         {"id": "mypub", "owner_sub": "dev-user", "name": "p",
-                         "visibility": "public"})
+                         "visibility": "public", "status": "ready"})
     assert client.post(
         "/api/demos/mypub/rag/files", files={"file": ("a.md", b"x", "text/markdown")}
     ).status_code == 200

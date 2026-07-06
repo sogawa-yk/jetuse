@@ -124,6 +124,7 @@ def create_app() -> FastAPI:
     app.include_router(usecases.router)
     app.include_router(capabilities.router)
     app.include_router(demos.router)
+    app.include_router(demos.crud_router)  # Demo CRUD(SP2-01 / specs/18 §2)
 
     return app
 
