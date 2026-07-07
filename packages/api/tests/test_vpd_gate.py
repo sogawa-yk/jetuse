@@ -55,23 +55,129 @@ def _reapply_with(monkeypatch, vpd_enabled):
     return cur.ddls
 
 
-def test_reapply_creates_lock_package_even_when_vpd_disabled(monkeypatch):
-    """review-13 B001: JETUSE_LOCK cover package は VPD 無効でも作る(Public でも demo 排他リースが
-    必要)。VPD 固有の context/policy/setter GRANT は vpd_enabled のときだけ。"""
+def test_reapply_noop_when_vpd_disabled(monkeypatch):
+    """Gate 2 最小案: JETUSE_LOCK は ADMIN provision へ移行。reapply は VPD 無効なら何もしない
+    (app スキーマに lock を作らない — DB を触らず即 return)。"""
     ddls = _reapply_with(monkeypatch, False)
-    joined = "\n".join(ddls)
-    assert any("PACKAGE JETUSE_LOCK" in d for d in ddls)       # lock は作る
-    assert any("PACKAGE BODY JETUSE_LOCK" in d for d in ddls)
-    assert "CREATE OR REPLACE CONTEXT" not in joined           # VPD 固有は作らない
-    assert "DBMS_RLS" not in joined and "GRANT EXECUTE" not in joined
+    assert ddls == []
 
 
-def test_reapply_creates_vpd_and_lock_when_enabled(monkeypatch):
+def test_reapply_creates_vpd_only_when_enabled(monkeypatch):
+    """VPD 有効時は VPD 固有定義 + setter GRANT のみ。lock はもう reapply では作らない。"""
     ddls = _reapply_with(monkeypatch, True)
     joined = "\n".join(ddls)
-    assert any("PACKAGE JETUSE_LOCK" in d for d in ddls)       # lock も
-    assert "CREATE OR REPLACE CONTEXT" in joined               # VPD context も
+    assert "CREATE OR REPLACE CONTEXT" in joined               # VPD context
     assert "GRANT EXECUTE" in joined                            # query user への setter GRANT
+    assert "PACKAGE JETUSE_LOCK" not in joined                 # lock は ADMIN provision へ移行
+
+
+class _ProvCur:
+    def __init__(self, existing_pkg=0, body_status="VALID", direct_grant=0):
+        self.ddls: list[str] = []
+        # 順に: SELECT USER→owner / body status / 既存 app package 数 / (移行時のみ)direct grant 数
+        self._fetch = [("ADMIN",), (body_status,), (existing_pkg,), (direct_grant,)]
+
+    def execute(self, sql, **kw):
+        self.ddls.append(sql)
+
+    def fetchone(self):
+        return self._fetch.pop(0)
+
+
+def test_provision_lock_for_admin_owned_minimal():
+    """Gate 2 最小案: ADMIN 所有 JETUSE_LOCK(ALLOCATE_UNIQUE/REQUEST/RELEASE のみ)+ app への
+    EXECUTE/synonym。app へ DBMS_LOCK 直付けはしない。"""
+    cur = _ProvCur(existing_pkg=0)
+    owner = vpd.provision_lock_for(cur, "APP_X")
+    joined = "\n".join(cur.ddls)
+    assert owner == "ADMIN"
+    assert "PACKAGE JETUSE_LOCK" in joined and "PACKAGE BODY JETUSE_LOCK" in joined
+    assert "ALLOCATE_UNIQUE" in joined                          # 最小 3 機能
+    assert "GRANT EXECUTE ON ADMIN.JETUSE_LOCK TO APP_X" in joined
+    assert "CREATE OR REPLACE SYNONYM APP_X.JETUSE_LOCK FOR ADMIN.JETUSE_LOCK" in joined
+    assert "GRANT EXECUTE ON DBMS_LOCK" not in joined           # app へ直付けしない
+    assert "DROP PACKAGE" not in joined                         # 既存 package なし → drop 不要
+    assert "REVOKE" not in joined                               # 旧 direct grant なし → revoke 不要
+
+
+def test_provision_lock_for_drops_shadowing_app_package():
+    """保守ウィンドウ(app_offline=True)なら旧 app 所有 package を落として synonym 化する。"""
+    cur = _ProvCur(existing_pkg=1)
+    vpd.provision_lock_for(cur, "APP_X", app_offline=True)
+    assert any("DROP PACKAGE APP_X.JETUSE_LOCK" in d for d in cur.ddls)
+
+
+def test_provision_lock_for_refuses_live_migration_by_default():
+    """旧 app 所有 package があり app_offline 未指定なら fail-closed で中断(numeric/named ロックは
+    相互排他せず live 移行は排他を破る — review-17 blocker)。旧 package は落とさない。"""
+    cur = _ProvCur(existing_pkg=1)
+    with pytest.raises(RuntimeError, match="app_offline"):
+        vpd.provision_lock_for(cur, "APP_X")
+    assert not any("DROP PACKAGE" in d for d in cur.ddls)
+    assert not any("SYNONYM" in d for d in cur.ddls)
+
+
+def test_provision_lock_for_rejects_bad_identifier():
+    """app_schema を DDL へ interpolate する前に識別子検証(注入防止 — review-17 major)。"""
+    cur = _ProvCur()
+    with pytest.raises(ValueError):
+        vpd.provision_lock_for(cur, "APP_X; DROP USER VICTIM --")
+    assert cur.ddls == []  # 検証前に DDL を1つも発行しない
+
+
+class _AvailConn:
+    def __init__(self, counts):
+        self._counts = list(counts)  # 各 execute→fetchone で返す COUNT を順に
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def cursor(self):
+        return self
+
+    def execute(self, sql, **kw):
+        pass
+
+    def fetchone(self):
+        return (self._counts.pop(0),)
+
+
+def test_lock_available_true_when_synonym_present(monkeypatch):
+    monkeypatch.setattr(vpd, "connect", lambda: _AvailConn([1]))  # synonym あり → 即 True
+    assert vpd.lock_available() is True
+
+
+def test_lock_available_false_when_absent(monkeypatch):
+    """synonym も package も無い(Gate 2 provision 未実行)= 起動時に検知できる。"""
+    monkeypatch.setattr(vpd, "connect", lambda: _AvailConn([0, 0]))
+    assert vpd.lock_available() is False
+
+
+def test_provision_lock_for_revokes_stale_direct_dbms_lock_on_migration():
+    """移行時(旧 package あり + app_offline)に旧 SYS.DBMS_LOCK grant を REVOKE(least-priv)。"""
+    cur = _ProvCur(existing_pkg=1, direct_grant=1)
+    vpd.provision_lock_for(cur, "APP_X", app_offline=True)
+    assert any("REVOKE EXECUTE ON SYS.DBMS_LOCK FROM APP_X" in d for d in cur.ddls)
+
+
+def test_provision_lock_for_fresh_keeps_existing_grants():
+    """fresh 構成(旧 package なし)は既存 grant を一切触らない — REVOKE しない(review-18 major)。"""
+    cur = _ProvCur(existing_pkg=0, direct_grant=1)
+    vpd.provision_lock_for(cur, "APP_X")
+    assert not any("REVOKE" in d for d in cur.ddls)
+
+
+def test_provision_lock_for_aborts_if_admin_body_invalid():
+    """ADMIN body が不正コンパイル(DBMS_LOCK 権限不足)なら旧 app package を落とす前に中断
+    (review-16 major — 稼働リースを壊さない)。"""
+    cur = _ProvCur(existing_pkg=1, body_status="INVALID")
+    with pytest.raises(RuntimeError):
+        vpd.provision_lock_for(cur, "APP_X")
+    assert not any("DROP PACKAGE" in d for d in cur.ddls)       # 旧 package を保持
+    assert not any("SYNONYM" in d for d in cur.ddls)
 
 
 def test_integrity_gate_fails_closed_until_verified(monkeypatch):

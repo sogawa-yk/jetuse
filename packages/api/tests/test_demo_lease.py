@@ -28,10 +28,9 @@ class FakeCursor:
     def execute(self, sql, **binds):
         self.sql = sql
 
-    def fetchone(self):
-        return (12345,)  # ORA_HASH の決定値
-
     def callfunc(self, name, rtype, args):
+        if name == "jetuse_lock.allocate_unique":
+            return "000000000000AB12"  # ALLOCATE_UNIQUE のハンドル(決定値)
         if name == "jetuse_lock.request":
             rc = self.request_rcs.pop(0)
             if isinstance(rc, Exception):
