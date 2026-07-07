@@ -27,11 +27,11 @@ locals {
 resource "oci_objectstorage_object" "spa" {
   for_each = local.spa_files
 
-  namespace    = module.spa.namespace
-  bucket       = module.spa.spa_bucket
-  object       = each.value
-  source       = "${local.spa_dist_dir}/${each.value}"
-  content_type = lookup(local.mime, element(reverse(split(".", each.value)), 0), "application/octet-stream")
+  namespace     = module.spa.namespace
+  bucket        = module.spa.spa_bucket
+  object        = each.value
+  source        = "${local.spa_dist_dir}/${each.value}"
+  content_type  = lookup(local.mime, element(reverse(split(".", each.value)), 0), "application/octet-stream")
   cache_control = startswith(each.value, "assets/") ? "public, max-age=31536000, immutable" : "no-cache"
 }
 
