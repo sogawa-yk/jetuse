@@ -19,6 +19,9 @@ variableGroups:
     variables:
       - prefix
       - enable_auth
+      - oidc_audience
+      - oidc_issuer
+      - oidc_jwks_url
       - demo_email
       - adb_admin_password
   - title: "IAM設定（実行ユーザーの権限に応じて選択）"
@@ -61,6 +64,24 @@ variables:
     title: "OIDC認証を有効化"
     description: "Identity Domain + OIDCアプリ + デモユーザーを作成し、ログインを必須にする"
     default: true
+
+  oidc_audience:
+    type: string
+    title: "OIDC audience"
+    description: "APIが検証するaudience（アプリ登録のprimary audience、または実トークンのaud実測値）。認証有効時は必須（未設定はplanで停止 — SP2-04 fail-closed）"
+    visible: enable_auth
+
+  oidc_issuer:
+    type: string
+    title: "OIDC issuer"
+    description: "トークンのiss（discoveryのissuerをそのまま。世代で異なるため固定既定なし）。認証有効時は必須（未設定はplanで停止）"
+    visible: enable_auth
+
+  oidc_jwks_url:
+    type: string
+    title: "OIDC JWKS URL（任意）"
+    description: "discoveryのjwks_uri。空なら本スタック作成ドメインの /admin/v1/SigningCert/jwk を使用"
+    visible: enable_auth
 
   enable_dynamic_group:
     type: boolean

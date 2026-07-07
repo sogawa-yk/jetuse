@@ -44,6 +44,19 @@ resource "random_password" "demo" {
   override_special = "#_-"
 }
 
+# SP2-04 fail-closed(specs/18 §5.1): AUTH_REQUIRED=true の API は issuer/audience/JWKS の3点必須
+# (不備は全リクエスト500)。空のまま配備してランタイムで死ぬより plan 時に止める。
+# 変数間 validation は TF>=1.9 のため、required_version 1.5 互換の precondition で強制(review-2 M001)。
+resource "terraform_data" "oidc_config_guard" {
+  lifecycle {
+    precondition {
+      # 空白のみも未設定扱い(auth.py 側の strip 判定と同一契約 — review-3 m001)
+      condition     = !var.enable_auth || (trimspace(var.oidc_audience) != "" && trimspace(var.oidc_issuer) != "")
+      error_message = "enable_auth=true には oidc_audience(アプリ登録の primary audience か実トークンの aud 実測値)と oidc_issuer が必須です。認証を使わない場合は enable_auth=false。"
+    }
+  }
+}
+
 # IAMもアプリ本体と同じResource Manager stackで管理する。
 # 実行者の権限と既存IAMに応じて、Dynamic Groupとruntime policyを個別に切り替える。
 module "iam" {
