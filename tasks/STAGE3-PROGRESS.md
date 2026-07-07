@@ -21,7 +21,7 @@ status: `todo` | `in_progress` | `blocked` | `done`
 | 順 | タスク | 依存 | 人間ゲート | status |
 |---|---|---|---|---|
 | 0 | [SP3-00 specs/19 起草（SP3 詳細仕様）+ キュー肉付け](SP3-00.md) | — | **spec 承認**（adr_approval 相当） | done |
-| 1 | [SP3-01 ビルダー・パイプライン API 骨格 + ヒアリング(NL)](SP3-01.md) | SP3-00 | コミット | todo |
+| 1 | [SP3-01 ビルダー・パイプライン API 骨格 + ヒアリング(NL)](SP3-01.md) | SP3-00 | コミット | in_progress |
 | 2 | [SP3-02 デモ設計（能力カタログ→デモプラン生成）](SP3-02.md) | SP3-01 | コミット | todo |
 | 3 | [SP3-03 フロント生成（OpenCode + OCI モデル→静的SPAバンドル）+ デモ配信](SP3-03.md) | SP3-02 | **adr_approval**（OpenCode 統合 ADR）+ コミット | todo |
 | 4 | [SP3-04 サンプルデータ生成 + 箱への投入（demo_<id>）](SP3-04.md) | SP3-02 | コミット | todo |
