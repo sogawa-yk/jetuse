@@ -2,12 +2,13 @@
 
 import pytest
 
-from jetuse_core import nl2sql, vpd
+from jetuse_core import nl2sql, owner_keys, vpd
 
 
 @pytest.fixture(autouse=True)
-def reset_gate():
+def reset_gate(monkeypatch):
     vpd._integrity_ok = False
+    monkeypatch.setattr(owner_keys, "owner_key_gate", lambda: None)  # 移行ゲートは別テスト
     yield
     vpd._integrity_ok = False
 
@@ -297,5 +298,5 @@ def test_execute_readonly_without_owner_skips_context(monkeypatch):
     monkeypatch.setattr(vpd, "verify_integrity", lambda: [])
     conn = _Conn()
     monkeypatch.setattr(nl2sql, "_get_query_pool", lambda: _Pool(conn))
-    nl2sql.execute_readonly("SELECT 1 FROM dual")
+    nl2sql.execute_readonly("SELECT 1 FROM dual", None)  # owner なしモード(層2は全 DS 拒否)
     assert all(c[0] != "set_owner" for c in conn.calls)

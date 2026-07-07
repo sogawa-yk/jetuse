@@ -21,7 +21,7 @@ from jetuse_core import audit, nl2sql, tts
 from jetuse_core import presets as preset_repo
 from jetuse_core.auth import verify_token
 from jetuse_core.logging import configure
-from jetuse_core.owner_keys import user_owner_key
+from jetuse_core.owner_keys import OwnerKeyPreflightError, user_owner_key
 from jetuse_core.settings import get_settings
 from jetuse_core.vpd import DatasetsSecurityError
 
@@ -65,6 +65,13 @@ def handler(ctx, data: io.BytesIO):
     except DatasetsSecurityError:
         # VPD 完全性ゲート未達は fail-closed(FastAPI ルートと同じ 503。500 にしない)
         return _error(ctx, 503, "datasets security boundary incomplete (fail-closed)")
+    except OwnerKeyPreflightError:
+        # owner キー移行が未完(予約接頭辞行が未分類)= FastAPI ルートと同じ 503(500 にしない
+        # — execute_readonly が共有チョークポイントで送出。review-12 M002)
+        return _error(ctx, 503, "owner key migration pending (fail-closed)")
+    except nl2sql.SqlBoundaryError as e:
+        # 層2 SQL ゲートの越境拒否(specs/18 §4.3 — FastAPI ルートと同じ 403)
+        return _error(ctx, 403, str(e))
     except nl2sql.SqlRejectedError as e:
         return _error(ctx, 400, str(e))
     except oracledb.Error as e:

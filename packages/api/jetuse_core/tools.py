@@ -33,12 +33,17 @@ def get_current_time_handler(args: dict) -> str:
 
 
 def query_database_handler(args: dict) -> str:
-    """NL2SQL(SQL Search)→読取専用実行(SQL-02のガード再利用)。生成に30秒程度"""
+    """NL2SQL(SQL Search)→読取専用実行(SQL-02のガード再利用)。生成に30秒程度。
+
+    owner なしモード(specs/18 §4.3 — invoke 契約に owner が無い agent 経路):
+    層2ゲートが JETUSE_DS_/辞書/パッケージを全拒否し、SH 等の共有スキーマ照会という
+    本来用途だけを通す。owner_key の invoke 伝播は SP3 課題。
+    """
     from . import nl2sql
 
     question = args["question"]
     sql = nl2sql.generate_sql(question)
-    result = nl2sql.execute_readonly(sql)
+    result = nl2sql.execute_readonly(sql, None)
     return json.dumps({
         "sql": sql,
         "columns": result["columns"],
