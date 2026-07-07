@@ -157,9 +157,19 @@ def post_migrate_maintenance() -> None:
 
     try:
         vpd.reapply_definitions()
-        logger.info("vpd/lock approved definitions reapplied")
+        logger.info("vpd definitions reapplied")
     except Exception:  # noqa: BLE001
         logger.exception("vpd definitions reapply 失敗(dbchat/datasets は 503 のまま)")
+    # 排他リース基盤(JETUSE_LOCK)は ADMIN 所有の最小カバーパッケージ(Gate 2 = ops/setup-vpd.py)。
+    # アプリ資格情報では作れない。未構成なら起動時に明示ログ(demo 経路は 503 に留まる=fail-closed)。
+    try:
+        if vpd.lock_available():
+            logger.info("demo lease infra ready (JETUSE_LOCK resolvable)")
+        else:
+            logger.error("demo lease infra 未構成 — ADMIN で ops/setup-vpd.py 実行(Gate 2)。"
+                         "JETUSE_LOCK 不在のため demo 作成/更新/削除は 503 に留まる")
+    except Exception:  # noqa: BLE001
+        logger.exception("lease infra 可用性チェック失敗")
     try:
         problems = vpd.verify_integrity()
         if problems:

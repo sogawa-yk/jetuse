@@ -18,6 +18,7 @@
 """
 
 import logging
+import re
 
 from . import ddl_verify
 from .db import connect
@@ -29,6 +30,16 @@ POLICY_NAME = "JETUSE_DS_POLICY"
 CTX_PACKAGE = "JETUSE_VPD_CTX"
 POLICY_FUNCTION = "JETUSE_VPD_POLICY"
 LOCK_PACKAGE = "JETUSE_LOCK"
+
+_IDENT_RE = re.compile(r"[A-Z][A-Z0-9_$#]*\Z")
+
+
+def _assert_ident(name: str) -> str:
+    """未引用 Oracle 識別子として正規化・検証(DDL へ interpolate する前の注入防止)。"""
+    up = (name or "").strip().upper()
+    if not (0 < len(up) <= 128 and _IDENT_RE.match(up)):
+        raise ValueError(f"invalid Oracle identifier: {name!r}")
+    return up
 
 _integrity_ok = False
 
@@ -50,29 +61,115 @@ def _schema() -> str:
 
 
 def lock_definitions() -> list[str]:
-    """排他リース cover package(specs/18 §3.2.1 — REQUEST/RELEASE の最小機能のみ晒す)。
+    """排他リース cover package(specs/18 §3.2.1 — ALLOCATE_UNIQUE/REQUEST/RELEASE のみ晒す最小案）。
 
-    VPD の有無に依らず demo 操作の直列化に必要(Internal/Public 双方)。DBMS_LOCK EXECUTE の
-    付与が前提(人間ゲート)。付与前は package body が不正コンパイルし、lease acquire が
-    LeaseUnavailableError=503 で fail-closed(review-13 B001)。
+    Gate 2 最小カバーパッケージ案(人間承認 2026-07-07): ADMIN 所有(definer's rights)で作成し、
+    アプリスキーマには DBMS_LOCK 直付けでなく EXECUTE + private synonym のみ付与する
+    (provision_lock_for)。ALLOCATE_UNIQUE でロック名→一意ハンドルを取るため ORA_HASH 数値 ID の
+    衝突が無い。付与前は synonym 解決不能で lease acquire が LeaseUnavailableError=503。
     """
     return [
         f"""CREATE OR REPLACE PACKAGE {LOCK_PACKAGE} AS
-  FUNCTION request(p_id IN INTEGER, p_timeout IN INTEGER) RETURN INTEGER;
-  FUNCTION release(p_id IN INTEGER) RETURN INTEGER;
+  FUNCTION allocate_unique(p_name IN VARCHAR2) RETURN VARCHAR2;
+  FUNCTION request(p_handle IN VARCHAR2, p_timeout IN INTEGER) RETURN INTEGER;
+  FUNCTION release(p_handle IN VARCHAR2) RETURN INTEGER;
 END {LOCK_PACKAGE};""",
         f"""CREATE OR REPLACE PACKAGE BODY {LOCK_PACKAGE} AS
-  FUNCTION request(p_id IN INTEGER, p_timeout IN INTEGER) RETURN INTEGER IS
+  FUNCTION allocate_unique(p_name IN VARCHAR2) RETURN VARCHAR2 IS
+    v_handle VARCHAR2(128);
   BEGIN
-    RETURN DBMS_LOCK.REQUEST(id => p_id, lockmode => DBMS_LOCK.X_MODE,
+    DBMS_LOCK.ALLOCATE_UNIQUE(lockname => p_name, lockhandle => v_handle);
+    RETURN v_handle;
+  END allocate_unique;
+  FUNCTION request(p_handle IN VARCHAR2, p_timeout IN INTEGER) RETURN INTEGER IS
+  BEGIN
+    RETURN DBMS_LOCK.REQUEST(lockhandle => p_handle, lockmode => DBMS_LOCK.X_MODE,
                              timeout => p_timeout, release_on_commit => FALSE);
   END request;
-  FUNCTION release(p_id IN INTEGER) RETURN INTEGER IS
+  FUNCTION release(p_handle IN VARCHAR2) RETURN INTEGER IS
   BEGIN
-    RETURN DBMS_LOCK.RELEASE(id => p_id);
+    RETURN DBMS_LOCK.RELEASE(lockhandle => p_handle);
   END release;
 END {LOCK_PACKAGE};""",
     ]
+
+
+def provision_lock_for(admin_cur, app_schema: str, *, app_offline: bool = False) -> str:
+    """ADMIN 接続で最小カバーパッケージ(ADMIN 所有)を作り、app へ EXECUTE + synonym を付与する。
+
+    Gate 2 最小案の実体(人間承認 2026-07-07)。app_schema は DBMS_LOCK を直接 EXECUTE しない。
+    新規スキーマ(旧 app 所有 package なし)は無条件に構成する。
+
+    **旧デプロイからの移行は保守ウィンドウ必須(app_offline=True)。** 旧実装の numeric ロック
+    (ORA_HASH+DBMS_LOCK.REQUEST(id=>...))と新実装の named ロック(ALLOCATE_UNIQUE handle)は
+    別ロック空間で相互排他しない。稼働中に in-place 移行すると旧ワーカーと新ワーカーが同一 demo を
+    同時取得し得る(排他崩壊 — codex review-17 blocker)。よって旧 app 所有 JETUSE_LOCK package が
+    在るときは、operator がアプリを停止/ドレインしたと明示(app_offline=True)しない限り fail-closed
+    で中断する。移行手順: ①全ワーカー停止 → ②app_offline=True で provision → ③新コードで再起動。
+    移行時の処理(review-16 major も保持):
+    - ADMIN package body が VALID(= ADMIN が DBMS_LOCK を持つ)ことを確認してから旧 app package を
+      落とす。不正コンパイルなら中断して既存の稼働リースを壊さない。
+    - 旧 app 所有 JETUSE_LOCK package は synonym と名前衝突するので落とす。
+    - 旧 direct DBMS_LOCK grant が app に残っていれば REVOKE(最小権限へ収束)。
+    返り値 = cover package の所有スキーマ(通常 ADMIN)。
+    """
+    app_schema = _assert_ident(app_schema)  # DDL interpolate 前の注入防止(review-17 major)
+    admin_cur.execute("SELECT USER FROM dual")
+    owner = _assert_ident(admin_cur.fetchone()[0])
+    for ddl in lock_definitions():
+        admin_cur.execute(ddl)  # owner.JETUSE_LOCK(definer's rights)
+    # 旧 app package を落とす前に ADMIN 側 body が VALID か確認(ADMIN が DBMS_LOCK 不足なら不正)。
+    admin_cur.execute(
+        "SELECT status FROM dba_objects WHERE owner = :o AND object_name = :n "
+        "AND object_type = 'PACKAGE BODY'", o=owner, n=LOCK_PACKAGE)
+    body = admin_cur.fetchone()
+    if not body or body[0] != "VALID":
+        raise RuntimeError(
+            f"{owner}.{LOCK_PACKAGE} body not VALID ({body}) — ADMIN の DBMS_LOCK 権限を確認。"
+            f"旧 app package を保持したまま中断する")
+    admin_cur.execute(f"GRANT EXECUTE ON {owner}.{LOCK_PACKAGE} TO {app_schema}")
+    admin_cur.execute(
+        "SELECT COUNT(*) FROM dba_objects WHERE owner = :o AND object_name = :n "
+        "AND object_type LIKE 'PACKAGE%'", o=app_schema, n=LOCK_PACKAGE)
+    migrating = admin_cur.fetchone()[0] > 0
+    if migrating:
+        # 旧 numeric ロックと新 named ロックは相互排他しない。稼働中の移行は排他を破るので、
+        # app が停止/ドレイン済みだと operator が明示しない限り中断する(fail-closed)。
+        if not app_offline:
+            raise RuntimeError(
+                f"{app_schema} に旧 app 所有 {LOCK_PACKAGE} package が存在。旧 numeric ロックと新 "
+                f"named ロックは相互排他しないため live 移行は排他を破る。アプリを停止/ドレインし "
+                f"app_offline=True で再実行すること(保守ウィンドウ必須 — review-17 blocker)")
+        admin_cur.execute(f"DROP PACKAGE {app_schema}.{LOCK_PACKAGE}")
+    admin_cur.execute(
+        f"CREATE OR REPLACE SYNONYM {app_schema}.{LOCK_PACKAGE} FOR {owner}.{LOCK_PACKAGE}")
+    if migrating:
+        # 旧 SYS.DBMS_LOCK direct grant は移行時のみ REVOKE(least-privilege へ収束)。fresh 構成では
+        # 既存 grant を一切触らない(他用途の grant を巻き込まない — review-18 major)。
+        admin_cur.execute(
+            "SELECT COUNT(*) FROM dba_tab_privs WHERE grantee = :g AND owner = 'SYS' "
+            "AND table_name = 'DBMS_LOCK' AND privilege = 'EXECUTE'", g=app_schema)
+        if admin_cur.fetchone()[0]:
+            admin_cur.execute(f"REVOKE EXECUTE ON SYS.DBMS_LOCK FROM {app_schema}")
+    return owner
+
+
+def lock_available() -> bool:
+    """アプリ資格情報で JETUSE_LOCK(synonym→ADMIN package もしくは同名 package)が解決可能か。
+
+    起動時の deploy 誤設定可視化用(Gate 2 provision 未実行だと demo 経路が 503 に留まる)。
+    """
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM all_synonyms WHERE synonym_name = :n "
+            "AND owner IN (USER, 'PUBLIC')", n=LOCK_PACKAGE)
+        if cur.fetchone()[0]:
+            return True
+        cur.execute(
+            "SELECT COUNT(*) FROM all_objects WHERE object_name = :n "
+            "AND object_type LIKE 'PACKAGE%'", n=LOCK_PACKAGE)
+        return cur.fetchone()[0] > 0
 
 
 def vpd_definitions() -> list[str]:
@@ -117,24 +214,25 @@ END;""",
 
 
 def approved_definitions() -> list[str]:
-    """人間承認の対象定義(APPROVAL-REQUEST.md に添付する正本)= 排他リース + VPD。"""
+    """人間承認の対象定義(APPROVAL-REQUEST.md に添付する正本)= 排他リース cover package + VPD。"""
     return lock_definitions() + vpd_definitions()
 
 
 def reapply_definitions() -> None:
-    """承認済み定義の冪等再適用。JETUSE_LOCK cover package は VPD の有無に依らず作る(排他リースは
-    Internal/Public 双方の demo 操作で必要 — codex review-13 B001。VPD 無効デプロイでも DBMS_LOCK を
-    人間が付与すれば demo が 503 にならない)。VPD 固有定義と query user への setter EXECUTE は
-    vpd_enabled のときだけ。権限が無ければ失敗し、lease/integrity ゲートが fail-closed に落とす。"""
+    """VPD 固有定義の冪等再適用(vpd_enabled のときだけ)。
+
+    JETUSE_LOCK cover package は Gate 2 最小案(ADMIN 所有 + app へ synonym/EXECUTE)へ移行したため
+    ここでは作らない — app は ADMIN 所有物を作れず DBMS_LOCK 直付けも避けるため
+    (provision_lock_for が ADMIN セットアップで用意)。VPD 無効(Public/既定)では no-op。
+    権限が無ければ失敗し、integrity ゲートが fail-closed に落とす。"""
     s = get_settings()
+    if not s.vpd_enabled:
+        return
     with connect() as conn:
         cur = conn.cursor()
-        for ddl in lock_definitions():
+        for ddl in vpd_definitions():
             cur.execute(ddl)
-        if s.vpd_enabled:
-            for ddl in vpd_definitions():
-                cur.execute(ddl)
-            cur.execute(f"GRANT EXECUTE ON {CTX_PACKAGE} TO {s.adb_query_user}")
+        cur.execute(f"GRANT EXECUTE ON {CTX_PACKAGE} TO {s.adb_query_user}")
         conn.commit()
 
 

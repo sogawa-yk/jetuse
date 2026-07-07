@@ -1,8 +1,9 @@
-"""demo 単位の排他リース(specs/18 §3.2.1 — 第一案 DBMS_LOCK cover package)。
+"""demo 単位の排他リース(specs/18 §3.2.1 — DBMS_LOCK cover package・Gate 2 最小案)。
 
-- 専用 DB セッションで JETUSE_LOCK.REQUEST(ORA_HASH(demo_id) ベースのロック ID, X モード)を
+- 専用 DB セッションで JETUSE_LOCK.ALLOCATE_UNIQUE(demo 名)→一意ハンドル→REQUEST(X モード)を
   取得して保持する。セッションスコープのため deleting 遷移の commit を跨いで保持できる
   (SELECT FOR UPDATE では不可 — 実機確認済み: runs/2026-07-06T1113_SP2-02/e2e/feasibility.md)。
+  ALLOCATE_UNIQUE は同名→同ハンドルを全プロセスで保証するため ORA_HASH 数値 ID の衝突が無い。
 - リース専用の小プール(既存作業プール〔最大4〕と分離)。上限到達は 503。
 - DBMS_LOCK.REQUEST の timeout は「秒」、リース待ちを跨ぐ oracledb call_timeout は
   「ミリ秒」(リース専用セッションにのみ設定し、返却時に既定へ戻す)。
@@ -15,8 +16,9 @@
 - DBMS_LOCK / cover package が使えない環境では LeaseUnavailableError(ルート側 503)
   = fail-closed(specs/18 §3.2.1 — 弱い代替で残骸リスクを黙認しない)。
 
-cover package(JETUSE_APP 所有・definer's rights)の定義は vpd.APPROVED_LOCK_PACKAGE。
-EXECUTE ON DBMS_LOCK の付与は人間ゲート(runs/<run-id>/e2e/APPROVAL-REQUEST.md)。
+cover package は ADMIN 所有(definer's rights)= vpd.lock_definitions()。アプリスキーマへは
+EXECUTE + private synonym のみ(vpd.provision_lock_for)で DBMS_LOCK 直付けはしない。ADMIN
+セットアップ(provision)は人間ゲート(runs/<run-id>/e2e/APPROVAL-REQUEST.md → APPROVAL.md)。
 """
 
 import contextlib
@@ -34,7 +36,6 @@ logger = logging.getLogger("jetuse.demo_lease")
 LOCK_TIMEOUT_S = 300           # DBMS_LOCK.REQUEST timeout(秒)
 LEASE_CALL_TIMEOUT_MS = 310_000  # リース待ちを跨ぐ DB 呼び出し上限(ミリ秒)
 LEASE_POOL_MAX = 4             # 同時 demo mutation の想定上限(超過は 503)
-LOCK_ID_RANGE = 1073741823     # ORA_HASH の上限(DBMS_LOCK のユーザーロック有効範囲内)
 
 _lease_pool: oracledb.ConnectionPool | None = None
 _pool_lock = threading.Lock()
@@ -90,10 +91,9 @@ def _get_lease_pool() -> oracledb.ConnectionPool:
     return _lease_pool
 
 
-def _lock_id_for(cur, demo_id: str) -> int:
-    """有効範囲内の決定値(サーバ側 ORA_HASH — 全プロセスで同一)。"""
-    cur.execute("SELECT ORA_HASH(:d, :m) FROM dual", d=demo_id, m=LOCK_ID_RANGE)
-    return int(cur.fetchone()[0])
+def _lock_name_for(demo_id: str) -> str:
+    """demo 名 → ALLOCATE_UNIQUE のロック名(全プロセスで同名 → 同ハンドル)。"""
+    return "jetuse_demo_" + demo_id
 
 
 @contextlib.contextmanager
@@ -108,14 +108,16 @@ def acquire(demo_id: str, *, timeout_s: int = LOCK_TIMEOUT_S):
         raise LeaseUnavailableError(f"lease pool exhausted or unavailable: {e}") from e
     drop = False
     acquired = False
+    handle = None
     try:
         conn.call_timeout = LEASE_CALL_TIMEOUT_MS
         cur = conn.cursor()
-        lock_id = _lock_id_for(cur, demo_id)
         try:
-            rc = cur.callfunc("jetuse_lock.request", int, [lock_id, timeout_s])
+            handle = cur.callfunc(
+                "jetuse_lock.allocate_unique", str, [_lock_name_for(demo_id)])
+            rc = cur.callfunc("jetuse_lock.request", int, [handle, timeout_s])
         except oracledb.DatabaseError as e:
-            # cover package なし / EXECUTE 未付与 = DBMS_LOCK 不可 → fail-closed(503)
+            # cover package/synonym なし・EXECUTE 未付与 = DBMS_LOCK 不可 → fail-closed(503)
             drop = True
             raise LeaseUnavailableError(
                 f"demo lease infrastructure unavailable (JETUSE_LOCK): {e}"
@@ -141,7 +143,7 @@ def acquire(demo_id: str, *, timeout_s: int = LOCK_TIMEOUT_S):
     finally:
         if acquired:
             try:
-                rc2 = conn.cursor().callfunc("jetuse_lock.release", int, [lock_id])
+                rc2 = conn.cursor().callfunc("jetuse_lock.release", int, [handle])
                 if rc2 != 0:
                     drop = True
                     logger.error("lease RELEASE rc=%s (dropping connection): %s",
