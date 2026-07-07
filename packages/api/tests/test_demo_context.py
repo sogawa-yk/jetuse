@@ -24,9 +24,12 @@ def ctx_route(ctx: Annotated[DemoContext, Depends(require_demo)]):
 client = TestClient(app)
 
 DEMOS = {
-    "d1": {"id": "d1", "owner_sub": "dev-user", "name": "mine", "visibility": "private"},
-    "d2": {"id": "d2", "owner_sub": "other-user", "name": "theirs", "visibility": "private"},
-    "d3": {"id": "d3", "owner_sub": "other-user", "name": "shared", "visibility": "public"},
+    "d1": {"id": "d1", "owner_sub": "dev-user", "name": "mine", "visibility": "private",
+           "status": "ready"},
+    "d2": {"id": "d2", "owner_sub": "other-user", "name": "theirs", "visibility": "private",
+           "status": "ready"},
+    "d3": {"id": "d3", "owner_sub": "other-user", "name": "shared", "visibility": "public",
+           "status": "ready"},
 }
 
 

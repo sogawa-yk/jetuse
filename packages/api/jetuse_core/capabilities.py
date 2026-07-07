@@ -22,6 +22,8 @@ CAPABILITIES: list[dict] = [
             {"path": "/api/chat/stream", "method": "post"},
             {"path": "/api/chat/models", "method": "get"},
             {"path": "/api/demos/{demo_id}/chat", "method": "post"},  # デモスコープ(SP1-03)
+            # デモ会話の作成(SP2-03 / specs/18 §4.2 — 継続は chat に conversation_id)
+            {"path": "/api/demos/{demo_id}/conversations", "method": "post"},
         ],
     },
     {
@@ -58,6 +60,15 @@ CAPABILITIES: list[dict] = [
             {"path": "/api/chat/nl2sql", "method": "post"},
             {"path": "/api/dbchat/execute", "method": "post"},
             {"path": "/api/dbchat/schema", "method": "get"},
+            # デモスコープ(SP2-03 / specs/18 §4.3 — datasets ターゲット固定)
+            {"path": "/api/demos/{demo_id}/dbchat/nl2sql", "method": "post"},
+            {"path": "/api/demos/{demo_id}/dbchat/execute", "method": "post"},
+            {"path": "/api/demos/{demo_id}/dbchat/schema", "method": "get"},
+            {"path": "/api/demos/{demo_id}/db/datasets", "method": "get"},
+            {"path": "/api/demos/{demo_id}/db/datasets", "method": "post"},
+            {"path": "/api/demos/{demo_id}/db/datasets/generate", "method": "post"},
+            {"path": "/api/demos/{demo_id}/db/datasets/{ds_id}/preview", "method": "get"},
+            {"path": "/api/demos/{demo_id}/db/datasets/{ds_id}", "method": "delete"},
         ],
     },
     {

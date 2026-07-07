@@ -19,7 +19,14 @@ import oracledb
 
 # SQLサニタイズ(_BANNED / sanitize_sql / SqlRejectedError)は jetuse_shared に一本化(P1b)。
 # 後方互換: 同名で再エクスポートし、既存の except SqlRejectedError / import を維持する。
-from jetuse_shared.sqlguard import _BANNED, SqlRejectedError, sanitize_sql  # noqa: F401
+# SqlBoundaryError / enforce_sql_boundary は層2の fail-closed SQL ゲート(specs/18 §4.3)。
+from jetuse_shared.sqlguard import (  # noqa: F401
+    _BANNED,
+    SqlBoundaryError,
+    SqlRejectedError,
+    enforce_sql_boundary,
+    sanitize_sql,
+)
 
 from .db import _wallet_dir  # ウォレット取得を共用
 from .genai import _signer
@@ -316,29 +323,89 @@ def get_schema_info() -> dict[str, Any]:
     return _schema_cache
 
 
-def preview_table(table: str, limit: int = 20) -> dict[str, Any]:
+def preview_table(table: str, limit: int = 20, *, owner_key: str | None = None) -> dict[str, Any]:
     """対象スキーマの既知テーブルの中身(サンプル行)を返す(ENH-02。read-only)。
 
     テーブル名は get_schema_info() の既知一覧で検証してから固定識別子で組み立てる
-    (任意SQLは受け付けない=インジェクション防止)。
+    (任意SQLは受け付けない=インジェクション防止)。owner_key は層2ゲートの呼び出し元
+    契約(specs/18 §4.3)= キーワード専用(既存の 1〜2 位置引数呼び出しと後方互換)。
     """
     valid = {t["name"] for t in get_schema_info()["tables"]}
     name = (table or "").strip().upper()
     if name not in valid:
         raise SqlRejectedError(f"未知のテーブル: {table}")
     n = max(1, min(int(limit), MAX_ROWS))
-    return execute_readonly(f'SELECT * FROM "{TARGET_SCHEMA}"."{name}" FETCH FIRST {n} ROWS ONLY')
+    return execute_readonly(
+        f'SELECT * FROM "{TARGET_SCHEMA}"."{name}" FETCH FIRST {n} ROWS ONLY',
+        owner_key=owner_key,
+    )
 
 
-def execute_readonly(sql: str) -> dict[str, Any]:
-    """読取専用ユーザーで実行し、行数上限・タイムアウト付きで結果を返す"""
+def execute_readonly(sql: str, owner_key: str | None = None) -> dict[str, Any]:
+    """読取専用ユーザーで実行し、行数上限・タイムアウト付きで結果を返す。
+
+    owner_key は呼び出し元契約(specs/18 §4.3 — 導出ヘルパー経由の owner キーまたは
+    DemoContext.namespace)。既定 None は owner なしモード(agent 経路・SH 等の固定
+    スキーマ照会)で **fail-closed**: 層2ゲートが JETUSE_DS_ 参照を全拒否し、dataset 表は
+    VPD の default-deny で必ず 0 行。既定値は公開シグネチャの後方互換のため維持する
+    (codex review-4 M002 — `execute_readonly(sql)` を TypeError にしない。省略時は最も安全な
+    owner なしモード)。
+
+    VPD コンテキスト契約(specs/18 §4.3): owner_key があれば SQL の parse 前に必ず
+    そのリクエストの owner で SET_CONTEXT を上書きし、設定失敗時は SQL を実行しない。
+    finally で CLEAR_CONTEXT してから接続を返却する(プール接続は再利用されるため、
+    clear に失敗した接続はプールへ返さず破棄する)。
+    """
+    from . import vpd  # 遅延 import(循環回避)
+    from .owner_keys import owner_key_gate
+
+    # 静的 allowlist 拒否(DB 非接触)を先に済ませ、DB へ渡す前に VPD 完全性を必須化する
+    # (specs/18 §4.3 — ポリシー欠落状態での fail-open を塞ぐ中央ゲート。SH 固定表照会も
+    # 含め、実際に SQL を実行する全経路がこのゲートを通る)。
     cleaned = sanitize_sql(sql)
-    with _get_query_pool().acquire() as conn:
+    # owner キー移行ゲートを登録簿参照・VPD 設定より前に通す(review-11 B003): route
+    # だけでなく Fn 経路(func.py)も execute_readonly を直接呼ぶため、共有チョークポイント
+    # で必須化する。未分類の予約接頭辞行が残る間は 503 で DB へ到達させない(legacy owner
+    # 衝突での越境読取を塞ぐ)。owner なしモード(agent/SH 固定照会)は対象外。
+    if owner_key is not None:
+        owner_key_gate()
+    vpd.integrity_gate()
+    # 層2 fail-closed SQL ゲート(specs/18 §4.3 — allowlist 方式): FROM/JOIN のテーブル参照は
+    # SH スキーマ(修飾)・当人の登録済み DS 表・DUAL・CTE だけを許可し、それ以外(未知
+    # synonym・別スキーマ・辞書ビュー・table function)は一律拒否。SH 照会は SemanticStore /
+    # Select AI とも常に `SH.<表>` 修飾で生成されるため素名の許可は不要(gate 側で SH 修飾を許可)。
+    # JETUSE_DS_ の登録簿照合は SQL が言及するときだけ引く。
+    allowed: set[str] = set()
+    if owner_key is not None and re.search(r"jetuse_ds_", cleaned, re.I):
+        from . import datasets  # 遅延 import(datasets → nl2sql の循環回避)
+
+        allowed = {t.upper() for t in datasets.owner_ds_tables(owner_key)}
+    enforce_sql_boundary(cleaned, allowed_tables=allowed,
+                         app_schema=get_settings().adb_user)
+    pool = _get_query_pool()
+    conn = pool.acquire()
+    drop = False
+    try:
         conn.call_timeout = EXECUTE_TIMEOUT_MS
-        cur = conn.cursor()
-        cur.execute(cleaned)
-        columns = [d[0] for d in cur.description]
-        rows = cur.fetchmany(MAX_ROWS + 1)
+        if owner_key is not None:
+            try:
+                vpd.set_owner_context(conn, owner_key)
+            except Exception:
+                # SET_CONTEXT 失敗時は SQL を実行せず、context 残留の恐れがある接続を破棄する
+                drop = True
+                raise
+        try:
+            cur = conn.cursor()
+            cur.execute(cleaned)
+            columns = [d[0] for d in cur.description]
+            rows = cur.fetchmany(MAX_ROWS + 1)
+        finally:
+            if owner_key is not None:
+                try:
+                    vpd.clear_owner_context(conn)
+                except Exception:
+                    drop = True  # コンテキスト残留の越境を防ぐ: この接続は再利用しない
+                    logger.exception("clear_owner_context failed (dropping connection)")
         truncated = len(rows) > MAX_ROWS
         return {
             "columns": columns,
@@ -349,3 +416,12 @@ def execute_readonly(sql: str) -> dict[str, Any]:
             "row_count": min(len(rows), MAX_ROWS),
             "truncated": truncated,
         }
+    finally:
+        try:
+            # oracledb の pooled connection の返却は pool.release(conn)(conn.release は無い)
+            if drop:
+                pool.drop(conn)
+            else:
+                pool.release(conn)
+        except Exception:  # noqa: BLE001
+            logger.exception("query connection return failed")

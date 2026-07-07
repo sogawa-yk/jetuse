@@ -38,6 +38,27 @@ variable "enable_auth" {
   default     = true
 }
 
+# SP2-04 fail-closed: AUTH_REQUIRED=true の API は issuer/audience/JWKS の3点必須(不備は全リクエスト500)。
+# enable_auth=true で不備のまま配備しない強制は main.tf の terraform_data.oidc_config_guard
+# (precondition。変数間 validation は TF>=1.9 のため required_version 1.5 では使えない — review-2 M001)。
+variable "oidc_audience" {
+  description = "APIが検証するOIDC audience。Identity Domainアプリ登録のprimary audience、または実トークンのaud実測値(discoveryからは得られない — specs/18 §5.1)。enable_auth=true では必須"
+  type        = string
+  default     = ""
+}
+
+variable "oidc_issuer" {
+  description = "トークンのiss。世代で異なるため固定値を持たない(specs/18 §5.1 — discoveryのissuerをそのまま入力)。enable_auth=true では必須"
+  type        = string
+  default     = ""
+}
+
+variable "oidc_jwks_url" {
+  description = "discoveryのjwks_uri。空なら本スタックが作成するドメインの <domain_url>/admin/v1/SigningCert/jwk を使う(実測でdiscoveryと同一パス)"
+  type        = string
+  default     = ""
+}
+
 variable "enable_dynamic_group" {
   description = "Runtime / ADB / Semantic StoreのDynamic Groupとテナンシスコープのnamespace参照ポリシーを作成する"
   type        = bool

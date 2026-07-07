@@ -63,3 +63,36 @@ def make_cp_client(settings: Settings | None = None, *, timeout: float = 120.0) 
             timeout=timeout,
         ),
     )
+
+
+def make_cp_client_for(region: str, compartment_ocid: str, *,
+                       timeout: float = 120.0) -> OpenAI:
+    """台帳 locator 指定の CP クライアント(specs/18 §3.2 — 削除は台帳の全 locator で
+    クライアントを構成して行う。現在の設定と不一致でも旧 target を消せるように)。"""
+    return OpenAI(
+        api_key="OCI",
+        base_url=f"https://generativeai.{region}.oci.oraclecloud.com/20231130/openai/v1",
+        http_client=httpx.Client(
+            auth=_signer(),
+            headers={"opc-compartment-id": compartment_ocid},
+            timeout=timeout,
+        ),
+    )
+
+
+def make_inference_client_for(region: str, compartment_ocid: str,
+                              project_ocid: str, *, timeout: float = 120.0) -> OpenAI:
+    """台帳 locator 指定の DP クライアント(Files 系の削除用)。"""
+    return OpenAI(
+        api_key="OCI",
+        base_url=f"https://inference.generativeai.{region}.oci.oraclecloud.com/openai/v1",
+        http_client=httpx.Client(
+            auth=_signer(),
+            headers={
+                "CompartmentId": compartment_ocid,
+                "opc-compartment-id": compartment_ocid,
+                "OpenAi-Project": project_ocid,
+            },
+            timeout=timeout,
+        ),
+    )

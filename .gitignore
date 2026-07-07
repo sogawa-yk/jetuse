@@ -37,6 +37,9 @@ dist/
 .DS_Store
 tmp/
 
+# ループ実行履歴・E2E証跡(環境依存の識別子を含みうる — コミットしない。STATE.md/docs は別)
+runs/
+
 # spike audio artifacts
 spikes/data/*.mp3
 spikes/data/*.wav

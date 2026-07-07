@@ -44,6 +44,22 @@ class Settings(BaseSettings):
     rag_bucket: str = ""
     # RAG-03(Select AI): 索引のバケットURL組み立てに使用
     os_namespace: str = ""
+    # SP2-02(specs/18 §3.1): アプリ全体の DP Files 総数上限(予約 ledger)。
+    # 既定 None = 無制限(Public/main 互換・挙動不変)。Internal 配備で有効値(目安 2000)。
+    rag_files_total_limit: int | None = None
+    # SP2-02(specs/18 §3.1): デモ箱あたりの上限(超過 422 — 同期削除の所要を有界化)
+    demo_max_rag_files: int = 20
+    demo_max_datasets: int = 10
+    # SP2-02(specs/18 §3.1): 起動世代トークン。entrypoint.sh が bootstrap/uvicorn 起動前に
+    # export し、両プロセスで共有する。upload gate は「今回起動の reconcile が開けた」場合のみ
+    # 通す(前回起動の 'Y' が残っていても boot_id 不一致で fail-closed — codex review-8 B001)。
+    # 空(単一プロセス/未設定)なら boot 照合はスキップ(gate 値のみ)。
+    app_boot_id: str = ""
+    # SP2-02(specs/18 §4.3): VPD(行レベル分離)を有効化するか。既定 False = Public/main 互換
+    # (VPD は Internal/デモテナンシ機能。未配備環境で integrity_gate/apply_policy を強制すると
+    # 従来デプロイの dataset 作成・dbchat が壊れる — codex review-10 B004)。Internal/デモ配備は
+    # 明示的に True(かつ人間ゲートで VPD セットアップ済み)にする。
+    vpd_enabled: bool = False
 
     # NL2SQL(SQL-02): SemanticStore + 読取専用ユーザー
     semstore_ocid: str = ""

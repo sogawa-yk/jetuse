@@ -16,6 +16,7 @@ import httpx
 
 from .embeddings import EMBED_DIM, embed
 from .genai import make_inference_client
+from .owner_keys import is_demo_namespace
 from .settings import get_settings
 
 logger = logging.getLogger("jetuse.rag_opensearch")
@@ -39,14 +40,31 @@ def _base() -> str:
 
 
 def _index(owner: str) -> str:
-    h = hashlib.sha1(owner.encode()).hexdigest()[:16]
-    return f"jetuse-rag-{h}"
+    """index 名の正本。demo は完全 sha1(40hex — specs/18 §3.2 手順 3e: 16hex 衝突は
+    検索混入・削除波及)。既存 user 資産の 16hex は変えない(main 互換・residual)。"""
+    h = hashlib.sha1(owner.encode()).hexdigest()
+    return f"jetuse-rag-{h if is_demo_namespace(owner) else h[:16]}"
 
 
-def _client() -> httpx.Client:
+def _client(endpoint: str | None = None) -> httpx.Client:
     # OCI OpenSearchは security_mode=DISABLED でも 9200 はTLS。証明書CNはFQDN/IPと
     # 一致しないことがあるため verify=False(プライベートサブネット内通信)。
-    return httpx.Client(base_url=_base(), timeout=_TIMEOUT, verify=False)
+    # endpoint 指定は台帳 locator からの削除用(specs/18 §3.2 — 設定の有効/無効に依らない)。
+    return httpx.Client(base_url=(endpoint or _base()).rstrip("/"),
+                        timeout=_TIMEOUT, verify=False)
+
+
+def delete_owner(owner: str, endpoint: str | None = None) -> None:
+    """箱の後始末(specs/18 §3.2 手順 3e): namespace の index を index ごと DELETE。
+
+    404 は成功扱い。endpoint は台帳 locator の保存値(設定が無効化されていても削除する)。
+    他の失敗は例外のまま伝播(呼び出し側が 503 → 再 DELETE で収束)。
+    """
+    idx = _index(owner)
+    with _client(endpoint) as c:
+        r = c.delete(f"/{idx}")
+        if r.status_code >= 300 and r.status_code != 404:
+            raise RuntimeError(f"index削除失敗: {r.status_code} {r.text[:200]}")
 
 
 # ---- テキスト抽出・チャンク ----
@@ -76,11 +94,14 @@ def _chunk(text: str) -> list[str]:
 
 # ---- index 管理 ----
 
-def ensure_index(owner: str) -> str:
+def ensure_index(owner: str, lease=None) -> str:
     idx = _index(owner)
     with _client() as c:
         if c.head(f"/{idx}").status_code == 200:
             return idx
+        # demo namespace の新規作成は demo 単位リース保持が前提(specs/18 §3.2.1)
+        from .demo_lease import require_lease_for
+        require_lease_for(owner, lease)
         body = {
             "settings": {"index": {"knn": True}},
             "mappings": {"properties": {
@@ -99,14 +120,14 @@ def ensure_index(owner: str) -> str:
     return idx
 
 
-def ingest(owner: str, file_id: str, filename: str, content: bytes) -> int:
+def ingest(owner: str, file_id: str, filename: str, content: bytes, lease=None) -> int:
     """1ファイルをチャンク+埋め込みしてindexに投入。投入チャンク数を返す。"""
     text = _extract_text(filename, content)
     chunks = _chunk(text)
     if not chunks:
         return 0
     vectors = embed(chunks, input_type="SEARCH_DOCUMENT")
-    idx = ensure_index(owner)
+    idx = ensure_index(owner, lease=lease)
     lines = []
     for n, (chunk, vec) in enumerate(zip(chunks, vectors, strict=True)):
         lines.append({"index": {"_index": idx, "_id": f"{file_id}-{n}"}})
@@ -121,13 +142,28 @@ def ingest(owner: str, file_id: str, filename: str, content: bytes) -> int:
     return len(chunks)
 
 
-def delete_file(owner: str, file_id: str) -> None:
+def delete_file(owner: str, file_id: str, endpoint: str | None = None) -> None:
+    """OpenSearch のチャンク削除(外部先行の契約 — 成功を確認して初めて呼び出し側が
+    rag_files/ledger を消す)。index 不存在(404)のみ削除済み扱い。401/5xx や
+    _delete_by_query の失敗は例外にして fail-closed にする(検索可能なまま残さない — B001)。
+    endpoint は台帳 locator の保存値(取り込み時の endpoint)。設定が無効化/変更されても
+    保存 endpoint で消す(現在設定に依らない — B004 / §3.2)。"""
     idx = _index(owner)
-    with _client() as c:
-        if c.head(f"/{idx}").status_code != 200:
-            return
-        c.post(f"/{idx}/_delete_by_query?refresh=true",
-               json={"query": {"term": {"file_id": file_id}}})
+    with _client(endpoint) as c:
+        h = c.head(f"/{idx}")
+        if h.status_code == 404:
+            return  # index 不存在 = 冪等成功
+        if h.status_code != 200:
+            raise RuntimeError(f"opensearch index HEAD failed: {h.status_code}")
+        r = c.post(f"/{idx}/_delete_by_query?refresh=true",
+                   json={"query": {"term": {"file_id": file_id}}})
+        if r.status_code >= 300:
+            raise RuntimeError(
+                f"opensearch delete_by_query failed: {r.status_code} {r.text[:200]}")
+        failures = (r.json() or {}).get("failures") or []
+        if failures:
+            raise RuntimeError(
+                f"opensearch delete_by_query had failures: {str(failures)[:200]}")
 
 
 def indexed_file_ids(owner: str) -> set[str]:

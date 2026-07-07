@@ -108,6 +108,44 @@ def create_app() -> FastAPI:
                  path=request.url.path, error=str(exc).splitlines()[0][:200])
         return JSONResponse(status_code=503, content={"detail": "database unavailable"})
 
+    # SP2-02(specs/18): fail-closed ゲート・リース・上限の型付き例外を HTTP に正規化
+    def _json_handler(status: int, detail: str):
+        async def handler(request: Request, exc: Exception):
+            log_with(logger, logging.WARNING, "request rejected",
+                     path=request.url.path, status=status,
+                     error=str(exc).splitlines()[0][:200])
+            return JSONResponse(status_code=status, content={"detail": detail})
+
+        return handler
+
+    from jetuse_core.demo_lease import (
+        DemoGoneError,
+        LeaseTimeoutError,
+        LeaseUnavailableError,
+    )
+    from jetuse_core.owner_keys import OwnerKeyPreflightError
+    from jetuse_core.rag_ledger import QuotaExceededError, UnmanagedFilesError
+    from jetuse_core.vpd import DatasetsSecurityError
+
+    app.add_exception_handler(
+        DatasetsSecurityError,
+        _json_handler(503, "datasets security boundary incomplete (fail-closed)"))
+    app.add_exception_handler(
+        OwnerKeyPreflightError,
+        _json_handler(503, "owner key migration pending (fail-closed)"))
+    app.add_exception_handler(
+        UnmanagedFilesError,
+        _json_handler(503, "unmanaged files detected (fail-closed)"))
+    app.add_exception_handler(
+        LeaseUnavailableError,
+        _json_handler(503, "demo lease unavailable (fail-closed)"))
+    app.add_exception_handler(
+        LeaseTimeoutError, _json_handler(503, "demo busy, retry later"))
+    app.add_exception_handler(
+        DemoGoneError, _json_handler(404, "demo not found"))
+    app.add_exception_handler(
+        QuotaExceededError, _json_handler(422, "file quota exceeded"))
+
     @app.get("/healthz")
     async def healthz():
         return {"status": "ok"}
@@ -124,6 +162,7 @@ def create_app() -> FastAPI:
     app.include_router(usecases.router)
     app.include_router(capabilities.router)
     app.include_router(demos.router)
+    app.include_router(demos.crud_router)  # Demo CRUD(SP2-01 / specs/18 §2)
 
     return app
 

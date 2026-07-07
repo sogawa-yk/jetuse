@@ -17,6 +17,7 @@ from jetuse_core.auth import AuthContext, require_user
 from jetuse_core.chat import GenParams, create_oci_conversation
 from jetuse_core.logging import log_with
 from jetuse_core.models import MODELS
+from jetuse_core.owner_keys import owner_key_gate, user_owner_key
 from jetuse_core.settings import get_settings
 
 from .. import agent_dispatch
@@ -64,19 +65,42 @@ async def chat_stream(  # noqa: ANN202
     user: Annotated[AuthContext, Depends(require_user)],
 ):
     """チャットストリーミング(CHAT-01)。LLMの2系統APIを正規化したSSEを返す。"""
-    return await stream_chat_response(req, user, user.subject)
+    return await stream_chat_response(req, user, user_owner_key(user.subject))
 
 
 async def stream_chat_response(  # noqa: ANN202
-    req: ChatRequest, user: AuthContext, rag_ns: str
+    req: ChatRequest, user: AuthContext, rag_ns: str, demo_id: str | None = None
 ):
     """チャットSSE本体(user単位/デモスコープ共有 — SP1-03/specs/17 §5)。
 
     rag_ns はRAG文書の名前空間キー: user単位ルートは user.subject、デモスコープは
     DemoContext.namespace。監査・会話・エージェント/MCP解決は実ユーザーのまま。
+
+    demo_id はデモスコープの会話紐付け(SP2-03 / specs/18 §4.2): conversation_id は
+    `owner_sub = owner_key(user.subject) AND demo_id = ctx.demo_id` の会話のみ受理
+    (不一致 404 — 両方向の持ち込み拒否)。user 単位(demo_id=None)は demo_id IS NULL を
+    強制。demo 会話は OCI Conversation(サーバ側会話状態)を作らず LTM も無効 —
+    継続の契約はクライアントが messages に全履歴を再送する(既存 SPA と同じ流儀)。
     """
     if req.model not in MODELS:
         raise HTTPException(status_code=400, detail=f"unknown model: {req.model}")
+
+    # 会話の所有者・箱スコープ検証は全早期 return より前で行う(review-1 M001 / review-2 B002)。
+    # agent_id の有無に依らず検証する: 保存済み Select AI/hosted agent 経路(agent_dispatch)は
+    # conversation_id へ owner 条件なしで append_message するため、agent_id をスキップ条件にすると
+    # 自分の agent_id + 他人/他デモの conversation_id で越境書き込みできてしまう。
+    # owner キー移行ゲートを会話照合より前に通す(review-11 B004): 変換済みキー
+    # (user_owner_key)で照合する前に、未分類の予約接頭辞行が残る間は 503。さもないと legacy
+    # owner `sub_sub_x` と新 sub `sub_x`→`sub_sub_x` の衝突で他人の会話を参照・追記できる。
+    conv: dict | None = None
+    if req.conversation_id:
+        await asyncio.to_thread(owner_key_gate)
+        conv = await asyncio.to_thread(
+            conv_repo.get_conversation, user_owner_key(user.subject),
+            req.conversation_id, demo_id,
+        )
+        if not conv:
+            raise HTTPException(status_code=404, detail="conversation not found")
 
     # 監査の機能ラベル(SEC-02)
     audit_feature = (
@@ -137,6 +161,10 @@ async def stream_chat_response(  # noqa: ANN202
 
     # Select AI / OpenSearch バックエンド: 非ストリーミングGENERATEを単発deltaで返す
     if req.rag and req.rag_backend in ("select_ai", "opensearch"):
+        # RAG 読取も owner_key 移行ゲートを通す(store 解決と同じ fail-closed 一貫性 — M007)。特に
+        # Select AI generate は ensure_profile で永続 profile/index を作るため、未分類 owner が
+        # escaped 側へ新規資産を作るのをストリーム開始前に塞ぐ(raise は 503 に正規化)。
+        await asyncio.to_thread(owner_key_gate)
         prompt = req.messages[-1].content
         _rag_gen = (rag_opensearch.generate if req.rag_backend == "opensearch"
                     else rag_select_ai.generate)
@@ -162,6 +190,19 @@ async def stream_chat_response(  # noqa: ANN202
                     yield (
                         f"data: {json.dumps({'citations': cites}, ensure_ascii=False)}\n\n"
                     )
+                # conversation_id 指定時は箱の会話へ履歴保存(review-1 M001 の契約 —
+                # RAG ストリームでも user/assistant を保存。失敗はストリームを止めない)
+                if req.conversation_id:
+                    try:
+                        if req.persist_user:
+                            await asyncio.to_thread(
+                                conv_repo.append_message, req.conversation_id,
+                                "user", prompt)
+                        await asyncio.to_thread(
+                            conv_repo.append_message, req.conversation_id,
+                            "assistant", body)
+                    except Exception:
+                        logger.exception("rag persist failed")
             except Exception as e:
                 logger.exception("%s rag failed", _rag_label)
                 err = {"error": f"{_rag_label} RAGの実行に失敗しました: {str(e)[:200]}"}
@@ -223,7 +264,7 @@ async def stream_chat_response(  # noqa: ANN202
     agent_rag_store: str | None = None
     eff_tools = agent_def["enabled_tools"] if agent_def else (req.enabled_tools or [])
     if (req.agent or agent_def) and eff_tools and "rag_search" in eff_tools:
-        agent_rag_store = await asyncio.to_thread(rag.get_store_id, rag_ns)
+        agent_rag_store = await asyncio.to_thread(rag.resolve_store_for_read, rag_ns)
 
     if agent_def and agent_def["mcp_server_ids"] and agent_def["mine"]:
         # 共有エージェントのMCP(所有者の私有資源)は実行ユーザーには適用しない(specs/11)
@@ -241,20 +282,18 @@ async def stream_chat_response(  # noqa: ANN202
             raise HTTPException(
                 status_code=400, detail="rag requires a responses-family model"
             )
-        rag_store = await asyncio.to_thread(rag.get_store_id, rag_ns)
+        rag_store = await asyncio.to_thread(rag.resolve_store_for_read, rag_ns)
         if not rag_store:
             raise HTTPException(status_code=400, detail="no documents uploaded")
 
     oci_conv: str | None = None
-    if req.conversation_id and not req.agent_id:
-        conv = await asyncio.to_thread(
-            conv_repo.get_conversation, user.subject, req.conversation_id
-        )
-        if not conv:
-            raise HTTPException(status_code=404, detail="conversation not found")
+    if conv is not None:  # 冒頭で取得・404 済み(review-1 M001)。再取得しない
         # 短期メモリ(CHAT-06): Responses系のみ。再生成時(persist_user=false)は
-        # Conversation側のアイテム重複を避けるためステートレスにフォールバック
-        if MODELS[req.model].api == "responses" and req.persist_user:
+        # Conversation側のアイテム重複を避けるためステートレスにフォールバック。
+        # demo 会話はスキップ = OCI Conversation を作らない(specs/18 §4.2 — 外部会話の
+        # 後始末・クラッシュ孤児・memory_subject_id=user.subject の LTM がデモ間で
+        # 記憶を共有する混線を構造的に排除。demo chat の LTM は無効)
+        if demo_id is None and MODELS[req.model].api == "responses" and req.persist_user:
             oci_conv = conv.get("oci_conversation_id")
             if not oci_conv:
                 try:
@@ -269,7 +308,7 @@ async def stream_chat_response(  # noqa: ANN202
                     )
                     await asyncio.to_thread(
                         conv_repo.set_oci_conversation,
-                        user.subject, req.conversation_id, oci_conv,
+                        user_owner_key(user.subject), req.conversation_id, oci_conv,
                     )
                 except Exception:
                     logger.exception("oci conversation create failed (fallback stateless)")
