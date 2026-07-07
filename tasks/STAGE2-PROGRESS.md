@@ -18,7 +18,7 @@ status: `todo` | `in_progress` | `blocked` | `done`
 | 1 | [SP2-01 Demo エンティティ本格化 + CRUD ルート](SP2-01.md) | SP2-00 | コミット | done |
 | 2 | [SP2-02 箱のライフサイクル（lazy 解決・削除後始末・VPD 基盤）](SP2-02.md) | SP2-01 | コミット + **VPD 初回セットアップ・DBMS_LOCK 権限付与・旧 demo 資源クリーンアップ削除の承認**（specs/18 §3.2・§3.2.1・§4.3 — 承認対象と実変更の一致を完了条件で照合） | done |
 | 3 | [SP2-03 DemoContext 解決先の実装 + dbchat デモスコープ化](SP2-03.md) | SP2-02 | コミット | done |
-| 4 | [SP2-04 Internal テナンシ分離（Identity Domains 実接続）](SP2-04.md) | SP2-00 ＋ 人間の事前作業 | **iam_identity**（IdP 設定は人間） | blocked |
+| 4 | [SP2-04 Internal テナンシ分離（Identity Domains 実接続）](SP2-04.md) | SP2-00 ＋ 人間の事前作業 | **iam_identity**（IdP 設定は人間） | in_progress |
 
 > 第0波 = SP2-00（spec 承認まで停止）。第1波 = SP2-01 ∥ SP2-04（SP2-04 は人間の事前作業が
 > 未完なら blocked にして先へ）。第2波 = SP2-02。第3波 = SP2-03。
@@ -71,3 +71,8 @@ status: `todo` | `in_progress` | `blocked` | `done`
   （jetuse_shared/webtools.py の既存 E501 2件は dev と同一・SP2-03 非由来）。
 - 2026-07-07: SP2-01〜03 統合完了。残ゲート = SP2-04（IdP 人間事前作業待ち・blocked）+ push/dev への PR
   （人間）+ SP2-02 Gate 1 のデプロイ環境実施。ステージ報告書 runs/_stages/sp2-demo-tenancy/REPORT.md へ。
+- 2026-07-07: SP2-04 の人間事前作業を施主承認のもとエージェントが実施（jetuse/dev 配下は権限あり）。
+  永続 Identity Domain `jetuse-dev-idp`（Free/ACTIVE、jetuse/dev、home=osaka・CRUD は home region IAD 経由）+
+  ROPC confidential app `jetuse-dev-api` + テストユーザー2名を作成。実トークンで iss/aud/sub 実測済み。
+  SP2-04 を blocked → in_progress（第4波起動）。実測 OIDC 値・秘匿値・token ヘルパーは
+  セッション scratchpad（非コミット）。詳細は memory [[sp204-identity-domain-jetuse-dev-idp]]。
