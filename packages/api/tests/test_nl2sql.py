@@ -163,6 +163,39 @@ def test_seed_datasets_endpoint(monkeypatch):
     assert res.json()["ready"] is True
 
 
+def test_execute_readonly_gates_owner_key_before_db(monkeypatch):
+    """review-11 B003: owner_key 付き execute_readonly は登録簿/VPD/DB より前に
+    owner_key_gate を通す(route だけでなく Fn 経路も直接呼ぶ共有チョークポイント)。"""
+    from jetuse_core import owner_keys, vpd
+    from jetuse_core.owner_keys import OwnerKeyPreflightError
+
+    monkeypatch.setattr(vpd, "integrity_gate", lambda: None)
+
+    def boom():
+        raise OwnerKeyPreflightError("pending")
+
+    monkeypatch.setattr(owner_keys, "owner_key_gate", boom)
+    monkeypatch.setattr(nl2sql, "_get_query_pool",
+                        lambda: pytest.fail("gate must block before DB"))
+    with pytest.raises(OwnerKeyPreflightError):
+        nl2sql.execute_readonly("SELECT 1 FROM dual", owner_key="demo_abc")
+
+
+def test_execute_readonly_ownerless_skips_gate(monkeypatch):
+    """owner なしモード(agent/SH 固定照会)は owner_key_gate 非対象(owner 非依存)。"""
+    from jetuse_core import owner_keys, vpd
+
+    calls: list[int] = []
+    monkeypatch.setattr(vpd, "integrity_gate", lambda: None)
+    monkeypatch.setattr(owner_keys, "owner_key_gate", lambda: calls.append(1))
+    monkeypatch.setattr(nl2sql, "enforce_sql_boundary", lambda *a, **k: None)
+    monkeypatch.setattr(nl2sql, "_get_query_pool",
+                        lambda: (_ for _ in ()).throw(RuntimeError("stop")))
+    with pytest.raises(RuntimeError):
+        nl2sql.execute_readonly("SELECT 1 FROM dual", owner_key=None)
+    assert calls == []  # owner なしはゲートを呼ばない
+
+
 def test_sample_data_csv_valid():
     # 同梱サンプルCSVがヘッダ+データ行を持ち、列名がASCIIであること(feedback 20260620 #12)
     from jetuse_core.sample_data import SAMPLE_DATASETS

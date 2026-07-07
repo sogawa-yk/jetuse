@@ -21,6 +21,11 @@ import httpx
 # SQLサニタイズ(SELECT/WITHガード)は jetuse_shared に一本化(P1b)。
 # jetuse_shared.sanitize_sql は SqlRejectedError(ValueError サブクラス)を送出するため、
 # 旧 _sanitize の ValueError catch 経路(run_tool の except Exception)は挙動不変。
+# enforce_sql_boundary は層2 fail-closed SQL ゲートの owner なしモード(specs/18 §4.3 —
+# 本コンテナは execute_readonly を通らず JETUSE_QUERY へ直結する独立経路のため、
+# JETUSE_DS_/辞書/パッケージを全拒否して SH 照会という本来用途だけを通す。
+# データ行は VPD の fail-closed が遮断する)。
+from jetuse_shared.sqlguard import enforce_sql_boundary
 from jetuse_shared.sqlguard import sanitize_sql as _sanitize
 
 REGION = os.environ.get("OCI_REGION", "ap-osaka-1")
@@ -108,6 +113,7 @@ def generate_sql(question: str) -> str:
 def query_database(question: str) -> dict:
     sql = generate_sql(question)
     cleaned = _sanitize(sql)
+    enforce_sql_boundary(cleaned)  # owner なしモード(層2 — specs/18 §4.3)
     with _query_pool().acquire() as conn:
         conn.call_timeout = 30_000
         cur = conn.cursor()

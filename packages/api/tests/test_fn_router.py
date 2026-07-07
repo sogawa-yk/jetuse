@@ -87,6 +87,17 @@ def test_dbchat_execute_rejected(monkeypatch):
     assert status == 400
 
 
+def test_dbchat_execute_owner_key_pending_returns_503(monkeypatch):
+    """review-12 M002: execute_readonly が共有チョークポイントで送出する
+    OwnerKeyPreflightError を Fn ルーターも 503 に正規化する(FastAPI と同契約。500 にしない)。"""
+    def raise_pending(sql, owner_key=None):
+        raise router.OwnerKeyPreflightError("pending")
+
+    monkeypatch.setattr(router.nl2sql, "execute_readonly", raise_pending)
+    status, body = call("POST", "/api/dbchat/execute", {"sql": "SELECT 1 FROM dual"})
+    assert status == 503
+
+
 def test_tts_validation():
     status, body = call("POST", "/api/tts", {"text": "a", "voice": "Nobody"})
     assert status == 422

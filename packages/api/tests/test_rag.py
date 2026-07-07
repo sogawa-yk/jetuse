@@ -103,6 +103,25 @@ def test_select_ai_rag_read_gated_by_owner_key_migration(fake_rag, monkeypatch):
     assert res.status_code == 503
 
 
+def test_chat_conversation_lookup_gated_by_owner_key(monkeypatch):
+    """review-11 B004: conversation_id 照合の前に owner_key_gate を通す。未分類の
+    予約接頭辞行が残る間は 503 = legacy owner 衝突での他人会話の参照/追記を塞ぐ。"""
+    import service.routes.chat as chat_routes
+    from jetuse_core.owner_keys import OwnerKeyPreflightError
+
+    def boom():
+        raise OwnerKeyPreflightError("pending")
+
+    monkeypatch.setattr(chat_routes, "owner_key_gate", boom)
+    monkeypatch.setattr(chat_routes.conv_repo, "get_conversation",
+                        lambda *a, **k: pytest.fail("gate must block before lookup"))
+    res = client.post("/api/chat/stream",
+                      json={"model": "gpt-oss-120b",
+                            "messages": [{"role": "user", "content": "q"}],
+                            "conversation_id": "c-other"})
+    assert res.status_code == 503
+
+
 def test_resolve_os_namespace_prefers_settings_else_live(monkeypatch):
     """review-14 B002: PUT/削除/locator は同一解決(config 値優先、無ければ実 namespace)。"""
     from jetuse_core import rag

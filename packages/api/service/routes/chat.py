@@ -69,15 +69,38 @@ async def chat_stream(  # noqa: ANN202
 
 
 async def stream_chat_response(  # noqa: ANN202
-    req: ChatRequest, user: AuthContext, rag_ns: str
+    req: ChatRequest, user: AuthContext, rag_ns: str, demo_id: str | None = None
 ):
     """チャットSSE本体(user単位/デモスコープ共有 — SP1-03/specs/17 §5)。
 
     rag_ns はRAG文書の名前空間キー: user単位ルートは user.subject、デモスコープは
     DemoContext.namespace。監査・会話・エージェント/MCP解決は実ユーザーのまま。
+
+    demo_id はデモスコープの会話紐付け(SP2-03 / specs/18 §4.2): conversation_id は
+    `owner_sub = owner_key(user.subject) AND demo_id = ctx.demo_id` の会話のみ受理
+    (不一致 404 — 両方向の持ち込み拒否)。user 単位(demo_id=None)は demo_id IS NULL を
+    強制。demo 会話は OCI Conversation(サーバ側会話状態)を作らず LTM も無効 —
+    継続の契約はクライアントが messages に全履歴を再送する(既存 SPA と同じ流儀)。
     """
     if req.model not in MODELS:
         raise HTTPException(status_code=400, detail=f"unknown model: {req.model}")
+
+    # 会話の所有者・箱スコープ検証は全早期 return より前で行う(review-1 M001 / review-2 B002)。
+    # agent_id の有無に依らず検証する: 保存済み Select AI/hosted agent 経路(agent_dispatch)は
+    # conversation_id へ owner 条件なしで append_message するため、agent_id をスキップ条件にすると
+    # 自分の agent_id + 他人/他デモの conversation_id で越境書き込みできてしまう。
+    # owner キー移行ゲートを会話照合より前に通す(review-11 B004): 変換済みキー
+    # (user_owner_key)で照合する前に、未分類の予約接頭辞行が残る間は 503。さもないと legacy
+    # owner `sub_sub_x` と新 sub `sub_x`→`sub_sub_x` の衝突で他人の会話を参照・追記できる。
+    conv: dict | None = None
+    if req.conversation_id:
+        await asyncio.to_thread(owner_key_gate)
+        conv = await asyncio.to_thread(
+            conv_repo.get_conversation, user_owner_key(user.subject),
+            req.conversation_id, demo_id,
+        )
+        if not conv:
+            raise HTTPException(status_code=404, detail="conversation not found")
 
     # 監査の機能ラベル(SEC-02)
     audit_feature = (
@@ -167,6 +190,19 @@ async def stream_chat_response(  # noqa: ANN202
                     yield (
                         f"data: {json.dumps({'citations': cites}, ensure_ascii=False)}\n\n"
                     )
+                # conversation_id 指定時は箱の会話へ履歴保存(review-1 M001 の契約 —
+                # RAG ストリームでも user/assistant を保存。失敗はストリームを止めない)
+                if req.conversation_id:
+                    try:
+                        if req.persist_user:
+                            await asyncio.to_thread(
+                                conv_repo.append_message, req.conversation_id,
+                                "user", prompt)
+                        await asyncio.to_thread(
+                            conv_repo.append_message, req.conversation_id,
+                            "assistant", body)
+                    except Exception:
+                        logger.exception("rag persist failed")
             except Exception as e:
                 logger.exception("%s rag failed", _rag_label)
                 err = {"error": f"{_rag_label} RAGの実行に失敗しました: {str(e)[:200]}"}
@@ -251,15 +287,13 @@ async def stream_chat_response(  # noqa: ANN202
             raise HTTPException(status_code=400, detail="no documents uploaded")
 
     oci_conv: str | None = None
-    if req.conversation_id and not req.agent_id:
-        conv = await asyncio.to_thread(
-            conv_repo.get_conversation, user_owner_key(user.subject), req.conversation_id
-        )
-        if not conv:
-            raise HTTPException(status_code=404, detail="conversation not found")
+    if conv is not None:  # 冒頭で取得・404 済み(review-1 M001)。再取得しない
         # 短期メモリ(CHAT-06): Responses系のみ。再生成時(persist_user=false)は
-        # Conversation側のアイテム重複を避けるためステートレスにフォールバック
-        if MODELS[req.model].api == "responses" and req.persist_user:
+        # Conversation側のアイテム重複を避けるためステートレスにフォールバック。
+        # demo 会話はスキップ = OCI Conversation を作らない(specs/18 §4.2 — 外部会話の
+        # 後始末・クラッシュ孤児・memory_subject_id=user.subject の LTM がデモ間で
+        # 記憶を共有する混線を構造的に排除。demo chat の LTM は無効)
+        if demo_id is None and MODELS[req.model].api == "responses" and req.persist_user:
             oci_conv = conv.get("oci_conversation_id")
             if not oci_conv:
                 try:

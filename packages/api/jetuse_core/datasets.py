@@ -345,7 +345,7 @@ def _strip_fences(text: str) -> str:
 
 def generate_dataset(
     owner: str, description: str, display_name: str | None = None, rows: int = 30,
-    model: str | None = None,
+    model: str | None = None, lease: DemoLease | None = None,
 ) -> dict[str, Any]:
     """AIでサンプルデータ(CSV)を生成→データセット化(feedback 20260618-3)。
 
@@ -378,7 +378,7 @@ def generate_dataset(
     if not csv_text.strip():
         raise ValueError("サンプルデータの生成に失敗しました(空応答)")
     name = (display_name or "").strip() or desc[:40]
-    return create_dataset(owner, name, csv_text.encode("utf-8"), model=model)
+    return create_dataset(owner, name, csv_text.encode("utf-8"), model=model, lease=lease)
 
 
 def seed_samples(owner: str, model: str | None = None) -> dict[str, Any]:
@@ -411,6 +411,12 @@ def seed_samples(owner: str, model: str | None = None) -> dict[str, Any]:
 def list_datasets(owner: str) -> list[dict[str, Any]]:
     """一覧は state='ready' のみ(creating 幽霊行を表示しない — specs/18 §3.2 手順 2)。"""
     vpd.integrity_gate()  # 不整合時は dbchat/datasets 経路を 503 で停止(specs/18 §4.3)
+    # read も移行ゲートを通す(SP2-02 residual M005 の解決 — rag の read 経路と同型:
+    # 未分類の予約接頭辞行が残る間は fail-closed=503。旧命名の予約接頭辞ユーザー資産
+    # (owner_sub='demo_<id>')が同 ID の demo 経路から参照されるのを塞ぐ。
+    # 実在 sub のみの環境では no-op = user 経路の挙動不変)。preview / schema_info も
+    # 本関数経由でこのゲートを通る。
+    owner_key_gate()
     with connect() as conn:
         cur = conn.cursor()
         _ensure_meta(cur)
@@ -479,6 +485,39 @@ def delete_dataset(owner: str, ds_id: str, lease: DemoLease | None = None) -> bo
         _rebuild_profile(owner, cur)
         conn.commit()
     return True
+
+
+def schema_info(owner: str) -> dict[str, Any]:
+    """箱の datasets(登録簿 owner_sub=owner)から表・列を返す(specs/18 §4.3 —
+    デモスコープ dbchat schema)。形は nl2sql.get_schema_info と同型(UI 共用)。"""
+    return {
+        "schema": "datasets",
+        "tables": [
+            {
+                "name": d["table_name"],
+                "comment": d["display_name"] or "",
+                "rows": d["row_count"],
+                "columns": [{"name": c, "type": "", "comment": ""} for c in d["columns"]],
+            }
+            for d in list_datasets(owner)
+        ],
+    }
+
+
+def owner_ds_tables(owner: str) -> set[str]:
+    """層2 SQL ゲート用: 当人の登録簿にある ready 表名(specs/18 §4.3)。"""
+    with connect() as conn:
+        cur = conn.cursor()
+        # 旧登録簿(STATE 列なし)を先に移行してから state を参照する。表なし→作成(空集合)、
+        # 旧スキーマ→state 列追加(codex review-4 M003 — `SELECT state` の ORA-00904 を回避。
+        # この列は遅延移行のため、登録簿への最初の操作が SQL execute でも成立させる)。
+        _ensure_meta(cur)
+        cur.execute(
+            "SELECT table_name FROM JETUSE_DATASETS WHERE owner_sub = :o "
+            "AND state = 'ready'",
+            o=owner,
+        )
+        return {r[0] for r in cur.fetchall()}
 
 
 # --- 後始末・回収の公開関数(demo_cleanup / vpd.verify_integrity が使う) ---
