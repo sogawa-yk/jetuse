@@ -7,9 +7,9 @@
 PASS したタスクを stage-runner がステージブランチへ自動 commit+merge する。push / dev への PR /
 apply / IAM / **ADR 承認**は自走中も停止（人間ゲート）。
 
-> **spec-driven**: SP3 の詳細仕様は specs/17 §6 に概略しかない。**SP3-00（specs/19 起草・人間承認）が
-> 最初のゲート**。SP3-01〜05 の受け入れ条件は specs/19 参照で肉付けする前提の**暫定**であり、
-> **有効になるのは specs/19 の人間承認をもって**（承認までは SP3-01 以降を起動しない）。
+> **spec-driven**: SP3 の詳細仕様は `specs/19-sp3-builder.md`（SP3-00 で起草済み・人間レビュー待ち）。
+> **SP3-00（specs/19 起草・人間承認）が最初のゲート**。SP3-01〜05 の受け入れ条件は specs/19 §9 参照で
+> 肉付け済みであり、**有効になるのは specs/19 の人間承認をもって**（承認までは SP3-01 以降を起動しない）。
 >
 > **技術リスクの明示**: SP3 の核 = 「OpenCode + OCI モデルによる静的SPA生成」を**サーバ側で安全に回す**
 > こと。ここは未検証の技術限界が出やすい（生成ランタイム・サンドボックス・生成物の安全性）。
@@ -38,7 +38,7 @@ status: `todo` | `in_progress` | `blocked` | `done`
 GenAI はリソースプリンシパル）に対して行う。新規スパイクを都度立てない。
 参照: memory `sp2-preview-rm-deploy-dev-app`。DB 系は `demo_<id>` / `JETUSE_SP3_xx` スキーマで隔離。
 
-## ステージ完了条件（specs/19 §? で確定。ステージ報告で人間が確認）
+## ステージ完了条件（specs/19 §10 で確定。ステージ報告で人間が確認）
 
 - specs/19 が人間承認済み。全タスク Codex review PASS・test/lint クリーン・実環境 E2E
   （または理由付き SKIPPED）通過。
