@@ -17,7 +17,7 @@ status: `todo` | `in_progress` | `blocked` | `done`
 | 0 | [SP2-00 specs/18 起草（SP2 詳細仕様）+ キュー肉付け](SP2-00.md) | — | **spec 承認**（adr_approval 相当） | done |
 | 1 | [SP2-01 Demo エンティティ本格化 + CRUD ルート](SP2-01.md) | SP2-00 | コミット | done |
 | 2 | [SP2-02 箱のライフサイクル（lazy 解決・削除後始末・VPD 基盤）](SP2-02.md) | SP2-01 | コミット + **VPD 初回セットアップ・DBMS_LOCK 権限付与・旧 demo 資源クリーンアップ削除の承認**（specs/18 §3.2・§3.2.1・§4.3 — 承認対象と実変更の一致を完了条件で照合） | done |
-| 3 | [SP2-03 DemoContext 解決先の実装 + dbchat デモスコープ化](SP2-03.md) | SP2-02 | コミット | in_progress |
+| 3 | [SP2-03 DemoContext 解決先の実装 + dbchat デモスコープ化](SP2-03.md) | SP2-02 | コミット | done |
 | 4 | [SP2-04 Internal テナンシ分離（Identity Domains 実接続）](SP2-04.md) | SP2-00 ＋ 人間の事前作業 | **iam_identity**（IdP 設定は人間） | blocked |
 
 > 第0波 = SP2-00（spec 承認まで停止）。第1波 = SP2-01 ∥ SP2-04（SP2-04 は人間の事前作業が
@@ -62,3 +62,12 @@ status: `todo` | `in_progress` | `blocked` | `done`
   APPROVAL-REQUEST.md 提示済み（runs/2026-07-06T1751_SP2-02/e2e/）。承認・実行・APPROVAL.md 証跡は
   ステージ報告の残ゲートとして提示。residual M001〜M006/N001 は SP2-02 worktree の STATE.md 参照。
 - 2026-07-06: 第3波起動 = SP2-03（専用ペイン・in_progress）。
+- 2026-07-07: 人間承認3件を反映 — (a) SP2-02 Gate 1〜3 全承認（Gate 2=最小案）→ 実行（Gate 2/3 実施・
+  review-19 PASS。Gate 1 は稼働アプリスキーマ不在のためデプロイ環境へ繰延。証跡 e2e/APPROVAL.md）。
+  Gate 2 のコード変更（vpd/demo_lease/setup-vpd/bootstrap）を再統合（秘匿値なし手動確認 — ガードは
+  検証レポート内の変数名言及に反応した誤検知）。(b) SP2-03 の残 blocker B001（共有 ADB 閉じた実験の
+  事後承認）/ B002（ADR-0022 を選択肢 B+C で Accepted）を承認 → C の段階的硬化実装 → codex review-15 PASS。
+  SP2-03 統合（コンフリクトなし）。統合後の再検証 = api 521 passed + jetuse_shared 28 passed・ruff クリーン
+  （jetuse_shared/webtools.py の既存 E501 2件は dev と同一・SP2-03 非由来）。
+- 2026-07-07: SP2-01〜03 統合完了。残ゲート = SP2-04（IdP 人間事前作業待ち・blocked）+ push/dev への PR
+  （人間）+ SP2-02 Gate 1 のデプロイ環境実施。ステージ報告書 runs/_stages/sp2-demo-tenancy/REPORT.md へ。
