@@ -38,7 +38,7 @@ module "container_instance" {
   image_pull_secret_id  = var.image_pull_secret_id
   registry_username     = var.registry_username
   registry_password     = var.registry_password
-  environment_variables = merge(var.api_environment, { LOG_OCID = module.observability.app_log_id })
+  environment_variables = merge(local.api_environment, { LOG_OCID = module.observability.app_log_id })
   memory_gb             = 4 # 右サイズ(ARCH-01試算、ユーザー承認 2026-06-12)
 }
 
@@ -59,13 +59,43 @@ module "functions" {
   subnet_id        = module.network.private_subnet_id
   router_image     = var.fn_router_image
   # CIと同じ環境変数+リソースプリンシパル(fnfuncはjetuse-dgに織り込み済み)
-  router_config = merge(var.api_environment, {
+  router_config = merge(local.api_environment, {
     AUTH_MODE = "resource_principal"
     LOG_OCID  = module.observability.app_log_id
   })
 }
 
 locals {
+  # SP2-04(specs/18 §5.1): Internal(jetuse-dev)配備は AUTH_REQUIRED=true が既定。
+  # OIDC 実値(ISSUER/AUDIENCE/JWKS)は人間が tfvars の api_environment に投入する(コミット禁止)。
+  # 明示的に無効化したい場合のみ api_environment 側で AUTH_REQUIRED="false" を上書きする。
+  api_environment = merge({ AUTH_REQUIRED = "true" }, var.api_environment)
+}
+
+# SP2-04 fail-closed: AUTH_REQUIRED=true の API は OIDC 3値必須(不備は全リクエスト500)。
+# 3値を投入し忘れたまま apply して「配備後に全滅」になる前に plan 時に止める(review-3 M002)。
+locals {
+  # Pydantic の bool 真値("TRUE"/"1"/"yes"等)と同じ意味で判定する(文字列 "true" 完全一致だと迂回可 — review-4 M002)
+  auth_required_on = contains(
+    ["true", "1", "yes", "on", "t", "y"],
+    lower(trimspace(local.api_environment["AUTH_REQUIRED"]))
+  )
+}
+
+resource "terraform_data" "oidc_config_guard" {
+  lifecycle {
+    precondition {
+      condition = !local.auth_required_on || alltrue([
+        for k in ["OIDC_ISSUER", "OIDC_AUDIENCE", "OIDC_JWKS_URL"] :
+        trimspace(lookup(local.api_environment, k, "")) != ""
+      ])
+      error_message = "AUTH_REQUIRED=true には api_environment に OIDC_ISSUER / OIDC_AUDIENCE / OIDC_JWKS_URL の3値が必須です(specs/18 §5.1 fail-closed)。認証を無効化する場合は AUTH_REQUIRED=\"false\" を明示上書き。"
+    }
+  }
+}
+
+locals {
+
   # fnルーターが担当するAPIセグメント(ARCH-02第1陣)。GWはCIより特定的なルートを優先する
   fn_router_segments = ["presets", "dbchat", "tts"]
   fn_routes = module.functions.router_function_id == "" ? {} : {

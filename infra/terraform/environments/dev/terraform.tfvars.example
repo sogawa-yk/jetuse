@@ -17,3 +17,12 @@ adb_admin_password = "change-me"
 # 既存IAMを使う環境では両方falseのままにする。
 # enable_dynamic_group  = false
 # enable_runtime_policy = false
+
+# SP2-04: Internal(jetuse-dev)配備は AUTH_REQUIRED=true が既定(main.tf locals)。
+# OIDC 実値(人間が Identity Domain アプリ登録から受領。コミット禁止)をここに投入する。
+# AUTH_REQUIRED=true では3値全て必須(不備は API が 500 を返す fail-closed)。
+# api_environment = {
+#   OIDC_ISSUER   = "<discovery の issuer をそのまま>"
+#   OIDC_JWKS_URL = "<discovery の jwks_uri をそのまま>"
+#   OIDC_AUDIENCE = "<アプリ登録の primary audience または実トークンの aud 実測値>"
+# }

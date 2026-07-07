@@ -21,8 +21,10 @@ locals {
     COMPARTMENT_OCID = var.compartment_ocid
     AUTH_MODE        = "resource_principal"
     AUTH_REQUIRED    = var.enable_auth ? "true" : "false"
-    OIDC_ISSUER      = var.enable_auth ? "https://identity.oraclecloud.com/" : ""
-    OIDC_JWKS_URL    = var.enable_auth ? "${local.domain_url}/admin/v1/SigningCert/jwk" : ""
+    # SP2-04: issuer/JWKS は上書き可(世代差分吸収 — specs/18 §5.1)。3点の非空は oidc_config_guard で plan 時強制
+    OIDC_ISSUER   = var.enable_auth ? var.oidc_issuer : ""
+    OIDC_JWKS_URL = var.enable_auth ? (trimspace(var.oidc_jwks_url) != "" ? trimspace(var.oidc_jwks_url) : "${local.domain_url}/admin/v1/SigningCert/jwk") : ""
+    OIDC_AUDIENCE = var.enable_auth ? var.oidc_audience : ""
     # Select AI は ADB のリソースプリンシパル資格情報を使う(bootstrapがENABLE_RESOURCE_PRINCIPAL)
     SELECT_AI_CREDENTIAL = "OCI$RESOURCE_PRINCIPAL"
     # DB自己ブートストラップ(entrypoint.sh → jetuse_core.bootstrap)
