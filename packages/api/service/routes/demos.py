@@ -18,7 +18,12 @@ from jetuse_core.auth import AuthContext, require_user
 from jetuse_core.models import MODELS
 from jetuse_core.owner_keys import owner_key_gate, user_owner_key
 
-from ..demo_context import DemoContext, require_demo, require_demo_owner
+from ..demo_context import (
+    DemoContext,
+    require_demo,
+    require_demo_owner,
+    require_ready_demo,
+)
 from ..schemas import (
     ChatRequest,
     ConversationCreate,
@@ -32,7 +37,11 @@ from . import chat as chat_routes
 from . import dbchat as dbchat_routes
 from . import rag as rag_routes
 
-router = APIRouter(prefix="/api/demos/{demo_id}")
+# ready ゲート(specs/19 §8.1): デモスコープ能力ルート(と SP3-03 の /app/ 配信)は
+# router 共通依存で status='ready' 以外を 404 にする。CRUD(crud_router)は対象外。
+router = APIRouter(
+    prefix="/api/demos/{demo_id}", dependencies=[Depends(require_ready_demo)]
+)
 crud_router = APIRouter()  # collection ルート(/api/demos)を含むため prefix なし
 
 # 閲覧・実行(公開デモは非所有者も可) / 書き込み(所有者のみ — REV-002)

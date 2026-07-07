@@ -38,6 +38,20 @@ def require_demo(
     )
 
 
+def require_ready_demo(
+    ctx: Annotated[DemoContext, Depends(require_demo)],
+) -> DemoContext:
+    """能力ルート・/app/ 配信の共通依存(specs/19 §8.1 — SP3-01 で一般化)。
+
+    deleting 404 を「ready 以外 404」へ広げる: provisioning/failed の箱への能力呼び出しが
+    lazy 生成と競合する余地を構造的に消す。存在秘匿と同じ 404。demos CRUD メタは対象外
+    (所有者は非 ready でも status を見られる — 進行表示・再生成・破棄に必要)。
+    """
+    if ctx.status != "ready":
+        raise HTTPException(status_code=404, detail="demo not found")
+    return ctx
+
+
 def require_demo_owner(
     ctx: Annotated[DemoContext, Depends(require_demo)],
     user: Annotated[AuthContext, Depends(require_user)],

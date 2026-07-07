@@ -73,6 +73,12 @@ class DemoPatch(BaseModel):
     config: dict | None = None
 
 
+class BuilderMessageIn(BaseModel):
+    """ヒアリング発話(SP3-01 / specs/19 §2.1 — 発話 1 件 ≤ 4,000 文字。超過は 422)。"""
+
+    content: str = Field(min_length=1, max_length=4000)
+
+
 class Nl2SqlRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     backend: Literal["sql_search", "select_ai"] = "sql_search"  # SQL-04比較モード
