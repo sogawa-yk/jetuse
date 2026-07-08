@@ -10,7 +10,6 @@ fail-closed(§3.3): LLM 出力は pydantic strict / extra=forbid のプランス
 
 import json
 import logging
-import re
 from typing import Annotated, Any, Literal
 
 from pydantic import (
@@ -24,6 +23,7 @@ from pydantic import (
 )
 
 from . import builder_hearing
+from .datasets import explicit_type_error
 from .models import DEFAULT_MODEL
 
 logger = logging.getLogger("jetuse.builder_design")
@@ -43,10 +43,8 @@ DATA_REQUIREMENTS = {"dbchat": "tables", "rag.search": "documents"}
 # 保守的な識別子のみ(§3.3 — SQL/命名機構への信頼境界)
 _IDENT = r"^[a-z][a-z0-9_]{0,29}$"
 _FILENAME = r"^[a-z0-9_-]{1,64}\.(md|txt)$"
-# datasets 機構が投入可能な型に閉じる(§3.3 の許可リスト)
-_COL_TYPE_RE = re.compile(
-    r"^(?:VARCHAR2\((\d{1,4}) CHAR\)|NUMBER(?:\((\d{1,2})(?:,(\d{1,2}))?\))?|DATE|TIMESTAMP)$"
-)
+# 列型の許可リストは datasets.explicit_type_error が単一の正(§3.3 「datasets 機構が
+# 投入可能な型に閉じる」— 投入側 create_dataset(column_types) と同一検証)
 
 Ident = Annotated[str, StringConstraints(pattern=_IDENT)]
 Prompt = Annotated[str, StringConstraints(max_length=200)]
@@ -86,21 +84,9 @@ class PlanColumn(_PlanBase):
     @field_validator("type")
     @classmethod
     def _type_allowlist(cls, v: str) -> str:
-        # fullmatch: $ アンカーは末尾改行の直前にも一致するため match では "DATE\n" を
-        # 受理してしまう(review-1 F005)
-        m = _COL_TYPE_RE.fullmatch(v)
-        ok = bool(m)
-        if ok and m.group(1) is not None:  # VARCHAR2(n CHAR): n ≤ 1000
-            ok = 1 <= int(m.group(1)) <= 1000
-        if ok and m.group(2) is not None:  # NUMBER(p[,s]): p ≤ 38, s ≤ 38
-            ok = 1 <= int(m.group(2)) <= 38 and (
-                m.group(3) is None or int(m.group(3)) <= 38
-            )
-        if not ok:
-            raise ValueError(
-                "許可された型のみ: VARCHAR2(n CHAR)(n≤1000) / NUMBER / "
-                "NUMBER(p[,s]) / DATE / TIMESTAMP"
-            )
+        err = explicit_type_error(v)  # fullmatch 内包(末尾改行の受理も防ぐ — review-1 F005)
+        if err:
+            raise ValueError(err)
         return v
 
 

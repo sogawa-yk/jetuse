@@ -88,15 +88,17 @@ _RETRY_PROMPT = (
 )
 
 
-def _complete(messages: list[dict], response_schema: dict | None = None) -> tuple[str, dict]:
+def _complete(messages: list[dict], response_schema: dict | None = None,
+              model_key: str | None = None) -> tuple[str, dict]:
     """非ストリーミング単発補完(temperature 0 — specs/19 §2.3)。戻り = (本文, usage)。
 
     response_schema 指定時は Responses API の json_schema 構造化出力で依頼する
     (SP3-02 review-1 F001 — 実機 gpt-oss-120b が構造的に壊れた JSON を返す揺れへの対策。
     大阪プレビュー実機で受理・6/6 合格を確認 2026-07-07)。chat API 系モデルへの適用は
     上流対応が未確認のため行わない(受け皿は呼び出し側のスキーマ検証 — fail-closed)。
+    model_key はビルダー系の共用点(SP3-04 — usage 込みで別モデルを使うため。既定は従来通り)。
     """
-    model = MODELS[HEARING_MODEL]
+    model = MODELS[model_key or HEARING_MODEL]
     client = make_inference_client(with_project=model.api == "responses")
     if model.api == "responses":
         extra: dict = {}
