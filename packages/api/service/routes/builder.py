@@ -23,7 +23,7 @@ from jetuse_core import conversations as conv_repo
 from jetuse_core.auth import AuthContext, require_user
 from jetuse_core.capabilities import demo_plan_vocabulary
 
-from ..schemas import BuilderMessageIn
+from ..schemas import BuilderMessageIn, BuilderPlanPatch
 from .capabilities import build_catalog
 
 logger = logging.getLogger("jetuse.builder")
@@ -188,6 +188,37 @@ async def design(sid: str, request: Request, user: User):
     )
     if not saved:
         # 設計中に生成開始(demo_id)or 並行 messages(transcript 前進)が割り込んだ(F003)
+        raise HTTPException(status_code=409, detail=_CONFLICT_DETAIL)
+    return _session_out(_get_or_404(user.subject, sid))
+
+
+@router.patch("/{sid}/plan")
+async def patch_plan(sid: str, req: BuilderPlanPatch, user: User):
+    """プランの title/description のみ直接編集(SP3-05 / specs/19 §7②)。
+
+    反映後に §3.3 の validate_plan で再検証してから保存する。それ以外の修正は
+    追加発話 → 再 design のループ(プラン JSON 自由編集の API は作らない — §11)。
+    保存は save_plan の楽観ロック(demo_id IS NULL + transcript 長)— 競合は 409。
+    """
+    session = _get_or_404(user.subject, sid)
+    if session["demo_id"] is not None:
+        raise HTTPException(status_code=409, detail=_READONLY_DETAIL)
+    if session["status"] != "designed" or not session["plan"]:
+        raise HTTPException(status_code=409, detail=_NO_PLAN_DETAIL)
+    updates = {k: v for k, v in (("title", req.title), ("description", req.description))
+               if v is not None}
+    if not updates:
+        return _session_out(session)  # 空 PATCH = 現状(demos PATCH と同じ流儀)
+    try:
+        plan = builder_design.validate_plan(
+            {**session["plan"], **updates}, demo_plan_vocabulary()
+        )
+    except builder_design.PlanValidationError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    saved = await asyncio.to_thread(
+        builder_sessions.save_plan, user.subject, sid, plan, len(session["transcript"])
+    )
+    if not saved:
         raise HTTPException(status_code=409, detail=_CONFLICT_DETAIL)
     return _session_out(_get_or_404(user.subject, sid))
 

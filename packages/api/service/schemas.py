@@ -7,7 +7,7 @@ import される。`validated()` は service/validators.py 側の純粋関数へ
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from jetuse_core import tts
 
@@ -77,6 +77,19 @@ class BuilderMessageIn(BaseModel):
     """ヒアリング発話(SP3-01 / specs/19 §2.1 — 発話 1 件 ≤ 4,000 文字。超過は 422)。"""
 
     content: str = Field(min_length=1, max_length=4000)
+
+
+class BuilderPlanPatch(BaseModel):
+    """プランの title/description のみ直接編集(SP3-05 / specs/19 §7②)。
+
+    プラン JSON の自由編集はさせない(§11) — extra=forbid で他フィールドは 422。
+    上限は DemoPlan(§3.3)と同一。省略 = 変更しない。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, min_length=1, max_length=1000)
 
 
 class Nl2SqlRequest(BaseModel):

@@ -10,6 +10,7 @@ const Agents = lazy(() => import('./pages/agents'))
 const Builder = lazy(() => import('./pages/builder'))
 const Chat = lazy(() => import('./pages/chat'))
 const DbChat = lazy(() => import('./pages/dbchat'))
+const DemoBuilder = lazy(() => import('./pages/demobuilder'))
 const Design = lazy(() => import('./pages/design'))
 const Admin = lazy(() => import('./pages/admin'))
 const Home = lazy(() => import('./pages/home'))
@@ -58,6 +59,7 @@ export default function App() {
           <Route path="video" element={<Video />} />
           <Route path="ocr" element={<Ocr />} />
           <Route path="uc/:id" element={<UsecaseRun />} />
+          <Route path="demo-builder" element={<DemoBuilder />} />
           <Route path="builder" element={<Builder />} />
           <Route path="agents" element={<Agents />} />
           <Route path="agents/new" element={<AgentBuilder />} />
