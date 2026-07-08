@@ -15,7 +15,7 @@ from collections.abc import Callable
 
 from openai import NotFoundError
 
-from . import conversations, datasets, demo_lease, demo_targets, demos, rag, rag_ledger
+from . import bundles, conversations, datasets, demo_lease, demo_targets, demos, rag, rag_ledger
 from .db import connect
 from .genai import (
     make_cp_client,
@@ -244,6 +244,24 @@ def _cleanup_rag(ns: str) -> None:
             rag.delete_objects(rag.list_original_objects(ns, loc), loc)
 
     _stage("rag-originals", step_originals)
+
+    # 3g: 生成 SPA バンドル prefix `demo-bundles/<sha1(ns)>/` の全列挙削除(specs/19 §5.4)。
+    # 公開・staging・失敗分を一括回収。bundle は rag と同一バケット(§5.1)ゆえ objectstorage 台帳の
+    # locator を使う(無ければ既定バケット)。versioning=Disabled を確認(3f と同契約)。
+    def step_bundles() -> None:
+        # 台帳が正: objectstorage target が無い = バンドル未公開(公開は必ず write-ahead 台帳を持つ
+        # — builder_generate._publish)。target 0 件なら 3g スキップ(現在設定への [None] fallback で
+        # OS 障害時に非バンドル demo の DELETE を 503 化する後方互換退行を避ける — codex-14 M016)。
+        for t in demo_targets.targets_for(ns, "objectstorage"):
+            loc = t["locator"]
+            versioning = rag.bucket_versioning(loc)
+            if versioning not in (None, "Disabled"):
+                raise RuntimeError(
+                    f"bucket versioning is {versioning} (must be Disabled) — human action"
+                )
+            rag.delete_objects(bundles.list_demo_objects(ns, loc), loc)
+
+    _stage("bundle-prefix", step_bundles)
 
     # 3 完了後: rag_stores 行と台帳行の削除(途中失敗の再 DELETE が旧 locator を参照できる
     # よう最後まで保持する — specs/18 §3.2 手順 3b)

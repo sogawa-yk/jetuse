@@ -120,3 +120,22 @@ def save_plan(owner: str, sid: str, plan: dict, expected_len: int) -> bool:
         )
         conn.commit()
         return cur.rowcount > 0
+
+
+def attach_demo(owner: str, sid: str, demo_id: str) -> bool:
+    """生成開始時にセッションへ demo_id を刻む(specs/19 §4.5)。demo_id 付与でセッションは
+    読み取り専用化(以後の hearing/plan 書き込みは demo_id IS NULL ガードで 0 行=409)。
+
+    冪等: 既に同じ demo_id が付いていれば True(初回生成の 202 と再取得の整合)。
+    競合ガード(0 行=False): status='designed' かつ (demo_id IS NULL または既存と一致)。
+    """
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE builder_sessions SET demo_id = :d, updated_at = SYSTIMESTAMP "
+            "WHERE id = :id AND owner_sub = :o AND status = 'designed' "
+            "AND (demo_id IS NULL OR demo_id = :d)",
+            d=demo_id, id=sid, o=owner,
+        )
+        conn.commit()
+        return cur.rowcount > 0
