@@ -6,8 +6,8 @@ import { authHeaders, useUser, type User } from '../../auth'
 import { PageContainer } from '../../components/layout'
 import { usePrefs } from '../../prefs'
 import {
-  checklist, clearSid, deriveStep, loadSid, saveSid,
-  type Demo, type MessageOut, type Plan, type Session, type Step,
+  GEN_MODELS, checklist, clearSid, deriveStep, loadGenModel, loadSid, saveGenModel, saveSid,
+  type Demo, type GenModelKey, type MessageOut, type Plan, type Session, type Step,
 } from './state'
 
 /** API エラー(detail 付き)。FastAPI の 409/422 detail をそのまま通知に出す */
@@ -62,6 +62,8 @@ export default function DemoBuilder() {
   // §7②: タイトル/説明のみ直接編集(プランへ反映は生成開始時に PATCH /plan)
   const [title, setTitle] = useState('')
   const [desc, setDesc] = useState('')
+  // SP3-06: 生成モデル選択(既定 gpt-oss-120b。localStorage 復帰 — §4.1 F2)
+  const [genModel, setGenModel] = useState<GenModelKey>(() => loadGenModel())
   // §7⑤: 確定フォーム(PATCH /api/demos/{id})
   const [confirmName, setConfirmName] = useState('')
   const [confirmDesc, setConfirmDesc] = useState('')
@@ -225,7 +227,8 @@ export default function DemoBuilder() {
       }
       const r = await call<{ demo_id: string }>(
         `/api/builder/sessions/${session.id}/generate`,
-        { method: 'POST' },
+        // SP3-06: 選択モデルを送る(未知キーはサーバが 422 — specs/19 §4.5)。再生成も同じ値
+        { method: 'POST', body: JSON.stringify({ model: genModel }) },
       )
       setSession((cur) =>
         cur ? { ...cur, demo_id: r.demo_id, demo_status: 'provisioning' } : cur,
@@ -438,8 +441,13 @@ export default function DemoBuilder() {
           title={title}
           desc={desc}
           busy={busy}
+          model={genModel}
           onTitle={setTitle}
           onDesc={setDesc}
+          onModel={(m) => {
+            setGenModel(m)
+            saveGenModel(m) // localStorage 復帰対象(SP3-06)
+          }}
           onBack={() => setStep(1)}
           onGenerate={() => void generate()}
         />
@@ -589,16 +597,19 @@ function Stepper({ step }: { step: Step }) {
   )
 }
 
-/** §7②: プランの要約表示。JSON は編集させない — タイトル/説明のみ入力欄 */
+/** §7②: プランの要約表示。JSON は編集させない — タイトル/説明のみ入力欄。
+ *  生成モデル選択(SP3-06)はここ = 生成開始 UI に置く */
 function PlanReview({
-  plan, title, desc, busy, onTitle, onDesc, onBack, onGenerate,
+  plan, title, desc, busy, model, onTitle, onDesc, onModel, onBack, onGenerate,
 }: {
   plan: Plan
   title: string
   desc: string
   busy: boolean
+  model: GenModelKey
   onTitle: (v: string) => void
   onDesc: (v: string) => void
+  onModel: (m: GenModelKey) => void
   onBack: () => void
   onGenerate: () => void
 }) {
@@ -685,6 +696,21 @@ function PlanReview({
         )}
       </div>
       <p className="text-xs text-ink-muted">{t('demobuilder.plan.editHint')}</p>
+      <label className="block max-w-md text-sm">
+        <span className="font-medium">{t('demobuilder.model.label')}</span>
+        <select
+          value={model}
+          onChange={(e) => onModel(e.target.value as GenModelKey)}
+          className="mt-1 w-full rounded-rw border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-action"
+        >
+          {GEN_MODELS.map((m) => (
+            <option key={m} value={m}>
+              {t(`demobuilder.model.${m}`)}
+            </option>
+          ))}
+        </select>
+        <span className="mt-1 block text-xs text-ink-muted">{t('demobuilder.model.hint')}</span>
+      </label>
       <div className="flex flex-wrap gap-2">
         <button
           onClick={onBack}

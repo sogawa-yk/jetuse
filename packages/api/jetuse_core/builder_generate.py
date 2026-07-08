@@ -142,8 +142,12 @@ def restart(demo_id: str) -> str:
     return demo_id
 
 
-def run(demo_id: str) -> None:
-    """バックグラウンド生成本体(§4.5 ③a/③b/③c/公開)。例外は failed に落とす(fail-closed)。"""
+def run(demo_id: str, model_key: str | None = None) -> None:
+    """バックグラウンド生成本体(§4.5 ③a/③b/③c/公開)。例外は failed に落とす(fail-closed)。
+
+    model_key = generate body で選ばれた生成レジストリ key(SP3-06)。None = 設定既定。
+    検証(未知キー 422)はルート側 — ここへは検証済みの値だけが届く。
+    """
     owner = model = None
     try:
         demo = demos.get_demo(demo_id)
@@ -167,7 +171,7 @@ def run(demo_id: str) -> None:
 
         # ③b フロント生成(リース外 — 長い build)。N2 サイズ超過は runtime が例外→failed。
         # model は build 前に確定 → 生成が失敗しても N5 使用を記録できる(下の finally 相当)。
-        model = get_settings().generation_model
+        model = model_key or get_settings().generation_model
         result = build_frontend(plan, model_key=model)
 
         # ③c 静的検査(fail-closed — 合格したバンドルだけ公開)

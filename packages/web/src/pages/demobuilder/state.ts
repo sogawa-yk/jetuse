@@ -93,3 +93,29 @@ export const SID_KEY = 'jetuse.demoBuilderSid'
 export const loadSid = (): string | null => localStorage.getItem(SID_KEY)
 export const saveSid = (sid: string): void => localStorage.setItem(SID_KEY, sid)
 export const clearSid = (): void => localStorage.removeItem(SID_KEY)
+
+/** 生成モデル選択(SP3-06 / specs/19 §4.1 F2・§4.5)。key はサーバの生成レジストリ
+ *  (jetuse_core/gen_models.py)と一致させる。表示ラベル(速度/品質の目安)は i18n
+ *  `demobuilder.model.<key>`。未知キーはサーバが 422 で fail-closed。 */
+export const GEN_MODELS = [
+  'gpt-oss-120b',
+  'gpt-5.5',
+  'gpt-5.6-luna',
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.1-codex-mini',
+  'gpt-5.3-codex',
+  'gpt-5.5-pro',
+] as const
+export type GenModelKey = (typeof GEN_MODELS)[number]
+export const DEFAULT_GEN_MODEL: GenModelKey = 'gpt-oss-120b'
+
+/** 選択の復帰(localStorage — SID と同じ流儀)。未知値は既定へフォールバック */
+export const GEN_MODEL_KEY = 'jetuse.demoBuilderGenModel'
+export const loadGenModel = (): GenModelKey => {
+  const v = localStorage.getItem(GEN_MODEL_KEY)
+  return (GEN_MODELS as readonly string[]).includes(v ?? '')
+    ? (v as GenModelKey)
+    : DEFAULT_GEN_MODEL
+}
+export const saveGenModel = (m: GenModelKey): void => localStorage.setItem(GEN_MODEL_KEY, m)

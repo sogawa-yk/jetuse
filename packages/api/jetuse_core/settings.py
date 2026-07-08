@@ -54,12 +54,14 @@ class Settings(BaseSettings):
     # SP2-02(specs/18 §3.1): デモ箱あたりの上限(超過 422 — 同期削除の所要を有界化)
     demo_max_rag_files: int = 20
     demo_max_datasets: int = 10
-    # SP3-03(ADR-0023 §6・F2): フロント生成 LLM = MODELS の公開キー(既定 gpt-oss-120b)。
-    # 設定で切替可能(F2)。生成側 OpenCode/署名プロキシは MODELS[generation_model].oci_id を使う。
+    # SP3-03/SP3-06(ADR-0023 §6・F2): フロント生成 LLM = 生成レジストリ(gen_models)のキー。
+    # 既定 gpt-oss-120b。generate API の model 未指定時に使う。allowlist はレジストリが単一真実源
+    # (署名プロキシ・runtime とも gen_models を参照 — 旧 GENAI_MODEL_ALLOWLIST は廃止)。
     generation_model: str = "gpt-oss-120b"
-    # SP3-03(ADR-0023 §2/§6): 署名プロキシが転送を許す OCI モデル id の allowlist(カンマ区切り)。
-    # 既定 = フル生成実証済みの openai.gpt-oss-120b のみ(追加はフル生成再計測後・運用で広げる)。
-    genai_model_allowlist: str = "openai.gpt-oss-120b"
+    # SP3-06: ORASEJAPAN 共有テナンシ(生成 gpt-5 系)の auth プロファイルと compartment OCID。
+    # 環境依存値ゆえ .env(コミット禁止)。空 = 共有テナンシモデルは使用不可(fail-closed)。
+    gen_shared_profile: str = ""
+    gen_shared_compartment_ocid: str = ""
     # SP3-03(§4.2 N3): 同時 provisioning デモ数の上限。固定名グローバルロック下で数える。
     demo_max_concurrent_generations: int = 2
     # SP3-03(specs/19 §4.2 N7・ADR-0023): 1 生成の壁時計上限(秒)。runtime のハードキル。

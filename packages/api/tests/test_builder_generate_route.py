@@ -34,7 +34,7 @@ def fake(monkeypatch):
     monkeypatch.setattr(broute.builder_generate, "start", start)
     monkeypatch.setattr(broute.builder_generate, "restart", restart)
     monkeypatch.setattr(broute.builder_generate, "run",
-                        lambda did: state["run"].append(did))
+                        lambda did, model_key=None: state["run"].append((did, model_key)))
     return state
 
 
@@ -48,7 +48,46 @@ def test_initial_generate_starts_and_schedules(fake):
     assert res.status_code == 202
     assert res.json() == {"demo_id": "d-new"}
     assert fake["start"] == ["s1"]
-    assert fake["run"] == ["d-new"]      # BackgroundTask 予約 → TestClient で実行
+    # BackgroundTask 予約 → TestClient で実行。body なし = model 未指定(設定既定)
+    assert fake["run"] == [("d-new", None)]
+
+
+def test_generate_with_model_key_passes_through(fake):
+    # SP3-06: body {"model": <生成レジストリ key>} が run へ届く(§4.5)
+    _sess(fake)
+    res = client.post("/api/builder/sessions/s1/generate",
+                      json={"model": "gpt-5.6-sol"})
+    assert res.status_code == 202
+    assert fake["run"] == [("d-new", "gpt-5.6-sol")]
+
+
+def test_generate_with_unknown_model_is_422_before_side_effects(fake):
+    # SP3-06: 未知キーは fail-closed 422。start/attach の副作用前に遮断
+    _sess(fake)
+    res = client.post("/api/builder/sessions/s1/generate",
+                      json={"model": "gpt-6-nonexistent"})
+    assert res.status_code == 422
+    assert not fake["start"] and not fake["run"]
+
+
+def test_generate_with_unknown_body_field_is_422(fake):
+    # extra=forbid(プロキシ許可外フィールドの素通り禁止)
+    _sess(fake)
+    res = client.post("/api/builder/sessions/s1/generate",
+                      json={"model": "gpt-oss-120b", "prompt": "evil"})
+    assert res.status_code == 422
+    assert not fake["start"] and not fake["run"]
+
+
+def test_regenerate_with_model_key(fake):
+    # 再実行(failed → restart)でも選択モデルが run へ届く(§4.5 再実行契約)
+    _sess(fake, demo_id="d1")
+    fake["demos"]["d1"] = {"id": "d1", "status": "failed"}
+    res = client.post("/api/builder/sessions/s1/generate",
+                      json={"model": "gpt-5.1-codex-mini"})
+    assert res.status_code == 202
+    assert fake["restart"] == ["d1"]
+    assert fake["run"] == [("d1", "gpt-5.1-codex-mini")]
 
 
 def test_no_plan_is_409(fake):
@@ -99,7 +138,7 @@ def test_failed_demo_restarts_and_schedules(fake):
     res = client.post("/api/builder/sessions/s1/generate")
     assert res.status_code == 202 and res.json() == {"demo_id": "d1"}
     assert fake["restart"] == ["d1"]
-    assert fake["run"] == ["d1"]
+    assert fake["run"] == [("d1", None)]
 
 
 def test_busy_maps_to_409(fake, monkeypatch):

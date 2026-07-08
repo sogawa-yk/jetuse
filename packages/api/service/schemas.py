@@ -92,6 +92,18 @@ class BuilderPlanPatch(BaseModel):
     description: str | None = Field(default=None, min_length=1, max_length=1000)
 
 
+class BuilderGenerateIn(BaseModel):
+    """生成開始 body(SP3-06 / specs/19 §4.5)。model = 生成レジストリ(gen_models)の key。
+
+    省略(または body なし)= 設定既定(generation_model)。fail-closed: 未知フィールドは
+    422(extra=forbid)。未知 model キーはルート側で生成レジストリと突き合わせて 422。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: str | None = None
+
+
 class Nl2SqlRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     backend: Literal["sql_search", "select_ai"] = "sql_search"  # SQL-04比較モード

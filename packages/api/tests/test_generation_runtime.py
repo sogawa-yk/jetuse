@@ -88,7 +88,8 @@ def test_attempt_build_excludes_out_of_src(tmp_path, monkeypatch):
 
     monkeypatch.setattr(gr, "_generate_src", fake_gen)
     monkeypatch.setattr(gr, "_sandboxed_build", fake_build)
-    res = gr._attempt({"title": "x"}, "gpt-oss-120b", "openai.gpt-oss-120b",
+    from jetuse_core.gen_models import GEN_MODELS
+    res = gr._attempt({"title": "x"}, GEN_MODELS["gpt-oss-120b"],
                       scaffold, gr.get_settings(), gr.time.monotonic() + 900, {})
     files = captured["files"]
     assert "evil.js" not in files                          # src 外は build に載らない
@@ -97,23 +98,71 @@ def test_attempt_build_excludes_out_of_src(tmp_path, monkeypatch):
     assert "index.html" in res.dist_files
 
 
+def test_attempt_burns_demo_runtime_model_not_generation_model(tmp_path, monkeypatch):
+    """SP3-06: VITE_DEMO_MODEL(デモ実行時チャットのモデル)は共用 MODELS のキーのまま。
+
+    生成モデル(gen_models キー — 例 gpt-5.6-sol)を焼き込むと、生成 SPA のチャットが
+    未知モデルで 400 になる(デモ実行時モデルの変更はタスクの非ゴール)。
+    """
+    from jetuse_core.gen_models import GEN_MODELS
+    scaffold = tmp_path / "scaffold"
+    (scaffold / "src").mkdir(parents=True)
+    (scaffold / "package.json").write_text("{}")
+
+    def fake_gen(workdir, model_oci_id, timeout_s):
+        (workdir / "src" / "App.jsx").write_text("ok")
+        return "genlog"
+
+    captured = {}
+
+    def fake_build(build_dir, demo_model, timeout_s):
+        captured["demo_model"] = demo_model
+        (build_dir / "dist").mkdir(exist_ok=True)
+        (build_dir / "dist" / "index.html").write_bytes(b"<html>")
+        return "buildlog"
+
+    monkeypatch.setattr(gr, "_generate_src", fake_gen)
+    monkeypatch.setattr(gr, "_sandboxed_build", fake_build)
+    gr._attempt({"title": "x"}, GEN_MODELS["gpt-5.6-sol"],
+                scaffold, gr.get_settings(), gr.time.monotonic() + 900, {})
+    from jetuse_core.models import MODELS
+    assert captured["demo_model"] in MODELS  # 生成キーでなく共用レジストリのキー
+
+
 def test_build_frontend_rejects_unknown_model():
-    # F2: 未知の generation_model は KeyError でなく明示的な RuntimeError(podman 到達前)
-    with pytest.raises(RuntimeError, match="not in MODELS"):
+    # F2: 未知の model キーは KeyError でなく明示的な RuntimeError(podman 到達前)。
+    # レジストリは生成専用(gen_models — SP3-06)
+    with pytest.raises(RuntimeError, match="not in generation model registry"):
         gr.build_frontend({"title": "x"}, model_key="totally-unknown-model-xyz")
 
 
-def test_build_frontend_rejects_model_not_in_allowlist(monkeypatch):
-    # F2: MODELS にあってもプロキシ allowlist 外なら podman 到達前に明示失敗(不透明な失敗回避)
+def test_build_frontend_rejects_unconfigured_shared_model(monkeypatch):
+    # SP3-06: 共有テナンシモデルは GEN_SHARED_* 未設定なら podman 到達前に fail-closed
     from jetuse_core.settings import get_settings
-    monkeypatch.setenv("GENERATION_PROXY_URL", "http://proxy:8765/v1")
-    monkeypatch.setenv("GENAI_MODEL_ALLOWLIST", "openai.some-other-model-only")
+    monkeypatch.setenv("GENERATION_PROXY_URL", "http://proxy:8766/v1")
+    monkeypatch.setenv("GEN_SHARED_PROFILE", "")
+    monkeypatch.setenv("GEN_SHARED_COMPARTMENT_OCID", "")
     get_settings.cache_clear()
     try:
-        with pytest.raises(RuntimeError, match="allowlist"):
-            gr.build_frontend({"title": "x"}, model_key="gpt-oss-120b")
+        with pytest.raises(RuntimeError, match="GEN_SHARED_PROFILE"):
+            gr.build_frontend({"title": "x"}, model_key="gpt-5.6-sol")
     finally:
         get_settings.cache_clear()
+
+
+def test_opencode_config_provider_by_api_family():
+    # SP3-06 スパイク実証: responses 系は @ai-sdk/openai(版固定 — review-2 M001)、
+    # chat 系は @ai-sdk/openai-compatible(opencode 同梱)
+    import json
+    import re
+
+    from jetuse_core.gen_models import GEN_MODELS
+    chat = json.loads(gr._opencode_config(GEN_MODELS["gpt-oss-120b"], "http://p/v1"))
+    resp = json.loads(gr._opencode_config(GEN_MODELS["gpt-5.1-codex-mini"], "http://p/v1"))
+    assert chat["provider"]["oci"]["npm"] == "@ai-sdk/openai-compatible"
+    # 実行時 npm 取得ゆえ厳密な版指定必須(無指定だと実行日時で挙動が変わる)
+    assert re.fullmatch(r"@ai-sdk/openai@\d+\.\d+\.\d+", resp["provider"]["oci"]["npm"])
+    assert resp["model"] == "oci/openai.gpt-5.1-codex-mini"
 
 
 def test_sandboxed_build_isolation_flags(tmp_path, monkeypatch):
