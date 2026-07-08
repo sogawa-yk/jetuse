@@ -187,13 +187,44 @@ def _doc_prompt(doc: dict, context: str, feedback: str) -> str:
     )
 
 
+def _llm_attempt(prompt: str, total: dict, label: str, attempt: int) -> str | None:
+    """1 試行分の LLM 呼び出し。一時失敗(タイムアウト等)は None を返し再試行へ回す
+    (codex review-1: APITimeoutError で即 failed になっていた)。usage は成功時のみ加算。"""
+    try:
+        raw, usage = _llm(prompt)
+    except Exception as e:  # noqa: BLE001 — 上流例外の型は問わず同じ有界再試行に収束
+        logger.warning("%s llm attempt %d failed: %s", label, attempt + 1, e)
+        return None
+    _add_usage(total, usage)
+    return raw
+
+
+def _truncate_surplus_rows(table: dict, csv_text: str) -> str:
+    """余剰データ行を plan.rows へ決定的に切り詰める(codex review-1: LLM の行数超過が
+    再試行でも収束せず failed になる)。不足・ヘッダ不一致・解析不能はそのまま返して
+    _validate_csv に判定させる(切り詰めは検証を迂回しない — 型検証は切り詰め後に効く)。"""
+    try:
+        rows = [r for r in csv.reader(io.StringIO(csv_text))
+                if any((c or "").strip() for c in r)]
+    except csv.Error:
+        return csv_text
+    if len(rows) <= 1 + table["rows"]:
+        return csv_text
+    buf = io.StringIO()
+    csv.writer(buf, lineterminator="\n").writerows(rows[: 1 + table["rows"]])
+    return buf.getvalue()
+
+
 def _generate_table_csv(table: dict, context: str, total: dict) -> str:
     """LLM 生成 → サーバ側検証を有界再試行(§6.1)。合格 CSV を返す。"""
     err = ""
     for attempt in range(MAX_ATTEMPTS):
-        raw, usage = _llm(_table_prompt(table, context, err))
-        _add_usage(total, usage)
-        csv_text = _strip_fences(raw)
+        raw = _llm_attempt(_table_prompt(table, context, err),
+                           total, f"table {table['name']}", attempt)
+        if raw is None:
+            err = "LLM 呼び出しに失敗しました(一時エラー)"
+            continue
+        csv_text = _truncate_surplus_rows(table, _strip_fences(raw))
         err = _validate_csv(table, csv_text)
         if not err:
             return csv_text
@@ -206,11 +237,14 @@ def _generate_table_csv(table: dict, context: str, total: dict) -> str:
 
 
 def _generate_document(doc: dict, context: str, total: dict) -> bytes:
-    """LLM Markdown 生成(≤64KB — §6.2)。超過・空は有界再試行。"""
+    """LLM Markdown 生成(≤64KB — §6.2)。超過・空・一時失敗は有界再試行。"""
     err = ""
     for attempt in range(MAX_ATTEMPTS):
-        raw, usage = _llm(_doc_prompt(doc, context, err))
-        _add_usage(total, usage)
+        raw = _llm_attempt(_doc_prompt(doc, context, err),
+                           total, f"document {doc['filename']}", attempt)
+        if raw is None:
+            err = "LLM 呼び出しに失敗しました(一時エラー)"
+            continue
         text = _strip_fences(raw)
         content = text.encode("utf-8")
         if text and len(content) <= DOC_MAX_BYTES:
@@ -271,7 +305,12 @@ def provision_data(demo_id: str, plan: dict) -> dict:
     total = {"input_tokens": 0, "output_tokens": 0}
     try:
         return _provision(demo_id, namespace, plan, total)
-    except (DataProvisionError, *_CONTROL_EXCEPTIONS):
+    except DataProvisionError:
+        raise
+    except _CONTROL_EXCEPTIONS as e:
+        # 型は保って伝播しつつ、リース取得前の LLM 生成で消費済みの usage を添付する
+        # (codex review-1: DemoGoneError 中止経路で usage_log から欠落していた)
+        e.usage = dict(total)
         raise
     except Exception as e:
         raise DataProvisionError(

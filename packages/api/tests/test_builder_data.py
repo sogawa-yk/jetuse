@@ -366,17 +366,20 @@ def test_external_failure_normalized_with_usage(fakes):
 
 
 def test_llm_comm_failure_normalized_with_usage(fakes, monkeypatch):
+    """恒常的な LLM 通信失敗は有界再試行の後 DataProvisionError に正規化され、
+    成功呼び出し分の usage を保持する(review-2 F002。一時失敗の再試行化は SP3-05 review-1)。"""
     llm_calls = []
 
     def flaky(prompt):
         llm_calls.append(prompt)
-        if len(llm_calls) == 2:
-            raise ConnectionError("upstream down")
-        return GOOD_CSV, dict(USAGE)
+        if len(llm_calls) == 1:
+            return GOOD_CSV, dict(USAGE)      # 表は成功
+        raise ConnectionError("upstream down")  # 文書は恒常失敗
 
     monkeypatch.setattr(bd, "_llm", flaky)
-    with pytest.raises(bd.DataProvisionError, match="upstream down") as ei:
+    with pytest.raises(bd.DataProvisionError, match="LLM 呼び出しに失敗") as ei:
         provision()
+    assert len(llm_calls) == 1 + bd.MAX_ATTEMPTS   # 文書側も有界(それ以上呼ばない)
     assert ei.value.usage == {"input_tokens": 10, "output_tokens": 20}  # 成功1回分
 
 
@@ -561,3 +564,79 @@ def test_explicit_number_rejects_nan_infinity_values(dataset_cur):
             datasets.create_dataset(
                 "dev-user", "nums", f"id,val\nA,{v}\n".encode(),
                 column_types=["VARCHAR2(10 CHAR)", "NUMBER"], warmup=False)
+
+
+# --- codex review-1(SP3-05)対応: 件数の決定的保証・一時的 LLM 失敗の再試行・制御例外の usage ---
+
+
+def test_surplus_rows_truncated_to_plan_count(fakes):
+    """余剰行は plan.rows へ決定的に切り詰めて合格させる
+    (review-1 実機: 100 行要求に 107 行返却で failed)。"""
+    ds, _rg, llm, _ = fakes
+    surplus = GOOD_CSV + "X-999,1,2020-01-01\nY-888,2,2021-02-02\n"  # 5 行(期待 3)
+    llm["outputs"] = [surplus, GOOD_MD]
+    provision()
+    body = ds.created[0]["data"].decode().splitlines()
+    assert len(body) == 1 + TABLE["rows"]   # header + ちょうど 3 行
+    assert body[1].startswith("P-101")      # 先頭から順に採用(決定的)
+    assert len(llm["prompts"]) == 2         # 再試行なしで合格
+
+
+def test_surplus_rows_truncated_only_after_valid_rows(fakes):
+    """切り詰め後の行にも型検証は効く(切り詰めが検証を迂回しない)。"""
+    ds, _rg, llm, _ = fakes
+    bad_then_good = (GOOD_CSV.replace("P-102,0,", "P-102,NaN,")
+                     + "X-999,1,2020-01-01\n")   # 4 行 + 型違反
+    llm["outputs"] = [bad_then_good, GOOD_CSV, GOOD_MD]
+    provision()
+    assert len(llm["prompts"]) == 3          # 1 回目は型違反で再試行
+
+
+def test_transient_llm_error_is_retried(fakes, monkeypatch):
+    """LLM 呼び出し自体の一時失敗(タイムアウト等)も有界再試行で回復する
+    (review-1 実機: APITimeoutError 即 failed)。"""
+    ds, _rg, llm, _ = fakes
+    outputs = [TimeoutError("llm timeout"), GOOD_CSV, GOOD_MD]
+
+    def flaky(prompt):
+        llm["prompts"].append(prompt)
+        o = outputs.pop(0)
+        if isinstance(o, Exception):
+            raise o
+        return o, dict(USAGE)
+
+    monkeypatch.setattr(bd, "_llm", flaky)
+    out = provision()
+    assert [c["display_name"] for c in ds.created] == ["equipment"]
+    assert len(llm["prompts"]) == 3
+    assert out["usage"] == {"input_tokens": 20, "output_tokens": 40}  # 成功呼び出し分のみ合算
+
+
+def test_llm_error_exhausts_attempts_then_fails(fakes, monkeypatch):
+    calls = []
+
+    def always_fail(prompt):
+        calls.append(prompt)
+        raise TimeoutError("llm down")
+
+    monkeypatch.setattr(bd, "_llm", always_fail)
+    with pytest.raises(bd.DataProvisionError) as ei:
+        provision()
+    assert len(calls) == bd.MAX_ATTEMPTS     # 有界(それ以上呼ばない)
+    assert "LLM" in str(ei.value)
+
+
+def test_demo_gone_error_carries_usage(fakes, monkeypatch):
+    """リース区間の DemoGoneError は型を保ったまま消費 usage を運ぶ(呼び出し側が owner へ記録)。"""
+    _ds, _rg, llm, _ = fakes
+    llm["outputs"] = [GOOD_CSV, GOOD_MD]
+
+    @contextlib.contextmanager
+    def gone(demo_id):
+        raise demo_lease.DemoGoneError("deleting")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(bd, "demo_lease", types.SimpleNamespace(mutation=gone))
+    with pytest.raises(demo_lease.DemoGoneError) as ei:
+        provision()
+    assert ei.value.usage == {"input_tokens": 20, "output_tokens": 40}

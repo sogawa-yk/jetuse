@@ -1,8 +1,8 @@
 """生成オーケストレーション(specs/19 §4.5・ADR-0023)。
 
 designed セッションから Demo(provisioning)を作り、バックグラウンドで
-③b フロント生成(runtime seam)→③c 静的検査(fail-closed)→公開(S5 ポインタ切替)を回し、
-ready/failed に落とす。データ投入(③a)は SP3-04 の seam(ここでは no-op)。
+③a データ投入(builder_data seam — SP3-05 で配線)→③b フロント生成(runtime seam)→
+③c 静的検査(fail-closed)→公開(S5 ポインタ切替)を回し、ready/failed に落とす。
 
 - **N3 同時生成上限**: 固定名グローバルロック下で provisioning 数を数える(§4.2 N3 = ≤2)。
 - **リースの持ち方**: 長い build(③b)はリース外。namespace への書き込み(公開)だけ demo lease 下で
@@ -65,6 +65,30 @@ def _default_build_frontend(plan: dict, *, model_key: str) -> GenerationResult:
 build_frontend = _default_build_frontend
 
 
+def _default_provision_data(demo_id: str, plan: dict) -> dict:
+    """③a データ投入の既定実装(SP3-04)。重い依存は遅延 import(ユニットは monkeypatch)。"""
+    from .builder_data import provision_data as impl
+
+    return impl(demo_id, plan)
+
+
+# ③a データ投入のシーム(SP3-05 で配線 — specs/19 §4.5。テストは monkeypatch で差し替える)。
+provision_data = _default_provision_data
+
+
+def _record_data_usage(owner: str, usage: dict) -> None:
+    """③a の LLM 使用を owner に記録(§8.3)。usage ゼロ = LLM 未起動(data なし)は記録しない。"""
+    if not (usage.get("input_tokens") or usage.get("output_tokens")):
+        return
+    try:
+        from .datasets import GEN_MODEL
+
+        conversations.log_usage(owner, None, GEN_MODEL,
+                                usage.get("input_tokens", 0), usage.get("output_tokens", 0))
+    except Exception:
+        logger.warning("data provision usage log failed", exc_info=True)
+
+
 def _os_locator() -> dict:
     """公開バンドルの objectstorage locator(rag の原本と同一形 — 3f/3g 掃除が同じ台帳で回収)。"""
     s = get_settings()
@@ -89,6 +113,17 @@ def start(owner: str, session: dict) -> str:
         if not builder_sessions.attach_demo(owner, session["id"], demo["id"]):
             demos.delete_demo(owner, demo["id"])  # 競合で別リクエストが先着 → 孤児を消す
             raise GenerationConflictError("session already attached to another demo")
+        # attach 成立後はセッション不変(save_plan の demo_id IS NULL ガード)。ルートの
+        # 読み取り〜attach の間に並行 PATCH /plan が新プランを保存した可能性があるため、
+        # 確定版を読み直して demo に反映する(codex review-1: 旧プランでの生成を構造的に防ぐ)
+        fresh = builder_sessions.get_session(owner, session["id"])
+        fresh_plan = (fresh or {}).get("plan")
+        if fresh_plan and fresh_plan != plan:
+            demos.update_demo(owner, demo["id"], {
+                "name": fresh_plan["title"],
+                "description": fresh_plan.get("description"),
+                "config": {"plan": fresh_plan},  # 作成直後 config は plan のみ = 全置換で正確
+            })
     return demo["id"]
 
 
@@ -119,6 +154,17 @@ def run(demo_id: str) -> None:
         if not plan:
             raise GenerationConflictError("provisioning demo has no plan")
 
+        # ③a データ投入(SP3-04 実装への配線 — specs/19 §4.5。LLM 生成はリース外・
+        # 箱への書き込みは provision_data 内の demo_lease.mutation 下 — §8.2)。
+        # usage は成功時ここで、失敗時は except 側(DataProvisionError.usage)で記録する。
+        data_result = provision_data(demo_id, plan)
+        _record_data_usage(owner, data_result["usage"])
+
+        # フェーズ境界の status 再確認(§1.2 — deleting を観測したら即中止。後始末は DELETE 側)
+        demo = demos.get_demo(demo_id)
+        if not demo or demo["status"] != "provisioning":
+            return
+
         # ③b フロント生成(リース外 — 長い build)。N2 サイズ超過は runtime が例外→failed。
         # model は build 前に確定 → 生成が失敗しても N5 使用を記録できる(下の finally 相当)。
         model = get_settings().generation_model
@@ -131,8 +177,18 @@ def run(demo_id: str) -> None:
             raise RuntimeError(f"static inspection failed: {violations[:5]}")
 
         _publish(demo_id, result)
+    except demo_lease.DemoGoneError as e:
+        # ③a 中に DELETE を観測(§1.2)。即中止 — 遷移・後始末は DELETE 側が所有する。
+        # リース前の LLM 生成で消費した usage は落とさない(provision_data が例外に添付)
+        logger.info("generation aborted (demo gone): %s", demo_id)
+        if owner and isinstance(getattr(e, "usage", None), dict):
+            _record_data_usage(owner, e.usage)
+        return
     except Exception as e:  # noqa: BLE001 — 全失敗を failed に写像(残骸は DELETE が回収)
         logger.exception("generation failed: %s", demo_id)
+        # ③a 失敗(DataProvisionError)は消費済み usage を持つ — エラー経路でも記録する
+        if owner and isinstance(getattr(e, "usage", None), dict):
+            _record_data_usage(owner, e.usage)
         # N4: 失敗理由(生成/ビルド出力末尾を含む)を config.generation.error に記録(F1 で秘密不入)
         demos.merge_config(demo_id, {"generation": {
             "error": str(e)[:2000], "failed_at": _now()}})
@@ -163,7 +219,6 @@ def _publish(demo_id: str, result: GenerationResult) -> None:
         demo = demos.get_demo(demo_id)
         if not demo or demo["status"] != "provisioning":
             return  # build 中に DELETE/別遷移が確定 — 生成物は捨てる(孤児を作らない)
-        # ③a データ投入(demo.config.plan.data の datasets/rag 文書)= SP3-04 がこのリース下で実装。
         bundle_id = str(uuid.uuid4())
         demo_targets.record_target(ns, "objectstorage", _os_locator())  # S6 write-ahead
         bundles.put_files(ns, bundle_id, result.dist_files)
