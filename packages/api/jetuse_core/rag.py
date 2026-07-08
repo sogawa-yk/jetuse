@@ -171,8 +171,10 @@ def _os_client(region: str | None = None):
             {"region": region or get_settings().oci_region}, signer=signer
         )
     cfg = oci.config.from_file()
-    if region:
-        cfg = {**cfg, "region": region}
+    # settings.oci_region を region の既定にする(RP 経路と一貫)。write-ahead locator は
+    # settings.oci_region を記録するため、OS クライアントもそれに揃える(別リージョン配備/
+    # Chicago fallback で config ファイルの region と食い違っても locator と整合)。
+    cfg = {**cfg, "region": region or get_settings().oci_region}
     return oci.object_storage.ObjectStorageClient(cfg)
 
 

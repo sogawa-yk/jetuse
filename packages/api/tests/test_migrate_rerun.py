@@ -11,15 +11,18 @@ from jetuse_core import migrate
 
 
 class FakeDict:
-    """USER_TAB_COLUMNS / USER_CONSTRAINTS / USER_INDEXES / USER_IND_COLUMNS の canned 応答。"""
+    """USER_TAB_COLUMNS / USER_CONSTRAINTS / USER_CONS_COLUMNS / USER_INDEXES /
+    USER_IND_COLUMNS の canned 応答。"""
 
-    def __init__(self, columns=None, checks=None, indexes=None):
+    def __init__(self, columns=None, checks=None, indexes=None, pks=None):
         # columns: {(table, col): (data_type, char_length, char_used, nullable, data_default)}
         # checks: {table: [(search_condition, status, validated), ...]}
         # indexes: {index: (table, [col, ...])}
+        # pks: {table: (constraint_name, status, validated, [col, ...])}
         self.columns = columns or {}
         self.checks = checks or {}
         self.indexes = indexes or {}
+        self.pks = pks or {}
         self._one = None
         self._all = []
 
@@ -28,6 +31,13 @@ class FakeDict:
         self._one, self._all = None, []
         if "user_tab_columns" in low:
             self._one = self.columns.get((binds["t"], binds["c"]))
+        elif "constraint_type = 'p'" in low:
+            entry = self.pks.get(binds["t"])
+            self._one = (entry[0], entry[1], entry[2]) if entry else None
+        elif "user_cons_columns" in low:
+            for name, _s, _v, cols in self.pks.values():
+                if name == binds["cn"]:
+                    self._all = [(c,) for c in cols]
         elif "user_constraints" in low:
             self._all = list(self.checks.get(binds["t"], []))
         elif "user_ind_columns" in low:
@@ -129,3 +139,67 @@ def test_all_new_migrations_have_expected_postconditions():
     for v in ("017_demos_v2", "018_demos_idx_owner", "019_demos_idx_visibility",
               "020_conversations_demo_id", "021_conversations_idx_demo"):
         assert v in migrate._EXPECTED_POST
+
+
+# --- 025/026 builder_sessions(specs/19 §2.1 — ランナー事後条件検証の対象) ---
+
+COLS_025 = {
+    ("BUILDER_SESSIONS", "ID"): ("VARCHAR2", 36, "B", "N", None),
+    ("BUILDER_SESSIONS", "OWNER_SUB"): ("VARCHAR2", 255, "B", "N", None),
+    ("BUILDER_SESSIONS", "STATUS"): ("VARCHAR2", 20, "B", "N", "'hearing'"),
+    ("BUILDER_SESSIONS", "TRANSCRIPT"): ("CLOB", None, None, "N", "'[]'"),
+    ("BUILDER_SESSIONS", "REQUIREMENTS"): ("CLOB", None, None, "Y", None),
+    ("BUILDER_SESSIONS", "PLAN"): ("CLOB", None, None, "Y", None),
+    ("BUILDER_SESSIONS", "DEMO_ID"): ("VARCHAR2", 36, "B", "Y", None),
+    ("BUILDER_SESSIONS", "CREATED_AT"): ("TIMESTAMP(6)", None, None, "N", "SYSTIMESTAMP"),
+    ("BUILDER_SESSIONS", "UPDATED_AT"): ("TIMESTAMP(6)", None, None, "N", "SYSTIMESTAMP"),
+}
+CHECKS_025 = {
+    "BUILDER_SESSIONS": [
+        ("status IN ('hearing','designed')", "ENABLED", "VALIDATED"),
+        ("transcript IS JSON", "ENABLED", "VALIDATED"),
+        ("requirements IS JSON", "ENABLED", "VALIDATED"),
+        ("plan IS JSON", "ENABLED", "VALIDATED"),
+    ]
+}
+PK_025 = {"BUILDER_SESSIONS": ("SYS_C001", "ENABLED", "VALIDATED", ["ID"])}
+
+
+def test_postconditions_025_full_match():
+    cur = FakeDict(columns=COLS_025, checks=CHECKS_025, pks=PK_025)
+    assert migrate._postconditions_met(cur, "025_builder_sessions") is True
+    idx = FakeDict(indexes={"IDX_BS_OWNER": ("BUILDER_SESSIONS", ["OWNER_SUB", "UPDATED_AT"])})
+    assert migrate._postconditions_met(idx, "026_builder_sessions_idx") is True
+
+
+def test_postconditions_027_sufficient_full_match():
+    """027 = sufficient 最終判定の永続化列(specs/19 §2.3・§3.1 — SP3-02 review-1 F002)。"""
+    cols = {("BUILDER_SESSIONS", "SUFFICIENT"): ("NUMBER", None, None, "N", "0")}
+    checks = {"BUILDER_SESSIONS": [("sufficient IN (0,1)", "ENABLED", "VALIDATED")]}
+    cur = FakeDict(columns=cols, checks=checks)
+    assert migrate._postconditions_met(cur, "027_builder_sessions_sufficient") is True
+    wrong_default = FakeDict(
+        columns={("BUILDER_SESSIONS", "SUFFICIENT"): ("NUMBER", None, None, "N", "1")},
+        checks=checks)
+    with pytest.raises(RuntimeError, match="SUFFICIENT"):
+        migrate._postconditions_met(wrong_default, "027_builder_sessions_sufficient")
+
+
+def test_postconditions_025_missing_primary_key_stops():
+    """同名テーブルが PK 欠落でも「適用済み」と誤記録しない(review-1 M001)。"""
+    cur = FakeDict(columns=COLS_025, checks=CHECKS_025, pks={})
+    with pytest.raises(RuntimeError, match="PRIMARY KEY"):
+        migrate._postconditions_met(cur, "025_builder_sessions")
+
+
+def test_postconditions_025_pk_wrong_columns_or_state_stops():
+    wrong_cols = FakeDict(columns=COLS_025, checks=CHECKS_025,
+                          pks={"BUILDER_SESSIONS": ("SYS_C001", "ENABLED", "VALIDATED",
+                                                    ["OWNER_SUB"])})
+    with pytest.raises(RuntimeError, match="PRIMARY KEY"):
+        migrate._postconditions_met(wrong_cols, "025_builder_sessions")
+    disabled = FakeDict(columns=COLS_025, checks=CHECKS_025,
+                        pks={"BUILDER_SESSIONS": ("SYS_C001", "DISABLED", "NOT VALIDATED",
+                                                  ["ID"])})
+    with pytest.raises(RuntimeError, match="ENABLED/VALIDATED"):
+        migrate._postconditions_met(disabled, "025_builder_sessions")

@@ -22,11 +22,13 @@ MIGRATIONS_DIR = pathlib.Path(__file__).parent / "migrations"
 # 既適用を示唆する ORA: 1430=列が既存 / 955=名前が既存 / 1408=列リストが索引済み
 _ALREADY_APPLIED_ORA = {1430, 955, 1408}
 
-# 期待事後条件(specs/18 §1.1 の 017〜021)。
+# 期待事後条件(specs/18 §1.1 の 017〜021、specs/19 §2.1 の 025〜026)。
 # columns: {(TABLE, COLUMN): (DATA_TYPE, CHAR_LENGTH, CHAR_USED, NULLABLE, DATA_DEFAULT)}
 #   CHAR_LENGTH/CHAR_USED が None の型(CLOB/TIMESTAMP)は長さセマンティクスなし = 比較対象外。
 # checks: {TABLE: [search_condition, ...]}(空白正規化して存在を要求)
 # indexes: {INDEX: (TABLE, [COLUMN, ...])}(列は position 順の完全一致)
+# primary_keys: {TABLE: [COLUMN, ...]}(ENABLED/VALIDATED の PK が position 順で完全一致 —
+#   同名テーブルが PK 欠落のまま「適用済み」と誤記録されるのを防ぐ。review-1 M001)
 _EXPECTED_POST: dict[str, dict] = {
     "017_demos_v2": {
         "columns": {
@@ -77,6 +79,42 @@ _EXPECTED_POST: dict[str, dict] = {
     },
     "024_rag_files_filename_char": {
         "columns": {("RAG_FILES", "FILENAME"): ("VARCHAR2", 400, "C", "N", None)}
+    },
+    "025_builder_sessions": {
+        "columns": {
+            ("BUILDER_SESSIONS", "ID"): ("VARCHAR2", 36, "B", "N", None),
+            ("BUILDER_SESSIONS", "OWNER_SUB"): ("VARCHAR2", 255, "B", "N", None),
+            ("BUILDER_SESSIONS", "STATUS"): ("VARCHAR2", 20, "B", "N", "'hearing'"),
+            ("BUILDER_SESSIONS", "TRANSCRIPT"): ("CLOB", None, None, "N", "'[]'"),
+            ("BUILDER_SESSIONS", "REQUIREMENTS"): ("CLOB", None, None, "Y", None),
+            ("BUILDER_SESSIONS", "PLAN"): ("CLOB", None, None, "Y", None),
+            ("BUILDER_SESSIONS", "DEMO_ID"): ("VARCHAR2", 36, "B", "Y", None),
+            ("BUILDER_SESSIONS", "CREATED_AT"): (
+                "TIMESTAMP(6)", None, None, "N", "SYSTIMESTAMP"
+            ),
+            ("BUILDER_SESSIONS", "UPDATED_AT"): (
+                "TIMESTAMP(6)", None, None, "N", "SYSTIMESTAMP"
+            ),
+        },
+        "checks": {
+            "BUILDER_SESSIONS": [
+                "status IN ('hearing','designed')",
+                "transcript IS JSON",
+                "requirements IS JSON",
+                "plan IS JSON",
+            ]
+        },
+        "primary_keys": {"BUILDER_SESSIONS": ["ID"]},
+    },
+    "026_builder_sessions_idx": {
+        "indexes": {"IDX_BS_OWNER": ("BUILDER_SESSIONS", ["OWNER_SUB", "UPDATED_AT"])}
+    },
+    # sufficient 最終判定の永続化(specs/19 §2.3・§3.1 — SP3-02 review-1 F002)
+    "027_builder_sessions_sufficient": {
+        "columns": {
+            ("BUILDER_SESSIONS", "SUFFICIENT"): ("NUMBER", None, None, "N", "0"),
+        },
+        "checks": {"BUILDER_SESSIONS": ["sufficient IN (0,1)"]},
     },
 }
 
@@ -153,6 +191,31 @@ def _postconditions_met(cur, version: str) -> bool:
                 raise _mismatch(
                     version, f"{table} の check 制約 [{cond}] が {state} (期待 ENABLED/VALIDATED)"
                 )
+
+    for table, pk_columns in (expected.get("primary_keys") or {}).items():
+        cur.execute(
+            "SELECT constraint_name, status, validated FROM user_constraints "
+            "WHERE table_name = :t AND constraint_type = 'P'",
+            t=table,
+        )
+        row = cur.fetchone()
+        if not row:
+            raise _mismatch(version, f"{table} の PRIMARY KEY が存在しない")
+        name, state = row[0], (row[1], row[2])
+        if state != ("ENABLED", "VALIDATED"):
+            raise _mismatch(
+                version, f"{table} の PRIMARY KEY が {state} (期待 ENABLED/VALIDATED)"
+            )
+        cur.execute(
+            "SELECT column_name FROM user_cons_columns WHERE constraint_name = :cn "
+            "ORDER BY position",
+            cn=name,
+        )
+        got_cols = [r[0] for r in cur.fetchall()]
+        if got_cols != pk_columns:
+            raise _mismatch(
+                version, f"{table} の PRIMARY KEY 列が {got_cols} (期待 {pk_columns})"
+            )
 
     for index, (table, columns) in (expected.get("indexes") or {}).items():
         cur.execute(

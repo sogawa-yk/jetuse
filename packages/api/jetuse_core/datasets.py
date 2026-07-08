@@ -16,6 +16,8 @@ import logging
 import re
 import time
 import uuid
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from . import ddl_verify, nl2sql, vpd
@@ -42,6 +44,31 @@ WARMUP_INTERVAL_S = 4
 
 # 作成済みデータセットプロファイルのモデルをプロセス内に記録(モデル変更時に作り直すため)
 _ds_profile_models: dict[str, str] = {}
+
+# 明示列型の許可リスト(specs/19 §3.3 の「datasets 機構が投入可能な型」の単一の正 —
+# builder_design のプラン検証もこれを使う)。DDL へ文字列連結するため許可リスト外は拒否。
+_EXPLICIT_TYPE_RE = re.compile(
+    r"^(?:VARCHAR2\((\d{1,4}) CHAR\)|NUMBER(?:\((\d{1,2})(?:,(\d{1,2}))?\))?|DATE|TIMESTAMP)$"
+)
+
+
+def explicit_type_error(coltype: str) -> str | None:
+    """明示列型の許可リスト+上限検証。エラー文(不正) or None(合格)。
+
+    上限は specs/19 §3.3: VARCHAR2 は n ≤ 1000、NUMBER は p ≤ 38・s ≤ 38。
+    """
+    m = _EXPLICIT_TYPE_RE.fullmatch(coltype or "")
+    ok = bool(m)
+    if ok and m.group(1) is not None:  # VARCHAR2(n CHAR)
+        ok = 1 <= int(m.group(1)) <= 1000
+    if ok and m.group(2) is not None:  # NUMBER(p[,s])
+        ok = 1 <= int(m.group(2)) <= 38 and (
+            m.group(3) is None or int(m.group(3)) <= 38
+        )
+    if not ok:
+        return ("許可された型のみ: VARCHAR2(n CHAR)(n≤1000) / NUMBER / "
+                "NUMBER(p[,s]) / DATE / TIMESTAMP")
+    return None
 
 
 def _schema() -> str:
@@ -213,7 +240,14 @@ def create_dataset(
     owner: str, display_name: str, data: bytes,
     model: str | None = None, warmup: bool = True,
     lease: DemoLease | None = None,
+    column_types: list[str] | None = None,
 ) -> dict[str, Any]:
+    """CSV をデータセット化する(既存の唯一の投入経路)。
+
+    column_types(SP3-04 / specs/19 §6.1): CSV 列順の明示型。指定時は値からの型推定を
+    行わず、この型で CREATE TABLE と値変換(NUMBER→数値 / DATE / TIMESTAMP→temporal)を
+    行う(検証済みデモプランの列型を物理スキーマへ反映する)。未指定は従来の推定のまま。
+    """
     vpd.integrity_gate()
     owner_key_gate()
     require_lease_for(owner, lease)  # demo namespace はリース保持が前提(specs/18 §3.2.1)
@@ -236,17 +270,26 @@ def create_dataset(
     ncol = len(cols)
     body = [r[:ncol] + [""] * (ncol - len(r)) for r in body]
 
-    types = []
-    for j in range(ncol):
-        vals = [r[j] for r in body]
-        nonempty = [v for v in vals if (v or "").strip()]
-        if nonempty and all(_is_num(v) for v in nonempty):
-            types.append("NUMBER")
-        else:
-            # Oracleの既定はBYTEセマンティクスのため、日本語(UTF-8で1文字3バイト)が
-            # 文字数基準だと ORA-12899 になる。バイト長で見積もり余裕を持たせる
-            maxbytes = max((len((v or "").encode("utf-8")) for v in vals), default=1)
-            types.append(f"VARCHAR2({min(max(maxbytes * 2, 32), 4000)})")
+    if column_types is not None:
+        if len(column_types) != ncol:
+            raise ValueError(
+                f"column_types の数({len(column_types)})が列数({ncol})と一致しません")
+        bad = [t for t in column_types if explicit_type_error(t)]
+        if bad:
+            raise ValueError(f"許可されていない列型: {bad}")
+        types = list(column_types)
+    else:
+        types = []
+        for j in range(ncol):
+            vals = [r[j] for r in body]
+            nonempty = [v for v in vals if (v or "").strip()]
+            if nonempty and all(_is_num(v) for v in nonempty):
+                types.append("NUMBER")
+            else:
+                # Oracleの既定はBYTEセマンティクスのため、日本語(UTF-8で1文字3バイト)が
+                # 文字数基準だと ORA-12899 になる。バイト長で見積もり余裕を持たせる
+                maxbytes = max((len((v or "").encode("utf-8")) for v in vals), default=1)
+                types.append(f"VARCHAR2({min(max(maxbytes * 2, 32), 4000)})")
 
     ds_id = str(uuid.uuid4())
     table = f"JETUSE_DS_{_owner_tag(owner)}_{ds_id[:8].upper()}"
@@ -255,9 +298,26 @@ def create_dataset(
 
     def conv(v: str, t: str):
         v = (v or "").strip()
-        if t == "NUMBER":
-            return float(v.replace(",", "")) if v else None
-        return v or None
+        if not v:
+            return None
+        if t.startswith("NUMBER"):
+            n = v.replace(",", "")
+            if column_types is None:  # 推定 NUMBER は従来どおり float(互換)
+                return float(n)
+            # 明示 NUMBER は Decimal のまま bind(float 経由は 2^53 超・38桁で桁落ち —
+            # review-2 F003)。oracledb は Decimal を NUMBER として正確に束縛する
+            try:
+                d = Decimal(n)
+            except InvalidOperation:
+                raise ValueError(f"NUMBER 列に数値でない値: {v[:40]!r}") from None
+            if not d.is_finite():  # Decimal は NaN/Infinity 文字列を受理してしまう
+                raise ValueError(f"NUMBER 列に数値でない値: {v[:40]!r}")
+            return d
+        if t == "DATE":  # 明示型のみ(推定は NUMBER/VARCHAR2 だけ)。不正値は ValueError=422
+            return date.fromisoformat(v)
+        if t == "TIMESTAMP":
+            return datetime.fromisoformat(v)
+        return v
 
     payload = [[conv(r[j], types[j]) for j in range(ncol)] for r in body]
 

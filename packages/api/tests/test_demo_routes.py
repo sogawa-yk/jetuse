@@ -361,24 +361,22 @@ def test_demo_chat_does_not_create_oci_conversation(fake_conv, monkeypatch):
 
 def test_demo_conversation_reserved_prefix_sub_roundtrip(fake_conv, monkeypatch):
     """予約接頭辞 sub(demo_/sub_)は owner_key で単射エスケープされ往復が成立(specs/18 §4.2)。"""
-    from jetuse_core.auth import AuthContext, require_user
-    from service.main import app as _app
+    from jetuse_core.auth import AuthContext
 
     _fake_stream(monkeypatch)
     monkeypatch.setitem(DEMOS, "pubx",
                         {"id": "pubx", "owner_sub": "user-a", "name": "p",
                          "visibility": "public", "status": "ready"})
-    _app.dependency_overrides[require_user] = lambda: AuthContext(subject="demo_evil")
-    try:
-        cid = client.post("/api/demos/pubx/conversations",
-                          json={"model": DEFAULT_MODEL}).json()["id"]
-        # 資源キー列はエスケープ済み(raw sub を owner に直渡ししない)
-        assert fake_conv.convs[cid]["owner"] == "sub_demo_evil"
-        res = client.post("/api/demos/pubx/chat",
-                          json={**CHAT_BODY, "conversation_id": cid})
-        assert res.status_code == 200
-    finally:
-        _app.dependency_overrides.pop(require_user, None)
+    # 能力ルートは require_app_or_user 経由(verify_token を直接呼ぶ)。予約接頭辞 sub を注入。
+    import service.demo_context as _dc
+    monkeypatch.setattr(_dc, "verify_token", lambda tok, s: AuthContext(subject="demo_evil"))
+    cid = client.post("/api/demos/pubx/conversations",
+                      json={"model": DEFAULT_MODEL}).json()["id"]
+    # 資源キー列はエスケープ済み(raw sub を owner に直渡ししない)
+    assert fake_conv.convs[cid]["owner"] == "sub_demo_evil"
+    res = client.post("/api/demos/pubx/chat",
+                      json={**CHAT_BODY, "conversation_id": cid})
+    assert res.status_code == 200
 
 
 def _mock_select_ai(monkeypatch, answer="回答本文"):
