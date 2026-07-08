@@ -13,10 +13,12 @@ from typing import Any
 
 from .db import connect
 
-# demo_status は demo_id があるとき JOIN で添える(UI の進行表示用 — specs/19 §2.4)
+# demo_status は demo_id があるとき JOIN で添える(UI の進行表示用 — specs/19 §2.4)。
+# sufficient は直近ヒアリングの最終判定(§2.3 — 決定的再検査後)の永続値。design ゲート
+# (§3.1)の内部判定用で、SessionOut には出さない(ルート側で落とす)。
 _SELECT = (
     "SELECT bs.id, bs.status, bs.transcript, bs.requirements, bs.plan, "
-    "bs.demo_id, d.status, bs.created_at, bs.updated_at "
+    "bs.demo_id, d.status, bs.sufficient, bs.created_at, bs.updated_at "
     "FROM builder_sessions bs LEFT JOIN demos d ON d.id = bs.demo_id"
 )
 
@@ -35,8 +37,9 @@ def _row_to_session(r) -> dict[str, Any]:
         "requirements": _json_col(r[3]),
         "plan": _json_col(r[4]),
         "demo_id": r[5], "demo_status": r[6],
-        "created_at": r[7].isoformat() if r[7] else None,
-        "updated_at": r[8].isoformat() if r[8] else None,
+        "sufficient": bool(r[7]),
+        "created_at": r[8].isoformat() if r[8] else None,
+        "updated_at": r[9].isoformat() if r[9] else None,
     }
 
 
@@ -66,10 +69,12 @@ def get_session(owner: str, sid: str) -> dict[str, Any] | None:
 
 def save_hearing_turn(
     owner: str, sid: str, transcript: list[dict], requirements: dict,
-    expected_len: int,
+    sufficient: bool, expected_len: int,
 ) -> bool:
-    """ヒアリング 1 往復の永続化(transcript 全置換 + requirements 上書き)。
+    """ヒアリング 1 往復の永続化(transcript 全置換 + requirements/sufficient 上書き)。
 
+    sufficient は決定的再検査後の最終判定(specs/19 §2.3)。requirements と同一 UPDATE で
+    永続化し、design ゲート(§3.1)がこの値を参照する(SP3-02 review-1 F002)。
     読み→LLM→書きの競合は WHERE で 0 行(False — ルート側 409)にする:
     - demo_id IS NULL: 途中で生成が始まった(読み取り専用化)
     - transcript の JSON 配列長 = :n(読み取り時の件数): 並行 messages の楽観ロック —
@@ -80,11 +85,37 @@ def save_hearing_turn(
         cur = conn.cursor()
         cur.execute(
             "UPDATE builder_sessions SET transcript = :t, requirements = :r, "
-            "updated_at = SYSTIMESTAMP "
+            "sufficient = :suf, updated_at = SYSTIMESTAMP "
             "WHERE id = :id AND owner_sub = :o AND demo_id IS NULL "
             "AND JSON_VALUE(transcript, '$.size()' RETURNING NUMBER) = :n",
             t=json.dumps(transcript, ensure_ascii=False, allow_nan=False),
             r=json.dumps(requirements, ensure_ascii=False, allow_nan=False),
+            suf=1 if sufficient else 0,
+            id=sid, o=owner, n=expected_len,
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def save_plan(owner: str, sid: str, plan: dict, expected_len: int) -> bool:
+    """検証済みプランの保存 + status='designed'(specs/19 §3.1)。
+
+    designed 後の再実行 = 上書き(demo_id が付くまで)なので status ガードは持たない。
+    WHERE で 0 行(False — ルート側 409)にする競合:
+    - demo_id IS NULL: 設計中に生成が始まった(読み取り専用化)
+    - transcript の JSON 配列長 = :n(design 開始時の件数): 設計中の並行 messages で
+      requirements が進んだ場合、古い要求由来のプランを保存しない(review-1 F003 の楽観
+      ロック — save_hearing_turn と同形)。designed 後の追加発話が既存プランを消さないのは
+    仕様どおり(§3.1 の再実行契約 — 修正は追加発話 → 再 design のループ)。
+    """
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE builder_sessions SET plan = :p, status = 'designed', "
+            "updated_at = SYSTIMESTAMP "
+            "WHERE id = :id AND owner_sub = :o AND demo_id IS NULL "
+            "AND JSON_VALUE(transcript, '$.size()' RETURNING NUMBER) = :n",
+            p=json.dumps(plan, ensure_ascii=False, allow_nan=False),
             id=sid, o=owner, n=expected_len,
         )
         conn.commit()

@@ -6,6 +6,24 @@
 3. 以上で GET /api/capabilities に自動で載る(routes の乖離は tests/test_capabilities.py が検出)。
 """
 
+# デモスコープルートの prefix(specs/19 §3.4 — プラン語彙の構造的導出に使う)
+DEMO_SCOPE_PREFIX = "/api/demos/{demo_id}/"
+
+
+def demo_plan_vocabulary(capabilities: list[dict] | None = None) -> list[str]:
+    """プラン語彙 = demo_safe=true かつデモスコープルートを 1 つ以上持つ能力(specs/19 §3.4)。
+
+    能力 id をハードコードせずカタログから導出する — デモスコープのパススルーを足せば
+    語彙は自動で広がる(§3.4 案 A の追従性)。順序はカタログ順。
+    """
+    caps = CAPABILITIES if capabilities is None else capabilities
+    return [
+        c["capability"] for c in caps
+        if c.get("demo_safe")
+        and any(r["path"].startswith(DEMO_SCOPE_PREFIX) for r in c["routes"])
+    ]
+
+
 # ponytail: 素の dict のリスト。統一 Capability インターフェース(案2)は作らない(specs/17 §3)。
 CAPABILITIES: list[dict] = [
     {

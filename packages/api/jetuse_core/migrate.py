@@ -109,6 +109,13 @@ _EXPECTED_POST: dict[str, dict] = {
     "026_builder_sessions_idx": {
         "indexes": {"IDX_BS_OWNER": ("BUILDER_SESSIONS", ["OWNER_SUB", "UPDATED_AT"])}
     },
+    # sufficient 最終判定の永続化(specs/19 §2.3・§3.1 — SP3-02 review-1 F002)
+    "027_builder_sessions_sufficient": {
+        "columns": {
+            ("BUILDER_SESSIONS", "SUFFICIENT"): ("NUMBER", None, None, "N", "0"),
+        },
+        "checks": {"BUILDER_SESSIONS": ["sufficient IN (0,1)"]},
+    },
 }
 
 
