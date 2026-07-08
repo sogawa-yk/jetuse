@@ -41,6 +41,9 @@ class World:
              "locator": {"region": "r1", "os_namespace": "n", "bucket": "b"}},
         ]
         self.originals = [f"rag/{TAG}/r1.md"]
+        # 3g: 生成 SPA バンドル prefix(公開 + staging + 失敗分)
+        self.bundle_objects = [f"demo-bundles/{TAG}/b1/index.html",
+                               f"demo-bundles/{TAG}/b1/assets/index.js"]
         self.deleted = {"stores": [], "files": [], "objects": [], "ledger": [],
                         "rag_rows": [], "targets": 0}
         self.versioning = "Disabled"
@@ -106,6 +109,9 @@ def world(monkeypatch):
                         lambda ns, loc=None, **kw: list(w.originals))
     monkeypatch.setattr(demo_cleanup.rag, "delete_objects",
                         lambda names, loc=None: w.deleted["objects"].extend(names))
+    # 3g: 生成 SPA バンドル prefix の列挙(bundles は rag と同一バケット・delete は rag 側)
+    monkeypatch.setattr(demo_cleanup.bundles, "list_demo_objects",
+                        lambda ns, loc=None: list(w.bundle_objects))
 
     # --- ledger ---
     monkeypatch.setattr(demo_cleanup.rag_ledger, "rows_for_owner",
@@ -205,6 +211,7 @@ def test_happy_path_order_and_convergence(world):
     # 3a は行ごとに対応 ledger を冪等解放、3c は残り全行(pending 含む)を解放
     assert world.deleted["ledger"] == ["f1", "r1"]  # 事後条件: owner の ledger 行ゼロ
     assert f"rag/{TAG}/r1.md" in world.deleted["objects"]  # 3f
+    assert f"demo-bundles/{TAG}/b1/index.html" in world.deleted["objects"]  # 3g
     # usage_log は会話層で触れない(delete_demo_conversations の契約 — 別テスト)
 
 

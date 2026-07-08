@@ -97,10 +97,10 @@ def _lock_name_for(demo_id: str) -> str:
 
 
 @contextlib.contextmanager
-def acquire(demo_id: str, *, timeout_s: int = LOCK_TIMEOUT_S):
-    """demo 単位の排他リースを取得する(最外層専用)。
+def _acquire_lock(lock_name: str, timeout_s: int):
+    """DBMS_LOCK 排他区間の取得/解放(acquire / acquire_global 共通の低レベル)。yield=保持中の conn。
 
-    取得後の status 再確認は呼び出し側の契約(mutation()/delete 側)が行う。
+    RELEASE 非 0・例外は接続を drop(残留ロックの誤認防止)。全戻り値を処理する。
     """
     try:
         conn = _get_lease_pool().acquire()
@@ -113,8 +113,7 @@ def acquire(demo_id: str, *, timeout_s: int = LOCK_TIMEOUT_S):
         conn.call_timeout = LEASE_CALL_TIMEOUT_MS
         cur = conn.cursor()
         try:
-            handle = cur.callfunc(
-                "jetuse_lock.allocate_unique", str, [_lock_name_for(demo_id)])
+            handle = cur.callfunc("jetuse_lock.allocate_unique", str, [lock_name])
             rc = cur.callfunc("jetuse_lock.request", int, [handle, timeout_s])
         except oracledb.DatabaseError as e:
             # cover package/synonym なし・EXECUTE 未付与 = DBMS_LOCK 不可 → fail-closed(503)
@@ -123,23 +122,16 @@ def acquire(demo_id: str, *, timeout_s: int = LOCK_TIMEOUT_S):
                 f"demo lease infrastructure unavailable (JETUSE_LOCK): {e}"
             ) from e
         if rc == 1:
-            raise LeaseTimeoutError(f"demo lease timeout after {timeout_s}s: {demo_id}")
+            raise LeaseTimeoutError(f"lease timeout after {timeout_s}s: {lock_name}")
         if rc == 4:
             # プール接続にロックが残留(前利用者の解放漏れ)。新規取得成功と誤認しない
             drop = True
-            raise LeaseUnavailableError(f"stale lease on pooled session (rc=4): {demo_id}")
+            raise LeaseUnavailableError(f"stale lease on pooled session (rc=4): {lock_name}")
         if rc != 0:
             drop = True
-            raise LeaseUnavailableError(f"DBMS_LOCK.REQUEST rc={rc}: {demo_id}")
+            raise LeaseUnavailableError(f"DBMS_LOCK.REQUEST rc={rc}: {lock_name}")
         acquired = True
-        lease = DemoLease(demo_id=demo_id, _conn=conn)
-        try:
-            yield lease
-        finally:
-            # 正常・異常を問わずトークンを無効化する(codex review-2 major — 本体が例外送出
-            # した場合も DB ロックは下の finally で解放されるため、外部に残ったトークンを
-            # 保持中と誤認させない。以後の require_lease_for が拒否する)。
-            lease.released = True
+        yield conn
     finally:
         if acquired:
             try:
@@ -147,10 +139,10 @@ def acquire(demo_id: str, *, timeout_s: int = LOCK_TIMEOUT_S):
                 if rc2 != 0:
                     drop = True
                     logger.error("lease RELEASE rc=%s (dropping connection): %s",
-                                 rc2, demo_id)
+                                 rc2, lock_name)
             except Exception:
                 drop = True
-                logger.exception("lease RELEASE failed (dropping connection): %s", demo_id)
+                logger.exception("lease RELEASE failed (dropping connection): %s", lock_name)
         try:
             if drop:
                 _get_lease_pool().drop(conn)
@@ -159,6 +151,33 @@ def acquire(demo_id: str, *, timeout_s: int = LOCK_TIMEOUT_S):
                 _get_lease_pool().release(conn)
         except Exception:  # noqa: BLE001 — 返却失敗はログのみ(プールが自浄する)
             logger.exception("lease connection return failed")
+
+
+@contextlib.contextmanager
+def acquire(demo_id: str, *, timeout_s: int = LOCK_TIMEOUT_S):
+    """demo 単位の排他リースを取得する(最外層専用)。
+
+    取得後の status 再確認は呼び出し側の契約(mutation()/delete 側)が行う。
+    """
+    with _acquire_lock(_lock_name_for(demo_id), timeout_s) as conn:
+        lease = DemoLease(demo_id=demo_id, _conn=conn)
+        try:
+            yield lease
+        finally:
+            # 正常・異常を問わずトークンを無効化する(codex review-2 major — 本体が例外送出
+            # した場合も DB ロックは下の finally で解放されるため、外部に残ったトークンを
+            # 保持中と誤認させない。以後の require_lease_for が拒否する)。
+            lease.released = True
+
+
+@contextlib.contextmanager
+def acquire_global(name: str, *, timeout_s: int = LOCK_TIMEOUT_S):
+    """全 demo 横断のグローバル排他(N3 の同時生成数チェック等 — 固定名 1 本)。
+
+    demo 単位の acquire() と別名前空間(`jetuse_g_`)で、全 demo_id を直列化する短い区間に使う。
+    """
+    with _acquire_lock("jetuse_g_" + name, timeout_s):
+        yield
 
 
 @contextlib.contextmanager

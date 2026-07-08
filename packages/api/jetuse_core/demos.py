@@ -33,19 +33,29 @@ def create_demo(
     description: str | None = None,
     visibility: str = "private",
     config: dict[str, Any] | None = None,
+    status: str | None = None,
 ) -> dict[str, Any]:
-    """INSERT のみ・即 status='ready'(DB DEFAULT)。外部リソースは作らない(specs/18 §3.1)。"""
+    """INSERT のみ。status 省略時は DB DEFAULT='ready'。外部リソースは作らない(specs/18 §3.1)。
+
+    status='provisioning' はビルダー内部作成(§4.5)用 — 完了で set_status(→ready/failed)。
+    """
     demo_id = str(uuid.uuid4())
+    cols = "id, owner_sub, name, description, visibility, config"
+    vals = ":id, :o, :n, :descr, :v, :c"
+    binds: dict[str, Any] = {
+        "id": demo_id, "o": owner, "n": name[:200],
+        "descr": description[:1000] if description else None,
+        "v": visibility,
+        # allow_nan=False: 非正規 JSON を DB(IS JSON)まで運ばない(ルート側 422 と同じ契約)
+        "c": json.dumps(config or {}, ensure_ascii=False, allow_nan=False),
+    }
+    if status is not None:
+        cols += ", status"
+        vals += ", :st"
+        binds["st"] = status
     with connect() as conn:
         cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO demos(id, owner_sub, name, description, visibility, config) "
-            "VALUES (:id, :o, :n, :descr, :v, :c)",
-            id=demo_id, o=owner, n=name[:200],
-            descr=description[:1000] if description else None,
-            # allow_nan=False: 非正規 JSON を DB(IS JSON)まで運ばない(ルート側 422 と同じ契約)
-            v=visibility, c=json.dumps(config or {}, ensure_ascii=False, allow_nan=False),
-        )
+        cur.execute(f"INSERT INTO demos({cols}) VALUES ({vals})", **binds)
         conn.commit()
         cur.execute(f"SELECT {_COLS} FROM demos WHERE id = :id", id=demo_id)
         return _row_to_demo(cur.fetchone())
@@ -110,6 +120,32 @@ def set_status(demo_id: str, from_status: str, to_status: str) -> bool:
         )
         conn.commit()
         return cur.rowcount > 0
+
+
+def count_provisioning() -> int:
+    """status='provisioning' の demo 総数(specs/19 §4.2 N3 の同時生成上限チェック)。
+    グローバルロック区間(builder_generate)からのみ呼ぶ — 単独では TOCTOU を防げない。"""
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM demos WHERE status = 'provisioning'")
+        return int(cur.fetchone()[0])
+
+
+def merge_config(demo_id: str, patch: dict[str, Any]) -> None:
+    """サーバ管理 config キー(frontend/generation 等)を原子的にマージ(specs/19 §4.5 の公開)。
+
+    JSON_MERGEPATCH で patch のキーだけ更新(値 null = キー削除。generation.error のクリアに使う)。
+    owner PATCH の全置換とは別経路だが、preserve-merge(routes/demos §5.3)がサーバキーを
+    温存するので通常は衝突しない。
+    ponytail: read-then-replace の稀な lost-update は PoC 許容(§4.2 N7 の人間承認済み緩和)。
+    """
+    with connect() as conn:
+        conn.cursor().execute(
+            "UPDATE demos SET config = JSON_MERGEPATCH(config, :p RETURNING CLOB), "
+            "updated_at = SYSTIMESTAMP WHERE id = :id",
+            p=json.dumps(patch, ensure_ascii=False, allow_nan=False), id=demo_id,
+        )
+        conn.commit()
 
 
 def delete_demo(owner: str, demo_id: str) -> bool:

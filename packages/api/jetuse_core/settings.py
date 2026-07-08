@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     # feature flags
     auth_required: bool = False  # INFRA-02(OIDC)完了までの暫定。本番はtrue必須
 
+    # SP3-03(ADR-0023 §3.5): 生成 SPA の app-session トークン(一回性コード/Cookie)の HMAC 秘密鍵。
+    # 空 = fail-closed(AUTH=true で Cookie 認証経路を無効化)。環境依存の秘密値ゆえ .env 必須。
+    app_session_secret: str = ""
+
     # OIDC(IAM Identity Domain)。INFRA-02で確定する
     oidc_issuer: str = ""
     oidc_audience: str = ""
@@ -50,6 +54,28 @@ class Settings(BaseSettings):
     # SP2-02(specs/18 §3.1): デモ箱あたりの上限(超過 422 — 同期削除の所要を有界化)
     demo_max_rag_files: int = 20
     demo_max_datasets: int = 10
+    # SP3-03(ADR-0023 §6・F2): フロント生成 LLM = MODELS の公開キー(既定 gpt-oss-120b)。
+    # 設定で切替可能(F2)。生成側 OpenCode/署名プロキシは MODELS[generation_model].oci_id を使う。
+    generation_model: str = "gpt-oss-120b"
+    # SP3-03(ADR-0023 §2/§6): 署名プロキシが転送を許す OCI モデル id の allowlist(カンマ区切り)。
+    # 既定 = フル生成実証済みの openai.gpt-oss-120b のみ(追加はフル生成再計測後・運用で広げる)。
+    genai_model_allowlist: str = "openai.gpt-oss-120b"
+    # SP3-03(§4.2 N3): 同時 provisioning デモ数の上限。固定名グローバルロック下で数える。
+    demo_max_concurrent_generations: int = 2
+    # SP3-03(specs/19 §4.2 N7・ADR-0023): 1 生成の壁時計上限(秒)。runtime のハードキル。
+    generation_timeout_s: int = 900
+    # SP3-03(ADR-0023 §1 の 2 相分離): 非信頼生成相の使い捨て podman コンテナ。鍵レス(OCI 認証を
+    # 渡さず egress は署名プロキシ経由)+ N7 資源上限。環境依存の到達/資源値(承認済み緩和で単純化)。
+    # 版数タグ(opencode 版)で固定 — stale な別版イメージを掴んで N6 メタと食い違わせない(#194)
+    generation_image: str = "jetuse-demo-gen:oc1.17.15"
+    # コンテナから見た署名プロキシ(鍵レス egress)。環境依存の実エンドポイントゆえ .env 必須
+    # (既定は空 = 生成開始時に fail-fast。エンドポイント実値をコードにコミットしない)。
+    generation_proxy_url: str = ""
+    generation_container_network: str = "slirp4netns:allow_host_loopback=true"
+    generation_cpus: str = "1"
+    generation_memory: str = "4g"
+    generation_pids_limit: int = 256
+    generation_scaffold_dir: str = ""  # 空なら repo 既定(spikes/sp3_03_scaffold)
     # SP2-02(specs/18 §3.1): 起動世代トークン。entrypoint.sh が bootstrap/uvicorn 起動前に
     # export し、両プロセスで共有する。upload gate は「今回起動の reconcile が開けた」場合のみ
     # 通す(前回起動の 'Y' が残っていても boot_id 不一致で fail-closed — codex review-8 B001)。
