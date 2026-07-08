@@ -172,6 +172,19 @@ def test_postconditions_025_full_match():
     assert migrate._postconditions_met(idx, "026_builder_sessions_idx") is True
 
 
+def test_postconditions_027_sufficient_full_match():
+    """027 = sufficient 最終判定の永続化列(specs/19 §2.3・§3.1 — SP3-02 review-1 F002)。"""
+    cols = {("BUILDER_SESSIONS", "SUFFICIENT"): ("NUMBER", None, None, "N", "0")}
+    checks = {"BUILDER_SESSIONS": [("sufficient IN (0,1)", "ENABLED", "VALIDATED")]}
+    cur = FakeDict(columns=cols, checks=checks)
+    assert migrate._postconditions_met(cur, "027_builder_sessions_sufficient") is True
+    wrong_default = FakeDict(
+        columns={("BUILDER_SESSIONS", "SUFFICIENT"): ("NUMBER", None, None, "N", "1")},
+        checks=checks)
+    with pytest.raises(RuntimeError, match="SUFFICIENT"):
+        migrate._postconditions_met(wrong_default, "027_builder_sessions_sufficient")
+
+
 def test_postconditions_025_missing_primary_key_stops():
     """同名テーブルが PK 欠落でも「適用済み」と誤記録しない(review-1 M001)。"""
     cur = FakeDict(columns=COLS_025, checks=CHECKS_025, pks={})

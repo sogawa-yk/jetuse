@@ -53,7 +53,7 @@ class FakeBuilderSessions:
         now = self._now()
         self.rows[sid] = {
             "id": sid, "owner_sub": owner, "status": "hearing", "transcript": [],
-            "requirements": None, "plan": None, "demo_id": None,
+            "requirements": None, "plan": None, "demo_id": None, "sufficient": False,
             "created_at": now, "updated_at": now,
         }
         return self.get_session(owner, sid)
@@ -66,7 +66,8 @@ class FakeBuilderSessions:
         out["demo_status"] = None  # demos JOIN(demo_id なしのため常に None)
         return out
 
-    def save_hearing_turn(self, owner, sid, transcript, requirements, expected_len):
+    def save_hearing_turn(self, owner, sid, transcript, requirements, sufficient,
+                          expected_len):
         r = self.rows.get(sid)
         if (
             not r or r["owner_sub"] != owner or r["demo_id"] is not None
@@ -75,6 +76,7 @@ class FakeBuilderSessions:
             return False
         r["transcript"] = transcript
         r["requirements"] = requirements
+        r["sufficient"] = sufficient
         r["updated_at"] = self._now()
         return True
 
@@ -130,7 +132,7 @@ def test_cross_user_session_is_404(fake_repo):
     """越境は存在秘匿の 404(demos と同形 — specs/19 §2.4)。"""
     fake_repo.rows["theirs"] = {
         "id": "theirs", "owner_sub": "user-a", "status": "hearing", "transcript": [],
-        "requirements": None, "plan": None, "demo_id": None,
+        "requirements": None, "plan": None, "demo_id": None, "sufficient": False,
         "created_at": "2026-07-07T00:00:00", "updated_at": "2026-07-07T00:00:00",
     }
     assert client.get("/api/builder/sessions/theirs").status_code == 404
@@ -338,9 +340,9 @@ def test_concurrent_demo_id_set_between_read_and_save_is_409(fake_repo, fake_llm
     fake_llm["outputs"] = [llm_json()]
     real_save = fake_repo.save_hearing_turn
 
-    def racy_save(owner, s, transcript, requirements, expected_len):
+    def racy_save(owner, s, transcript, requirements, sufficient, expected_len):
         fake_repo.rows[sid]["demo_id"] = "d1"  # 保存直前に生成開始が割り込む
-        return real_save(owner, s, transcript, requirements, expected_len)
+        return real_save(owner, s, transcript, requirements, sufficient, expected_len)
 
     monkeypatch.setattr(repo, "save_hearing_turn", racy_save)
     res = client.post(f"/api/builder/sessions/{sid}/messages", json={"content": "x"})
@@ -423,6 +425,31 @@ def test_llm_null_requirements_is_accepted(fake_llm):
          "sufficient": False, "missing": ["industry"]}, ensure_ascii=False)]
     assert client.post(f"/api/builder/sessions/{sid}/messages",
                        json={"content": "x"}).status_code == 200
+
+
+# --- sufficient 最終判定の永続化(specs/19 §2.3・§3.1 — review-1 F002) ---
+
+
+def test_final_sufficient_true_is_persisted(fake_repo, fake_llm):
+    sid = _create_sid()
+    fake_llm["outputs"] = [llm_json(requirements=FULL_REQ, sufficient=True)]
+    client.post(f"/api/builder/sessions/{sid}/messages", json={"content": "x"})
+    assert fake_repo.rows[sid]["sufficient"] is True
+
+
+def test_final_sufficient_false_is_persisted_even_if_llm_claims_true(fake_repo, fake_llm):
+    """永続化されるのは決定的再検査後の最終判定(LLM の生の主張ではない)。"""
+    sid = _create_sid()
+    fake_llm["outputs"] = [llm_json(
+        requirements={"use_case": "検索"}, sufficient=True)]  # 必須欠落なのに true 主張
+    client.post(f"/api/builder/sessions/{sid}/messages", json={"content": "x"})
+    assert fake_repo.rows[sid]["sufficient"] is False
+
+
+def test_session_out_does_not_expose_sufficient():
+    """SessionOut の形は specs/19 §2.4 のまま(sufficient は内部列 — 応答に漏らさない)。"""
+    res = client.post("/api/builder/sessions")
+    assert "sufficient" not in res.json()
 
 
 # --- 決定的再検査の単体(HTTP 非経由) ---
