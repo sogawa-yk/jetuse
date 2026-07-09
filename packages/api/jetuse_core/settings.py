@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     # 環境依存値ゆえ .env(コミット禁止)。空 = 共有テナンシモデルは使用不可(fail-closed)。
     gen_shared_profile: str = ""
     gen_shared_compartment_ocid: str = ""
+    # SP3-09: デプロイ環境の鍵材料 = Vault シークレット(JSON)の OCID(非鍵材料)。
+    # 設定時は GEN_SHARED_PROFILE より優先(gen_shared_vault — RP で取得・in-memory 署名)。
+    gen_shared_secret_ocid: str = ""
     # SP3-03(§4.2 N3): 同時 provisioning デモ数の上限。固定名グローバルロック下で数える。
     demo_max_concurrent_generations: int = 2
     # SP3-03(specs/19 §4.2 N7・ADR-0023): 1 生成の壁時計上限(秒)。runtime のハードキル。

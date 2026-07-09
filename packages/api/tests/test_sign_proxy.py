@@ -166,6 +166,74 @@ def test_shared_unconfigured_is_fail_closed(env, upstream, monkeypatch):
     assert upstream == []
 
 
+# --- SP3-09: 共有テナンシの Vault 経路(デプロイ環境 — GEN_SHARED_SECRET_OCID) ---
+
+def test_vault_route_takes_precedence_over_profile(env, upstream, monkeypatch):
+    # secret OCID 設定時は profile(TESTSHARED)より Vault を優先(デプロイの正経路)
+    monkeypatch.setenv("GEN_SHARED_SECRET_OCID", "ocid1.vaultsecret.oc1..t")
+    get_settings.cache_clear()
+    monkeypatch.setattr(sp.gen_shared_vault, "get_auth", lambda: object())
+    client = TestClient(sp.app)
+    res = _post(client, "responses", b'{"model":"openai.gpt-5.6-sol"}')
+    assert res.status_code == 200
+    (call,) = upstream
+    assert call["profile"] == sp._VAULT
+    assert call["headers"]["CompartmentId"] == SHARED_COMP
+
+
+def test_vault_fetch_failure_fails_closed_without_profile_fallback(env, upstream, monkeypatch):
+    # Vault 取得失敗は 403。profile が設定されていても fallback しない(経路を混ぜない)
+    monkeypatch.setenv("GEN_SHARED_SECRET_OCID", "ocid1.vaultsecret.oc1..t")
+    get_settings.cache_clear()
+    monkeypatch.setattr(sp.gen_shared_vault, "get_auth", lambda: None)
+    client = TestClient(sp.app)
+    res = _post(client, "responses", b'{"model":"openai.gpt-5.6-sol"}')
+    assert (res.status_code, res.json()["error"]) == (403, "model_not_configured")
+    assert upstream == []
+
+
+def test_auth_for_vault_key_returns_vault_auth(monkeypatch):
+    sentinel = object()
+    monkeypatch.setattr(sp.gen_shared_vault, "get_auth", lambda: sentinel)
+    assert sp._auth_for(sp._VAULT) is sentinel
+
+
+def test_slow_vault_fetch_does_not_block_event_loop(env, upstream, monkeypatch):
+    """Vault フェッチ(同期 SDK I/O)中もイベントループは回り続ける(review-1 M001)。
+
+    フェッチに 0.3s かかる間、同一ループ上の他タスク(10ms tick)が進むことを観測する。
+    proxy が get_auth を同期呼び出しすると tick はほぼ進まない(退行検知)。
+    """
+    import asyncio
+    import time as _time
+
+    monkeypatch.setenv("GEN_SHARED_SECRET_OCID", "ocid1.vaultsecret.oc1..t")
+    get_settings.cache_clear()
+
+    def slow_get_auth():
+        _time.sleep(0.3)
+        return object()
+    monkeypatch.setattr(sp.gen_shared_vault, "get_auth", slow_get_auth)
+
+    import httpx as _httpx
+
+    async def main():
+        transport = _httpx.ASGITransport(app=sp.app)
+        async with _httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            req = asyncio.ensure_future(c.post(
+                "/v1/responses", content=b'{"model":"openai.gpt-5.6-sol"}',
+                headers={"content-type": "application/json"}))
+            ticks = 0
+            while not req.done() and ticks < 200:
+                await asyncio.sleep(0.01)
+                ticks += 1
+            return (await req).status_code, ticks
+
+    status, ticks = asyncio.run(main())
+    assert status == 200
+    assert ticks >= 10  # 同期ブロックだとループが止まり tick はほぼ 0
+
+
 def test_self_tenancy_chat_keeps_max_tokens(client, upstream):
     # 自テナンシ(120b)は従来どおり max_tokens を受ける — 挙動不変(回帰)
     res = _post(client, "chat/completions",

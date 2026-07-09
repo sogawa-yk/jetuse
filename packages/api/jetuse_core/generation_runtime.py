@@ -266,10 +266,12 @@ def build_frontend(plan: dict, *, model_key: str) -> GenerationResult:
         raise RuntimeError("generation_proxy_url is not configured (.env: GENERATION_PROXY_URL)")
     # 共有テナンシモデルは auth/compartment 未設定なら runtime 到達前に明示失敗(fail-closed —
     # プロキシ側も同条件で 403 するが、不透明に落ちる前にここで止める)
-    if model.shared and not (s.gen_shared_profile and s.gen_shared_compartment_ocid):
+    if model.shared and not (
+            (s.gen_shared_profile or s.gen_shared_secret_ocid)
+            and s.gen_shared_compartment_ocid):
         raise RuntimeError(
-            f"generation_model '{model_key}' requires GEN_SHARED_PROFILE / "
-            "GEN_SHARED_COMPARTMENT_OCID (.env)")
+            f"generation_model '{model_key}' requires GEN_SHARED_PROFILE (local) or "
+            "GEN_SHARED_SECRET_OCID (deployed — SP3-09), plus GEN_SHARED_COMPARTMENT_OCID")
     runtime = s.generation_runtime
     if runtime == "oci-ci":
         from . import generation_runtime_ci as _ci

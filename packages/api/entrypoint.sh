@@ -14,40 +14,10 @@ fi
 export APP_BOOT_ID
 echo "[entrypoint] APP_BOOT_ID=${APP_BOOT_ID}"
 
-# SP3-07: ORASEJAPAN 共有テナンシ(生成 gpt-5 系)のユーザープリンシパル材料を
-# RM sensitive 変数 → コンテナ env で受け取り、~/.oci/config のプロファイルへ冪等に書き出す。
-# 材料が不完全/不正 base64 のときは config を書かず GEN_SHARED_PROFILE を落として起動を続ける
-# (= 共有モデルだけ sign_proxy が 403 の fail-closed。任意機能の不備で API 全体を殺さない —
-# review-1 M002)。値はログに出さない。
-if [ -n "${GEN_SHARED_PROFILE}" ]; then
-  if [ -n "${GEN_SHARED_KEY_PEM_B64}" ] && [ -n "${GEN_SHARED_USER_OCID}" ] \
-    && [ -n "${GEN_SHARED_TENANCY_OCID}" ] && [ -n "${GEN_SHARED_FINGERPRINT}" ] \
-    && KEY_PEM="$(echo "${GEN_SHARED_KEY_PEM_B64}" | base64 -d 2>/dev/null)" \
-    && [ -n "${KEY_PEM}" ]; then
-    OCI_DIR="${HOME:-/root}/.oci"
-    # umask 077 = ディレクトリ 700 / ファイル 600 で生成(鍵材料を他ユーザーから読ませない)
-    (
-      umask 077
-      mkdir -p "${OCI_DIR}"
-      printf '%s\n' "${KEY_PEM}" > "${OCI_DIR}/gen_shared_key.pem"
-      cat > "${OCI_DIR}/config" <<EOF
-[${GEN_SHARED_PROFILE}]
-user=${GEN_SHARED_USER_OCID}
-fingerprint=${GEN_SHARED_FINGERPRINT}
-tenancy=${GEN_SHARED_TENANCY_OCID}
-region=${GEN_SHARED_REGION:-ap-osaka-1}
-key_file=${OCI_DIR}/gen_shared_key.pem
-EOF
-    )
-    unset KEY_PEM
-    echo "[entrypoint] wrote OCI profile ${GEN_SHARED_PROFILE} for shared-tenancy generation"
-  else
-    echo "[entrypoint] WARN: GEN_SHARED_* incomplete or invalid base64 — shared-tenancy generation disabled (fail-closed)"
-    unset GEN_SHARED_PROFILE
-  fi
-fi
-# 鍵材料はファイル化(または破棄)済み — 長寿命の API プロセスとその子へは伝播させない(review-2 m002)
-unset GEN_SHARED_KEY_PEM_B64
+# SP3-09: ORASEJAPAN 共有テナンシ(生成 gpt-5 系)の鍵材料は env で受け取らない。
+# デプロイ環境は GEN_SHARED_SECRET_OCID(非鍵材料)から jetuse_core.gen_shared_vault が
+# RP で取得し in-memory 署名する(取得失敗は共有モデルのみ 403 の fail-closed)。
+# SP3-07 の ~/.oci プロファイル書き出しブロックはここにあったが撤去した。
 
 # DBブートストラップ(スキーマ作成+マイグレ)は**バックグラウンド**で実行し、APIは即起動する。
 # これにより ADB ACTIVE 待ちやプロビジョニング中も API は応答(DB系は503でフェイルセーフ)し、

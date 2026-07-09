@@ -132,37 +132,62 @@ cmd_update_stack() { # tf 構成 zip + image_url 変数を RM スタックへ反
   echo "== stack updated: image_url=$(image_url), config=${TF_WORKDIR}"
 }
 
-cmd_seed_env() { # 環境依存値・秘匿値を .env / ~/.oci から RM 変数へシード(ローカルで一度だけ。
-  # ORASEJAPAN 材料 + RAG_BUCKET / APP_SESSION_SECRET。以降のデプロイは変数マージで温存)
-  : "${GEN_SHARED_PROFILE:?GEN_SHARED_PROFILE is required (.env)}"
+cmd_seed_env() { # 環境依存値を RM 変数へ、ORASEJAPAN 鍵材料を Vault シークレットへ投入(ローカル。
+  # SP3-09: 鍵材料は RM 変数に置かない — ~/.oci のプロファイルから読んで Vault へ新版投入し、
+  # 旧 GEN_SHARED_* 鍵材料変数はスタックから除去する。要: 先に apply で Vault/Secret 作成済み)
+  : "${GEN_SHARED_PROFILE:?GEN_SHARED_PROFILE is required (.env — ~/.oci の読み出し元プロファイル)}"
   : "${GEN_SHARED_COMPARTMENT_OCID:?GEN_SHARED_COMPARTMENT_OCID is required (.env)}"
   : "${RAG_BUCKET:?RAG_BUCKET is required (.env — 生成 SPA バンドル/RAG の保管バケット)}"
   : "${APP_SESSION_SECRET:?APP_SESSION_SECRET is required (.env)}"
-  local sid tmp; sid="$(stack_id)"; tmp="$(mktemp -d -p "${TMP_ROOT}")"
+  local sid tmp secret_id; sid="$(stack_id)"; tmp="$(mktemp -d -p "${TMP_ROOT}")"
+  secret_id="$(tf_output gen_shared_secret_ocid)"
+  [ -n "${secret_id}" ] && [ "${secret_id}" != "null" ] \
+    || { echo "gen_shared_secret_ocid output not found — run apply first (vault.tf)"; exit 1; }
   _wait_no_active_job "${sid}"
-  # プロファイルの user/fingerprint/tenancy/region/key_file を読み取り(値は表示しない)
-  python3 - "$GEN_SHARED_PROFILE" > "${tmp}/prof.json" <<'PY'
-import configparser, json, os, sys
+  # プロファイル → 鍵材料 JSON {user,tenancy,fingerprint,region,key_pem} → BASE64(値は表示しない)
+  python3 - "$GEN_SHARED_PROFILE" > "${tmp}/secret.b64" <<'PY'
+import base64, configparser, json, os, sys
 cp = configparser.ConfigParser()
 cp.read(os.path.expanduser("~/.oci/config"))
 p = cp[sys.argv[1]]
-print(json.dumps({k: p[k] for k in ("user", "fingerprint", "tenancy", "region", "key_file")}))
+with open(os.path.expanduser(p["key_file"])) as f:
+    key_pem = f.read()
+payload = json.dumps({"user": p["user"], "tenancy": p["tenancy"],
+                      "fingerprint": p["fingerprint"], "region": p["region"],
+                      "key_pem": key_pem})
+print(base64.b64encode(payload.encode()).decode())
 PY
-  local key_file; key_file="$(jq -r .key_file "${tmp}/prof.json")"
-  base64 -w0 "${key_file/#\~/$HOME}" > "${tmp}/key.b64"
+  # 新版投入(--secret-content は file:// で渡し argv に秘密を出さない)。
+  # 冪等性は現行版の**実内容比較**で判定する(エラー文字列一致だと無関係な OCI エラーを
+  # 「同一内容」と誤判定して更新失敗のまま RM 鍵変数を消しかねない — review-2 m001)。
+  jq -n --rawfile c "${tmp}/secret.b64" \
+    '{contentType: "BASE64", content: ($c | rtrimstr("\n"))}' > "${tmp}/content.json"
+  base64 -d "${tmp}/secret.b64" > "${tmp}/new.raw"
+  oci secrets secret-bundle get --secret-id "${secret_id}" \
+    --query 'data."secret-bundle-content".content' --raw-output 2>/dev/null \
+    | base64 -d > "${tmp}/cur.raw" 2>/dev/null || : # placeholder/初回は空
+  if [ -s "${tmp}/cur.raw" ] && cmp -s "${tmp}/cur.raw" "${tmp}/new.raw"; then
+    echo "== vault secret content unchanged (kept current version)"
+  else
+    # 失敗は set -e で即停止(握り潰さない)。ACTIVE 到達まで待つ = 新版が CURRENT に
+    # なる前に後続の再起動が旧版を読む競合を防ぐ(review-2 OPS-001)
+    oci vault secret update --secret-id "${secret_id}" \
+      --secret-content "file://${tmp}/content.json" --force \
+      --wait-for-state ACTIVE --max-wait-seconds 300 >/dev/null
+    echo "== vault secret new version created (ACTIVE)"
+  fi
   oci resource-manager stack get --stack-id "${sid}" --query data.variables > "${tmp}/vars.json"
-  jq --slurpfile prof "${tmp}/prof.json" --rawfile key "${tmp}/key.b64" \
-     --arg profile "${GEN_SHARED_PROFILE}" --arg comp "${GEN_SHARED_COMPARTMENT_OCID}" \
+  jq --arg comp "${GEN_SHARED_COMPARTMENT_OCID}" \
      --arg bucket "${RAG_BUCKET}" --arg app_secret "${APP_SESSION_SECRET}" \
-     '. + {gen_shared_profile: $profile, gen_shared_compartment_ocid: $comp,
-           gen_shared_user_ocid: $prof[0].user, gen_shared_tenancy_ocid: $prof[0].tenancy,
-           gen_shared_fingerprint: $prof[0].fingerprint, gen_shared_region: $prof[0].region,
-           gen_shared_key_pem_b64: $key,
-           rag_bucket: $bucket, app_session_secret: $app_secret}' \
+     '. + {gen_shared_compartment_ocid: $comp,
+           rag_bucket: $bucket, app_session_secret: $app_secret}
+      | del(.gen_shared_profile, .gen_shared_user_ocid, .gen_shared_tenancy_ocid,
+            .gen_shared_fingerprint, .gen_shared_region, .gen_shared_key_pem_b64)' \
      "${tmp}/vars.json" > "${tmp}/vars.new.json"
   oci resource-manager stack update --stack-id "${sid}" \
     --variables "file://${tmp}/vars.new.json" --force >/dev/null
-  echo "== env vars seeded into stack (gen-shared profile=${GEN_SHARED_PROFILE}, rag_bucket, app_session_secret)"
+  echo "== seeded: vault secret + stack vars (gen_shared_compartment_ocid, rag_bucket," \
+       "app_session_secret; key-material vars removed)"
 }
 
 _wait_no_active_job() { # 共有スタックにつき apply は直列: 先行 job の完了を待つ(最大30分)

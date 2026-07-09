@@ -118,22 +118,42 @@ ops/dev-env-down.sh alice    # アプリ層を破棄(共有基盤・ADBスキー
 
 ### 環境依存値・秘匿値のシード（ORASEJAPAN 材料 / RAG_BUCKET / APP_SESSION_SECRET）
 
-生成 gpt-5 系（共有テナンシ）の材料・アプリ秘匿値は **GitHub Secrets には置かない**。
-RM スタックの変数（`gen_shared_*`・`rag_bucket`・`app_session_secret`）として一度だけ
-シードすれば、以降のデプロイは変数マージで温存される:
+生成 gpt-5 系（共有テナンシ）の鍵材料・アプリ秘匿値は **GitHub Secrets には置かない**。
+SP3-09 以降、鍵材料は **RM スタック変数にも置かない** — jetuse:dev の OCI Vault シークレット
+（`jetuse-dev-app-gen-shared`、JSON: `user`/`tenancy`/`fingerprint`/`region`/`key_pem`。
+vault.tf が software 保護キーの Vault ごと管理・destroy 禁止）に置く:
 
 ```bash
-# ローカル（~/.oci/config に ORASEJAPAN プロファイル、.env に GEN_SHARED_* / RAG_BUCKET /
-# APP_SESSION_SECRET がある環境）で一度だけ
+# ローカル（~/.oci/config に ORASEJAPAN プロファイル、.env に GEN_SHARED_PROFILE /
+# GEN_SHARED_COMPARTMENT_OCID / RAG_BUCKET / APP_SESSION_SECRET がある環境）で。
+# 初回は先に apply（Vault/Secret の作成）→ seed-env の順
 ops/deploy-dev-app.sh seed-env
 ```
+
+seed-env は ①`~/.oci` のプロファイルから鍵材料を読んで Vault シークレットへ新版投入
+（実値は argv にも RM 変数にも出さない）、②非鍵材料（`gen_shared_compartment_ocid`・
+`rag_bucket`・`app_session_secret`）を RM 変数へマージ、③旧 SP3-07 方式の鍵材料変数
+（`gen_shared_{profile,user_ocid,tenancy_ocid,fingerprint,region,key_pem_b64}`）を
+スタックから除去する（冪等 — 再実行可）。
 
 `RAG_BUCKET` は生成 SPA バンドル（`demo-bundles/` prefix）と RAG 文書の保管バケット、
 `APP_SESSION_SECRET` は生成 SPA 配信の app-session HMAC 鍵。未設定だと ready デモの
 `/app/` 配信が 404 / app-session が 500 になる（fail-closed）。
 
-コンテナ側は entrypoint.sh が `GEN_SHARED_*` env から `~/.oci/config` のプロファイルを冪等生成
-する（未設定なら何もしない = 共有モデルは sign_proxy が 403 の fail-closed）。
+コンテナ側は `GEN_SHARED_SECRET_OCID`（tf が配線・非鍵材料）を受け、共有モデルの初回
+リクエスト時に `jetuse_core.gen_shared_vault` がリソースプリンシパル（DG jetuse-internal-dg）
+で取得して **in-memory 署名**を構成する（鍵をディスク・環境変数に出さない）。未 seed
+（placeholder）・取得失敗は共有モデルのみ 403 の fail-closed で、API は起動継続・値はログ非出力。
+ローカル開発は従来どおり `GEN_SHARED_PROFILE`（~/.oci）— `GEN_SHARED_SECRET_OCID` が
+設定されていればそちらが優先（fallback はしない）。
+
+**ローテーション手順**: ~/.oci の ORASEJAPAN プロファイルを新しい API 鍵に更新 →
+`ops/deploy-dev-app.sh seed-env`（シークレット新版投入）→ **API コンテナ再起動**
+（`oci container-instances container-instance restart --wait-for-state SUCCEEDED`）で反映。
+再起動は必須である — user principal（API 鍵）は期限切れしないため、`gen_shared_vault` は
+成功した署名をプロセス生涯キャッシュし、**周期・401 の自動再取得は持たない**（いずれも同期
+Vault I/O をイベントループ上で走らせるため封じた — SP3-09 codex review-2 M001）。旧鍵を
+失効させる場合は、新版 seed → 再起動で新鍵が有効になったことを確認してから失効させること。
 
 ### sign_proxy の配備方式（SP3-07 で確定）
 
