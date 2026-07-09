@@ -50,6 +50,9 @@ jobs:
         run: ops/deploy-dev-app.sh update-stack
       - name: RM plan + apply (oci resource-manager job)
         run: ops/deploy-dev-app.sh apply
+      # SP3-08: 生成/ビルド CI イメージ。apply が OCIR repo を作った後に push(既存タグは skip)
+      - name: Build & push generation CI images (OCIR)
+        run: ops/deploy-dev-app.sh gen-images
       # SPA オブジェクトは tf 管理外(CLI 同期)。apply でバケット/PAR が整った後に同期する
       - name: Build & sync SPA
         run: ops/deploy-dev-app.sh spa
