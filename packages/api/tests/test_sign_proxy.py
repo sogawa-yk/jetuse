@@ -240,6 +240,28 @@ def test_upstream_errors_map_to_502_504(env, monkeypatch):
     assert (res.status_code, res.json()["error"]) == (502, "upstream_unreachable")
 
 
+def test_own_tenancy_auth_follows_auth_mode(monkeypatch):
+    """配備(Container Instance)では AUTH_MODE=resource_principal で RP 署名(コンテナに
+    ~/.oci の DEFAULT プロファイルを置かない — SP3-07)。共有テナンシは常にユーザープリンシパル。"""
+    from jetuse_core import genai
+
+    class _RP:
+        pass
+
+    class _UP:
+        def __init__(self, profile_name=None):
+            self.profile_name = profile_name
+
+    monkeypatch.setattr(genai, "OciResourcePrincipalAuth", _RP)
+    monkeypatch.setattr(genai, "OciUserPrincipalAuth", _UP)
+    monkeypatch.setattr(sp, "OciUserPrincipalAuth", _UP)
+    monkeypatch.setenv("AUTH_MODE", "resource_principal")
+    assert isinstance(sp._auth_for(""), _RP)
+    monkeypatch.delenv("AUTH_MODE")
+    assert isinstance(sp._auth_for(""), _UP)
+    assert sp._auth_for("SHAREDPROF").profile_name == "SHAREDPROF"
+
+
 def test_client_headers_are_not_forwarded(client, upstream):
     res = client.post(
         "/v1/chat/completions", content=b'{"model":"openai.gpt-oss-120b"}',

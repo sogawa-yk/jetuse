@@ -13,7 +13,10 @@ module "network" {
   app_port            = var.app_port
 }
 
-# SPA 静的ホスティング（非公開バケット + AnyObjectRead の PAR）
+# SPA 静的ホスティング（非公開バケット + AnyObjectRead の PAR）。
+# オブジェクト（dist + config.json）は terraform 管理にしない — SP3-07 で CLI 同期
+# （ops/deploy-dev-app.sh spa / deploy-dev.yml）へ一本化。RM zip に dist を含めると
+# 11MB 上限と fileset の空解決（= 全削除）を踏み、SPA だけの更新にも apply が要るため。
 module "spa" {
   source           = "../../modules/spa-bucket"
   compartment_ocid = var.compartment_ocid
@@ -46,6 +49,20 @@ module "container_instance" {
     ADB_QUERY_USER      = var.adb_query_user
     ADB_QUERY_PASSWORD  = var.adb_query_password
     ADB_WALLET_PASSWORD = var.adb_wallet_password
+    # 生成 SPA バンドル配信(demo-bundles/)+RAG。app-session は配信の認可(§3.5)に必須
+    RAG_BUCKET         = var.rag_bucket
+    APP_SESSION_SECRET = var.app_session_secret
+    # RUN_DB_BOOTSTRAP は設定しない — 共有 loop ADB へのマイグレーション適用は自動 push デプロイに
+    # 含めず、明示の人間/承認ステップで行う(review-1 B002。適用手順は docs/guides/dev-environments.md)
+    # SP3-06 生成系(空 = fail-closed で共有モデル 403。entrypoint が ~/.oci へプロファイル生成)
+    GENERATION_PROXY_URL        = var.generation_proxy_url
+    GEN_SHARED_PROFILE          = var.gen_shared_profile
+    GEN_SHARED_COMPARTMENT_OCID = var.gen_shared_compartment_ocid
+    GEN_SHARED_USER_OCID        = var.gen_shared_user_ocid
+    GEN_SHARED_TENANCY_OCID     = var.gen_shared_tenancy_ocid
+    GEN_SHARED_FINGERPRINT      = var.gen_shared_fingerprint
+    GEN_SHARED_REGION           = var.gen_shared_region
+    GEN_SHARED_KEY_PEM_B64      = var.gen_shared_key_pem_b64
   }
   registry_username = var.registry_username
   registry_password = var.registry_password

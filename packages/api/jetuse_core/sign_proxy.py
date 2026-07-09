@@ -31,6 +31,7 @@ from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
 from .gen_models import GEN_MODELS_BY_OCI_ID, GenModelDef, inference_base_url
+from .genai import _signer
 from .settings import get_settings
 
 logger = logging.getLogger("jetuse.sign_proxy")
@@ -45,10 +46,15 @@ _FORWARD_REQ_HEADERS = {"content-type", "accept"}
 _clients: dict[str, httpx.AsyncClient] = {}
 
 
+def _auth_for(profile: str):
+    """共有テナンシ = ユーザープリンシパル(プロファイル)。自テナンシ = genai と同一の選択
+    (AUTH_MODE=resource_principal なら RP — 配備コンテナに DEFAULT プロファイル不要。SP3-07)。"""
+    return OciUserPrincipalAuth(profile_name=profile) if profile else _signer()
+
+
 def _client(profile: str) -> httpx.AsyncClient:
     if profile not in _clients:
-        auth = OciUserPrincipalAuth(profile_name=profile) if profile else OciUserPrincipalAuth()
-        _clients[profile] = httpx.AsyncClient(auth=auth, timeout=300.0)
+        _clients[profile] = httpx.AsyncClient(auth=_auth_for(profile), timeout=300.0)
     return _clients[profile]
 
 
