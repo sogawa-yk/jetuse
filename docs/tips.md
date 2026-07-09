@@ -29,6 +29,9 @@
 - 2026-06-10 ~~`.env`のADB_OCIDがスパイクADBを指す問題~~ **解消**: スパイクADB2本は削除済み（2026-06-11ユーザー指示）、ADB_OCIDはjetuse-dev-adbに修正済み。jetusedevウォレットは非公開バケット `jetuse-dev-app-data` の `adb_wallet.zip`（/home/opc/adb_wallet/は旧スパイク用で無効）
 - **2026-06-11 jetusedevウォレットのewallet.pemはパスワード保護**: `wallet_password` 未指定だとoracledb thinが**stdinでPEMパスフレーズを無限プロンプト**し、プール経由だと背景スレッドで沈黙→DPY-4005に見える（実害: migrate実行が謎ハング）。パスワードは tfvars の `ADB_WALLET_PASSWORD`。migrate実行例は docs/verification/UC-01-03.md 参照
 - 2026-06-11 プールの `wait_timeout=5000` はコールドmTLS接続（>5秒）で不足しDPY-4005になる → 15秒に変更。DB停止の即時503は `tcp_connect_timeout` 側が担うので影響なし
+- **2026-07-09 oci SDK の SecretsClient 等は RP signer でも region 必須（SP3-09）**: `SecretsClient({}, signer=rp_signer)` は "Must supply either a region or an endpoint" で失敗する（validate_config は signer 型で本人確認系をスキップするが endpoint 導出は config["region"] 依存）。`{"region": settings.oci_region}` を明示する（db.py 等の既存流儀）。この見落としはユニット（クライアントをモック）では捕まらない — クライアント構築自体を 1 回は実環境/実 SDK で通すこと
+- **2026-07-09 `container-instance restart` は非同期（SP3-09 E2E で実害）**: restart 発行直後の `/api/health` は**旧コンテナの 200 を拾う**。そのまま次の処理（生成開始）を進めると、数十秒後の実再起動が API の BackgroundTask を殺し、demo が provisioning で孤児化する（reconcile の timeout+10 分掃除で failed 化されるまで残る）。`--wait-for-state SUCCEEDED` で work request 完了を待ってから health を見る
+- 2026-07-09 RM スタック変数は**構成 zip から変数宣言を消しても勝手には消えない**（undeclared のまま残置・apply は警告どまり）。除去は `stack update --variables` で明示的に del した変数マップを渡す（SP3-09 seed-env。負の確認は `stack get --query data.variables`）。また `oci vault secret update --secret-content file://...` の complex param 渡しなら鍵材料が argv に出ない
 
 ## 開発環境
 

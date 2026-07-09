@@ -55,15 +55,11 @@ module "container_instance" {
     APP_SESSION_SECRET = var.app_session_secret
     # RUN_DB_BOOTSTRAP は設定しない — 共有 loop ADB へのマイグレーション適用は自動 push デプロイに
     # 含めず、明示の人間/承認ステップで行う(review-1 B002。適用手順は docs/guides/dev-environments.md)
-    # SP3-06 生成系(空 = fail-closed で共有モデル 403。entrypoint が ~/.oci へプロファイル生成)
+    # SP3-06/09 生成系(共有テナンシの鍵材料は env に置かない — Vault シークレット vault.tf。
+    # API が RP で取得し in-memory 署名。未 seed/取得失敗は共有モデルのみ 403 の fail-closed)
     GENERATION_PROXY_URL        = var.generation_proxy_url
-    GEN_SHARED_PROFILE          = var.gen_shared_profile
     GEN_SHARED_COMPARTMENT_OCID = var.gen_shared_compartment_ocid
-    GEN_SHARED_USER_OCID        = var.gen_shared_user_ocid
-    GEN_SHARED_TENANCY_OCID     = var.gen_shared_tenancy_ocid
-    GEN_SHARED_FINGERPRINT      = var.gen_shared_fingerprint
-    GEN_SHARED_REGION           = var.gen_shared_region
-    GEN_SHARED_KEY_PEM_B64      = var.gen_shared_key_pem_b64
+    GEN_SHARED_SECRET_OCID      = oci_vault_secret.gen_shared.id
   })
   registry_username = var.registry_username
   registry_password = var.registry_password

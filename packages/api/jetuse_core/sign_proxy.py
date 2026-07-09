@@ -19,6 +19,7 @@ OpenCode(OpenAI 互換・API key 認証のみ)から OCI GenAI(IAM 署名必須)
   .venv/bin/uvicorn jetuse_core.sign_proxy:app --app-dir packages/api --port 8766
 """
 
+import asyncio
 import json
 import logging
 
@@ -30,11 +31,16 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
+from . import gen_shared_vault
 from .gen_models import GEN_MODELS_BY_OCI_ID, GenModelDef, inference_base_url
 from .genai import _signer
 from .settings import get_settings
 
 logger = logging.getLogger("jetuse.sign_proxy")
+
+# 共有テナンシ auth の Vault 経路(SP3-09)を表すクライアントキャッシュキー。
+# ~/.oci のプロファイル名と衝突しない予約名(プロファイル名に __ は使わない)。
+_VAULT = "__vault__"
 
 # 許可パス(完全一致)→ そのパスを話せる api 種別
 _PATH_API = {"chat/completions": "chat", "responses": "responses"}
@@ -47,8 +53,11 @@ _clients: dict[str, httpx.AsyncClient] = {}
 
 
 def _auth_for(profile: str):
-    """共有テナンシ = ユーザープリンシパル(プロファイル)。自テナンシ = genai と同一の選択
-    (AUTH_MODE=resource_principal なら RP — 配備コンテナに DEFAULT プロファイル不要。SP3-07)。"""
+    """共有テナンシ = Vault 材料(SP3-09・デプロイ)かユーザープリンシパル(プロファイル・
+    ローカル)。自テナンシ = genai と同一の選択(AUTH_MODE=resource_principal なら RP —
+    配備コンテナに DEFAULT プロファイル不要。SP3-07)。"""
+    if profile == _VAULT:
+        return gen_shared_vault.get_auth()
     return OciUserPrincipalAuth(profile_name=profile) if profile else _signer()
 
 
@@ -62,10 +71,20 @@ def _route(model: GenModelDef) -> tuple[str, str, str] | None:
     """モデル → (base_url, compartment, auth プロファイル)。未設定は None(fail-closed)。"""
     s = get_settings()
     if model.shared:
-        if not (s.gen_shared_profile and s.gen_shared_compartment_ocid):
+        if not s.gen_shared_compartment_ocid:
             return None
-        return (inference_base_url(model.region),
-                s.gen_shared_compartment_ocid, s.gen_shared_profile)
+        # 優先順位(SP3-09): GEN_SHARED_SECRET_OCID(Vault — デプロイ)> GEN_SHARED_PROFILE
+        # (~/.oci — ローカル)。Vault 取得失敗はプロファイルへ fallback しない(fail-closed —
+        # デプロイ環境にプロファイルは無く、経路を混ぜると障害が不透明になる)。
+        # Vault 材料の実解決はブロッキング I/O のためここでは行わず、proxy が off-loop で行う
+        # (review-1 M001。ここは純粋な経路決定に留める)。
+        if s.gen_shared_secret_ocid:
+            profile = _VAULT
+        elif s.gen_shared_profile:
+            profile = s.gen_shared_profile
+        else:
+            return None
+        return (inference_base_url(model.region), s.gen_shared_compartment_ocid, profile)
     if not s.compartment_ocid:
         return None
     return (inference_base_url(model.region), s.compartment_ocid, "")
@@ -164,6 +183,12 @@ async def proxy(request: Request):
     if bad:
         return JSONResponse({"error": bad[1]}, status_code=bad[0])
     base_url, compartment, profile = route
+    if profile == _VAULT:
+        # Vault フェッチは SDK 同期 I/O(最大 接続10s+読取60s)— イベントループを塞がないよう
+        # off-loop で解決する(review-1 M001。失敗はバックオフ付きで共有モデルのみ 403)。
+        # 成功後はプロセス生涯キャッシュのため、以降の to_thread は即時返る。
+        if await asyncio.to_thread(gen_shared_vault.get_auth) is None:
+            return JSONResponse({"error": "model_not_configured"}, status_code=403)
     # クライアントヘッダは通信メタ(_FORWARD_REQ_HEADERS)だけ通す。Compartment/署名はサーバ側で
     # 固定。content-length は転送対象外 = canonical 本文で再計算される。
     headers = {

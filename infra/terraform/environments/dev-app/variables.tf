@@ -129,41 +129,10 @@ variable "generation_proxy_url" {
   default = "http://localhost:8000/gen-proxy/v1"
 }
 
-# ORASEJAPAN 共有テナンシ(gpt-5 系)のユーザープリンシパル材料。実値は RM スタック変数に置き
-# コミットしない(ops/deploy-dev-app.sh seed-gen-shared でシード)。空 = 共有モデル fail-closed(403)。
-variable "gen_shared_profile" {
-  type    = string
-  default = ""
-}
-
+# ORASEJAPAN 共有テナンシ(gpt-5 系)の compartment OCID(非鍵材料。ops/deploy-dev-app.sh
+# seed-env でシード)。鍵材料そのものは RM 変数に置かない — Vault シークレット(vault.tf)へ
+# seed-env が投入する(SP3-09)。空 = 共有モデル fail-closed(403)。
 variable "gen_shared_compartment_ocid" {
   type    = string
   default = ""
-}
-
-variable "gen_shared_user_ocid" {
-  type    = string
-  default = ""
-}
-
-variable "gen_shared_tenancy_ocid" {
-  type    = string
-  default = ""
-}
-
-variable "gen_shared_fingerprint" {
-  type    = string
-  default = ""
-}
-
-variable "gen_shared_region" {
-  type    = string
-  default = "ap-osaka-1"
-}
-
-variable "gen_shared_key_pem_b64" {
-  description = "ORASEJAPAN API 鍵(PEM の base64)。entrypoint が ~/.oci へ書き出す"
-  type        = string
-  sensitive   = true
-  default     = ""
 }
