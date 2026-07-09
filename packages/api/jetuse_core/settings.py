@@ -78,6 +78,17 @@ class Settings(BaseSettings):
     generation_memory: str = "4g"
     generation_pids_limit: int = 256
     generation_scaffold_dir: str = ""  # 空なら repo 既定(spikes/sp3_03_scaffold)
+    # SP3-08(ADR-0023 §1 B'): 生成 runtime バックエンド。podman = ローカル開発(従来)、
+    # oci-ci = 生成ごとの使い捨て Container Instance(デプロイ環境の正 — dev-app tf が設定)。
+    generation_runtime: str = "podman"
+    # oci-ci 用の配線(dev-app tf が env で与える。未設定は生成開始時に fail-fast)
+    generation_ci_subnet_ocid: str = ""   # 生成 CI を置く private サブネット
+    generation_ci_ad: str = ""            # availability domain 名
+    generation_gen_image_url: str = ""    # 相1 生成イメージ(OCIR public repo)
+    generation_build_image_url: str = ""  # 相2 信頼ビルドイメージ(OCIR public repo)
+    # 相ごとのタイムアウト(ADR-0023 §1: 相1 9 分・相2 2 分。全体は generation_timeout_s)
+    generation_ci_gen_timeout_s: int = 540
+    generation_ci_build_timeout_s: int = 120
     # SP2-02(specs/18 §3.1): 起動世代トークン。entrypoint.sh が bootstrap/uvicorn 起動前に
     # export し、両プロセスで共有する。upload gate は「今回起動の reconcile が開けた」場合のみ
     # 通す(前回起動の 'Y' が残っていても boot_id 不一致で fail-closed — codex review-8 B001)。

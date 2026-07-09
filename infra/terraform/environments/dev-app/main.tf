@@ -35,7 +35,8 @@ module "container_instance" {
   ocpus            = var.ocpus
   memory_gb        = var.memory_gb
   # プレビューは認証オフ。region/compartment は上位変数から導出、残りはフラット変数から。
-  environment_variables = {
+  # SP3-08: 生成 runtime(oci-ci)の配線は gen.tf の local.generation_env を merge。
+  environment_variables = merge(local.generation_env, {
     AUTH_MODE           = var.auth_mode
     AUTH_REQUIRED       = "false"
     OCI_REGION          = var.region
@@ -63,7 +64,7 @@ module "container_instance" {
     GEN_SHARED_FINGERPRINT      = var.gen_shared_fingerprint
     GEN_SHARED_REGION           = var.gen_shared_region
     GEN_SHARED_KEY_PEM_B64      = var.gen_shared_key_pem_b64
-  }
+  })
   registry_username = var.registry_username
   registry_password = var.registry_password
 }

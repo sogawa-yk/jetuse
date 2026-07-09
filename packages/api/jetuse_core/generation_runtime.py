@@ -251,6 +251,10 @@ def build_frontend(plan: dict, *, model_key: str) -> GenerationResult:
 
     build 失敗(生成品質の当たり外れ)は最大 _MAX_ATTEMPTS まで生成からやり直す。全体で単一 deadline
     (N1 = 15 分)を共有し、各相へ残時間を渡す。返り値に生成ログ(N4)と generator メタ(N6)を含む。
+
+    バックエンドは settings.generation_runtime で切替(SP3-08): podman = ローカル開発
+    (host podman 近似 — 従来経路のまま)、oci-ci = 生成ごとの使い捨て Container Instance
+    (ADR-0023 §1 B' — デプロイ環境の正)。検証・deadline・再試行の枠は両者共通。
     """
     s = get_settings()
     # F2: 設定/入力値の妥当性(未知キーは KeyError でなく明示失敗)。レジストリ = 生成専用
@@ -260,16 +264,30 @@ def build_frontend(plan: dict, *, model_key: str) -> GenerationResult:
         raise RuntimeError(f"generation_model '{model_key}' not in generation model registry")
     if not s.generation_proxy_url:  # #13: 環境依存値は .env 必須(fail-fast)
         raise RuntimeError("generation_proxy_url is not configured (.env: GENERATION_PROXY_URL)")
-    # 共有テナンシモデルは auth/compartment 未設定なら podman 到達前に明示失敗(fail-closed —
+    # 共有テナンシモデルは auth/compartment 未設定なら runtime 到達前に明示失敗(fail-closed —
     # プロキシ側も同条件で 403 するが、不透明に落ちる前にここで止める)
     if model.shared and not (s.gen_shared_profile and s.gen_shared_compartment_ocid):
         raise RuntimeError(
             f"generation_model '{model_key}' requires GEN_SHARED_PROFILE / "
             "GEN_SHARED_COMPARTMENT_OCID (.env)")
-    scaffold = _scaffold_dir()
-    if not scaffold.is_dir():
-        raise RuntimeError(f"scaffold not found: {scaffold}")
-    _ensure_image(s.generation_image)  # インフラ準備(キャッシュ)— job deadline の外
+    runtime = s.generation_runtime
+    if runtime == "oci-ci":
+        from . import generation_runtime_ci as _ci
+
+        _ci.check_settings(s)  # subnet/AD/イメージ URL 未配線なら CI 作成前に fail-fast
+
+        def _try(deadline: float, generator: dict) -> GenerationResult:
+            return _ci.attempt(plan, model, s, deadline, generator)
+    elif runtime == "podman":
+        scaffold = _scaffold_dir()
+        if not scaffold.is_dir():
+            raise RuntimeError(f"scaffold not found: {scaffold}")
+        _ensure_image(s.generation_image)  # インフラ準備(キャッシュ)— job deadline の外
+
+        def _try(deadline: float, generator: dict) -> GenerationResult:
+            return _attempt(plan, model, scaffold, s, deadline, generator)
+    else:
+        raise RuntimeError(f"unknown generation_runtime '{runtime}' (podman | oci-ci)")
 
     deadline = time.monotonic() + s.generation_timeout_s
     generator = {"model": model_key, "prompt_version": _PROMPT_VERSION,
@@ -278,7 +296,7 @@ def build_frontend(plan: dict, *, model_key: str) -> GenerationResult:
     last_err: Exception | None = None
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
-            return _attempt(plan, model, scaffold, s, deadline, generator)
+            return _try(deadline, generator)
         except RuntimeError as e:
             last_err = e
             logger.warning("generation attempt %d/%d failed: %s",

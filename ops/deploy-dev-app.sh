@@ -73,6 +73,39 @@ cmd_image() { # API イメージ build → OCIR push(tag = <branch>-<short-sha>)
   "${CONTAINER_TOOL}" push "${image}"
 }
 
+_gen_image_exists() { # _gen_image_exists <repo> <tag> — OCIR に該当タグが既にあるか
+  local n
+  n="$(oci artifacts container image list --compartment-id "${COMPARTMENT_OCID}" \
+    --repository-name "$1" --query "length(data.items[?version=='$2'])" \
+    --raw-output 2>/dev/null || echo 0)"
+  [ "${n:-0}" != "0" ] && [ "${n}" != "null" ]
+}
+
+cmd_gen_images() { # SP3-08: 生成/ビルド CI イメージ build → OCIR push(public repo — gen.tf)
+  # all/deploy-dev.yml から apply 後に呼ばれる(初回 apply が repo を作った直後に像を置き、
+  # API が存在しないイメージを指す窓を塞ぐ — review-1 M001)。イメージは版固定タグで不変ゆえ、
+  # 既に同タグが OCIR にあれば skip(毎 push のフルビルドを避ける)。GEN_IMAGE_FORCE=1 で強制。
+  # タグ既定は gen.tf の var.generation_image_tag 既定と一致させる(ずれると API が旧像を指す)
+  local host nsv tag; host="$(ocir_host)"; nsv="$(ns)"; tag="${GEN_IMAGE_TAG:-oc1.17.15-r2}"
+  local logged_in=""
+  local img
+  for img in "gen:Containerfile.gen" "build:Containerfile.build"; do
+    local name file; name="jetuse-dev-${img%%:*}"; file="infra/images/gen-ci/${img#*:}"
+    if [ -z "${GEN_IMAGE_FORCE:-}" ] && _gen_image_exists "${name}" "${tag}"; then
+      echo "== skip ${name}:${tag} (already in OCIR; set GEN_IMAGE_FORCE=1 to rebuild)"
+      continue
+    fi
+    if [ -z "${logged_in}" ] && [ -n "${OCIR_USERNAME:-}" ] && [ -n "${OCIR_AUTH_TOKEN:-}" ]; then
+      echo "${OCIR_AUTH_TOKEN}" | "${CONTAINER_TOOL}" login "${host}" \
+        -u "${OCIR_USERNAME}" --password-stdin
+      logged_in=1
+    fi
+    echo "== build & push ${host}/${nsv}/${name}:${tag}"
+    "${CONTAINER_TOOL}" build -f "${file}" -t "${host}/${nsv}/${name}:${tag}" .
+    "${CONTAINER_TOOL}" push "${host}/${nsv}/${name}:${tag}"
+  done
+}
+
 cmd_spa() { # SPA build → スタックの SPA バケットへ同期
   local bucket; bucket="$(tf_output spa_bucket)"
   [ -n "${bucket}" ] && [ "${bucket}" != "null" ] || { echo "spa_bucket output not found"; exit 1; }
@@ -245,11 +278,13 @@ EOF
 }
 
 # SPA 同期は apply の後(SPA オブジェクトは tf 管理外 — apply がバケット/PAR を整えた後に
-# 同期すれば、初回プロビジョニングやバケット再作成でも常に最終状態が正しい)
-cmd_all() { cmd_image; cmd_update_stack; cmd_apply; cmd_spa; cmd_smoke; }
+# 同期すれば、初回プロビジョニングやバケット再作成でも常に最終状態が正しい)。
+# gen-images も apply の後(初回 apply が OCIR repo を作る。既存タグは skip で高速)
+cmd_all() { cmd_image; cmd_update_stack; cmd_apply; cmd_gen_images; cmd_spa; cmd_smoke; }
 
 case "${1:-all}" in
   image)        cmd_image ;;
+  gen-images)   cmd_gen_images ;;
   spa)          cmd_spa ;;
   update-stack) cmd_update_stack ;;
   seed-env)     cmd_seed_env ;;
@@ -257,5 +292,5 @@ case "${1:-all}" in
   smoke)        cmd_smoke ;;
   summary)      cmd_summary "${2:-}" ;;
   all)          cmd_all ;;
-  *) echo "usage: $0 {image|spa|update-stack|seed-env|apply|smoke|summary|all}"; exit 2 ;;
+  *) echo "usage: $0 {image|gen-images|spa|update-stack|seed-env|apply|smoke|summary|all}"; exit 2 ;;
 esac

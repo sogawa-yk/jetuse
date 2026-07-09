@@ -131,6 +131,21 @@ def count_provisioning() -> int:
         return int(cur.fetchone()[0])
 
 
+def list_stale_provisioning(older_than_s: int) -> list[str]:
+    """N1 ハードキャップを超えて provisioning のままの demo id(SP3-08 reconcile — ADR-0023 §4)。
+
+    updated_at は set_status(→provisioning)で更新されるため「生成開始からの経過」を表す。
+    遷移そのものは呼び出し側が set_status の楽観 UPDATE で行う(競合安全)。"""
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM demos WHERE status = 'provisioning' "
+            "AND updated_at < SYSTIMESTAMP - NUMTODSINTERVAL(:s, 'SECOND')",
+            s=older_than_s,
+        )
+        return [r[0] for r in cur.fetchall()]
+
+
 def merge_config(demo_id: str, patch: dict[str, Any]) -> None:
     """サーバ管理 config キー(frontend/generation 等)を原子的にマージ(specs/19 §4.5 の公開)。
 
