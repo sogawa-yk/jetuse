@@ -151,6 +151,11 @@ def create_app() -> FastAPI:
     async def healthz():
         return {"status": "ok"}
 
+    @app.get("/api/health")
+    async def api_health():
+        # gateway は /api/* しか CI へルートしない — デプロイ smoke の契約(SP3-07)
+        return {"status": "ok"}
+
     # route 群(P1c §5)。path/method/status は分割前と同一。
     app.include_router(chat.router)
     app.include_router(admin.router)
@@ -165,6 +170,12 @@ def create_app() -> FastAPI:
     app.include_router(demos.router)
     app.include_router(demos.crud_router)  # Demo CRUD(SP2-01 / specs/18 §2)
     app.include_router(builder.router)  # ビルダー・ヒアリング(SP3-01 / specs/19 §2)
+
+    # 生成用署名プロキシ(SP3-07 配備像: API プロセス内 mount)。gateway は /api/* と SPA しか
+    # ルートしないため公開されない。VCN 内(SP3-08 の生成 CI)からは :8000/gen-proxy/v1 で到達。
+    from jetuse_core import sign_proxy
+
+    app.mount("/gen-proxy", sign_proxy.app)
 
     return app
 
