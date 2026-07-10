@@ -9,7 +9,7 @@ export type IconName =
   | 'voicechat' | 'video' | 'ocr' | 'agents' | 'admin' | 'settings' | 'design'
   // 汎用(ユースケース/エージェントのアイコン選択用)
   | 'document' | 'edit' | 'translate' | 'link' | 'diagram' | 'search'
-  | 'idea' | 'mail' | 'code' | 'image' | 'star' | 'tag' | 'checklist'
+  | 'idea' | 'mail' | 'code' | 'image' | 'star' | 'tag' | 'checklist' | 'gallery'
   // チャットのコントロール用(ツール/添付。絵文字をやめモノトーンに統一 — feedback 20260618-2)
   | 'tools' | 'attach'
 
@@ -115,6 +115,14 @@ const PATHS: Record<IconName, ReactElement> = {
     </>
   ),
   star: <path d="M12 4l2.4 5 5.5.8-4 3.9.9 5.4-4.8-2.5-4.8 2.5.9-5.4-4-3.9 5.5-.8z" />,
+  gallery: (
+    <>
+      <rect x="4" y="4" width="7" height="7" rx="1" />
+      <rect x="13" y="4" width="7" height="7" rx="1" />
+      <rect x="4" y="13" width="7" height="7" rx="1" />
+      <rect x="13" y="13" width="7" height="7" rx="1" />
+    </>
+  ),
   tag: (
     <>
       <path d="M4 4h7l9 9-7 7-9-9z" />

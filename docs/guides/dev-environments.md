@@ -75,3 +75,89 @@ ops/dev-env-down.sh alice    # アプリ層を破棄(共有基盤・ADBスキー
   per-dev スキーマでは未提供(SQL Search バックエンドと datasets は per-dev でも動作)。
 - 将来 開発者が増えたら `environments/app` を GitHub Actions のPRごとプレビュー環境へ昇格できる
   (remote state を OCI Object Storage に、GHA→OCI OIDC連携)。
+
+## 開発ブランチ push → jetuse:dev 自動デプロイ（SP3-07）
+
+`feat/**`・`fix/**`・`chore/**` への push で `.github/workflows/deploy-dev.yml` が共有プレビュー
+（RM スタック `jetuse-dev-app`、jetuse:dev）へ自動デプロイする。`main` / `dev` / `internal-stable` は
+トリガー対象外。**以降の実環境 E2E はこのデプロイ環境で行う**（施主指示 2026-07-09）。
+
+- 手順の実体は `ops/deploy-dev-app.sh`（各 workflow step = 同スクリプトのサブコマンド。
+  ローカルでも `ops/deploy-dev-app.sh all` で同一手順を実行できる）。
+- 流れ: API イメージ build → OCIR push（tag=`<branch>-<short-sha>`、リポジトリは既存の
+  `jetuse-dev-api` 系譜）→ RM スタック更新（tf 構成 zip + `image_url` 変数。他の変数は
+  マージで温存）→ RM job で plan+apply → SPA build → SPA バケット同期 → gateway smoke
+  （/api/health・SPA・/api/chat/models・ビルダーのモデル一覧 8 個）。
+- SPA オブジェクトは **terraform 管理にしない**（SP3-07 で dev-app の spa.tf を廃止）。
+  スタックはバケット+PAR のみ管理し、dist と config.json は上記 CLI アップロードが正
+  （index.html を最後に公開・旧ハッシュ付きアセットは配信中クライアント保護のため残置）。
+- **DB マイグレーションは自動デプロイに含めない**（`RUN_DB_BOOTSTRAP` 未設定 — 共有 loop ADB の
+  スキーマ変更は人間ゲート）。マイグレーションを含むブランチは、デプロイ前に承認の上
+  `ops/start-adb-if-stopped.sh && .venv/bin/python -m jetuse_core.migrate` を明示実行する
+  （従来どおり。api area の deploy_cmd と同一）。
+- **共有スタック 1 本のため apply は直列**: workflow の `concurrency: dev-app-deploy`
+  （cancel-in-progress）+ スクリプト側の先行 RM job 完了待ちの二段構え。`destroy` は扱わない（禁止）。
+- 生成（ビルダーの generate 実行）はデプロイ環境ではまだ動かない — 実 CI ランタイムは SP3-08。
+
+### 必要な GitHub Secrets（登録は人間ゲート — 値は絶対にコミットしない）
+
+リポジトリ Settings → Secrets and variables → Actions → New repository secret
+（または `gh secret set <NAME>`）。デプロイ用 IAM ユーザーは jetuse-dev グループ相当の権限
+（OCIR push / Resource Manager job / Object Storage put / stack read+update）が必要。
+
+| Secret | 用途 | 値の入手方法 |
+|---|---|---|
+| `OCI_CLI_USER` | OCI API 認証（ユーザー OCID） | `~/.oci/config` の `user` |
+| `OCI_CLI_TENANCY` | 同（テナンシ OCID） | `~/.oci/config` の `tenancy` |
+| `OCI_CLI_FINGERPRINT` | 同（API 鍵フィンガープリント） | `~/.oci/config` の `fingerprint` |
+| `OCI_CLI_KEY_CONTENT` | 同（API 秘密鍵 PEM 本文） | `cat` した `~/.oci/config` の `key_file` の中身（複数行のまま） |
+| `OCI_CLI_REGION` | リージョン | `ap-osaka-1` |
+| `COMPARTMENT_OCID` | jetuse:dev コンパートメント | `.env` の `COMPARTMENT_OCID` |
+| `OCIR_USERNAME` | OCIR docker login | `<namespace>/<ユーザー名>`（`podman login --get-login kix.ocir.io` の値） |
+| `OCIR_AUTH_TOKEN` | OCIR docker login | OCI コンソール → プロファイル → Auth Tokens で生成 |
+
+### 環境依存値・秘匿値のシード（ORASEJAPAN 材料 / RAG_BUCKET / APP_SESSION_SECRET）
+
+生成 gpt-5 系（共有テナンシ）の鍵材料・アプリ秘匿値は **GitHub Secrets には置かない**。
+SP3-09 以降、鍵材料は **RM スタック変数にも置かない** — jetuse:dev の OCI Vault シークレット
+（`jetuse-dev-app-gen-shared`、JSON: `user`/`tenancy`/`fingerprint`/`region`/`key_pem`。
+vault.tf が software 保護キーの Vault ごと管理・destroy 禁止）に置く:
+
+```bash
+# ローカル（~/.oci/config に ORASEJAPAN プロファイル、.env に GEN_SHARED_PROFILE /
+# GEN_SHARED_COMPARTMENT_OCID / RAG_BUCKET / APP_SESSION_SECRET がある環境）で。
+# 初回は先に apply（Vault/Secret の作成）→ seed-env の順
+ops/deploy-dev-app.sh seed-env
+```
+
+seed-env は ①`~/.oci` のプロファイルから鍵材料を読んで Vault シークレットへ新版投入
+（実値は argv にも RM 変数にも出さない）、②非鍵材料（`gen_shared_compartment_ocid`・
+`rag_bucket`・`app_session_secret`）を RM 変数へマージ、③旧 SP3-07 方式の鍵材料変数
+（`gen_shared_{profile,user_ocid,tenancy_ocid,fingerprint,region,key_pem_b64}`）を
+スタックから除去する（冪等 — 再実行可）。
+
+`RAG_BUCKET` は生成 SPA バンドル（`demo-bundles/` prefix）と RAG 文書の保管バケット、
+`APP_SESSION_SECRET` は生成 SPA 配信の app-session HMAC 鍵。未設定だと ready デモの
+`/app/` 配信が 404 / app-session が 500 になる（fail-closed）。
+
+コンテナ側は `GEN_SHARED_SECRET_OCID`（tf が配線・非鍵材料）を受け、共有モデルの初回
+リクエスト時に `jetuse_core.gen_shared_vault` がリソースプリンシパル（DG jetuse-internal-dg）
+で取得して **in-memory 署名**を構成する（鍵をディスク・環境変数に出さない）。未 seed
+（placeholder）・取得失敗は共有モデルのみ 403 の fail-closed で、API は起動継続・値はログ非出力。
+ローカル開発は従来どおり `GEN_SHARED_PROFILE`（~/.oci）— `GEN_SHARED_SECRET_OCID` が
+設定されていればそちらが優先（fallback はしない）。
+
+**ローテーション手順**: ~/.oci の ORASEJAPAN プロファイルを新しい API 鍵に更新 →
+`ops/deploy-dev-app.sh seed-env`（シークレット新版投入）→ **API コンテナ再起動**
+（`oci container-instances container-instance restart --wait-for-state SUCCEEDED`）で反映。
+再起動は必須である — user principal（API 鍵）は期限切れしないため、`gen_shared_vault` は
+成功した署名をプロセス生涯キャッシュし、**周期・401 の自動再取得は持たない**（いずれも同期
+Vault I/O をイベントループ上で走らせるため封じた — SP3-09 codex review-2 M001）。旧鍵を
+失効させる場合は、新版 seed → 再起動で新鍵が有効になったことを確認してから失効させること。
+
+### sign_proxy の配備方式（SP3-07 で確定）
+
+署名プロキシは **API プロセス内 mount**（`service.main` が `/gen-proxy` に mount）。
+API Gateway は `/api/*` と SPA しかルートしないため公開されず、VCN 内（SP3-08 の生成 CI）
+からは `http://<API CI の private IP>:8000/gen-proxy/v1` で到達する。自テナンシモデルの署名は
+`AUTH_MODE=resource_principal` でリソースプリンシパル、共有テナンシは上記プロファイルを使う。

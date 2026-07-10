@@ -54,12 +54,18 @@ class Settings(BaseSettings):
     # SP2-02(specs/18 §3.1): デモ箱あたりの上限(超過 422 — 同期削除の所要を有界化)
     demo_max_rag_files: int = 20
     demo_max_datasets: int = 10
-    # SP3-03(ADR-0023 §6・F2): フロント生成 LLM = MODELS の公開キー(既定 gpt-oss-120b)。
-    # 設定で切替可能(F2)。生成側 OpenCode/署名プロキシは MODELS[generation_model].oci_id を使う。
+    # SP3-03/SP3-06(ADR-0023 §6・F2): フロント生成 LLM = 生成レジストリ(gen_models)のキー。
+    # 既定 gpt-oss-120b(自テナンシ)。model 未指定時に使う。**自テナンシ既定を保つ**ことで、
+    # 共有設定(gen_shared_*)が無い環境でも省略時生成が動く(後方互換 — codex review-5 B001)。
+    # UI 選択肢の品質厳選(state.ts)とは別レイヤ。allowlist はレジストリが単一真実源。
     generation_model: str = "gpt-oss-120b"
-    # SP3-03(ADR-0023 §2/§6): 署名プロキシが転送を許す OCI モデル id の allowlist(カンマ区切り)。
-    # 既定 = フル生成実証済みの openai.gpt-oss-120b のみ(追加はフル生成再計測後・運用で広げる)。
-    genai_model_allowlist: str = "openai.gpt-oss-120b"
+    # SP3-06: ORASEJAPAN 共有テナンシ(生成 gpt-5 系)の auth プロファイルと compartment OCID。
+    # 環境依存値ゆえ .env(コミット禁止)。空 = 共有テナンシモデルは使用不可(fail-closed)。
+    gen_shared_profile: str = ""
+    gen_shared_compartment_ocid: str = ""
+    # SP3-09: デプロイ環境の鍵材料 = Vault シークレット(JSON)の OCID(非鍵材料)。
+    # 設定時は GEN_SHARED_PROFILE より優先(gen_shared_vault — RP で取得・in-memory 署名)。
+    gen_shared_secret_ocid: str = ""
     # SP3-03(§4.2 N3): 同時 provisioning デモ数の上限。固定名グローバルロック下で数える。
     demo_max_concurrent_generations: int = 2
     # SP3-03(specs/19 §4.2 N7・ADR-0023): 1 生成の壁時計上限(秒)。runtime のハードキル。
@@ -76,6 +82,17 @@ class Settings(BaseSettings):
     generation_memory: str = "4g"
     generation_pids_limit: int = 256
     generation_scaffold_dir: str = ""  # 空なら repo 既定(spikes/sp3_03_scaffold)
+    # SP3-08(ADR-0023 §1 B'): 生成 runtime バックエンド。podman = ローカル開発(従来)、
+    # oci-ci = 生成ごとの使い捨て Container Instance(デプロイ環境の正 — dev-app tf が設定)。
+    generation_runtime: str = "podman"
+    # oci-ci 用の配線(dev-app tf が env で与える。未設定は生成開始時に fail-fast)
+    generation_ci_subnet_ocid: str = ""   # 生成 CI を置く private サブネット
+    generation_ci_ad: str = ""            # availability domain 名
+    generation_gen_image_url: str = ""    # 相1 生成イメージ(OCIR public repo)
+    generation_build_image_url: str = ""  # 相2 信頼ビルドイメージ(OCIR public repo)
+    # 相ごとのタイムアウト(ADR-0023 §1: 相1 9 分・相2 2 分。全体は generation_timeout_s)
+    generation_ci_gen_timeout_s: int = 540
+    generation_ci_build_timeout_s: int = 120
     # SP2-02(specs/18 §3.1): 起動世代トークン。entrypoint.sh が bootstrap/uvicorn 起動前に
     # export し、両プロセスで共有する。upload gate は「今回起動の reconcile が開けた」場合のみ
     # 通す(前回起動の 'Y' が残っていても boot_id 不一致で fail-closed — codex review-8 B001)。

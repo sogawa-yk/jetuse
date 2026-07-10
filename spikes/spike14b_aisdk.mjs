@@ -12,7 +12,7 @@ const BASE = 'https://inference.generativeai.ap-osaka-1.oci.oraclecloud.com/open
 async function ociFetch(input, init = {}) {
   const url = typeof input === 'string' ? input : input.url;
   const headers = new Headers(init.headers || {});
-  headers.set('CompartmentId', 'ocid1.compartment.oc1..aaaaaaaa2mszedgajabtkd2v2fmtikogjpcmreghesxyu7kelm7qgm6tzywa');
+  headers.set('CompartmentId', process.env.COMPARTMENT_OCID ?? (() => { throw new Error('COMPARTMENT_OCID required'); })());
   headers.set('OpenAi-Project', 'ocid1.generativeaiproject.oc1.ap-osaka-1.amaaaaaal7l2mtaafbc3hyhlw54smiwwnfmqpg2gdlmu6f363vj5q7zpbmba');
   headers.delete('authorization');
   const httpRequest = {

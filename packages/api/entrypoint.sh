@@ -14,6 +14,11 @@ fi
 export APP_BOOT_ID
 echo "[entrypoint] APP_BOOT_ID=${APP_BOOT_ID}"
 
+# SP3-09: ORASEJAPAN 共有テナンシ(生成 gpt-5 系)の鍵材料は env で受け取らない。
+# デプロイ環境は GEN_SHARED_SECRET_OCID(非鍵材料)から jetuse_core.gen_shared_vault が
+# RP で取得し in-memory 署名する(取得失敗は共有モデルのみ 403 の fail-closed)。
+# SP3-07 の ~/.oci プロファイル書き出しブロックはここにあったが撤去した。
+
 # DBブートストラップ(スキーマ作成+マイグレ)は**バックグラウンド**で実行し、APIは即起動する。
 # これにより ADB ACTIVE 待ちやプロビジョニング中も API は応答(DB系は503でフェイルセーフ)し、
 # ゲートウェイが長時間502になるのを避ける。完了後にDB系が利用可能になる。

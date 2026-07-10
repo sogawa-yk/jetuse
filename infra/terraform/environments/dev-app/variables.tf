@@ -107,3 +107,32 @@ variable "adb_wallet_password" {
   type      = string
   sensitive = true
 }
+
+# 生成 SPA バンドル(demo-bundles/ prefix)と RAG 文書の保管バケット。未設定 = 生成デモの
+# /app/ 配信と RAG が 404/無効(review-2 B001 — loop 環境と同じバケット名を RM 変数で与える)
+variable "rag_bucket" {
+  type    = string
+  default = ""
+}
+
+# 生成 SPA の app-session(一回性コード/Cookie)の HMAC 秘密鍵。未設定 = 発行 500(fail-closed)
+variable "app_session_secret" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+
+# --- SP3-06/07: フロント生成(sign_proxy は API プロセス内 mount — /gen-proxy)。 ---
+# 既定 localhost = 同一プロセス mount の自己参照。SP3-08(生成 CI)は runtime が自 IP へ解決する。
+variable "generation_proxy_url" {
+  type    = string
+  default = "http://localhost:8000/gen-proxy/v1"
+}
+
+# ORASEJAPAN 共有テナンシ(gpt-5 系)の compartment OCID(非鍵材料。ops/deploy-dev-app.sh
+# seed-env でシード)。鍵材料そのものは RM 変数に置かない — Vault シークレット(vault.tf)へ
+# seed-env が投入する(SP3-09)。空 = 共有モデル fail-closed(403)。
+variable "gen_shared_compartment_ocid" {
+  type    = string
+  default = ""
+}

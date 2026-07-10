@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthProvider } from '../../auth'
 import { PrefsProvider } from '../../prefs'
 import DemoBuilder from './index'
-import { SID_KEY, type Session } from './state'
+import { GEN_MODEL_KEY, SID_KEY, type Session } from './state'
 
 const PLAN = {
   plan_version: 1,
@@ -263,5 +263,64 @@ describe('生成(③) — failed の理由表示と再生成導線', () => {
     await screen.findByText('作りたいデモを教えてください')
     expect(confirmSpy).toHaveBeenCalled()
     expect(localStorage.getItem(SID_KEY)).toBeNull()
+  })
+})
+
+describe('生成モデル選択(SP3-06) — 既定・body 送信・localStorage 復帰', () => {
+  const designedSession: Session = {
+    ...SESSION,
+    status: 'designed',
+    plan: PLAN,
+    requirements: { industry: '製造', use_case: '検索', data_profile: { documents: 'x' } },
+  }
+  const routes = () => [
+    { method: 'GET', path: '/api/builder/sessions/sid-1', body: designedSession },
+    { method: 'POST', path: '/api/builder/sessions/sid-1/generate', body: { demo_id: 'd1' } },
+    {
+      method: 'GET',
+      path: '/api/demos/d1',
+      body: { id: 'd1', name: '保全デモ', description: null, status: 'provisioning' },
+    },
+  ]
+
+  it('既定は gpt-5.6-sol。変更が localStorage に入り、generate body で送られる', async () => {
+    localStorage.setItem(SID_KEY, 'sid-1')
+    const fetchMock = fakeFetch(routes())
+    vi.stubGlobal('fetch', fetchMock)
+    mount()
+
+    const select = (await screen.findByRole('combobox')) as HTMLSelectElement
+    expect(select.value).toBe('gpt-5.6-sol')
+
+    fireEvent.change(select, { target: { value: 'gpt-5.5' } })
+    expect(localStorage.getItem(GEN_MODEL_KEY)).toBe('gpt-5.5')
+
+    fireEvent.click(screen.getByRole('button', { name: /生成を開始/ }))
+    await screen.findByText(/デモを生成しています/)
+    const gen = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        url === '/api/builder/sessions/sid-1/generate' && init?.method === 'POST',
+    )
+    expect(JSON.parse((gen?.[1] as RequestInit).body as string)).toEqual({
+      model: 'gpt-5.5',
+    })
+  })
+
+  it('前回選択が localStorage から復帰する', async () => {
+    localStorage.setItem(SID_KEY, 'sid-1')
+    localStorage.setItem(GEN_MODEL_KEY, 'gpt-5.6-terra')
+    vi.stubGlobal('fetch', fakeFetch(routes()))
+    mount()
+    const select = (await screen.findByRole('combobox')) as HTMLSelectElement
+    expect(select.value).toBe('gpt-5.6-terra')
+  })
+
+  it('localStorage の未知値は既定へフォールバックする(レジストリ改廃に安全)', async () => {
+    localStorage.setItem(SID_KEY, 'sid-1')
+    localStorage.setItem(GEN_MODEL_KEY, 'removed-model')
+    vi.stubGlobal('fetch', fakeFetch(routes()))
+    mount()
+    const select = (await screen.findByRole('combobox')) as HTMLSelectElement
+    expect(select.value).toBe('gpt-5.6-sol')
   })
 })

@@ -22,8 +22,9 @@ from jetuse_core import (
 from jetuse_core import conversations as conv_repo
 from jetuse_core.auth import AuthContext, require_user
 from jetuse_core.capabilities import demo_plan_vocabulary
+from jetuse_core.gen_models import GEN_MODELS
 
-from ..schemas import BuilderMessageIn, BuilderPlanPatch
+from ..schemas import BuilderGenerateIn, BuilderMessageIn, BuilderPlanPatch
 from .capabilities import build_catalog
 
 logger = logging.getLogger("jetuse.builder")
@@ -224,14 +225,22 @@ async def patch_plan(sid: str, req: BuilderPlanPatch, user: User):
 
 
 @router.post("/{sid}/generate", status_code=202)
-async def generate(sid: str, background: BackgroundTasks, user: User):
+async def generate(sid: str, background: BackgroundTasks, user: User,
+                   req: BuilderGenerateIn | None = None):
     """designed セッション → Demo(provisioning)を作り生成を開始(specs/19 §4.5)。202 {demo_id}。
 
     生成本体(③b 生成→③c 検査→公開)は BackgroundTask で回す(N3≤2・§4.2)。状態は Demo.status。
     - demo_id 未設定: status='designed' + plan 必須(≠なら 409)。start(N3・作成・attach)→ run 予約。
     - demo_id 済 + failed: 再実行(restart → run 予約)。
     - demo_id 済 + provisioning / ready: 409(§4.5 の再実行契約)。deleting / 行なし: 404。
+    - body は任意 {"model": <生成レジストリ key>}(SP3-06 / §4.5)。未知キーは副作用前に 422。
+      省略 = 設定既定。使用モデルは N6(config.frontend.generator.model)に記録される。
     """
+    model_key = req.model if req else None
+    if model_key is not None and model_key not in GEN_MODELS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"未知の生成モデルです。選択可能: {', '.join(GEN_MODELS)}")
     session = _get_or_404(user.subject, sid)
     demo_id = session["demo_id"]
 
@@ -250,7 +259,7 @@ async def generate(sid: str, background: BackgroundTasks, user: User):
             raise HTTPException(status_code=409, detail=_NO_PLAN_DETAIL)
         demo_id = await _start_or_raise(user.subject, session)
 
-    background.add_task(builder_generate.run, demo_id)
+    background.add_task(builder_generate.run, demo_id, model_key)
     return {"demo_id": demo_id}
 
 
