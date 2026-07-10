@@ -46,6 +46,10 @@ GEN_MODELS: dict[str, GenModelDef] = {
         "openai.gpt-5.5-pro", "responses", "ap-osaka-1", shared=True),
 }
 
+# 既定は自テナンシの gpt-oss-120b(model 未指定でも共有テナンシ設定なしで動く = 後方互換)。
+# UI の選択肢は品質重視の curated subset(state.ts — 施主指示 2026-07-09 で gpt-oss-120b/codex 系は
+# 選択肢から除外)だが、レジストリ・既定は 8 モデルのまま維持する(署名プロキシ allowlist・
+# 既存デモの再生成・非共有フォールバック)。UI の既定は state.ts 側で gpt-5.6-sol。
 DEFAULT_GEN_MODEL = "gpt-oss-120b"
 
 # OCI id → 定義(署名プロキシの allowlist・ルーティングの逆引き)

@@ -12,7 +12,7 @@ def test_shared_models_registry_has_no_gpt5():
 
 def test_gen_registry_shape():
     assert DEFAULT_GEN_MODEL == "gpt-oss-120b"
-    assert GEN_MODELS[DEFAULT_GEN_MODEL].shared is False  # 既定は現行どおり自テナンシ
+    assert GEN_MODELS[DEFAULT_GEN_MODEL].shared is False  # 既定は自テナンシ(共有設定なしで動く=後方互換)
     # 施主指定 7 モデル + 既定(tasks/SP3-06)。oci_id は一意(逆引き allowlist が崩れない)
     assert len(GEN_MODELS) == 8
     assert len(GEN_MODELS_BY_OCI_ID) == 8

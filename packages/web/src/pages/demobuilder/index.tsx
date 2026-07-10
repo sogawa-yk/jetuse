@@ -62,7 +62,8 @@ export default function DemoBuilder() {
   // §7②: タイトル/説明のみ直接編集(プランへ反映は生成開始時に PATCH /plan)
   const [title, setTitle] = useState('')
   const [desc, setDesc] = useState('')
-  // SP3-06: 生成モデル選択(既定 gpt-oss-120b。localStorage 復帰 — §4.1 F2)
+  // SP3-06: 生成モデル選択(UI 既定 gpt-5.6-sol = state.ts の curated subset。API 既定とは別 —
+  // API は model 省略時 gpt-oss-120b に落ちる後方互換。localStorage 復帰 — §4.1 F2)
   const [genModel, setGenModel] = useState<GenModelKey>(() => loadGenModel())
   // §7⑤: 確定フォーム(PATCH /api/demos/{id})
   const [confirmName, setConfirmName] = useState('')

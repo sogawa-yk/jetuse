@@ -283,17 +283,17 @@ describe('生成モデル選択(SP3-06) — 既定・body 送信・localStorage 
     },
   ]
 
-  it('既定は gpt-oss-120b。変更が localStorage に入り、generate body で送られる', async () => {
+  it('既定は gpt-5.6-sol。変更が localStorage に入り、generate body で送られる', async () => {
     localStorage.setItem(SID_KEY, 'sid-1')
     const fetchMock = fakeFetch(routes())
     vi.stubGlobal('fetch', fetchMock)
     mount()
 
     const select = (await screen.findByRole('combobox')) as HTMLSelectElement
-    expect(select.value).toBe('gpt-oss-120b')
+    expect(select.value).toBe('gpt-5.6-sol')
 
-    fireEvent.change(select, { target: { value: 'gpt-5.6-sol' } })
-    expect(localStorage.getItem(GEN_MODEL_KEY)).toBe('gpt-5.6-sol')
+    fireEvent.change(select, { target: { value: 'gpt-5.5' } })
+    expect(localStorage.getItem(GEN_MODEL_KEY)).toBe('gpt-5.5')
 
     fireEvent.click(screen.getByRole('button', { name: /生成を開始/ }))
     await screen.findByText(/デモを生成しています/)
@@ -302,17 +302,17 @@ describe('生成モデル選択(SP3-06) — 既定・body 送信・localStorage 
         url === '/api/builder/sessions/sid-1/generate' && init?.method === 'POST',
     )
     expect(JSON.parse((gen?.[1] as RequestInit).body as string)).toEqual({
-      model: 'gpt-5.6-sol',
+      model: 'gpt-5.5',
     })
   })
 
   it('前回選択が localStorage から復帰する', async () => {
     localStorage.setItem(SID_KEY, 'sid-1')
-    localStorage.setItem(GEN_MODEL_KEY, 'gpt-5.1-codex-mini')
+    localStorage.setItem(GEN_MODEL_KEY, 'gpt-5.6-terra')
     vi.stubGlobal('fetch', fakeFetch(routes()))
     mount()
     const select = (await screen.findByRole('combobox')) as HTMLSelectElement
-    expect(select.value).toBe('gpt-5.1-codex-mini')
+    expect(select.value).toBe('gpt-5.6-terra')
   })
 
   it('localStorage の未知値は既定へフォールバックする(レジストリ改廃に安全)', async () => {
@@ -321,6 +321,6 @@ describe('生成モデル選択(SP3-06) — 既定・body 送信・localStorage 
     vi.stubGlobal('fetch', fakeFetch(routes()))
     mount()
     const select = (await screen.findByRole('combobox')) as HTMLSelectElement
-    expect(select.value).toBe('gpt-oss-120b')
+    expect(select.value).toBe('gpt-5.6-sol')
   })
 })

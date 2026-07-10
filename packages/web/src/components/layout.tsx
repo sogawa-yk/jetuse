@@ -28,6 +28,7 @@ const NAV: { to: string; key: string; icon: IconName }[] = [
   { to: '/video', key: 'nav.video', icon: 'video' },
   { to: '/ocr', key: 'nav.ocr', icon: 'ocr' },
   { to: '/demo-builder', key: 'nav.demobuilder', icon: 'idea' },
+  { to: '/demos', key: 'nav.demos', icon: 'gallery' },
   { to: '/admin', key: 'nav.admin', icon: 'admin' },
   { to: '/settings', key: 'nav.settings', icon: 'settings' },
   { to: '/design', key: 'nav.design', icon: 'design' },

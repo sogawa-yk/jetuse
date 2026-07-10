@@ -94,21 +94,19 @@ export const loadSid = (): string | null => localStorage.getItem(SID_KEY)
 export const saveSid = (sid: string): void => localStorage.setItem(SID_KEY, sid)
 export const clearSid = (): void => localStorage.removeItem(SID_KEY)
 
-/** 生成モデル選択(SP3-06 / specs/19 §4.1 F2・§4.5)。key はサーバの生成レジストリ
- *  (jetuse_core/gen_models.py)と一致させる。表示ラベル(速度/品質の目安)は i18n
- *  `demobuilder.model.<key>`。未知キーはサーバが 422 で fail-closed。 */
+/** 生成モデル選択(SP3-06 / specs/19 §4.1 F2・§4.5)。UI が出すのはサーバ生成レジストリ
+ *  (jetuse_core/gen_models.py)の **UI 品質で厳選した subset**(施主指示 2026-07-09 —
+ *  見た目がしょぼい gpt-oss-120b / codex 系は選択肢から除外。サーバ registry には残る)。
+ *  表示ラベル(品質の目安)は i18n `demobuilder.model.<key>`。未知キーはサーバが 422 で fail-closed。 */
 export const GEN_MODELS = [
-  'gpt-oss-120b',
-  'gpt-5.5',
-  'gpt-5.6-luna',
   'gpt-5.6-sol',
+  'gpt-5.6-luna',
   'gpt-5.6-terra',
-  'gpt-5.1-codex-mini',
-  'gpt-5.3-codex',
+  'gpt-5.5',
   'gpt-5.5-pro',
 ] as const
 export type GenModelKey = (typeof GEN_MODELS)[number]
-export const DEFAULT_GEN_MODEL: GenModelKey = 'gpt-oss-120b'
+export const DEFAULT_GEN_MODEL: GenModelKey = 'gpt-5.6-sol'
 
 /** 選択の復帰(localStorage — SID と同じ流儀)。未知値は既定へフォールバック */
 export const GEN_MODEL_KEY = 'jetuse.demoBuilderGenModel'

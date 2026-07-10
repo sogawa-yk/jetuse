@@ -103,12 +103,16 @@ export default function Home() {
     localStorage.setItem(ORDER_KEY, JSON.stringify(keys))
   }
 
-  // 標準3種(大カード)。検索時は名前/説明でこちらも絞る
-  const features = [
+  // 標準機能(大カード)。検索時は名前/説明でこちらも絞る。デモ一覧は作成済みデモへの導線
+  const features: {
+    to: string; image?: string; icon?: string
+    tone?: 'terracotta' | 'green' | 'dark'; title: string; desc: string
+  }[] = [
     { to: '/chat', image: featureChat, title: t('nav.chat'), desc: t('home.chat.desc') },
     { to: '/rag', image: featureRag, title: t('nav.rag'), desc: t('home.rag.desc') },
     { to: '/dbchat', image: featureDb, title: t('nav.dbchat'), desc: t('home.db.desc') },
-  ] as const
+    { to: '/demos', icon: '🖼️', tone: 'green', title: t('nav.demos'), desc: t('home.demos.desc') },
+  ]
   const shownFeatures = reorder ? [] : features.filter((f) => matchQ(f.title, f.desc))
 
   return (
@@ -179,7 +183,15 @@ export default function Home() {
       {shownFeatures.length > 0 && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
           {shownFeatures.map((f) => (
-            <FeatureCard key={f.to} to={f.to} image={f.image} title={f.title} desc={f.desc} />
+            <FeatureCard
+              key={f.to}
+              to={f.to}
+              image={f.image}
+              icon={f.icon}
+              tone={f.tone}
+              title={f.title}
+              desc={f.desc}
+            />
           ))}
         </div>
       )}

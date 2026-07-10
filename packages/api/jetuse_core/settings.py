@@ -55,8 +55,9 @@ class Settings(BaseSettings):
     demo_max_rag_files: int = 20
     demo_max_datasets: int = 10
     # SP3-03/SP3-06(ADR-0023 §6・F2): フロント生成 LLM = 生成レジストリ(gen_models)のキー。
-    # 既定 gpt-oss-120b。generate API の model 未指定時に使う。allowlist はレジストリが単一真実源
-    # (署名プロキシ・runtime とも gen_models を参照 — 旧 GENAI_MODEL_ALLOWLIST は廃止)。
+    # 既定 gpt-oss-120b。generate API の model 未指定時に使う。**自テナンシモデルを既定に保つ**ことで
+    # 共有テナンシ設定(gen_shared_*)が無い環境でも省略時生成が動く(後方互換 — codex review-5 B001)。
+    # UI 選択肢の品質厳選(state.ts の curated subset)とは別レイヤ。allowlist はレジストリが単一真実源。
     generation_model: str = "gpt-oss-120b"
     # SP3-06: ORASEJAPAN 共有テナンシ(生成 gpt-5 系)の auth プロファイルと compartment OCID。
     # 環境依存値ゆえ .env(コミット禁止)。空 = 共有テナンシモデルは使用不可(fail-closed)。
