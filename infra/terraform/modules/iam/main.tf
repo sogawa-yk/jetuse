@@ -66,6 +66,13 @@ locals {
     "Allow any-user to use functions-family in compartment id ${var.compartment_ocid} where ALL {request.principal.type = 'ApiGateway', request.resource.compartment.id = '${var.compartment_ocid}'}",
   ]
 
+  # DP 状態API(Files/Conversations等)必須の OpenAi-Project を自動解決するため、
+  # GenerativeAiProject の検索と自動作成をアプリに許可する(FIX-47 / Issue #47)。
+  # opt-in: PROJECT_OCID を明示配線する運用では不要なので既定では付与しない。
+  project_autocreate_statements = var.enable_project_autocreate ? [
+    "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage generative-ai-project in compartment id ${var.compartment_ocid}",
+  ] : []
+
   adb_statements = [
     # DBMS_CLOUD_AI / Select AI が ADB の resource principal で推論・RAGを行う。
     "Allow dynamic-group ${local.adb_dynamic_group_name} to use generative-ai-family in compartment id ${var.compartment_ocid}",
@@ -90,6 +97,7 @@ resource "oci_identity_policy" "runtime" {
   # 単一の既存DGを参照する場合、責務間で同一になる文をまとめる。
   statements = distinct(concat(
     local.runtime_statements,
+    local.project_autocreate_statements,
     local.adb_statements,
     local.semantic_store_statements,
   ))

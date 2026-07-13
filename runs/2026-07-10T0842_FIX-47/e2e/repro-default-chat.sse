@@ -1,0 +1,40 @@
+data: {"ka": 1}
+
+data: {"delta": "私は"}
+
+data: {"delta": "Chat"}
+
+data: {"delta": "GPT"}
+
+data: {"delta": "、"}
+
+data: {"delta": "Open"}
+
+data: {"delta": "AI"}
+
+data: {"delta": "が"}
+
+data: {"delta": "開"}
+
+data: {"delta": "発"}
+
+data: {"delta": "した"}
+
+data: {"delta": "AI"}
+
+data: {"delta": "ア"}
+
+data: {"delta": "シ"}
+
+data: {"delta": "スタ"}
+
+data: {"delta": "ント"}
+
+data: {"delta": "です"}
+
+data: {"delta": "。"}
+
+data: {"usage": {"input_tokens": 76, "output_tokens": 102}}
+
+data: [DONE]
+

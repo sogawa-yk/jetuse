@@ -16,7 +16,7 @@ import oracledb
 from openai import NotFoundError
 
 from .db import connect
-from .genai import make_cp_client, make_inference_client
+from .genai import make_cp_client, make_inference_client, resolve_project_ocid
 from .settings import get_settings
 
 logger = logging.getLogger("jetuse.rag")
@@ -159,6 +159,51 @@ def _delete_original(owner: str, file_id: str, filename: str) -> None:
         client.delete_object(ns, bucket, f"rag/{owner}/{file_id}_{filename}")
     except Exception:
         logger.exception("rag original delete failed (ignored)")
+
+
+# --- プリフライト診断(FIX-47) ---
+
+
+def _check_hint(e: Exception, what: str) -> str:
+    """失敗ヒント。レスポンスbody(OCID等を含みうる)は載せずステータスと確認箇所だけ返す。"""
+    code = getattr(e, "status_code", None)
+    base = f"{what} の呼び出しが失敗"
+    if code:
+        base += f" (HTTP {code})"
+    return (base + "。DG matching rule / IAM policy statements / PROJECT_OCID / "
+            "リージョンの agentic API 対応を確認してください")
+
+
+def health_check() -> dict[str, Any]:
+    """RAG 経路の3点検査: ①project解決 ②CP vector_stores.list ③DP files.list(OpenAi-Project付き)。
+
+    Issue #47 の報告者が「どこで落ちているか」を自己診断できる粒度で返す(認可済み前提)。
+    """
+    checks: dict[str, dict[str, Any]] = {}
+    project: str | None = None
+    try:
+        project = resolve_project_ocid()
+        checks["project"] = {
+            "ok": True, "source": "env" if get_settings().project_ocid else "auto",
+        }
+    except Exception as e:  # noqa: BLE001 - 診断エンドポイント。落とさず構造化して返す
+        checks["project"] = {"ok": False, "hint": str(e)}
+    try:
+        make_cp_client().vector_stores.list()
+        checks["control_plane"] = {"ok": True}
+    except Exception as e:  # noqa: BLE001
+        checks["control_plane"] = {"ok": False,
+                                   "hint": _check_hint(e, "CP vector_stores.list")}
+    if project:
+        try:
+            make_inference_client(with_project=True).files.list()
+            checks["data_plane"] = {"ok": True}
+        except Exception as e:  # noqa: BLE001
+            checks["data_plane"] = {"ok": False,
+                                    "hint": _check_hint(e, "DP files.list")}
+    else:
+        checks["data_plane"] = {"ok": False, "hint": "project 未解決のため検査不能"}
+    return {"ok": all(c["ok"] for c in checks.values()), "checks": checks}
 
 
 # --- Vector Store / Files API ---

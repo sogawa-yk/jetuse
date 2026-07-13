@@ -61,13 +61,14 @@ module "iam" {
   source    = "../terraform/modules/iam"
   providers = { oci = oci.home }
 
-  tenancy_ocid           = var.tenancy_ocid
-  compartment_ocid       = var.compartment_ocid
-  prefix                 = var.prefix
-  enable_dynamic_group   = var.enable_dynamic_group
-  enable_runtime_policy  = var.enable_runtime_policy
-  enable_semantic_store  = var.enable_semantic_store
-  create_deployer_policy = false
+  tenancy_ocid              = var.tenancy_ocid
+  compartment_ocid          = var.compartment_ocid
+  prefix                    = var.prefix
+  enable_dynamic_group      = var.enable_dynamic_group
+  enable_runtime_policy     = var.enable_runtime_policy
+  enable_semantic_store     = var.enable_semantic_store
+  enable_project_autocreate = var.enable_project_autocreate
+  create_deployer_policy    = false
 
   existing_dynamic_group = var.existing_dynamic_group
 }

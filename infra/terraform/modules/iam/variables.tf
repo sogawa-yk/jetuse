@@ -25,6 +25,12 @@ variable "enable_runtime_policy" {
   default     = true
 }
 
+variable "enable_project_autocreate" {
+  description = "Allow the runtime to discover and auto-create the GenerativeAiProject required by the OpenAi-Project header (adds 'manage generative-ai-project'). Off by default; the public ORM stack enables it together with PROJECT_AUTOCREATE (FIX-47)."
+  type        = bool
+  default     = false
+}
+
 variable "enable_semantic_store" {
   description = "Create the dynamic group and policies required by OCI Generative AI semantic stores (SQL Search)."
   type        = bool
