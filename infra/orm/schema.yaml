@@ -5,7 +5,7 @@ description: >-
   実行ユーザーの権限や既存IAMに応じて、Dynamic GroupとPolicyの作成範囲を選択できます。
   デプロイ後、出力の app_url を開き demo ユーザーでログインしてください。
 schemaVersion: 1.1.0
-version: "20260706"
+version: "20260710"
 
 logoUrl: ""
 
@@ -27,8 +27,10 @@ variableGroups:
       - existing_dynamic_group
       - enable_runtime_policy
       - enable_semantic_store
+      - enable_project_autocreate
   - title: "オプション（詳細）"
     variables:
+      - project_ocid
       - enable_opensearch
       - rate_limit_rps
       - ocir_namespace
@@ -99,6 +101,18 @@ variables:
     title: "ADB ADMIN パスワード（任意）"
     description: "空欄なら自動生成します（出力に表示）。12〜30文字・英大小+数字"
     required: false
+
+  project_ocid:
+    type: string
+    title: "GenerativeAI Project OCID（任意）"
+    description: "RAG・会話メモリが使う GenerativeAiProject。空欄なら既存のACTIVEなprojectを自動検出し、無ければ自動作成します（自動作成は下のIAM設定でオフにできます）"
+    required: false
+
+  enable_project_autocreate:
+    type: boolean
+    title: "GenerativeAI Projectの自動作成を許可"
+    description: "RAG・会話メモリに必須のGenerativeAiProjectが無い場合にアプリが自動作成します（IAMに manage generative-ai-project を含めます）。オフの場合は Project OCID の明示指定を推奨"
+    default: true
 
   enable_opensearch:
     type: boolean

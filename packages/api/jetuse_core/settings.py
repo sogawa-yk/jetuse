@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     oci_region: str = "ap-osaka-1"
     compartment_ocid: str = ""
     project_ocid: str = ""
+    # FIX-47: project_ocid 空のとき、compartment に ACTIVE project が無ければ自動作成を許可する。
+    # 既定 false(検出のみ)。公開 ORM スタックは IAM policy とセットで true を注入する
+    project_autocreate: bool = False
 
     # OpenSearch RAG(ENH-05)。例 http://10.1.1.x:9200。空ならOpenSearchバックエンド無効
     opensearch_endpoint: str = ""

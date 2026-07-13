@@ -29,10 +29,13 @@ locals {
   api_environment = {
     OCI_REGION       = var.region
     COMPARTMENT_OCID = var.compartment_ocid
-    AUTH_MODE        = "resource_principal"
-    AUTH_REQUIRED    = var.enable_auth ? "true" : "false"
-    OIDC_ISSUER      = var.enable_auth ? "https://identity.oraclecloud.com/" : ""
-    OIDC_JWKS_URL    = var.enable_auth ? "${local.domain_url}/admin/v1/SigningCert/jwk" : ""
+    # 空ならアプリが自動解決(FIX-47)。genai.py resolve_project_ocid 参照。
+    PROJECT_OCID       = var.project_ocid
+    PROJECT_AUTOCREATE = var.enable_project_autocreate ? "true" : "false"
+    AUTH_MODE          = "resource_principal"
+    AUTH_REQUIRED      = var.enable_auth ? "true" : "false"
+    OIDC_ISSUER        = var.enable_auth ? "https://identity.oraclecloud.com/" : ""
+    OIDC_JWKS_URL      = var.enable_auth ? "${local.domain_url}/admin/v1/SigningCert/jwk" : ""
     # Select AI は ADB のリソースプリンシパル資格情報を使う(bootstrapがENABLE_RESOURCE_PRINCIPAL)
     SELECT_AI_CREDENTIAL = "OCI$RESOURCE_PRINCIPAL"
     # DB自己ブートストラップ(entrypoint.sh → jetuse_core.bootstrap)

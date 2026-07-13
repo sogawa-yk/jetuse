@@ -93,6 +93,24 @@ variable "image_repo_prefix" {
   default     = "jetuse"
 }
 
+# FIX-47: DP 状態API(Files / Vector Store files / Conversations)は OpenAi-Project ヘッダに
+# GenerativeAiProject OCID が必須。空ならアプリが compartment 内の ACTIVE project を自動検出し、
+# 無ければ自動作成する(GenerativeAiProject は TF provider 未対応のためアプリ側で解決)。
+variable "project_ocid" {
+  description = "GenerativeAI Project OCID(空なら自動検出/自動作成)"
+  type        = string
+  default     = ""
+}
+
+# 自動作成の opt-in(既定 on — ワンクリックの無手動セットアップを成立させる)。
+# off にする場合は project_ocid の明示指定が実質必須。IAM の
+# 'manage generative-ai-project' もこのフラグと連動する。
+variable "enable_project_autocreate" {
+  description = "GenerativeAI Project の自動作成を許可(IAM policy 'manage generative-ai-project' を含む)"
+  type        = bool
+  default     = true
+}
+
 # 明示指定時は合成より優先(空なら ocir_* / image_repo_prefix から合成)。
 variable "api_image_url" {
   type    = string
