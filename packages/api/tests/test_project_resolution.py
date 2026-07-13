@@ -64,6 +64,12 @@ def reset_project_cache():
     genai._reset_project_cache()
 
 
+@pytest.fixture(autouse=True)
+def no_real_signer(monkeypatch):
+    """CI(GitHub Actions)には ~/.oci/config が無い。署名器はクライアント構築に不要なのでスタブ。"""
+    monkeypatch.setattr(genai, "_signer", lambda: None)
+
+
 # --- resolve_project_ocid ---
 
 
