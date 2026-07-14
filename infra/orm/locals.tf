@@ -12,10 +12,20 @@ locals {
   # 対応外リージョンは main.tf の region_guard が plan 時に明示エラーにする
   # (api_image_url と fn_router_image の両方を明示指定すれば対応外リージョンでも可)。
   ocir_supported_region_keys = ["kix", "nrt", "iad", "ord"]
+  # GenAI(推論+agentic API)の実証済みリージョンは OCIR より狭い(docs/tips.md)。
+  # kix(大阪)/ord(シカゴ)のみ。nrt/iad は apply は通るが GenAI が動かない。
+  genai_validated_region_keys = ["kix", "ord"]
+  # JetUse 公開イメージの namespace。auto-synth(空 image URL 時)が pull 可能なパスを作れるのは
+  # この公開 namespace のときだけ。var.ocir_namespace の既定値と一致させること(region_guard が検証)。
+  public_ocir_namespace = "idqcucnenh88"
   deploy_region_key = try(lower(one([
     for r in data.oci_identity_region_subscriptions.this.region_subscriptions : r.region_key
     if r.region_name == var.region
   ])), "")
+
+  # テナンシのホームリージョン(Identity Domain 作成先)。providers.tf の home alias と同式。
+  home_region = try([for r in data.oci_identity_region_subscriptions.this.region_subscriptions :
+  r.region_name if r.is_home_region][0], var.region)
   ocir_registry   = "${local.deploy_region_key}.ocir.io/${var.ocir_namespace}"
   api_image_url   = var.api_image_url != "" ? var.api_image_url : "${local.ocir_registry}/${var.image_repo_prefix}-api:latest"
   fn_router_image = var.fn_router_image != "" ? var.fn_router_image : "${local.ocir_registry}/${var.image_repo_prefix}-fn-router:latest"
@@ -55,5 +65,10 @@ locals {
     RAG_BUCKET        = module.object_storage.app_data_bucket
     SPEECH_BUCKET     = module.object_storage.speech_bucket
     OS_NAMESPACE      = module.object_storage.namespace
+    # Monitoring 名前空間は prefix 由来にする(既定 "jetuse_dev" のままだと別テナンシに
+    # dev 名前空間が出る)。名前空間はハイフン不可なので "_" へ正規化。
+    METRICS_NAMESPACE = replace(var.prefix, "-", "_")
+    # NL2SQL(SQL Search)。事前作成した Semantic Store の OCID(空なら NL2SQL 無効=503)。
+    SEMSTORE_OCID = var.semstore_ocid
   }
 }
