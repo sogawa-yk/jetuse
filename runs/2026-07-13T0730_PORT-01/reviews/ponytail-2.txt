@@ -1,0 +1,12 @@
+ponytail-review (maker self-review, non-scoring) — turn 2 (F-001/F-002 fixes)
+
+F-001 fix (ocir guard):
+  +1 local (public_ocir_namespace) + 1 precondition. No new var. Minimal.
+  Literal "idqcucnenh88" duplicated (var default + local) — commented "keep in sync".
+  Acceptable: it's one named public constant, clearer in Console than default "".
+F-002 fix (time_offset):
+  Adds hashicorp/time provider — but task item 3 explicitly named time_offset as the
+  sanctioned option, and it removes the ignore_changes footgun (correctness > 1 tiny dep).
+  count-gated resource (only when spa_par_expiry==""); explicit-date path unchanged.
+  Verified RM installs the provider (plan v2 SUCCEEDED).
+net: -0 lines possible. Lean. Ship.

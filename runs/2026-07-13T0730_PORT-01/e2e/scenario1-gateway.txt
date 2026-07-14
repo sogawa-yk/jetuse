@@ -1,0 +1,3 @@
+GET / -> 200
+GET /index.html -> 200
+GET /config.json -> 200

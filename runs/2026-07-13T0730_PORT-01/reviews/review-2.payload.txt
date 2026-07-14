@@ -1,0 +1,743 @@
+diff --git a/README.md b/README.md
+index c82baa7..11254f3 100644
+--- a/README.md
++++ b/README.md
+@@ -26,8 +26,19 @@ Identity Domain（OIDC）/ Dynamic Group / Policyを一括構築し、**OIDC登
+ - **入力**: 対象コンパートメント、テナンシのホームリージョン、prefix。パスワード類は自動生成し、イメージは公開 OCIR を既定使用。
+ - **所要時間**: 初回は Autonomous Database 作成とDB初期化に約10〜15分。
+ - **デプロイ後**: 出力の `app_url` を開き、`demo_username` / `demo_password`（出力）でログイン。
+-- **前提**: Generative AI 対応リージョン、ADB・Identity Domain・Container Instance のクォータ、JetUse 専用コンパートメント。
+-- **対応リージョン**: **大阪（ap-osaka-1）/ 東京（ap-tokyo-1）/ アシュバーン（us-ashburn-1）/ シカゴ（us-chicago-1）** の4リージョン。公開イメージを各リージョンのOCIRへ事前公開しており（OCI Functions は同一リージョンOCIRのイメージ必須）、スタックはデプロイリージョンのOCIRを自動選択します。対応外リージョンは plan 時に明示エラーになります（イメージを自リージョンOCIRへミラーし `api_image_url` と `fn_router_image` を指定すれば利用可 — Issue #55 / ADR-0017）。
++- **対応リージョン（2階層）**:
++  - **アプリ（イメージ提供）= 4リージョン**: 大阪（ap-osaka-1）/ 東京（ap-tokyo-1）/ アシュバーン（us-ashburn-1）/ シカゴ（us-chicago-1）。公開イメージを各リージョンのOCIRへ事前公開しており（OCI Functions は同一リージョンOCIRのイメージ必須）、スタックはデプロイリージョンのOCIRを自動選択します。対応外リージョンは plan 時に明示エラー（イメージを自リージョンOCIRへミラーし `api_image_url` と `fn_router_image` を指定すれば利用可 — Issue #55 / ADR-0017）。
++  - **GenAI（推論/agentic API）実証済 = 2リージョンのみ**: 大阪（ap-osaka-1）/ シカゴ（us-chicago-1）。RAG・会話メモリ・デモ生成はGenAIに依存します。東京/アシュバーンは**applyは通ってもGenAIが動きません**。承知の上で他リージョンへ進める場合のみ `allow_unvalidated_genai_region=true` を設定（plan時に明示エラーで停止します）。
++- **デプロイ前チェックリスト（別テナンシへ持ち出す場合）**:
++  - [ ] 対象リージョンをテナンシで**サブスクライブ**済み（未サブスクライブだと home リージョン導出/region_guard が失敗）
++  - [ ] **GenAI**（推論+agentic API）が対象リージョンで利用可（実証済=大阪/シカゴ。他は `allow_unvalidated_genai_region`）
++  - [ ] **ADB ECPU** のサービス枠 ≥ `adb_ecpu_count`（既定2。新規テナンシは枠0が普通→LimitExceeded）。`adb_db_version`(既定26ai)が対象リージョンで提供されること
++  - [ ] **Container Instance** の `ci_shape`（既定 CI.Standard.E4.Flex）が対象リージョンで提供されること
++  - [ ] **Functions / VCN** のサービス枠（アプリ/VCNの上限に余裕）
++  - [ ] `prefix` は英小文字始まり・ハイフン除去後15文字以内（VCN dns_label 上限）
++  - [ ] `ocir_namespace` は**既定のまま**（公開イメージの cross-tenancy pull 用。自テナンシへミラーした場合のみ上書き）
++  - [ ] `enable_auth=true` なら Identity Domain はテナンシの**ホームリージョン**に作成される（destroy が失敗する場合は手動で domain を deactivate → 再 destroy。`docs/guides/customize.md` 参照）
++  - [ ] NL2SQL(SQL Search)を使うなら `semstore_ocid` に既存 Semantic Store の OCID を設定（未設定だと503）
+ - 権限・Dynamic Group一覧は [Public版 IAM要件](./docs/setup/public-iam-requirements.md)、IAM設定の詳細は [IAMガイド](./docs/setup/iam.md)、デプロイ手順は [Resource Managerガイド](./docs/setup/orm.md)。
+ 
+ > ORM は Terraform のみを実行するため、コンテナイメージ（公開OCIR）・SPA配信・DB初期化・OIDC登録は
+diff --git a/docs/guides/customize.md b/docs/guides/customize.md
+index 23f2ca6..9fb9172 100644
+--- a/docs/guides/customize.md
++++ b/docs/guides/customize.md
+@@ -67,3 +67,25 @@
+ - **SSE・プロセス内状態・6MB超アップロードはCI**、短時間・非ストリーミングはFunctions候補
+   （配置の判断は `docs/comparison/compute-architecture.md`）
+ - 監査対象にするなら `audit.log_event(...)` を呼ぶ（機能ラベルは `source` か固定文字列）
++
++## ⑨ 別テナンシ / リージョンへの持ち出し（可搬性・ORMスタック変数）
++
++ワンクリックスタック（`infra/orm`）は自環境固有値を持たないよう可搬化してある（PORT-01）。
++別テナンシへデプロイする前に README の「デプロイ前チェックリスト」を確認し、必要に応じて次の変数で調整する。
++
++| 変数 | 既定 | いつ変える |
++|---|---|---|
++| `allow_unvalidated_genai_region` | false | GenAI実証済（大阪/シカゴ）以外へ承知の上でデプロイするとき（plan時にエラーで停止する） |
++| `adb_ecpu_count` / `adb_db_version` | 2 / 26ai | ADB ECPU枠が足りない、または 26ai 非提供のリージョン |
++| `ci_shape` | CI.Standard.E4.Flex | E4.Flex が提供されないリージョン |
++| `ocir_namespace` | 公開namespace | イメージを自テナンシへミラーした場合のみ（自テナンシの Object Storage namespace とは無関係） |
++| `semstore_ocid` | 空 | NL2SQL(SQL Search)を使うとき（事前作成した Semantic Store の OCID。空だと503） |
++
++- **SPA配信PARの期限**: 既定は apply 時刻起点で1年（`spa_par_expiry` 空時）。基準時刻を `time_offset` リソースが
++  state に固定するため plan 毎の差分は出ない。固定の絶対日付を使いたい場合のみ `spa_par_expiry` に RFC3339 を指定
++  （その場合は指定値を尊重し、後からの変更も反映される）。**固定日付から相対期限へ移行する既存スタックは、
++  初回 apply で PAR が1回だけ再発行される**（access_uri が変わるが Terraform が API Gateway バックエンドへ再配線する）。
++- **Identity Domain の destroy（`enable_auth=true` 時のみ）**: ドメインは ACTIVE のままだと削除できないため、
++  スタックの destroy 時に provisioner がテナンシのホームリージョンで自動 deactivate する。RM ランナーで CLI 認証が
++  効かず deactivate に失敗した場合は、**手動で**ホームリージョンにて `oci iam domain deactivate --domain-id <id>
++  --region <home>` を実行してから再度 destroy する（未 deactivate のまま同 prefix で再デプロイすると衝突する）。
+diff --git a/docs/tips.md b/docs/tips.md
+index 90071de..f6a0fc6 100644
+--- a/docs/tips.md
++++ b/docs/tips.md
+@@ -129,3 +129,4 @@
+ - **2026-07-13 新規作成直後の GenerativeAiProject は DP から数分見えない(FIX-47 E2E)**: CP で ACTIVE になっても、その OCID を `OpenAi-Project` に載せた DP 呼び出し(files.list 等)は数分間 404 を返す(実測 2〜3分。vector store の CP→DP 伝播と同パターン)。クリーンルーム初回リクエストは project 自動作成→即 DP 呼び出しでこの窓に当たる → 一時的な 503(ヒント付き)は仕様として許容し、`GET /api/rag/health` が ok になってから再試行が正。伝播をコードで待ち込むとチャット経路が分単位でブロックされるため採用しない。
+ - **2026-07-13 ADB を prefix 変更で in-place rename すると wallet が stale になり DB 全断(FIX-47 E2E)**: `oci_database_autonomous_database` の db_name 変更は置換でなく in-place 更新で、tnsnames のサービス名(`<dbname>_low`)は変わるのに `oci_database_autonomous_database_wallet` は `autonomous_database_id` 不変のため再生成されない → 旧サービス名のウォレットがバケットに配置され `DPY-4000` で接続不能。復旧=Database API でウォレット再生成→バケット上書き→CI 再起動。恒久修正は wallet リソースに `lifecycle.replace_triggered_by = [db_name]`(PORT-01)。またアプリの `/tmp/adb_wallet` キャッシュは tnsnames 不整合を検知せず再フェッチしないため、復旧には CI 再起動が必須(PORT-02)。
+ - **2026-07-13 ORM の on-behalf-of 実行はテナンシレベル読取に明示 policy が要る(FIX-47 E2E)**: `data.oci_identity_region_subscriptions` は直接 CLI(ユーザー認証)では暗黙に読めるが、RM ジョブの OBO トークンでは `inspect tenancies in tenancy` が無いと **エラーでなく null** を返し、home リージョン導出(providers.tf)と deploy_region_key(Issue #55)が `Iteration over null value` / region_guard 失敗で plan 不能になる。deployer policy には既に `inspect tenancies` が含まれるが、含まないグループの実行では再現する。切り分け: ローカル plan は通るのに RM だけ落ちたらこれ(PORT-01)。あわせて prefix は15文字以内でないと VCN dnsLabel 上限(15)で apply が落ちる(schema.yaml に長さ検証なし — PORT-01)。
++- **2026-07-13 ORMワンクリックの対応リージョンは2階層(アプリ4 / GenAI検証済2)(PORT-01)**: コンテナイメージは公開OCIRの4リージョン(kix大阪/nrt東京/iadアシュバーン/ordシカゴ)へ事前pushしてあり、region_guard(main.tf)はこの4つ+イメージミラー指定を許す。だが**GenAI(推論+agentic API)の実証済は大阪(kix)とシカゴ(ord)のみ**で、nrt/iadは apply が綺麗に通っても RAG/会話メモリ/デモ生成が全滅する(推論エンドポイント非提供)。よって region_guard に GenAI 用の第2 precondition を追加し、未検証リージョンは `allow_unvalidated_genai_region=true` の明示オプトインを要求する(既定は kix/ord のみ許可)。イメージのミラーでは回避できない(GenAI自体が無い)ため OCIR ガードとは別条件。東京/アシュバーンでのGenAI提供開始は要再確認。
+diff --git a/infra/orm/locals.tf b/infra/orm/locals.tf
+index 34454ce..7556cc8 100644
+--- a/infra/orm/locals.tf
++++ b/infra/orm/locals.tf
+@@ -12,10 +12,20 @@ locals {
+   # 対応外リージョンは main.tf の region_guard が plan 時に明示エラーにする
+   # (api_image_url と fn_router_image の両方を明示指定すれば対応外リージョンでも可)。
+   ocir_supported_region_keys = ["kix", "nrt", "iad", "ord"]
++  # GenAI(推論+agentic API)の実証済みリージョンは OCIR より狭い(docs/tips.md)。
++  # kix(大阪)/ord(シカゴ)のみ。nrt/iad は apply は通るが GenAI が動かない。
++  genai_validated_region_keys = ["kix", "ord"]
++  # JetUse 公開イメージの namespace。auto-synth(空 image URL 時)が pull 可能なパスを作れるのは
++  # この公開 namespace のときだけ。var.ocir_namespace の既定値と一致させること(region_guard が検証)。
++  public_ocir_namespace = "idqcucnenh88"
+   deploy_region_key = try(lower(one([
+     for r in data.oci_identity_region_subscriptions.this.region_subscriptions : r.region_key
+     if r.region_name == var.region
+   ])), "")
++
++  # テナンシのホームリージョン(Identity Domain 作成先)。providers.tf の home alias と同式。
++  home_region = try([for r in data.oci_identity_region_subscriptions.this.region_subscriptions :
++  r.region_name if r.is_home_region][0], var.region)
+   ocir_registry   = "${local.deploy_region_key}.ocir.io/${var.ocir_namespace}"
+   api_image_url   = var.api_image_url != "" ? var.api_image_url : "${local.ocir_registry}/${var.image_repo_prefix}-api:latest"
+   fn_router_image = var.fn_router_image != "" ? var.fn_router_image : "${local.ocir_registry}/${var.image_repo_prefix}-fn-router:latest"
+@@ -55,5 +65,10 @@ locals {
+     RAG_BUCKET        = module.object_storage.app_data_bucket
+     SPEECH_BUCKET     = module.object_storage.speech_bucket
+     OS_NAMESPACE      = module.object_storage.namespace
++    # Monitoring 名前空間は prefix 由来にする(既定 "jetuse_dev" のままだと別テナンシに
++    # dev 名前空間が出る)。名前空間はハイフン不可なので "_" へ正規化。
++    METRICS_NAMESPACE = replace(var.prefix, "-", "_")
++    # NL2SQL(SQL Search)。事前作成した Semantic Store の OCID(空なら NL2SQL 無効=503)。
++    SEMSTORE_OCID = var.semstore_ocid
+   }
+ }
+diff --git a/infra/orm/main.tf b/infra/orm/main.tf
+index 59be395..2f270aa 100644
+--- a/infra/orm/main.tf
++++ b/infra/orm/main.tf
+@@ -10,6 +10,21 @@ resource "terraform_data" "region_guard" {
+       condition     = contains(local.ocir_supported_region_keys, local.deploy_region_key) || (var.api_image_url != "" && var.fn_router_image != "")
+       error_message = "JetUse のワンクリックデプロイは ap-osaka-1 / ap-tokyo-1 / us-ashburn-1 / us-chicago-1 のみ対応です(コンテナイメージの事前push先)。他リージョンでは、イメージを自リージョンOCIRへミラーし api_image_url と fn_router_image の両方を指定してください。"
+     }
++    # GenAI(推論+agentic API)の対応リージョンは OCIR より狭い。実証済は kix/ord のみで、
++    # nrt/iad は apply が通っても GenAI が動かず RAG/会話/生成が全滅する。イメージのミラー
++    # (api_image_url 指定)では回避できないため、未検証リージョンは明示オプトインを要求する。
++    precondition {
++      condition     = var.allow_unvalidated_genai_region || contains(local.genai_validated_region_keys, local.deploy_region_key)
++      error_message = "リージョン ${var.region}(key=${local.deploy_region_key}) は GenAI(推論/agentic API)が未検証です。JetUse の RAG/会話メモリ/デモ生成は GenAI に依存し、実証済は 大阪(kix)/シカゴ(ord) のみです。デプロイ前に対象リージョンの GenAI/agentic API の提供状況を確認し、承知の上で進める場合は allow_unvalidated_genai_region=true を設定してください。"
++    }
++    # ocir_namespace を公開既定から変えると、api_image_url/fn_router_image が空のままでは
++    # auto-synth が <region>.ocir.io/<変更後namespace>/jetuse-{api,fn-router}:latest を pull しようとし、
++    # そのイメージが存在せず Container Instance / Functions が起動しない(サイレント)。
++    # よって公開既定以外にする場合は両イメージURLの明示指定を必須にする(自テナンシへミラーした前提)。
++    precondition {
++      condition     = var.ocir_namespace == local.public_ocir_namespace || (var.api_image_url != "" && var.fn_router_image != "")
++      error_message = "ocir_namespace を公開既定(${local.public_ocir_namespace})から変更する場合は、イメージを自テナンシの OCIR へミラーした上で api_image_url と fn_router_image を両方明示してください。ocir_namespace 単独の変更では jetuse-api/jetuse-fn-router の pull に失敗します(これは自テナンシの Object Storage namespace ではありません)。"
++    }
+   }
+ }
+ 
+@@ -92,6 +107,8 @@ module "adb" {
+   compartment_ocid = var.compartment_ocid
+   prefix           = var.prefix
+   admin_password   = local.adb_admin_password
++  db_version       = var.adb_db_version
++  ecpu_count       = var.adb_ecpu_count
+   # ウォレットをTerraformで生成し、base64テキストでバケットへ配置する(コンテナはobject readのみでOK)
+   generate_wallet = true
+   wallet_password = random_password.wallet.result
+@@ -137,6 +154,7 @@ module "container_instance" {
+   image_url             = local.api_image_url
+   environment_variables = merge(local.api_environment, { LOG_OCID = module.observability.app_log_id })
+   memory_gb             = 4
++  shape                 = var.ci_shape
+ 
+   depends_on = [module.iam]
+ }
+@@ -178,6 +196,9 @@ module "identity_domain" {
+   compartment_ocid = var.compartment_ocid
+   prefix           = var.prefix
+   region           = var.region
++  # Identity Domain はテナンシのホームリージョンにしか作れない。deployリージョンではなく
++  # ホームリージョンを渡す(deployリージョン≠ホームでの作成失敗を防ぐ)。
++  home_region = local.home_region
+ }
+ 
+ module "identity_domain_app" {
+diff --git a/infra/orm/providers.tf b/infra/orm/providers.tf
+index 970e72a..ed91133 100644
+--- a/infra/orm/providers.tf
++++ b/infra/orm/providers.tf
+@@ -9,6 +9,10 @@ terraform {
+       source  = "hashicorp/random"
+       version = ">= 3.5"
+     }
++    time = {
++      source  = "hashicorp/time"
++      version = ">= 0.9"
++    }
+   }
+ }
+ 
+diff --git a/infra/orm/schema.yaml b/infra/orm/schema.yaml
+index 9766801..4185191 100644
+--- a/infra/orm/schema.yaml
++++ b/infra/orm/schema.yaml
+@@ -5,7 +5,7 @@ description: >-
+   実行ユーザーの権限や既存IAMに応じて、Dynamic GroupとPolicyの作成範囲を選択できます。
+   デプロイ後、出力の app_url を開き demo ユーザーでログインしてください。
+ schemaVersion: 1.1.0
+-version: "20260710"
++version: "20260713"
+ 
+ logoUrl: ""
+ 
+@@ -27,16 +27,23 @@ variableGroups:
+       - existing_dynamic_group
+       - enable_runtime_policy
+       - enable_semantic_store
++      - semstore_ocid
+       - enable_project_autocreate
+-  - title: "オプション（詳細）"
++  - title: "リージョン・サービス枠（可搬性）"
++    variables:
++      - allow_unvalidated_genai_region
++      - adb_db_version
++      - adb_ecpu_count
++      - ci_shape
++  - title: "オプション（詳細・通常変更不要）"
+     variables:
+       - project_ocid
+       - enable_opensearch
+       - rate_limit_rps
+-      - ocir_namespace
+       - image_repo_prefix
+       - api_image_url
+       - fn_router_image
++      - ocir_namespace
+   - title: "Hidden"
+     visible: false
+     variables:
+@@ -86,9 +93,16 @@ variables:
+   enable_semantic_store:
+     type: boolean
+     title: "SQL Search用Semantic Store権限"
+-    description: "SQL Searchを使用しない場合はオフにするとDynamic GroupとPolicy文を減らせます。"
++    description: "SQL Searchを使用しない場合はオフにするとDynamic GroupとPolicy文を減らせます。使用する場合は下のSemantic Store OCIDも設定してください（未設定だとIAMだけ作られNL2SQLは503）。"
+     default: true
+ 
++  semstore_ocid:
++    type: string
++    title: "Semantic Store OCID（SQL Search用・任意）"
++    description: "NL2SQL（SQL Search）が使う既存のGenerative AI Semantic StoreのOCID。スタックは実体を作らずIAM権限のみ付与します。空ならNL2SQLは無効（503）。"
++    required: false
++    visible: enable_semantic_store
++
+   demo_email:
+     type: string
+     title: "デモユーザーのメール"
+@@ -114,6 +128,31 @@ variables:
+     description: "RAG・会話メモリに必須のGenerativeAiProjectが無い場合にアプリが自動作成します（IAMに manage generative-ai-project を含めます）。オフの場合は Project OCID の明示指定を推奨"
+     default: true
+ 
++  allow_unvalidated_genai_region:
++    type: boolean
++    title: "GenAI未検証リージョンへのデプロイを許可"
++    description: "GenAI（推論/agentic API）が実証済みなのは大阪（ap-osaka-1）とシカゴ（us-chicago-1）のみ。他リージョンはアプリのapplyは通ってもRAG/会話メモリ/デモ生成が動きません。承知の上で他リージョンへ進める場合のみオン。"
++    default: false
++
++  adb_db_version:
++    type: string
++    title: "ADB バージョン"
++    description: "Select AIベクトル索引（RAG）は 26ai 必須。26ai非提供のリージョン/レルムでは変更が必要な場合があります。通常は既定のまま。"
++    default: "26ai"
++
++  adb_ecpu_count:
++    type: number
++    title: "ADB ECPU 数"
++    description: "新規テナンシは ADB ECPU のサービス枠が 0 のことが多く、その場合 apply が LimitExceeded で落ちます。事前にリージョンのADB ECPU枠を確認してください。"
++    default: 2
++    minimum: 2
++
++  ci_shape:
++    type: string
++    title: "API コンテナ shape"
++    description: "APIのContainer Instance shape。CI.Standard.E4.Flex が無いリージョンでのみ変更。通常は既定のまま。"
++    default: "CI.Standard.E4.Flex"
++
+   enable_opensearch:
+     type: boolean
+     title: "OpenSearch RAG を有効化"
+@@ -128,10 +167,10 @@ variables:
+ 
+   ocir_namespace:
+     type: string
+-    title: "OCIR ネームスペース"
+-    description: "コンテナイメージを置くOCIRのネームスペース（= Object Storage namespace）"
++    title: "OCIR ネームスペース（通常変更不要）"
++    description: "JetUse公開イメージのレジストリnamespace。既定値はcross-tenancy pullに必要なので通常は変更しません。自テナンシのObject Storage namespaceとは無関係です。変更する場合はイメージを自テナンシのOCIRへミラーした上で、下のAPI/Functionsイメージ（api_image_url・fn_router_image）を両方必須で指定してください（単独変更はplan時にエラーになります）。"
+     default: "idqcucnenh88"
+-    required: true
++    required: false
+ 
+   image_repo_prefix:
+     type: string
+@@ -143,13 +182,13 @@ variables:
+   api_image_url:
+     type: string
+     title: "API コンテナイメージ（上書き）"
+-    description: "通常は空欄。空ならデプロイリージョンのOCIRパスを自動合成（<region-key>.ocir.io/<namespace>/<prefix>-api:latest。対応: 大阪/東京/アシュバーン/シカゴ）"
++    description: "通常は空欄。空ならデプロイリージョンのOCIRパスを自動合成（<region-key>.ocir.io/<namespace>/<prefix>-api:latest。イメージ提供: 大阪/東京/アシュバーン/シカゴの4リージョン。ただしGenAI実証済は大阪/シカゴの2リージョンのみ）"
+     required: false
+ 
+   fn_router_image:
+     type: string
+     title: "Functions ルーターイメージ（上書き）"
+-    description: "通常は空欄。空ならデプロイリージョンのOCIRパスを自動合成（対応: 大阪/東京/アシュバーン/シカゴ）。対応外リージョンでは自リージョンOCIRへミラーし api_image_url と合わせて指定"
++    description: "通常は空欄。空ならデプロイリージョンのOCIRパスを自動合成（イメージ提供4リージョン: 大阪/東京/アシュバーン/シカゴ。GenAI実証済は大阪/シカゴのみ）。対応外リージョンでは自リージョンOCIRへミラーし api_image_url と合わせて指定"
+     required: false
+ 
+   tenancy_ocid:
+diff --git a/infra/orm/variables.tf b/infra/orm/variables.tf
+index 7ed3a25..7b051d3 100644
+--- a/infra/orm/variables.tf
++++ b/infra/orm/variables.tf
+@@ -17,6 +17,48 @@ variable "prefix" {
+   description = "リソース名プレフィックス"
+   type        = string
+   default     = "jetuse"
++
++  # VCN dns_label は replace(prefix,"-","") で導出され OCI 上限は15文字(超過で apply が
++  # LimitExceeded/InvalidParameter で落ちる — docs/tips.md 2026-07-13)。英小文字始まり。
++  validation {
++    condition     = can(regex("^[a-z][a-z0-9-]*$", var.prefix)) && length(replace(var.prefix, "-", "")) <= 15
++    error_message = "prefix は英小文字で始まり、英小文字/数字/ハイフンのみ。ハイフンを除いた長さは15文字以内(VCN dns_label 上限)にしてください。"
++  }
++}
++
++variable "allow_unvalidated_genai_region" {
++  description = "GenAI(推論+agentic API)が検証済みでないリージョンへのデプロイを明示的に許可する。JetUseのRAG/会話メモリ/デモ生成はGenAIに依存するため、未検証リージョンでは動作未保証(実証済=大阪kix/シカゴord)。"
++  type        = bool
++  default     = false
++}
++
++variable "ci_shape" {
++  description = "API コンテナ(Container Instance)の shape。E4.Flex 非提供リージョン向けに可変(既定は現行値)"
++  type        = string
++  default     = "CI.Standard.E4.Flex"
++}
++
++# ADB は既定でロック(db_version=26ai / ECPU=2)。新規テナンシは ADB ECPU 枠が 0 のことがあり
++# apply が LimitExceeded で落ちる。26ai 非提供のリージョン/レルムでも落ちる。事前に枠と提供状況を確認。
++variable "adb_db_version" {
++  description = "ADB の db_version。Select AI ベクトル索引は 26ai(旧23ai系) 必須。提供状況をリージョンで確認"
++  type        = string
++  default     = "26ai"
++}
++
++variable "adb_ecpu_count" {
++  description = "ADB の ECPU 数。新規テナンシは ECPU サービス枠が 0 のことがあるため事前確認(既定 2)"
++  type        = number
++  default     = 2
++}
++
++# NL2SQL(SQL Search)は事前作成された Generative AI Semantic Store の OCID を要する。
++# enable_semantic_store の IAM(DG+policy)はこれを使う権限を与えるだけで実体は作らない。
++# 空なら NL2SQL は 503(未設定)。使う場合はストアを作成し OCID をここに設定する。
++variable "semstore_ocid" {
++  description = "NL2SQL(SQL Search)が使う Generative AI Semantic Store の OCID(任意。空なら NL2SQL 無効)"
++  type        = string
++  default     = ""
+ }
+ 
+ variable "adb_admin_password" {
+@@ -75,13 +117,15 @@ variable "rate_limit_rps" {
+   default     = 20
+ }
+ 
+-# コンテナイメージは対応4リージョン(kix/nrt/iad/ord)の OCIR へ事前 push(ADR-0011/0017)。
+-# Functions は同一リージョンの OCIR 必須のため、レジストリはデプロイリージョンから自動導出
+-# (locals.tf)。リージョンキーはユーザー入力にしない。
++# コンテナイメージは JetUse 公開レジストリ(対応4リージョン kix/nrt/iad/ord の OCIR)へ事前 push
++# 済み(ADR-0011/0017)。既定値はその公開 namespace で、cross-tenancy pull に必須なので通常は変更しない。
++# 自テナンシへイメージをミラーした場合のみ上書きする(その場合は api_image_url/fn_router_image も併せて指定)。
++# Functions は同一リージョンの OCIR 必須のため、レジストリはデプロイリージョンから自動導出(locals.tf)。
+ variable "ocir_namespace" {
+-  description = "OCIRネームスペース(= Object Storage namespace。tenancy固有)"
++  description = "JetUse 公開イメージのレジストリ namespace。通常は変更しない(自テナンシの Object Storage namespace とは無関係)。変更時は api_image_url と fn_router_image の両方明示が必須(region_guard で強制)"
+   type        = string
+-  default     = "idqcucnenh88"
++  # 既定値は local.public_ocir_namespace と一致させること(region_guard の precondition が参照)。
++  default = "idqcucnenh88"
+ }
+ 
+ # イメージrepo名のプレフィックス。リソース名の var.prefix とは分離する(設計上の独立)。
+diff --git a/infra/terraform/modules/adb/main.tf b/infra/terraform/modules/adb/main.tf
+index 5649415..20c183d 100644
+--- a/infra/terraform/modules/adb/main.tf
++++ b/infra/terraform/modules/adb/main.tf
+@@ -24,4 +24,11 @@ resource "oci_database_autonomous_database_wallet" "this" {
+   password               = var.wallet_password
+   generate_type          = "SINGLE"
+   base64_encode_content  = true
++
++  lifecycle {
++    # prefix 変更 → db_name の in-place rename でサービス名(<dbname>_low)は変わるが
++    # autonomous_database_id は不変なため wallet が再生成されず stale になり接続断(DPY-4000)。
++    # db_name 変更時にウォレットを作り直す(docs/tips.md 2026-07-13 / PORT-01)。
++    replace_triggered_by = [oci_database_autonomous_database.this.db_name]
++  }
+ }
+diff --git a/infra/terraform/modules/container-instance/main.tf b/infra/terraform/modules/container-instance/main.tf
+index 2c1cd07..5be4b2b 100644
+--- a/infra/terraform/modules/container-instance/main.tf
++++ b/infra/terraform/modules/container-instance/main.tf
+@@ -6,7 +6,7 @@ resource "oci_container_instances_container_instance" "this" {
+   compartment_id      = var.compartment_ocid
+   display_name        = "${var.prefix}-api"
+   availability_domain = data.oci_identity_availability_domains.ads.availability_domains[0].name
+-  shape               = "CI.Standard.E4.Flex"
++  shape               = var.shape
+ 
+   shape_config {
+     ocpus         = var.ocpus
+diff --git a/infra/terraform/modules/container-instance/variables.tf b/infra/terraform/modules/container-instance/variables.tf
+index d17f153..5bc2d8f 100644
+--- a/infra/terraform/modules/container-instance/variables.tf
++++ b/infra/terraform/modules/container-instance/variables.tf
+@@ -19,6 +19,12 @@ variable "image_url" {
+   type        = string
+ }
+ 
++variable "shape" {
++  description = "Container Instance の shape。E4.Flex が無いリージョン向けに可変(既定は現行の CI.Standard.E4.Flex)"
++  type        = string
++  default     = "CI.Standard.E4.Flex"
++}
++
+ variable "app_port" {
+   type    = number
+   default = 8000
+diff --git a/infra/terraform/modules/identity-domain/main.tf b/infra/terraform/modules/identity-domain/main.tf
+index 08836f1..f542075 100644
+--- a/infra/terraform/modules/identity-domain/main.tf
++++ b/infra/terraform/modules/identity-domain/main.tf
+@@ -4,8 +4,11 @@ resource "oci_identity_domain" "this" {
+   compartment_id = var.compartment_ocid
+   display_name   = "${var.prefix}-domain"
+   description    = "JetUse app end-user authentication (OIDC PKCE)"
+-  home_region    = var.region
+-  license_type   = "free"
++  # Identity Domain はテナンシのホームリージョンにしか作れない。deployリージョンを
++  # そのまま渡すと home_region≠テナンシホームで作成が失敗しうる(可搬性)。
++  # home_region が空なら従来どおり region にフォールバック(後方互換)。
++  home_region  = var.home_region != "" ? var.home_region : var.region
++  license_type = "free"
+ 
+   # destroy前に非アクティブ化(ACTIVEなドメインは削除できず destroy が失敗するため)。
+   # 依存順序により、配下のOIDCアプリ削除(非アクティブ化込み)の後にここが走る。
+diff --git a/infra/terraform/modules/identity-domain/variables.tf b/infra/terraform/modules/identity-domain/variables.tf
+index a46a3f0..f965a06 100644
+--- a/infra/terraform/modules/identity-domain/variables.tf
++++ b/infra/terraform/modules/identity-domain/variables.tf
+@@ -9,3 +9,9 @@ variable "prefix" {
+ variable "region" {
+   type = string
+ }
++
++variable "home_region" {
++  description = "テナンシのホームリージョン(Identity Domain 作成先)。空なら region にフォールバック"
++  type        = string
++  default     = ""
++}
+diff --git a/infra/terraform/modules/object-storage/main.tf b/infra/terraform/modules/object-storage/main.tf
+index dceb203..525eabd 100644
+--- a/infra/terraform/modules/object-storage/main.tf
++++ b/infra/terraform/modules/object-storage/main.tf
+@@ -16,12 +16,21 @@ resource "oci_objectstorage_bucket" "spa" {
+ 
+ # bucket_listing_actionは未指定=リスト不可。"Deny"を明示するとAPIが値を
+ # 返さず毎applyで再作成(URL変化)になるため指定しない
++# 相対期限の基準時刻を state に固定する(time_offset)。timestamp() と違い base を保持するため
++# plan 毎に揺れず、ignore_changes 無しで安定する(=明示指定時の後からの変更も反映できる)。
++# 既存(固定日付)スタックでは初回 apply で PAR が 1回だけ相対期限へ再発行される(URL は API GW へ再配線)。
++resource "time_offset" "spa_par" {
++  count        = var.spa_par_expiry == "" ? 1 : 0
++  offset_years = 1
++}
++
+ resource "oci_objectstorage_preauthrequest" "spa_read" {
+-  namespace    = local.ns
+-  bucket       = oci_objectstorage_bucket.spa.name
+-  name         = "${var.prefix}-spa-read"
+-  access_type  = "AnyObjectRead"
+-  time_expires = var.spa_par_expiry
++  namespace   = local.ns
++  bucket      = oci_objectstorage_bucket.spa.name
++  name        = "${var.prefix}-spa-read"
++  access_type = "AnyObjectRead"
++  # 空なら apply 時刻(time_offset の base)起点 +1年。明示指定時はその値を尊重(変更も反映)。
++  time_expires = var.spa_par_expiry != "" ? var.spa_par_expiry : time_offset.spa_par[0].rfc3339
+ }
+ 
+ resource "oci_objectstorage_bucket" "app_data" {
+diff --git a/infra/terraform/modules/object-storage/variables.tf b/infra/terraform/modules/object-storage/variables.tf
+index 5a3bbe5..37b9763 100644
+--- a/infra/terraform/modules/object-storage/variables.tf
++++ b/infra/terraform/modules/object-storage/variables.tf
+@@ -7,7 +7,7 @@ variable "prefix" {
+ }
+ 
+ variable "spa_par_expiry" {
+-  description = "SPA配信用PAR(AnyObjectRead)の失効日時(RFC3339)。ADR-0004の方式A検証用"
++  description = "SPA配信用PAR(AnyObjectRead)の失効日時(RFC3339)。空ならapply時刻起点+1年の相対期限(可搬性: 固定絶対日付は将来のdeployで最初から失効するため)"
+   type        = string
+-  default     = "2027-12-31T00:00:00Z"
++  default     = ""
+ }
+diff --git a/infra/terraform/modules/object-storage/versions.tf b/infra/terraform/modules/object-storage/versions.tf
+index e70d9d2..caf87c9 100644
+--- a/infra/terraform/modules/object-storage/versions.tf
++++ b/infra/terraform/modules/object-storage/versions.tf
+@@ -5,5 +5,9 @@ terraform {
+       source  = "oracle/oci"
+       version = ">= 6.0"
+     }
++    time = {
++      source  = "hashicorp/time"
++      version = ">= 0.9"
++    }
+   }
+ }
+diff --git a/infra/terraform/modules/spa-bucket/main.tf b/infra/terraform/modules/spa-bucket/main.tf
+index d4d6960..c523ea6 100644
+--- a/infra/terraform/modules/spa-bucket/main.tf
++++ b/infra/terraform/modules/spa-bucket/main.tf
+@@ -17,10 +17,17 @@ resource "oci_objectstorage_bucket" "spa" {
+ 
+ # bucket_listing_actionは未指定=リスト不可。"Deny"明示はAPIが値を返さず
+ # 毎applyで再作成(URL変化)になるため指定しない(object-storageモジュールと同挙動)
++# 相対期限の基準時刻を state に固定(object-storage モジュールと同挙動。ignore_changes 不要)。
++resource "time_offset" "spa_par" {
++  count        = var.spa_par_expiry == "" ? 1 : 0
++  offset_years = 1
++}
++
+ resource "oci_objectstorage_preauthrequest" "spa_read" {
+-  namespace    = local.ns
+-  bucket       = oci_objectstorage_bucket.spa.name
+-  name         = "${var.prefix}-spa-read"
+-  access_type  = "AnyObjectRead"
+-  time_expires = var.spa_par_expiry
++  namespace   = local.ns
++  bucket      = oci_objectstorage_bucket.spa.name
++  name        = "${var.prefix}-spa-read"
++  access_type = "AnyObjectRead"
++  # 空なら apply 時刻(time_offset の base)起点 +1年。明示指定時はその値を尊重(変更も反映)。
++  time_expires = var.spa_par_expiry != "" ? var.spa_par_expiry : time_offset.spa_par[0].rfc3339
+ }
+diff --git a/infra/terraform/modules/spa-bucket/variables.tf b/infra/terraform/modules/spa-bucket/variables.tf
+index c39bc6c..81d6855 100644
+--- a/infra/terraform/modules/spa-bucket/variables.tf
++++ b/infra/terraform/modules/spa-bucket/variables.tf
+@@ -7,7 +7,7 @@ variable "prefix" {
+ }
+ 
+ variable "spa_par_expiry" {
+-  description = "SPA配信PAR(AnyObjectRead)の失効日時(RFC3339)。dev環境は長めに"
++  description = "SPA配信PAR(AnyObjectRead)の失効日時(RFC3339)。空ならapply時刻起点+1年の相対期限"
+   type        = string
+-  default     = "2027-12-31T00:00:00Z"
++  default     = ""
+ }
+
+
+===== 実環境 E2E 証跡 (jetuse-dev / Codex は実行せず証跡を評価する) =====
+--- runs/2026-07-13T0730_PORT-01/e2e/ocir-namespace-guard.txt ---
+# F-001 fix — ocir_namespace 単独変更ガード (region_guard 第3 precondition)
+local `terraform plan -target=terraform_data.region_guard`:
+  default namespace (public idqcucnenh88)                         -> PASS
+  custom ocir_namespace, api_image_url/fn_router_image 空          -> DENY  (precondition: "ocir_namespace を公開既定から変更する場合は...")
+  custom ocir_namespace + api_image_url + fn_router_image 両方指定  -> PASS
+=> 公開既定のままなら影響なし。namespace 単独変更のサイレント image 404 を plan 時に停止。
+   共有スタックは ocir_namespace=既定のためガードに当たらない(RM plan v2 SUCCEEDED で確認)。
+
+--- runs/2026-07-13T0730_PORT-01/e2e/PENDING.md ---
+# E2E 実施状況 (無言スキップ禁止のため明記)
+
+## 実施済み (完了ゲート min_scenarios=2 を満たす)
+- Scenario 2 (リージョンガード): scenario2-summary.txt + regionguard-*.out。ローカル plan で
+  tokyo=DENY / opt-in=PASS / kix・ord=PASS を実証。
+- Scenario 3 (schema 妥当性 + RM plan 成功): scenario3-summary.txt。未コミット config を zip 化し
+  jetuse:test に jetuse-spike RM スタックを作成(=schema 受理)→ plan job SUCCEEDED(Plan: 165 to add,
+  0 change, 0 destroy, エラー0)。スタックは検証後に削除済み。
+
+## PENDING (共有スタック apply ゲート待ち — 恒久スキップではない)
+- Scenario 1 (PAR 相対期限 + gateway 200): 共有スタック jetuse-spike-fix47 への apply を要する。
+  /home/opc/jetuse-loops/fix47-e2e-shared/ に PORT-01-APPLY-OK が現れるまで update/apply 禁止
+  (PORT-02 先行スロット)。ファイル出現後に:
+    1) 共有スタックを本 config で stack update
+    2) RM plan(条件2 の plan) → 変更部分 apply(条件2 の apply。IAM 変更は無い想定=下記)
+    3) fix_wallet_and_restart.sh APPLY_JOB=<apply job id> を必ず実行(怠ると DB 全断)
+    4) 新規/管理下 PAR の time_expires が apply 時刻起点で将来日付、gateway 経由 SPA=200 を確認
+  を実施し scenario1-*.{status,body,txt} を追加する。
+- 本 diff の apply 変更点は CI の environment_variables 追加(METRICS_NAMESPACE / SEMSTORE_OCID=空)
+  のみで **IAM statement / DG は不変**(enable_dynamic_group=false・enable_runtime_policy=false・
+  semstore_ocid 空・project_autocreate 不変)。よって apply は IAM 人間ゲートに当たらない見込み。
+  ただし CI 差し替えに伴い wallet 復旧スクリプトの実行は必須。
+
+--- runs/2026-07-13T0730_PORT-01/e2e/prefix-validation.txt ---
+# prefix 検証ブロックの実挙動確認 (input validation / 回帰)
+full plan(no -target, prefix が参照される) で variable validation が発火:
+  prefix=jetuse-spike-47      -> PASS  (共有スタック prefix。sanitized=jetusespike47=13<=15)
+  prefix=jetuse               -> PASS
+  prefix=jetusetoolongname12  -> FAIL(validation)  sanitized=19>15
+  prefix=Jetuse               -> FAIL(validation)  英大文字始まり
+注: `-target=terraform_data.region_guard` では prefix が依存グラフに無く validation は評価されない
+   (region_guard は prefix を参照しない)。フル plan で確認。
+
+--- runs/2026-07-13T0730_PORT-01/e2e/regionguard-chicago-pass.out ---
+data.oci_identity_region_subscriptions.this: Reading...
+data.oci_identity_region_subscriptions.this: Read complete after 0s [id=IdentityRegionSubscriptionsDataSource-975117611]
+
+Terraform used the selected providers to generate the following execution
+plan. Resource actions are indicated with the following symbols:
+  + create
+
+Terraform will perform the following actions:
+
+  # terraform_data.region_guard will be created
+  + resource "terraform_data" "region_guard" {
+      + id = (known after apply)
+    }
+
+Plan: 1 to add, 0 to change, 0 to destroy.
+
+Warning: Resource targeting is in effect
+
+You are creating a plan with the -target option, which means that the result
+of this plan may not represent all of the changes requested by the current
+configuration.
+
+The -target option is not for routine use, and is provided only for
+exceptional situations such as recovering from errors or mistakes, or when
+Terraform specifically suggests to use it as part of an error message.
+
+─────────────────────────────────────────────────────────────────────────────
+
+Note: You didn't use the -out option to save this plan, so Terraform can't
+guarantee to take exactly these actions if you run "terraform apply" now.
+
+--- runs/2026-07-13T0730_PORT-01/e2e/regionguard-osaka-pass.out ---
+data.oci_identity_region_subscriptions.this: Reading...
+data.oci_identity_region_subscriptions.this: Read complete after 0s [id=IdentityRegionSubscriptionsDataSource-975117611]
+
+Terraform used the selected providers to generate the following execution
+plan. Resource actions are indicated with the following symbols:
+  + create
+
+Terraform will perform the following actions:
+
+  # terraform_data.region_guard will be created
+  + resource "terraform_data" "region_guard" {
+      + id = (known after apply)
+    }
+
+Plan: 1 to add, 0 to change, 0 to destroy.
+
+Warning: Resource targeting is in effect
+
+You are creating a plan with the -target option, which means that the result
+of this plan may not represent all of the changes requested by the current
+configuration.
+
+The -target option is not for routine use, and is provided only for
+exceptional situations such as recovering from errors or mistakes, or when
+Terraform specifically suggests to use it as part of an error message.
+
+─────────────────────────────────────────────────────────────────────────────
+
+Note: You didn't use the -out option to save this plan, so Terraform can't
+guarantee to take exactly these actions if you run "terraform apply" now.
+
+--- runs/2026-07-13T0730_PORT-01/e2e/regionguard-tokyo-deny.out ---
+data.oci_identity_region_subscriptions.this: Reading...
+data.oci_identity_region_subscriptions.this: Read complete after 0s [id=IdentityRegionSubscriptionsDataSource-975117611]
+
+Planning failed. Terraform encountered an error while generating this plan.
+
+
+Warning: Resource targeting is in effect
+
+You are creating a plan with the -target option, which means that the result
+of this plan may not represent all of the changes requested by the current
+configuration.
+
+The -target option is not for routine use, and is provided only for
+exceptional situations such as recovering from errors or mistakes, or when
+Terraform specifically suggests to use it as part of an error message.
+
+Error: Resource precondition failed
+
+  on main.tf line 17, in resource "terraform_data" "region_guard":
+  17:       condition     = var.allow_unvalidated_genai_region || contains(local.genai_validated_region_keys, local.deploy_region_key)
+    ├────────────────
+    │ local.deploy_region_key is "nrt"
+    │ local.genai_validated_region_keys is tuple with 2 elements
+    │ var.allow_unvalidated_genai_region is false
+
+リージョン ap-tokyo-1(key=nrt) は GenAI(推論/agentic API)が未検証です。JetUse の
+RAG/会話メモリ/デモ生成は GenAI に依存し、実証済は 大阪(kix)/シカゴ(ord) のみです。デプロイ前に対象リージョンの
+GenAI/agentic API の提供状況を確認し、承知の上で進める場合は allow_unvalidated_genai_region=true
+を設定してください。
+
+--- runs/2026-07-13T0730_PORT-01/e2e/regionguard-tokyo-optin.out ---
+data.oci_identity_region_subscriptions.this: Reading...
+data.oci_identity_region_subscriptions.this: Read complete after 0s [id=IdentityRegionSubscriptionsDataSource-975117611]
+
+Terraform used the selected providers to generate the following execution
+plan. Resource actions are indicated with the following symbols:
+  + create
+
+Terraform will perform the following actions:
+
+  # terraform_data.region_guard will be created
+  + resource "terraform_data" "region_guard" {
+      + id = (known after apply)
+    }
+
+Plan: 1 to add, 0 to change, 0 to destroy.
+
+Warning: Resource targeting is in effect
+
+You are creating a plan with the -target option, which means that the result
+of this plan may not represent all of the changes requested by the current
+configuration.
+
+The -target option is not for routine use, and is provided only for
+exceptional situations such as recovering from errors or mistakes, or when
+Terraform specifically suggests to use it as part of an error message.
+
+─────────────────────────────────────────────────────────────────────────────
+
+Note: You didn't use the -out option to save this plan, so Terraform can't
+guarantee to take exactly these actions if you run "terraform apply" now.
+
+--- runs/2026-07-13T0730_PORT-01/e2e/scenario2-summary.txt ---
+# Scenario 2 — Region guard (local `terraform plan -target=terraform_data.region_guard`, my config)
+# Isolated to the guard resource; region_subscriptions data source read with user creds.
+# Tenancy subscribes to NRT(tokyo) so OCIR guard passes for tokyo -> only the NEW GenAI guard fires.
+
+region=ap-tokyo-1 (nrt)                         -> exit=1  DENY  (GenAI precondition failed)   [regionguard-tokyo-deny.out]
+region=ap-tokyo-1 + allow_unvalidated=true      -> exit=0  PASS  (Plan: 1 to add)              [regionguard-tokyo-optin.out]
+region=ap-osaka-1 (kix, GenAI-validated)        -> exit=0  PASS  (Plan: 1 to add)              [regionguard-osaka-pass.out]
+region=us-chicago-1 (ord, GenAI-validated)      -> exit=0  PASS  (Plan: 1 to add)              [regionguard-chicago-pass.out]
+
+Error message on deny (from regionguard-tokyo-deny.out):
+  "リージョン ap-tokyo-1(key=nrt) は GenAI(推論/agentic API)が未検証です ... allow_unvalidated_genai_region=true を設定してください。"
+Matches tasks/PORT-01.md E2E scenario 2 exactly (deny -> opt-in passes; kix/ord pass as before).
+
+--- runs/2026-07-13T0730_PORT-01/e2e/scenario3-summary.txt ---
+# Scenario 3 v2 — RM stack create + plan with time_offset + ocir_namespace guard (my config)
+stack: jetuse-spike-port01-v2  region(var)=us-chicago-1(ord)  state after create=ACTIVE (schema valid)
+plan_job: ocid1.ormjob.oc1.ap-osaka-1.amaaaaaal7l2mtaa7roptxlekeaa6ewru6zullvzcy42iekzqn2r4p4367nq  state=SUCCEEDED
+
+## Plan summary
+Plan: 166 to add, 0 to change, 0 to destroy
+errors(precondition/null): 0
+
+## hashicorp/time provider installed by RM
+Installing hashicorp/time v0.14.0...
+## time_offset resource planned (relative PAR base, no ignore_changes)
+  # module.object_storage.time_offset.spa_par[0] will be created
+## PAR spa_read time_expires (relative => known after apply)
+      + time_expires          = (known after apply)
+

@@ -19,6 +19,12 @@ variable "image_url" {
   type        = string
 }
 
+variable "shape" {
+  description = "Container Instance の shape。E4.Flex が無いリージョン向けに可変(既定は現行の CI.Standard.E4.Flex)"
+  type        = string
+  default     = "CI.Standard.E4.Flex"
+}
+
 variable "app_port" {
   type    = number
   default = 8000
