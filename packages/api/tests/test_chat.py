@@ -41,6 +41,27 @@ def test_list_models():
     assert DEFAULT_MODEL in keys
 
 
+def test_list_models_response_is_backward_compatible():
+    """PORT-02 レビュー指摘: availableフラグの追加は既存フィールドを削除/改変しない
+    追加専用の変更であることを契約として固定する(構造的型付けのTSクライアントは
+    未知フィールドを無視するため additive は非破壊 — ModelInfo型は packages/web 側で
+    reasoning/vision/multi_image 追加時と同じ additive パターンを踏襲)。
+    """
+    res = client.get("/api/chat/models")
+    for m in res.json()["models"]:
+        # CHAT-04b/MM-01/ENH-09時点までの既存契約フィールド(削除・改変禁止)
+        assert set(m) >= {
+            "key", "label", "default_temperature", "api",
+            "reasoning", "min_max_tokens", "vision", "multi_image",
+        }
+        assert isinstance(m["key"], str) and isinstance(m["label"], str)
+        assert m["api"] in ("responses", "chat")
+        # 今回追加分(PORT-02): 常にbool、理由は不可時のみ付与
+        assert isinstance(m["available"], bool)
+        if m["available"]:
+            assert "unavailable_reason" not in m
+
+
 def test_chat_stream_unknown_model():
     res = client.post(
         "/api/chat/stream",

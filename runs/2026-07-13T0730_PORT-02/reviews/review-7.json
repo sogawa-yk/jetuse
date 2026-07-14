@@ -1,0 +1,63 @@
+{
+  "review_n": 7,
+  "timestamp": "2026-07-13T08:37:07+00:00",
+  "reviewer": "codex",
+  "model": "gpt-5.5",
+  "input_diff_path": "reviews/review-7.input.diff",
+  "raw_output_path": "reviews/review-7.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker はありませんが、Functions 経由の既存公開経路に今回の縮退・schema 契約変更が反映されておらず、実運用パスで FastAPI 側と挙動が分岐します。obs のバックオフ保持も初回失敗バッチを捨てており、テストはその欠落を捕捉できていません。実環境 E2E 証跡は添付されていません。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 4,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "major",
+      "file": "packages/api/fn/router/func.py",
+      "line": 123,
+      "issue": "`tts.synthesize()` が今回 `tts.TtsError` を投げるようになりましたが、OCI Functions ルーター側では捕捉していません。FastAPI ルートは 503 とヒントを返す一方、Functions 経由の `/api/tts` ではトップレベルの `except Exception` に落ちて 500 `internal error` になり、PORT-02 の縮退メッセージが実運用パスで失われます。",
+      "suggestion": "`handler()` か `/api/tts` 分岐で `tts.TtsError` を捕捉し、FastAPI 側と同じく 503 と `str(e)` を返してください。Functions ルーターの TTS 503 テストも追加してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "packages/api/fn/router/func.py",
+      "line": 94,
+      "issue": "FastAPI 側の `/api/dbchat/schema` は `sample_available` / `sample_unavailable_reason` を返す契約に拡張されていますが、Functions ルーターの同一パスは従来どおり `nl2sql.get_schema_info()` だけを返します。API Gateway が dbchat セグメントを Functions に流す構成では、UI やクライアントが新しい sample availability 情報を受け取れません。",
+      "suggestion": "Functions 側も `nl2sql.sh_sample_status()` を呼び、FastAPI ルートと同じレスポンス形に揃えてください。両経路の契約一致を固定するテストを追加してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/obs.py",
+      "line": 154,
+      "issue": "送信失敗時に `throttle.failed(e)` の後で必ず `buf = []` が実行されるため、失敗した当該バッチは破棄されます。追加された `_retain_buffer` はバックオフ中の後続バッファにしか効かず、コメントの「バックオフ中はバッファを破棄せず保持する」という主張を満たしていません。metrics 側も同じ構造です。",
+      "suggestion": "送信失敗時は現在バッチを `_retain_buffer(buf, _BATCH_MAX)` で保持し、成功時だけクリアしてください。ログ・メトリクス双方に、初回送信失敗バッチが保持されるテストを追加してください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "major",
+      "file": "runs/2026-07-13T0730_PORT-02/e2e",
+      "line": 1,
+      "issue": "実環境 E2E 証跡が空です。今回の差分は `/api/health`、`/api/chat/stream` のSSEフォールバック、`/api/chat/models` の可用性表示、dbchat の Select AI 分岐、TTS 503 化など、jetuse-dev の IAM・OCI サービス状態に依存する変更を含みますが、デプロイ後の複数シナリオ証跡がありません。",
+      "suggestion": "少なくとも `/api/health`、モデル不可時の chat SSE、dbchat sample/Select AI 分岐、TTS 未購読時の 503 などから2本以上の実環境シナリオを実行し、リクエスト/レスポンス、ログ抜粋、対象デプロイを `runs/<run-id>/e2e/` に残してください。未実施範囲は `SKIPPED.md` に理由を明記してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "insufficient",
+    "notes": "`===== 実環境 E2E 証跡 =====` には `runs/2026-07-13T0730_PORT-02/e2e` が空と明記されており、実行シナリオ・結果・ログ・スクリーンショット等は確認できません。実環境依存の health/chat/dbchat/TTS 変更を裏づける証跡として不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されておらず、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

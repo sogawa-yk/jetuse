@@ -150,7 +150,9 @@ def list_projects() -> list[dict[str, str]]:
             {"region": s.oci_region}, signer=signer
         )
     else:
-        client = oci.generative_ai.GenerativeAiClient(oci.config.from_file())
+        from .genai import load_local_oci_config
+
+        client = oci.generative_ai.GenerativeAiClient(load_local_oci_config())
     res = client.list_generative_ai_projects(compartment_id=s.compartment_ocid)
     return [
         {"id": p.id, "name": p.display_name}

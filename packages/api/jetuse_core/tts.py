@@ -23,6 +23,10 @@ _client: Any = None
 _lock = threading.Lock()
 
 
+class TtsError(Exception):
+    """TTS失敗(テナンシ未購読・サービス不在等。PORT-02で明確なヒントを付す)。"""
+
+
 def _speech_client() -> Any:
     """TTSリージョンのSpeechクライアント(プロセス内キャッシュ)"""
     global _client
@@ -38,7 +42,9 @@ def _speech_client() -> Any:
                         {"region": region}, signer=signer
                     )
                 else:
-                    cfg = oci.config.from_file()
+                    from .genai import load_local_oci_config
+
+                    cfg = load_local_oci_config()
                     cfg["region"] = region
                     _client = oci.ai_speech.AIServiceSpeechClient(cfg)
     return _client
@@ -46,21 +52,37 @@ def _speech_client() -> Any:
 
 def synthesize(text: str, voice: str) -> bytes:
     """テキストをmp3へ合成(同期。呼び出し側でto_thread推奨)"""
+    import oci
     import oci.ai_speech.models as sm
 
     if voice not in VOICES:
         raise ValueError(f"unknown voice: {voice}")
-    r = _speech_client().synthesize_speech(
-        sm.SynthesizeSpeechDetails(
-            text=text,
-            compartment_id=get_settings().compartment_ocid,
-            configuration=sm.TtsOracleConfiguration(
-                model_details=sm.TtsOracleTts2NaturalModelDetails(
-                    voice_id=voice, language_code="ja-JP"
+    try:
+        client = _speech_client()
+    except RuntimeError as e:
+        # AUTH_MODEガード(genai.load_local_oci_config)由来。TtsErrorに統一し
+        # FastAPI/Functionsルーター双方で同じ縮退(503+ヒント)にする(レビュー指摘)。
+        raise TtsError(str(e)) from e
+    try:
+        r = client.synthesize_speech(
+            sm.SynthesizeSpeechDetails(
+                text=text,
+                compartment_id=get_settings().compartment_ocid,
+                configuration=sm.TtsOracleConfiguration(
+                    model_details=sm.TtsOracleTts2NaturalModelDetails(
+                        voice_id=voice, language_code="ja-JP"
+                    ),
+                    # 既定はWAV(24kHz PCM、1文270KB超)のためMP3を明示(帯域1/10程度)
+                    speech_settings=sm.TtsOracleSpeechSettings(output_format="MP3"),
                 ),
-                # 既定はWAV(24kHz PCM、1文270KB超)のためMP3を明示(帯域1/10程度)
-                speech_settings=sm.TtsOracleSpeechSettings(output_format="MP3"),
-            ),
+            )
         )
-    )
+    except oci.exceptions.ServiceError as e:
+        if e.status in (401, 403, 404):
+            region = get_settings().tts_region
+            raise TtsError(
+                f"TTSにアクセスできません(テナンシが{region}未購読の可能性。"
+                "TTS_REGIONで対象リージョンを変更できます)"
+            ) from e
+        raise TtsError(f"音声合成に失敗しました: {e.code} {e.message}") from e
     return r.data.content

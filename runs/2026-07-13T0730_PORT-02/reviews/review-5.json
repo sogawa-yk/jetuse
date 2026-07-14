@@ -1,0 +1,71 @@
+{
+  "review_n": 5,
+  "timestamp": "2026-07-13T08:26:15+00:00",
+  "reviewer": "codex",
+  "model": "gpt-5.5",
+  "input_diff_path": "reviews/review-5.input.diff",
+  "raw_output_path": "reviews/review-5.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "差分に認証情報・実 OCID・実エンドポイント値のコミットは見当たりません。ただし、モデル可用性キャッシュと dbchat の事前チェックにユーザー影響のある回帰リスクがあり、実環境 E2E 証跡も未添付です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 4,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "major",
+      "file": "packages/api/service/routes/chat.py",
+      "line": 91,
+      "issue": "`needs_responses_family` に `req.conversation_id` が含まれていません。コメントでは保存済み会話メモリ時に chat-family へフォールバックしない方針ですが、既定モデルが unavailable の状態で `conversation_id` 付きリクエストを送ると `llama-3.3-70b` などへフォールバックし、OCI conversation memory が silently 無効化されます。",
+      "suggestion": "`needs_responses_family = bool(req.agent or req.agent_id or req.rag or req.images or req.conversation_id)` とし、会話メモリ利用時は responses-family 不可を明示エラーにしてください。回帰テストも追加してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/chat.py",
+      "line": 583,
+      "issue": "401/403/404 を一度受けると `mark_unavailable()` によりプロセス再起動までモデル不可扱いが固定されます。一時的な IAM/サービス側状態、PROJECT_OCID の修正、リージョン購読後も `/api/chat/models` と `/api/chat/stream` が古い不可判定を返し続けます。",
+      "suggestion": "不可キャッシュに TTL/再試行を入れるか、同モデルの成功時に `clear_unavailable()` してください。少なくとも project/header 起因の 404 とモデル未提供を区別できる条件に絞ってください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "major",
+      "file": "packages/api/service/routes/dbchat.py",
+      "line": 38,
+      "issue": "`nl2sql.sh_sample_status()` が SSE generator の外で実行されるため、DB 接続失敗やウォレット取得失敗が起きると従来の SSE エラーではなく通常の 500 になります。`/api/chat/nl2sql` のストリーミング契約とエラー処理が回帰します。",
+      "suggestion": "sample precheck も `gen()` 内の try/except に入れて SSE の `{error: ...}` と `[DONE]` を返すか、外側で例外を捕捉して同じ SSE 形式に変換してください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "major",
+      "file": "runs/2026-07-13T0730_PORT-02/e2e",
+      "line": 1,
+      "issue": "実環境 E2E 証跡が空です。今回の差分は `/api/health`、dbchat backend 切替、TTS 縮退、モデル unavailable SSE など実 OCI/ADB/GenAI 状態に依存する変更を含みますが、最低2本の実行シナリオも SKIPPED.md による未実施理由も確認できません。",
+      "suggestion": "jetuse-dev へデプロイした上で、少なくとも `/api/health` と代表的な degraded 経路（例: dbchat fallback または TTS 503）を含む複数シナリオの証跡を `runs/.../e2e/` に残してください。未実施なら SKIPPED.md に理由を明記してください。"
+    },
+    {
+      "id": "F-005",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/obs.py",
+      "line": 118,
+      "issue": "バックオフ中に `buf = []` でログ/メトリクスを無条件破棄しています。ベストエフォート送信として許容範囲ではありますが、障害直後の重要な観測データが復旧後に欠落し、ドロップ件数も見えません。",
+      "suggestion": "バックオフ中はサイズ上限付きで保持するか、明示的にドロップ件数を記録してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "insufficient",
+    "notes": "入力には `runs/2026-07-13T0730_PORT-02/e2e` が空である旨だけがあり、実環境 E2E 証跡、2本以上のシナリオ、SKIPPED.md による未実施理由はいずれも確認できません。diff の実環境依存部分を裏づけるには不足しています。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲット URL が提供されていないため、指示どおりブラウザ E2E は実施していません。"
+    }
+  }
+}

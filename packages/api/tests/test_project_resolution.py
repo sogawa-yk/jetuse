@@ -114,6 +114,18 @@ def test_autocreate_disabled_fails_fast(monkeypatch):
     assert "PROJECT_OCID" in str(ei.value)
 
 
+def test_allow_autocreate_false_suppresses_creation_even_when_enabled(monkeypatch):
+    """PORT-02レビュー指摘: /api/health等のGET診断エンドポイントがポーリングだけで
+    GenerativeAiProjectを作らないよう、呼び出し側でautocreateを明示的に抑制できる。"""
+    sdk = FakeSdk(items=[])
+    monkeypatch.setattr(genai, "_sdk_client", lambda s: sdk)
+    s = _settings(project_autocreate=True)  # 有効環境でも
+    with pytest.raises(genai.ProjectResolutionError):
+        genai.resolve_project_ocid(s, allow_autocreate=False)
+    assert sdk.created == []  # 作成されない
+    assert genai._project_cache is None
+
+
 def test_nonactive_created_project_not_cached(monkeypatch):
     """作成後 ACTIVE に達しない project は使わずキャッシュもしない(REV-001 major#2)。"""
     sdk = FakeSdk(items=[], create_state="FAILED")
@@ -236,7 +248,7 @@ def _fake_dp(fail=None):
 
 def test_rag_health_all_ok(monkeypatch):
     monkeypatch.setattr(rag, "resolve_project_ocid",
-                        lambda: "ocid1.generativeaiproject.oc1..live")
+                        lambda **kw: "ocid1.generativeaiproject.oc1..live")
     monkeypatch.setattr(rag, "make_cp_client", lambda: _fake_cp())
     monkeypatch.setattr(rag, "make_inference_client", lambda **kw: _fake_dp())
     res = client.get("/api/rag/health")
@@ -250,7 +262,7 @@ def test_rag_health_all_ok(monkeypatch):
 
 def test_rag_health_pinpoints_cp_failure(monkeypatch):
     monkeypatch.setattr(rag, "resolve_project_ocid",
-                        lambda: "ocid1.generativeaiproject.oc1..live")
+                        lambda **kw: "ocid1.generativeaiproject.oc1..live")
     monkeypatch.setattr(rag, "make_cp_client",
                         lambda: _fake_cp(fail=_api_error(openai.NotFoundError, 404)))
     monkeypatch.setattr(rag, "make_inference_client", lambda **kw: _fake_dp())
@@ -262,7 +274,7 @@ def test_rag_health_pinpoints_cp_failure(monkeypatch):
 
 
 def test_rag_health_project_unresolved_skips_dp(monkeypatch):
-    def raise_unresolved():
+    def raise_unresolved(**kw):
         raise genai.ProjectResolutionError("set PROJECT_OCID")
 
     monkeypatch.setattr(rag, "resolve_project_ocid", raise_unresolved)

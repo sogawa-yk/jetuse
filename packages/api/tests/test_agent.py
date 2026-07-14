@@ -326,6 +326,52 @@ def test_chat_with_agent_applies_instructions(fake_agents, monkeypatch):
     assert "丁寧" in captured["state"]["system_prompt"]
 
 
+def test_chat_with_agent_ignores_caller_model_availability(fake_agents, monkeypatch):
+    """PORT-02 レビュー指摘F-002: agent_id指定時は実行時にagent_def["model"]を使うため、
+    リクエスト上のmodelフィールド(呼び出し側が指定した別モデル)がたまたま利用不可マーク
+    されていても、エージェント実行自体を巻き込んで弾いてはいけない。"""
+    from jetuse_core import models
+
+    res = client.post("/api/agents", json={**AGENT_DEF, "enabled_tools": []})
+    aid = res.json()["id"]
+    models.mark_unavailable("llama-3.3-70b", "HTTP 404")
+    try:
+
+        def fake_invoke(sdk, state):
+            return {"output": "ok", "tool_trace": []}
+
+        monkeypatch.setattr(service_main.hosted_agent, "invoke_agent", fake_invoke)
+        r = client.post("/api/chat/stream", json={
+            "model": "llama-3.3-70b",  # 利用不可マーク済みだが、agent_def側のモデルを使う
+            "agent_id": aid,
+            "messages": [{"role": "user", "content": "q"}],
+        })
+        assert r.status_code == 200
+        assert "ok" in r.text
+        assert "利用できません" not in r.text
+    finally:
+        models.clear_unavailable("llama-3.3-70b")
+
+
+def test_chat_with_agent_ignores_unknown_caller_model(fake_agents, monkeypatch):
+    """PORT-02レビュー指摘(blocker): agent_id指定時はreq.modelを実行に使わないため、
+    呼び出し側が未登録のmodel文字列を送っても「unknown model」400で弾いてはいけない。"""
+    res = client.post("/api/agents", json={**AGENT_DEF, "enabled_tools": []})
+    aid = res.json()["id"]
+
+    def fake_invoke(sdk, state):
+        return {"output": "ok", "tool_trace": []}
+
+    monkeypatch.setattr(service_main.hosted_agent, "invoke_agent", fake_invoke)
+    r = client.post("/api/chat/stream", json={
+        "model": "totally-bogus-model-not-in-registry",
+        "agent_id": aid,
+        "messages": [{"role": "user", "content": "q"}],
+    })
+    assert r.status_code == 200
+    assert "ok" in r.text
+
+
 def test_chat_with_unknown_agent_404(fake_agents):
     r = client.post("/api/chat/stream", json={
         "model": "gpt-oss-120b", "agent_id": "nope",

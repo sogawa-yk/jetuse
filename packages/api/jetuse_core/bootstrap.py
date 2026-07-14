@@ -15,6 +15,7 @@
 
 import logging
 import os
+import threading
 import time
 
 import oracledb
@@ -23,6 +24,33 @@ from .db import _wallet_dir
 from .settings import Settings, get_settings
 
 logger = logging.getLogger("jetuse.bootstrap")
+
+# Select AI(データセット)クレデンシャルの可視化(PORT-02)。bootstrap は best-effort で
+# ENABLE_RESOURCE_PRINCIPAL を試みる(下記 _provision)。/api/health がこの結果を読む。
+# 初期値はok=None(未検証) — bootstrap未実行/未完了を「成功」と偽って見せない
+# (レビュー指摘F-003: 既定trueだとRUN_DB_BOOTSTRAP未設定や起動直後にhealthが誤ってokを返す)。
+_rp_lock = threading.Lock()
+_rp_status: dict = {
+    "ok": None,
+    "hint": "起動時のENABLE_RESOURCE_PRINCIPAL検証が未実行です(bootstrap未完了)",
+}
+
+_RP_HINT = (
+    "ENABLE_RESOURCE_PRINCIPAL に失敗しました。Select AI(データセット)のクレデンシャルが"
+    "使えない可能性があります。動的グループへの generative-ai-family 権限、および"
+    "Object Storage バケットの read 権限を確認してください"
+)
+
+
+def resource_principal_status() -> dict:
+    with _rp_lock:
+        return dict(_rp_status)
+
+
+def _set_resource_principal_status(ok: bool, hint: str | None = None) -> None:
+    global _rp_status
+    with _rp_lock:
+        _rp_status = {"ok": ok, **({"hint": hint} if hint else {})}
 
 # ADB ACTIVE 待ちの上限(秒)と間隔。ADB作成は実測10-15分。
 BOOTSTRAP_TIMEOUT_S = int(os.environ.get("DB_BOOTSTRAP_TIMEOUT_S", "1500"))
@@ -109,11 +137,10 @@ def _provision(settings: Settings) -> None:
                 u=app_user,
             )
             logger.info("resource principal enabled for %s", app_user)
-        except oracledb.DatabaseError:
-            logger.warning(
-                "ENABLE_RESOURCE_PRINCIPAL 失敗(Select AIは手動クレデンシャルが必要)",
-                exc_info=True,
-            )
+            _set_resource_principal_status(True)
+        except oracledb.DatabaseError as e:
+            logger.warning("%s: %s", _RP_HINT, e, exc_info=True)
+            _set_resource_principal_status(False, _RP_HINT)
         conn.commit()
     finally:
         conn.close()

@@ -35,8 +35,10 @@ def _inference_client():
                 {"region": region}, signer=signer
             )
         else:
+            from .genai import load_local_oci_config
+
             _client = oci.generative_ai_inference.GenerativeAiInferenceClient(
-                oci.config.from_file()
+                load_local_oci_config()
             )
     return _client
 

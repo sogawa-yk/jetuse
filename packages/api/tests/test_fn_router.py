@@ -91,3 +91,36 @@ def test_tts_validation():
     status, body = call("POST", "/api/tts", {"text": "a", "voice": "Nobody"})
     assert status == 422
     assert "unknown voice" in body["detail"]
+
+
+def test_tts_error_surfaces_hint_as_503(monkeypatch):
+    # PORT-02: CI(FastAPI)側と同じ縮退契約をFnルーターでも保つ(ADR-0005)
+    def boom(text, voice):
+        raise router.tts.TtsError("テナンシがus-phoenix-1未購読の可能性")
+
+    monkeypatch.setattr(router.tts, "synthesize", boom)
+    status, body = call("POST", "/api/tts", {"text": "こんにちは", "voice": "Yuki"})
+    assert status == 503
+    assert "未購読" in body["detail"]
+
+
+def test_dbchat_schema_reports_sample_available(monkeypatch):
+    # PORT-02: CI(FastAPI)側の /api/dbchat/schema と同じ契約をFnルーターでも保つ(ADR-0005)
+    monkeypatch.setattr(
+        router.nl2sql, "get_schema_info",
+        lambda: {"schema": "SH", "tables": [{"name": "SALES"}]},
+    )
+    status, body = call("GET", "/api/dbchat/schema")
+    assert status == 200
+    assert body["sample_available"] is True
+    assert "sample_unavailable_reason" not in body
+
+
+def test_dbchat_schema_reports_sample_unavailable_reason(monkeypatch):
+    monkeypatch.setattr(
+        router.nl2sql, "get_schema_info", lambda: {"schema": "SH", "tables": []}
+    )
+    status, body = call("GET", "/api/dbchat/schema")
+    assert status == 200
+    assert body["sample_available"] is False
+    assert body["sample_unavailable_reason"]
