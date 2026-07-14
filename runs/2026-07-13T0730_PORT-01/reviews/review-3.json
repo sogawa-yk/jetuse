@@ -1,0 +1,30 @@
+{
+  "review_n": 3,
+  "timestamp": "2026-07-13T10:21:56+00:00",
+  "reviewer": "codex",
+  "model": "gpt-5.5",
+  "input_diff_path": "reviews/review-3.input.diff",
+  "raw_output_path": "reviews/review-3.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "差分本体に blocker は見当たりません。OCIR namespace ガード、GenAI リージョンガード、PAR 相対期限化、Identity Domain home_region 配線はいずれも既存方針と整合しており、認証情報・テナンシ/コンパートメント OCID の新規コミットも差分本体には見当たりません。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 3,
+    "adequacy": "sufficient",
+    "notes": "runs/2026-07-13T0730_PORT-01/e2e/ を確認。Scenario 1 は apply 成功、PAR が apply 時刻起点+1年、Gateway 経由 /・/index.html・/config.json が 200。Scenario 2 は tokyo DENY、tokyo opt-in PASS、osaka/chicago PASS。Scenario 3 は RM stack create/schema 受理、hashicorp/time provider install、plan SUCCEEDED。補助として prefix validation と ocir_namespace guard もあり、最低2本を超えて diff の主要主張を裏づけています。SKIPPED.md は無く、無言スキップも見当たりません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲット URL が提供されていないため、指示どおりブラウザ E2E は未実施です。"
+    }
+  }
+}

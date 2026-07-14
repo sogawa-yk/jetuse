@@ -1,0 +1,12 @@
+# Scenario 2 — Region guard (local `terraform plan -target=terraform_data.region_guard`, my config)
+# Isolated to the guard resource; region_subscriptions data source read with user creds.
+# Tenancy subscribes to NRT(tokyo) so OCIR guard passes for tokyo -> only the NEW GenAI guard fires.
+
+region=ap-tokyo-1 (nrt)                         -> exit=1  DENY  (GenAI precondition failed)   [regionguard-tokyo-deny.out]
+region=ap-tokyo-1 + allow_unvalidated=true      -> exit=0  PASS  (Plan: 1 to add)              [regionguard-tokyo-optin.out]
+region=ap-osaka-1 (kix, GenAI-validated)        -> exit=0  PASS  (Plan: 1 to add)              [regionguard-osaka-pass.out]
+region=us-chicago-1 (ord, GenAI-validated)      -> exit=0  PASS  (Plan: 1 to add)              [regionguard-chicago-pass.out]
+
+Error message on deny (from regionguard-tokyo-deny.out):
+  "リージョン ap-tokyo-1(key=nrt) は GenAI(推論/agentic API)が未検証です ... allow_unvalidated_genai_region=true を設定してください。"
+Matches tasks/PORT-01.md E2E scenario 2 exactly (deny -> opt-in passes; kix/ord pass as before).
