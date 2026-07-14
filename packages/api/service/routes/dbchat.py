@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from jetuse_core import audit, datasets, nl2sql
 from jetuse_core.auth import AuthContext, require_user
 from jetuse_core.logging import log_with
+from jetuse_core.settings import get_settings
 
 from ..schemas import (
     ChartSuggestRequest,
@@ -32,14 +33,45 @@ router = APIRouter()
 async def nl2sql_generate(
     req: Nl2SqlRequest, user: Annotated[AuthContext, Depends(require_user)]
 ):
+    if req.target == "sample":
+        # PORT-02: SHが読めないADBでの ORA-00942 / サイレント空表示を、生成前に検出して防ぐ。
+        # 検査自体がDB未接続等で失敗しても、SSE契約を破る生500にせずSSEエラーへ正規化する
+        # (レビュー指摘F-003)。
+        try:
+            sample = await asyncio.to_thread(nl2sql.sh_sample_status)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("sh_sample_status precheck failed")
+            sample = {"available": False, "reason": f"SHサンプル検査に失敗しました: {e}"[:300]}
+        if not sample["available"]:
+            async def unavailable_gen():
+                yield KEEPALIVE_FRAME
+                err = {"error": sample["reason"]}
+                yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+
+            return StreamingResponse(
+                unavailable_gen(), media_type="text/event-stream", headers=SSE_HEADERS
+            )
+
+    effective_backend = req.backend  # 監査ログ用の実効値
     if req.target == "datasets":
         # ENH-01: 本人のCSVデータセット。本人専用Select AIプロファイルで生成。
         # feedback 20260620 #3: 選択モデルでプロファイルを(必要なら)整える(#2: 準備待ちも内包)。
         # ensure_profile は再構築/ウォームアップでブロックしうるためワーカースレッド内で呼ぶ。
+        effective_backend = "select_ai"  # datasetsは常にSelect AI経由(監査ログの実効値)
+
         def generator(q: str) -> str:
             prof = datasets.ensure_profile(user.subject, req.model)
             return nl2sql.generate_sql_select_ai(q, profile_name=prof)
-    elif req.backend == "select_ai":
+    elif req.backend == "select_ai" or (
+        req.target == "sample" and not get_settings().semstore_ocid
+    ):
+        # PORT-02: semantic store未構成の別テナンシでは既定でselect_ai経路へ切替える
+        # (公開ORMスタックはSemanticStoreを作らないため — 既定dbchatが必ず壊れる問題の根治)。
+        # web UIは常にbackendを明示送信するため「未指定」と「明示sql_search」をワイヤ上で
+        # 区別できず、両方をここで拾う(schemas.Nl2SqlRequestのponytailコメント参照)。
+        effective_backend = "select_ai"
+
         def generator(q: str) -> str:
             return nl2sql.generate_sql_select_ai(q, model=req.model)
     else:
@@ -60,7 +92,7 @@ async def nl2sql_generate(
             log_with(logger, logging.INFO, "nl2sql generated", user=user.subject)
             yield f"data: {json.dumps({'sql': sql}, ensure_ascii=False)}\n\n"
             await asyncio.to_thread(
-                audit.log_event, user.subject, "nl2sql", req.backend
+                audit.log_event, user.subject, "nl2sql", effective_backend
             )
         except Exception as e:
             logger.exception("nl2sql generation failed")
@@ -88,7 +120,13 @@ async def dbchat_chart(
 @router.get("/api/dbchat/schema")
 async def dbchat_schema(user: Annotated[AuthContext, Depends(require_user)]):
     """対象スキーマの一覧(UIの「質問できるデータ」表示用 — SQL-02b)"""
-    return await asyncio.to_thread(nl2sql.get_schema_info)
+    info = await asyncio.to_thread(nl2sql.get_schema_info)
+    sample = await asyncio.to_thread(nl2sql.sh_sample_status)
+    return {
+        **info,
+        "sample_available": sample["available"],
+        **({"sample_unavailable_reason": sample["reason"]} if not sample["available"] else {}),
+    }
 
 
 @router.get("/api/dbchat/select-ai-models")

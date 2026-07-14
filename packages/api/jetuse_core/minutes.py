@@ -51,7 +51,9 @@ def _clients():
             oci.object_storage.ObjectStorageClient(cfg, signer=signer),
             oci.ai_speech.AIServiceSpeechClient(cfg, signer=signer),
         )
-    cfg = oci.config.from_file()
+    from .genai import load_local_oci_config
+
+    cfg = load_local_oci_config()
     return (
         oci.object_storage.ObjectStorageClient(cfg),
         oci.ai_speech.AIServiceSpeechClient(cfg),

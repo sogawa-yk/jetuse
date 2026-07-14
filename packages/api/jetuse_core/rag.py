@@ -134,7 +134,9 @@ def _os_client():
         return oci.object_storage.ObjectStorageClient(
             {"region": get_settings().oci_region}, signer=signer
         )
-    return oci.object_storage.ObjectStorageClient(oci.config.from_file())
+    from .genai import load_local_oci_config
+
+    return oci.object_storage.ObjectStorageClient(load_local_oci_config())
 
 
 def _backup_original(owner: str, file_id: str, filename: str, content: bytes) -> None:
@@ -174,15 +176,18 @@ def _check_hint(e: Exception, what: str) -> str:
             "リージョンの agentic API 対応を確認してください")
 
 
-def health_check() -> dict[str, Any]:
+def health_check(*, allow_autocreate: bool = True) -> dict[str, Any]:
     """RAG 経路の3点検査: ①project解決 ②CP vector_stores.list ③DP files.list(OpenAi-Project付き)。
 
     Issue #47 の報告者が「どこで落ちているか」を自己診断できる粒度で返す(認可済み前提)。
+    allow_autocreate=False は集約health(/api/health)からの呼び出し向け(PORT-02):
+    GETの読み取り専用ポーリングだけでGenerativeAiProjectを作ってしまわないようにする
+    (/api/rag/health は既定のallow_autocreate=True=従来どおりの挙動を維持)。
     """
     checks: dict[str, dict[str, Any]] = {}
     project: str | None = None
     try:
-        project = resolve_project_ocid()
+        project = resolve_project_ocid(allow_autocreate=allow_autocreate)
         checks["project"] = {
             "ok": True, "source": "env" if get_settings().project_ocid else "auto",
         }

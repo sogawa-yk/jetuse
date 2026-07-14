@@ -1,0 +1,9 @@
+{
+  "turn": 1,
+  "timestamp": "2026-07-13T10:07:12+00:00",
+  "action_summary": "(loop-protocol 側で追記可)",
+  "files_changed": ["STATE.md", "docs/tips.md", "docs/verification/port02-graceful-degradation.md", "packages/api/fn/router/func.py", "packages/api/jetuse_core/agents.py", "packages/api/jetuse_core/bootstrap.py", "packages/api/jetuse_core/chat.py", "packages/api/jetuse_core/db.py", "packages/api/jetuse_core/docunderstand.py", "packages/api/jetuse_core/embeddings.py", "packages/api/jetuse_core/genai.py", "packages/api/jetuse_core/guardrails.py", "packages/api/jetuse_core/health.py", "packages/api/jetuse_core/mcp_servers.py", "packages/api/jetuse_core/minutes.py", "packages/api/jetuse_core/models.py", "packages/api/jetuse_core/nl2sql.py", "packages/api/jetuse_core/obs.py", "packages/api/jetuse_core/rag.py", "packages/api/jetuse_core/stt_realtime.py", "packages/api/jetuse_core/translate.py", "packages/api/jetuse_core/tts.py", "packages/api/service/main.py", "packages/api/service/routes/chat.py", "packages/api/service/routes/dbchat.py", "packages/api/service/routes/health.py", "packages/api/service/routes/voice.py", "packages/api/service/schemas.py", "packages/api/tests/test_agent.py", "packages/api/tests/test_auth_mode_guard.py", "packages/api/tests/test_bootstrap.py", "packages/api/tests/test_chat.py", "packages/api/tests/test_fn_router.py", "packages/api/tests/test_health.py", "packages/api/tests/test_model_availability.py", "packages/api/tests/test_nl2sql.py", "packages/api/tests/test_obs.py", "packages/api/tests/test_project_resolution.py", "packages/api/tests/test_tts.py", "runs/2026-07-10T0842_FIX-47/issue-47-comment-draft.md"],
+  "diff_path": "diffs/turn-1.diff",
+  "review_ref": "reviews/review-9.json",
+  "goal_checker": { "verdict": "(/goal 判定モデルが記録)", "reason": "" }
+}

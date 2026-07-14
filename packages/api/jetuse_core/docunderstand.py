@@ -82,7 +82,9 @@ def _doc_client():
                 {"region": region}, signer=signer
             )
         else:
-            _client = oci.ai_document.AIServiceDocumentClient(oci.config.from_file())
+            from .genai import load_local_oci_config
+
+            _client = oci.ai_document.AIServiceDocumentClient(load_local_oci_config())
     return _client
 
 

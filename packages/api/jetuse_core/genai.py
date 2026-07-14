@@ -21,12 +21,43 @@ from .settings import Settings, get_settings
 
 logger = logging.getLogger("jetuse.genai")
 
+_AUTH_MODE_HINT = (
+    "OCI設定ファイル(~/.oci/config)が見つかりません。"
+    "AUTH_MODE=resource_principal の設定漏れの可能性があります"
+)
+
 
 def _signer():
     # CI/Functions上は AUTH_MODE=resource_principal を環境変数で指定(specs/07)
     if os.environ.get("AUTH_MODE") == "resource_principal":
         return OciResourcePrincipalAuth()
-    return OciUserPrincipalAuth()
+    try:
+        # OciUserPrincipalAuth()内部でもoci.config.from_file()を呼ぶため、
+        # ここで捕捉しないとload_local_oci_config()の外側で生ConfigFileNotFoundが
+        # 漏れる(make_inference_client/make_cp_client/nl2sql等genai系全経路の入口 —
+        # レビュー指摘: AUTH_MODEガードがOpenAI互換クライアント側に届いていなかった)。
+        return OciUserPrincipalAuth()
+    except Exception as e:
+        import oci
+
+        if isinstance(e, oci.exceptions.ConfigFileNotFound):
+            raise RuntimeError(_AUTH_MODE_HINT) from e
+        raise
+
+
+def load_local_oci_config() -> dict:
+    """AUTH_MODE!=resource_principal のときの ~/.oci/config フォールバック(PORT-02)。
+
+    未設定コンテナでの ConfigFileNotFound を未処理500で落とさず、原因(AUTH_MODE設定漏れ)を
+    明示する。genai/obs/tts/stt_realtime/docunderstand/minutes/guardrails/embeddings/
+    mcp_servers/agents/rag/translate/db の各モジュールが共通で使う(root-causeを1箇所に集約)。
+    """
+    import oci
+
+    try:
+        return oci.config.from_file()
+    except oci.exceptions.ConfigFileNotFound as e:
+        raise RuntimeError(_AUTH_MODE_HINT) from e
 
 
 # --- GenerativeAiProject 解決(FIX-47 / Issue #47) ---
@@ -66,7 +97,7 @@ def _sdk_client(settings: Settings):
         return oci.generative_ai.GenerativeAiClient(
             {"region": settings.oci_region}, signer=signer
         )
-    config = oci.config.from_file()
+    config = load_local_oci_config()
     config["region"] = settings.oci_region
     return oci.generative_ai.GenerativeAiClient(config)
 
@@ -97,11 +128,16 @@ def _create_project(client, settings: Settings) -> str:
     )
 
 
-def resolve_project_ocid(settings: Settings | None = None) -> str:
+def resolve_project_ocid(
+    settings: Settings | None = None, *, allow_autocreate: bool = True
+) -> str:
     """OpenAi-Project 用 project OCID を返す。
 
     設定 > キャッシュ > compartment内ACTIVE検索 > 自動作成(PROJECT_AUTOCREATE=true のときのみ。
     公開 ORM スタックが policy とセットで有効化する — ベアランタイム既定は検出のみ)。
+
+    allow_autocreate=False は診断/health目的の呼び出し向け(PORT-02): GETの読み取り専用
+    エンドポイントがポーリングだけでリソースを作ってしまうのを避ける(レビュー指摘)。
     """
     global _project_cache
     settings = settings or get_settings()
@@ -122,7 +158,7 @@ def resolve_project_ocid(settings: Settings | None = None) -> str:
             ).data
             resolved = next((p.id for p in items if p.lifecycle_state == "ACTIVE"), None)
             if not resolved:
-                if not settings.project_autocreate:
+                if not settings.project_autocreate or not allow_autocreate:
                     raise ProjectResolutionError(
                         _ACTIONABLE + " (cause: no ACTIVE project and autocreate disabled)"
                     )

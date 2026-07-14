@@ -1,0 +1,63 @@
+{
+  "review_n": 6,
+  "timestamp": "2026-07-13T08:29:08+00:00",
+  "reviewer": "codex",
+  "model": "gpt-5.5",
+  "input_diff_path": "reviews/review-6.input.diff",
+  "raw_output_path": "reviews/review-6.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "差分には公開APIの後方互換を壊すレスポンス変更と、未検証/利用不可モデルがプロセス内に永続してしまう運用上の不具合があります。実環境E2E証跡は空で、追加された readiness やフォールバック経路の主張を裏づけるものはありません。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 2,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "packages/api/service/routes/chat.py",
+      "line": 483,
+      "issue": "`/api/chat/models` の各モデル要素に `available` が常に追加され、モデル不可時には `unavailable_reason` も追加されます。既存の公開レスポンスシグネチャを無条件に変更しており、厳格なクライアント型・スキーマ検証・キャッシュ比較を行う既存利用者を壊す可能性があります。後方互換観点では破壊的変更です。",
+      "suggestion": "既存エンドポイントのレスポンス形状は維持し、可用性情報は `/api/chat/models?include_availability=true` や別エンドポイントに分離するか、バージョン付きAPIとして追加してください。どうしても同一レスポンスに含める場合は互換性方針とクライアント更新を明示し、既存契約テストを追加してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/chat.py",
+      "line": 583,
+      "issue": "401/403/404 を受けたモデルを `mark_unavailable()` でプロセス内に記録していますが、TTL・再検証・管理用クリア手段がありません。一時的なIAM伝播遅延、リージョン購読直後、OCI側の一時障害、設定修正後でも、プロセス再起動まで当該モデルが利用不可として扱われ続け、既定モデルなら自動フォールバック、非既定モデルなら即エラーになります。",
+      "suggestion": "不可状態に期限を持たせる、一定間隔で再試行する、成功時にクリアする、または管理エンドポイント/起動時初期化で明示的に再検証できるようにしてください。テストには一時失敗後の回復シナリオを追加してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/obs.py",
+      "line": 118,
+      "issue": "バックオフ中に送信バッファを `buf = []` で破棄しています。OCI Logging/Metrics の一時障害時に、バックオフ窓内に蓄積されたログやメトリクスがすべて失われるため、観測性の縮退ではなくデータロスになります。特に障害発生中の診断ログほど落ちやすくなります。",
+      "suggestion": "バックオフ中はバッファを保持する、上限付きリングバッファで古いものから落とす、または明示的にドロップ件数をメトリクス/ログに残してください。少なくとも一時的な500後に次回成功で同じバッチが送られるテストを追加してください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/health.py",
+      "line": 78,
+      "issue": "`speech_health()` は `SPEECH_BUCKET` の有無だけで `ok` を返していますが、実際の Speech 利用にはリージョン、Object Storage 権限、バケット存在も関与します。readiness としては過度に楽観的で、設定ミスを `ok` と表示する可能性があります。",
+      "suggestion": "課金や重いAPI呼び出しを避ける方針なら、少なくとも必須設定の網羅チェックと IAM/バケット未検証である旨の `hint` を返し、実疎通を確認していない状態を `degraded` などで表現してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-07-13T0730_PORT-02/e2e` は空と明記されており、実環境デプロイ後のE2E証跡は確認できません。追加された `/api/health`、モデル不可時のSSE、dbchatのSemanticStore未設定時フォールバック、TTS 503化などは最低2シナリオ以上の実環境証跡で裏づけられていません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURL未提供のため、指示どおり実ブラウザE2Eは実施していません。"
+    }
+  }
+}

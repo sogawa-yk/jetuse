@@ -56,7 +56,15 @@ class ConversationCreate(BaseModel):
 
 class Nl2SqlRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
-    backend: Literal["sql_search", "select_ai"] = "sql_search"  # SQL-04比較モード
+    # SQL-04比較モード。web UI(dbchat.tsx)は常にbackendを明示送信し既定値は"sql_search"
+    # のため、「未指定」と「明示sql_search」をワイヤ上で区別できない(対象areaはpackages/api
+    # のためUI側の変更はこのタスクでは行わない)。よって"sql_search"はどちらの場合も
+    # SEMSTORE_OCID未設定なら既定機能(dbchatが別テナンシで必ず壊れる問題の根治)を優先し
+    # select_aiへ自動切替する(下記PORT-02コメント参照)。
+    # ponytail: この結果SQL-04比較モードはSEMSTORE_OCID未設定環境では両パネルがselect_ai
+    # になり得る既知の制約。UI側がbackend="auto"相当を明示送信できるようになれば
+    # sql_search側を強制する経路を分離できる(docs/tips.md参照)。
+    backend: Literal["sql_search", "select_ai"] = "sql_search"
     target: Literal["sample", "datasets"] = "sample"  # ENH-01: SHサンプル or 本人CSV
     model: str | None = Field(default=None, max_length=100)  # feedback 20260620 #3: モデル選択
 

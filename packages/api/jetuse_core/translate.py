@@ -41,7 +41,9 @@ def _oci_language_client():
                 {"region": region}, signer=signer
             )
         else:
-            _lang_client = oci.ai_language.AIServiceLanguageClient(oci.config.from_file())
+            from .genai import load_local_oci_config
+
+            _lang_client = oci.ai_language.AIServiceLanguageClient(load_local_oci_config())
     return _lang_client
 
 

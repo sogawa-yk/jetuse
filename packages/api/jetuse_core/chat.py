@@ -10,11 +10,11 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from openai import APIConnectionError, OpenAI
+from openai import APIConnectionError, APIStatusError, OpenAI
 
 from .genai import make_inference_client
 from .logging import log_with
-from .models import MODELS, ModelDef
+from .models import MODELS, ModelDef, mark_unavailable
 
 logger = logging.getLogger("jetuse.chat")
 
@@ -569,6 +569,31 @@ def stream_chat(
                 "error": "上流応答の解析に失敗しました（一時的なエラーの可能性）。"
                 "再生成をお試しください"
             }
+            return
+        except APIStatusError as e:
+            # 404/403/401はモデル未提供/未認可(リージョン/テナンシ差)を示しうる(PORT-02)。
+            # ただしRAG(stale vector store)/短期メモリ(stale conversation)/エージェント固有
+            # project_ocid絡みの呼び出しはモデル以外が原因の404/403もあるため、プロセス全体を
+            # 汚す mark_unavailable はそれらが関与しない素のチャット呼び出しに限定する
+            # (レビュー指摘F-001)。
+            p = params or GenParams()
+            model_only_call = (
+                not p.file_search_store and not oci_conversation_id and not project_ocid
+            )
+            if e.status_code in (401, 403, 404) and model_only_call:
+                hint = f"HTTP {e.status_code}"
+                mark_unavailable(model_key, hint)
+                log_with(
+                    logger, logging.WARNING, "chat_model_unavailable",
+                    model=model_key, status=e.status_code,
+                )
+                yield {
+                    "error": f"モデル {model_key} はこのリージョン/テナンシでは利用できません"
+                    f"({hint})"
+                }
+                return
+            log_with(logger, logging.ERROR, "chat_failed", model=model_key, error=str(e))
+            yield {"error": str(e)}
             return
         except Exception as e:  # ストリーミング途中の失敗はイベントで通知
             log_with(logger, logging.ERROR, "chat_failed", model=model_key, error=str(e))

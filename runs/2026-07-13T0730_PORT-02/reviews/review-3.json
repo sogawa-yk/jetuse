@@ -1,0 +1,71 @@
+{
+  "review_n": 3,
+  "timestamp": "2026-07-13T08:11:09+00:00",
+  "reviewer": "codex",
+  "model": "gpt-5.5",
+  "input_diff_path": "reviews/review-3.input.diff",
+  "raw_output_path": "reviews/review-3.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "認証情報・実 OCID・実エンドポイントのコミットは差分上は見当たりませんでした。ただし、モデル不可判定と新規 /api/health の実装に、本番挙動を誤判定またはブロックしうる major リスクがあります。実環境 E2E 証跡は空で、差分の主張を裏づけるには不十分です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 5,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/chat.py",
+      "line": 576,
+      "issue": "401/403/404 の APIStatusError をすべて「モデルがリージョン/テナンシで利用不可」とみなし、プロセス全体の model_status に記録しています。Responses/RAG 経路では stale vector store、OpenAi-Project、会話 ID、IAM/compartment 不整合などモデル以外の 404/403 でも発生し得るため、1 リクエストでモデル一覧と以後の全ユーザーリクエストが誤って unavailable/fallback になります。",
+      "suggestion": "モデル不可として mark_unavailable する条件を、純粋なモデル呼び出しのエラーまたは専用の軽量モデルプローブで確認できた場合に限定してください。少なくとも file_search_store / oci_conversation_id / project 関連の失敗はリクエスト局所エラーとして返し、永続的なプロセス内状態には反映しないでください。TTL や scope 付きキャッシュも検討してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "packages/api/service/routes/health.py",
+      "line": 18,
+      "issue": "/api/health の async ルート内で同期の health.capability_health() を直接呼んでいます。この中で rag.health_check() の OCI/OpenAI HTTP 呼び出しや nl2sql の DB 検査が走るため、遅延時に FastAPI のイベントループをブロックし、readiness probe が通常リクエストを巻き込んで遅延させます。",
+      "suggestion": "既存の /api/rag/health と同様に await asyncio.to_thread(health.capability_health) で実行するか、各チェックを async 化してください。外部呼び出しには短い診断用 timeout も設定してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/health.py",
+      "line": 47,
+      "issue": "モジュールコメントでは各チェックが例外を握りつぶして ok/hint を返す設計になっていますが、_rag_health() は rag.health_check() の例外を捕捉しません。RAG 側の想定外例外だけで /api/health 全体が 503 になり、chat/dbchat/speech など他機能の診断結果も失われます。",
+      "suggestion": "_rag_health() 内で例外を捕捉し、{\"status\":\"unavailable\",\"hint\":\"...\"} のように RAG capability の失敗として返してください。ルートの 503 catch は本当に集約処理自体が壊れた場合の最後の防衛線に留めるべきです。"
+    },
+    {
+      "id": "F-004",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/health.py",
+      "line": 71,
+      "issue": "dbchat_health() が sample_data の結果を status 集約に含めていません。SEMSTORE_OCID と select_ai が ok なら、SH サンプルが読めず /api/chat/nl2sql の既定 sample リクエストが即エラーになる状態でも dbchat status は ok になり、/api/health の総合 ok も誤って true になり得ます。",
+      "suggestion": "sample_data を dbchat の集約対象に含めるか、sample/datasets/semantic/select_ai を個別 capability として表現し、既定フローが使えない場合は dbchat を degraded にしてください。このケースの単体テストを追加してください。"
+    },
+    {
+      "id": "F-005",
+      "severity": "major",
+      "file": "runs/2026-07-13T0730_PORT-02/e2e",
+      "line": 1,
+      "issue": "実環境 E2E 証跡ディレクトリが空で、最低 2 シナリオの実行結果も SKIPPED.md による未実施理由もありません。差分は OCI 認証モード、/api/health、chat fallback、dbchat、TTS など実環境依存の経路を触っており、ユニットテストだけでは jetuse-dev での主張を裏づけられません。",
+      "suggestion": "jetuse-dev デプロイ後に少なくとも /api/health の ok/degraded 表示、モデル unavailable/fallback、dbchat の SEMSTORE 未設定時 Select AI 経路、TTS 503 縮退のうち 2 本以上を実ブラウザ/API で検証し、証跡を配置してください。未実施なら SKIPPED.md に理由とリスクを明記してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "insufficient",
+    "notes": "runs/2026-07-13T0730_PORT-02/e2e は空と記載されており、実行シナリオ・結果・ログ・スクリーンショット等は確認できません。最低 2 シナリオの網羅も、未実施の正当化(SKIPPED.md)もありません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}
