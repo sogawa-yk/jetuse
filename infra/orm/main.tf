@@ -10,6 +10,21 @@ resource "terraform_data" "region_guard" {
       condition     = contains(local.ocir_supported_region_keys, local.deploy_region_key) || (var.api_image_url != "" && var.fn_router_image != "")
       error_message = "JetUse のワンクリックデプロイは ap-osaka-1 / ap-tokyo-1 / us-ashburn-1 / us-chicago-1 のみ対応です(コンテナイメージの事前push先)。他リージョンでは、イメージを自リージョンOCIRへミラーし api_image_url と fn_router_image の両方を指定してください。"
     }
+    # GenAI(推論+agentic API)の対応リージョンは OCIR より狭い。実証済は kix/ord のみで、
+    # nrt/iad は apply が通っても GenAI が動かず RAG/会話/生成が全滅する。イメージのミラー
+    # (api_image_url 指定)では回避できないため、未検証リージョンは明示オプトインを要求する。
+    precondition {
+      condition     = var.allow_unvalidated_genai_region || contains(local.genai_validated_region_keys, local.deploy_region_key)
+      error_message = "リージョン ${var.region}(key=${local.deploy_region_key}) は GenAI(推論/agentic API)が未検証です。JetUse の RAG/会話メモリ/デモ生成は GenAI に依存し、実証済は 大阪(kix)/シカゴ(ord) のみです。デプロイ前に対象リージョンの GenAI/agentic API の提供状況を確認し、承知の上で進める場合は allow_unvalidated_genai_region=true を設定してください。"
+    }
+    # ocir_namespace を公開既定から変えると、api_image_url/fn_router_image が空のままでは
+    # auto-synth が <region>.ocir.io/<変更後namespace>/jetuse-{api,fn-router}:latest を pull しようとし、
+    # そのイメージが存在せず Container Instance / Functions が起動しない(サイレント)。
+    # よって公開既定以外にする場合は両イメージURLの明示指定を必須にする(自テナンシへミラーした前提)。
+    precondition {
+      condition     = var.ocir_namespace == local.public_ocir_namespace || (var.api_image_url != "" && var.fn_router_image != "")
+      error_message = "ocir_namespace を公開既定(${local.public_ocir_namespace})から変更する場合は、イメージを自テナンシの OCIR へミラーした上で api_image_url と fn_router_image を両方明示してください。ocir_namespace 単独の変更では jetuse-api/jetuse-fn-router の pull に失敗します(これは自テナンシの Object Storage namespace ではありません)。"
+    }
   }
 }
 
@@ -74,13 +89,14 @@ module "iam" {
   source    = "../terraform/modules/iam"
   providers = { oci = oci.home }
 
-  tenancy_ocid           = var.tenancy_ocid
-  compartment_ocid       = var.compartment_ocid
-  prefix                 = var.prefix
-  enable_dynamic_group   = var.enable_dynamic_group
-  enable_runtime_policy  = var.enable_runtime_policy
-  enable_semantic_store  = var.enable_semantic_store
-  create_deployer_policy = false
+  tenancy_ocid              = var.tenancy_ocid
+  compartment_ocid          = var.compartment_ocid
+  prefix                    = var.prefix
+  enable_dynamic_group      = var.enable_dynamic_group
+  enable_runtime_policy     = var.enable_runtime_policy
+  enable_semantic_store     = var.enable_semantic_store
+  enable_project_autocreate = var.enable_project_autocreate
+  create_deployer_policy    = false
 
   existing_dynamic_group = var.existing_dynamic_group
 }
@@ -104,6 +120,8 @@ module "adb" {
   compartment_ocid = var.compartment_ocid
   prefix           = var.prefix
   admin_password   = local.adb_admin_password
+  db_version       = var.adb_db_version
+  ecpu_count       = var.adb_ecpu_count
   # ウォレットをTerraformで生成し、base64テキストでバケットへ配置する(コンテナはobject readのみでOK)
   generate_wallet = true
   wallet_password = random_password.wallet.result
@@ -149,6 +167,7 @@ module "container_instance" {
   image_url             = local.api_image_url
   environment_variables = merge(local.api_environment, { LOG_OCID = module.observability.app_log_id })
   memory_gb             = 4
+  shape                 = var.ci_shape
 
   depends_on = [module.iam]
 }
@@ -190,6 +209,9 @@ module "identity_domain" {
   compartment_ocid = var.compartment_ocid
   prefix           = var.prefix
   region           = var.region
+  # Identity Domain はテナンシのホームリージョンにしか作れない。deployリージョンではなく
+  # ホームリージョンを渡す(deployリージョン≠ホームでの作成失敗を防ぐ)。
+  home_region = local.home_region
 }
 
 module "identity_domain_app" {

@@ -1,0 +1,47 @@
+{
+  "review_n": 18,
+  "timestamp": "2026-07-13T09:59:25+00:00",
+  "reviewer": "codex",
+  "model": "gpt-5.5",
+  "input_diff_path": "reviews/review-18.input.diff",
+  "raw_output_path": "reviews/review-18.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "差分は実装面では広範にテストされている一方、実環境E2E証跡内にテナンシ/コンパートメント/プロジェクトOCIDやOCIR実値がそのまま残っています。本リポジトリの禁止観点に反するため、E2E証跡が添付されている状態ではブロッカーです。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 1,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "runs/2026-07-13T0730_PORT-02/e2e/apply.log",
+      "line": 8,
+      "issue": "実環境E2E証跡に compartment-id、stack-id、project_ocid、tenancy_ocid、OCIR namespace/image URL などの環境依存実値が複数含まれています。レビュー観点で明示されている「認証情報・テナンシ/コンパートメント OCID・エンドポイント実値をコミットしていないか」に反し、同じ値は stack-update.log にも残っています。",
+      "suggestion": "E2E証跡をコミット対象にする場合は OCID、namespace、実エンドポイント、人物タグ等をマスクしてください。必要なら証跡は非公開保管に寄せ、コミットする要約レポートには `ocid1...redacted` のようなプレースホルダだけを残してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/health.py",
+      "line": 65,
+      "issue": "`dbchat_health()` は `resource_principal_status()` の結果だけで Select AI の生成経路が利用可能かを判定していますが、初期値は bootstrap 未実行なら `ok=None` のままです。E2Eの scenario3-health.body でも `select_ai.ok=null` かつ `dbchat.status=unavailable` ですが、同じ証跡の scenario2-nl2sql-generate.body では Select AI 経路が実際に成功しています。診断エンドポイントが実際に利用可能な dbchat を unavailable と報告しており、グレースフルデグレードの表面化として誤診断になります。",
+      "suggestion": "`RUN_DB_BOOTSTRAP` が無効/未完了でも、Select AI 経路の設定や軽量なDBメタデータ確認から `unknown/degraded` と `unavailable` を分ける、または `ok=None` を `unavailable` ではなく `degraded/unknown` として集約してください。E2Eでは nl2sql 成功後の `/api/health` 再取得も追加して整合性を確認してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "insufficient",
+    "notes": "E2E証跡は build/push/apply、モデル一覧+実チャット+未知モデル400、NL2SQL生成、/api/health、TTS正常系、SKIPPED.md を含み、最低2本以上のシナリオは確認できます。ただし `/api/dbchat/schema` の新フィールドは実環境で未反映、obs抑制はIAM変更が人間ゲートとして未実施、かつ health 証跡は Select AI 生成成功と dbchat unavailable が矛盾しています。SKIPPED.md の理由は一部妥当ですが、差分全体の主張を十分に裏づける証跡としては不足です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されていないため、指示どおり実ブラウザE2Eは実施していません。"
+    }
+  }
+}

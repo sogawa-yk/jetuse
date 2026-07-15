@@ -54,7 +54,9 @@ def generate_sql(question: str) -> str:
     """SemanticStoreでNL→SQL生成(同期/非同期両対応)。実測30秒前後"""
     s = get_settings()
     if not s.semstore_ocid:
-        raise RuntimeError("SEMSTORE_OCID is not configured")
+        raise RuntimeError(
+            "SemanticStore 未構成(SEMSTORE_OCID)。Select AI を使うか構成してください"
+        )
     with httpx.Client(auth=_signer(), timeout=GENERATE_TIMEOUT) as client:
         res = client.post(
             f"{_base()}/semanticStores/{s.semstore_ocid}/actions/generateSqlFromNl",
@@ -128,18 +130,27 @@ def create_profile(cur, prof: str, model: str, object_list: list[dict]) -> None:
         cur.execute("BEGIN DBMS_CLOUD_AI.DROP_PROFILE(:p); END;", p=prof)
     except Exception:  # noqa: BLE001
         pass
-    cur.execute(
-        "BEGIN DBMS_CLOUD_AI.CREATE_PROFILE(:p, :a); END;",
-        p=prof,
-        a=json.dumps({
-            "provider": "oci",
-            "credential_name": s.select_ai_credential,
-            "region": s.oci_region,
-            "model": model,
-            "object_list": object_list,
-            "comments": "true",
-        }),
-    )
+    try:
+        cur.execute(
+            "BEGIN DBMS_CLOUD_AI.CREATE_PROFILE(:p, :a); END;",
+            p=prof,
+            a=json.dumps({
+                "provider": "oci",
+                "credential_name": s.select_ai_credential,
+                "region": s.oci_region,
+                "model": model,
+                "object_list": object_list,
+                "comments": "true",
+            }),
+        )
+    except oracledb.DatabaseError as e:
+        # PORT-02: クレデンシャル/DG権限未整備がここに集約して落ちる。原因ヒントを付す。
+        raise RuntimeError(
+            f"Select AI プロファイル作成に失敗しました。DBMS_CLOUD_AI のクレデンシャル"
+            f"({s.select_ai_credential})が未整備の可能性があります。動的グループへの"
+            "generative-ai-family 権限、Object Storage バケットの read 権限、および"
+            "ENABLE_RESOURCE_PRINCIPAL の起動ログ(/api/health)を確認してください"
+        ) from e
 
 
 def _ensure_select_ai_profile(model: str) -> str:
@@ -321,6 +332,21 @@ def get_schema_info() -> dict[str, Any]:
                 )
     _schema_cache = {"schema": TARGET_SCHEMA, "tables": list(tables.values())}
     return _schema_cache
+
+
+def sh_sample_status() -> dict[str, Any]:
+    """SHサンプルスキーマが読めるか(PORT-02)。bootstrapはSHへのgrantをしないため、
+    未整備ADBではALL_TABLESが空になり従来はサイレントに空表示していた — ここで検出する。
+    """
+    if get_schema_info()["tables"]:
+        return {"available": True}
+    return {
+        "available": False,
+        "reason": (
+            "SHサンプルスキーマが読み取れません(ADBのSHスキーマがPUBLIC公開されていない"
+            "可能性)。CSVデータセット取り込み(datasets)を利用してください"
+        ),
+    }
 
 
 def preview_table(table: str, limit: int = 20, *, owner_key: str | None = None) -> dict[str, Any]:

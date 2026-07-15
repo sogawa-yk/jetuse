@@ -75,6 +75,7 @@ from .routes import (
     conversations,
     dbchat,
     demos,
+    health,
     minutes,
     usecases,
     voice,
@@ -177,11 +178,6 @@ def create_app() -> FastAPI:
     async def healthz():
         return {"status": "ok"}
 
-    @app.get("/api/health")
-    async def api_health():
-        # gateway は /api/* しか CI へルートしない — デプロイ smoke の契約(SP3-07)
-        return {"status": "ok"}
-
     # route 群(P1c §5)。path/method/status は分割前と同一。
     app.include_router(chat.router)
     app.include_router(admin.router)
@@ -202,6 +198,7 @@ def create_app() -> FastAPI:
     from jetuse_core import sign_proxy
 
     app.mount("/gen-proxy", sign_proxy.app)
+    app.include_router(health.router)
 
     return app
 

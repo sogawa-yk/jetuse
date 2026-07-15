@@ -1,5 +1,7 @@
 """モデルレジストリ(specs/07)。API対応はモデル依存(SPIKE-01実証)。"""
 
+import threading
+import time
 from dataclasses import dataclass
 from typing import Literal
 
@@ -46,3 +48,44 @@ MODELS: dict[str, ModelDef] = {
 }
 
 DEFAULT_MODEL = "gpt-oss-120b"
+
+# 利用可否のlazyマーク(PORT-02): 起動時プローブはせず、実際のchat呼び出しが
+# NotFound/PermissionDenied(=リージョン/テナンシに無い)で失敗した時点でプロセス内に記録する。
+# マーク後は routes/chat.py が実呼び出し自体をスキップするため、TTLで自動的に
+# 再試行対象へ戻さないと一時的なIAM伝播遅延・リージョン購読直後の遅延等でも
+# プロセス再起動までモデルが永久に使えなくなる(レビュー指摘: 自己回復手段が無い)。
+_RETRY_AFTER_SECONDS = 300.0  # ponytail: 固定5分。運用で頻発するなら設定化を検討
+_lock = threading.Lock()
+_unavailable: dict[str, tuple[str, float]] = {}  # model_key -> (hint, retry_at monotonic)
+
+
+def mark_unavailable(key: str, hint: str) -> None:
+    with _lock:
+        _unavailable[key] = (hint, time.monotonic() + _RETRY_AFTER_SECONDS)
+
+
+def clear_unavailable(key: str | None = None) -> None:
+    """テスト用リセット。keyを省略すると全解除。"""
+    with _lock:
+        if key is None:
+            _unavailable.clear()
+        else:
+            _unavailable.pop(key, None)
+
+
+def model_status(key: str) -> tuple[bool, str | None]:
+    """(利用可能か, 不可の場合のヒント)。TTL経過後は自動的に利用可能へ戻す
+    (次回呼び出しで実際に再試行し、まだ不可なら新しいTTLで再マークされる)。
+
+    読み取り専用(GET /api/chat/models・/api/health等からポーリングされうる)なので
+    _unavailable への書き込みは行わない(レビュー指摘: 照会が状態を変えるべきではない)。
+    期限切れエントリは次にmark_unavailable()が呼ばれた時に上書きされるのみで、放置しても
+    MODELSレジストリ規模(数件)を超えて増え続けることはない。
+    """
+    with _lock:
+        entry = _unavailable.get(key)
+    if entry is not None and time.monotonic() >= entry[1]:
+        entry = None
+    if entry is None:
+        return True, None
+    return False, entry[0]

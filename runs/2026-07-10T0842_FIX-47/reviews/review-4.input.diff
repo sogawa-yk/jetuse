@@ -1,0 +1,17 @@
+diff --git a/packages/api/tests/test_project_resolution.py b/packages/api/tests/test_project_resolution.py
+index 370977f..552a006 100644
+--- a/packages/api/tests/test_project_resolution.py
++++ b/packages/api/tests/test_project_resolution.py
+@@ -64,6 +64,12 @@ def reset_project_cache():
+     genai._reset_project_cache()
+ 
+ 
++@pytest.fixture(autouse=True)
++def no_real_signer(monkeypatch):
++    """CI(GitHub Actions)には ~/.oci/config が無い。署名器はクライアント構築に不要なのでスタブ。"""
++    monkeypatch.setattr(genai, "_signer", lambda: None)
++
++
+ # --- resolve_project_ocid ---
+ 
+ 

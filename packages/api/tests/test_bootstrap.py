@@ -17,14 +17,17 @@ class FakeErr:
 
 
 class FakeCursor:
-    def __init__(self, fail_create_user: bool = False):
+    def __init__(self, fail_create_user: bool = False, fail_rp: bool = False):
         self.executed: list[str] = []
         self._fail_create_user = fail_create_user
+        self._fail_rp = fail_rp
 
     def execute(self, sql, **kw):
         self.executed.append(sql.strip())
         if self._fail_create_user and sql.strip().startswith("CREATE USER JETUSE_APP"):
             raise oracledb.DatabaseError(FakeErr(1920))  # user already exists
+        if self._fail_rp and "ENABLE_RESOURCE_PRINCIPAL" in sql:
+            raise oracledb.DatabaseError(FakeErr(20000))
 
 
 class FakeConn:
@@ -88,6 +91,23 @@ def test_provision_skips_when_passwords_missing(patched, monkeypatch):
                     lambda **kw: called.__setitem__("connect", True) or FakeConn(FakeCursor()))
     bootstrap._provision(_settings())
     assert called["connect"] is False  # ADMINパスワード無しなら接続しない
+
+
+def test_provision_success_reports_rp_status_ok(patched):
+    # PORT-02: Select AI可視化(/api/health が読む resource_principal_status())
+    cur = FakeCursor()
+    patched.setattr(oracledb, "connect", lambda **kw: FakeConn(cur))
+    bootstrap._provision(_settings())
+    assert bootstrap.resource_principal_status() == {"ok": True}
+
+
+def test_provision_rp_failure_reports_hint(patched):
+    cur = FakeCursor(fail_rp=True)
+    patched.setattr(oracledb, "connect", lambda **kw: FakeConn(cur))
+    bootstrap._provision(_settings())
+    status = bootstrap.resource_principal_status()
+    assert status["ok"] is False
+    assert "generative-ai-family" in status["hint"]
 
 
 def test_bootstrap_runs_migrate(patched, monkeypatch):

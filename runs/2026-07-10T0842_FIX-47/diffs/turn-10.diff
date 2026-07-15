@@ -1,0 +1,558 @@
+diff --git a/.env.example b/.env.example
+index bace2dd..6c395ff 100644
+--- a/.env.example
++++ b/.env.example
+@@ -6,6 +6,13 @@ OS_NAMESPACE=your-object-storage-namespace
+ # OpenAI互換エンドポイント（リージョンから導出可能だが明示）
+ GENAI_BASE_URL=https://inference.generativeai.ap-osaka-1.oci.oraclecloud.com/openai/v1
+ 
++# FIX-47: DP状態API(Files/Conversations等)の OpenAi-Project ヘッダに使う GenerativeAiProject OCID。
++# 空なら compartment 内の ACTIVE project を自動検出（project OCIDはリージョン別）。
++# PROJECT_AUTOCREATE=true なら project が無いとき自動作成する（要 manage generative-ai-project。
++# 公開ORMスタックは既定で有効。ローカル/ベア実行の既定は false=検出のみ）
++PROJECT_OCID=
++PROJECT_AUTOCREATE=false
++
+ # SPIKE-04 (ADB)
+ ADB_ADMIN_PASSWORD=
+ ADB_OCID=
+diff --git a/infra/orm/locals.tf b/infra/orm/locals.tf
+index a0fe7ef..34454ce 100644
+--- a/infra/orm/locals.tf
++++ b/infra/orm/locals.tf
+@@ -29,10 +29,13 @@ locals {
+   api_environment = {
+     OCI_REGION       = var.region
+     COMPARTMENT_OCID = var.compartment_ocid
+-    AUTH_MODE        = "resource_principal"
+-    AUTH_REQUIRED    = var.enable_auth ? "true" : "false"
+-    OIDC_ISSUER      = var.enable_auth ? "https://identity.oraclecloud.com/" : ""
+-    OIDC_JWKS_URL    = var.enable_auth ? "${local.domain_url}/admin/v1/SigningCert/jwk" : ""
++    # 空ならアプリが自動解決(FIX-47)。genai.py resolve_project_ocid 参照。
++    PROJECT_OCID       = var.project_ocid
++    PROJECT_AUTOCREATE = var.enable_project_autocreate ? "true" : "false"
++    AUTH_MODE          = "resource_principal"
++    AUTH_REQUIRED      = var.enable_auth ? "true" : "false"
++    OIDC_ISSUER        = var.enable_auth ? "https://identity.oraclecloud.com/" : ""
++    OIDC_JWKS_URL      = var.enable_auth ? "${local.domain_url}/admin/v1/SigningCert/jwk" : ""
+     # Select AI は ADB のリソースプリンシパル資格情報を使う(bootstrapがENABLE_RESOURCE_PRINCIPAL)
+     SELECT_AI_CREDENTIAL = "OCI$RESOURCE_PRINCIPAL"
+     # DB自己ブートストラップ(entrypoint.sh → jetuse_core.bootstrap)
+diff --git a/infra/orm/main.tf b/infra/orm/main.tf
+index 10a71ca..59be395 100644
+--- a/infra/orm/main.tf
++++ b/infra/orm/main.tf
+@@ -61,13 +61,14 @@ module "iam" {
+   source    = "../terraform/modules/iam"
+   providers = { oci = oci.home }
+ 
+-  tenancy_ocid           = var.tenancy_ocid
+-  compartment_ocid       = var.compartment_ocid
+-  prefix                 = var.prefix
+-  enable_dynamic_group   = var.enable_dynamic_group
+-  enable_runtime_policy  = var.enable_runtime_policy
+-  enable_semantic_store  = var.enable_semantic_store
+-  create_deployer_policy = false
++  tenancy_ocid              = var.tenancy_ocid
++  compartment_ocid          = var.compartment_ocid
++  prefix                    = var.prefix
++  enable_dynamic_group      = var.enable_dynamic_group
++  enable_runtime_policy     = var.enable_runtime_policy
++  enable_semantic_store     = var.enable_semantic_store
++  enable_project_autocreate = var.enable_project_autocreate
++  create_deployer_policy    = false
+ 
+   existing_dynamic_group = var.existing_dynamic_group
+ }
+diff --git a/infra/orm/schema.yaml b/infra/orm/schema.yaml
+index 22d85a9..9766801 100644
+--- a/infra/orm/schema.yaml
++++ b/infra/orm/schema.yaml
+@@ -5,7 +5,7 @@ description: >-
+   実行ユーザーの権限や既存IAMに応じて、Dynamic GroupとPolicyの作成範囲を選択できます。
+   デプロイ後、出力の app_url を開き demo ユーザーでログインしてください。
+ schemaVersion: 1.1.0
+-version: "20260706"
++version: "20260710"
+ 
+ logoUrl: ""
+ 
+@@ -27,8 +27,10 @@ variableGroups:
+       - existing_dynamic_group
+       - enable_runtime_policy
+       - enable_semantic_store
++      - enable_project_autocreate
+   - title: "オプション（詳細）"
+     variables:
++      - project_ocid
+       - enable_opensearch
+       - rate_limit_rps
+       - ocir_namespace
+@@ -100,6 +102,18 @@ variables:
+     description: "空欄なら自動生成します（出力に表示）。12〜30文字・英大小+数字"
+     required: false
+ 
++  project_ocid:
++    type: string
++    title: "GenerativeAI Project OCID（任意）"
++    description: "RAG・会話メモリが使う GenerativeAiProject。空欄なら既存のACTIVEなprojectを自動検出し、無ければ自動作成します（自動作成は下のIAM設定でオフにできます）"
++    required: false
++
++  enable_project_autocreate:
++    type: boolean
++    title: "GenerativeAI Projectの自動作成を許可"
++    description: "RAG・会話メモリに必須のGenerativeAiProjectが無い場合にアプリが自動作成します（IAMに manage generative-ai-project を含めます）。オフの場合は Project OCID の明示指定を推奨"
++    default: true
++
+   enable_opensearch:
+     type: boolean
+     title: "OpenSearch RAG を有効化"
+diff --git a/infra/orm/variables.tf b/infra/orm/variables.tf
+index 5233f7f..7ed3a25 100644
+--- a/infra/orm/variables.tf
++++ b/infra/orm/variables.tf
+@@ -93,6 +93,24 @@ variable "image_repo_prefix" {
+   default     = "jetuse"
+ }
+ 
++# FIX-47: DP 状態API(Files / Vector Store files / Conversations)は OpenAi-Project ヘッダに
++# GenerativeAiProject OCID が必須。空ならアプリが compartment 内の ACTIVE project を自動検出し、
++# 無ければ自動作成する(GenerativeAiProject は TF provider 未対応のためアプリ側で解決)。
++variable "project_ocid" {
++  description = "GenerativeAI Project OCID(空なら自動検出/自動作成)"
++  type        = string
++  default     = ""
++}
++
++# 自動作成の opt-in(既定 on — ワンクリックの無手動セットアップを成立させる)。
++# off にする場合は project_ocid の明示指定が実質必須。IAM の
++# 'manage generative-ai-project' もこのフラグと連動する。
++variable "enable_project_autocreate" {
++  description = "GenerativeAI Project の自動作成を許可(IAM policy 'manage generative-ai-project' を含む)"
++  type        = bool
++  default     = true
++}
++
+ # 明示指定時は合成より優先(空なら ocir_* / image_repo_prefix から合成)。
+ variable "api_image_url" {
+   type    = string
+diff --git a/infra/terraform/modules/iam/main.tf b/infra/terraform/modules/iam/main.tf
+index 72fc07a..a6b2a78 100644
+--- a/infra/terraform/modules/iam/main.tf
++++ b/infra/terraform/modules/iam/main.tf
+@@ -66,6 +66,13 @@ locals {
+     "Allow any-user to use functions-family in compartment id ${var.compartment_ocid} where ALL {request.principal.type = 'ApiGateway', request.resource.compartment.id = '${var.compartment_ocid}'}",
+   ]
+ 
++  # DP 状態API(Files/Conversations等)必須の OpenAi-Project を自動解決するため、
++  # GenerativeAiProject の検索と自動作成をアプリに許可する(FIX-47 / Issue #47)。
++  # opt-in: PROJECT_OCID を明示配線する運用では不要なので既定では付与しない。
++  project_autocreate_statements = var.enable_project_autocreate ? [
++    "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage generative-ai-project in compartment id ${var.compartment_ocid}",
++  ] : []
++
+   adb_statements = [
+     # DBMS_CLOUD_AI / Select AI が ADB の resource principal で推論・RAGを行う。
+     "Allow dynamic-group ${local.adb_dynamic_group_name} to use generative-ai-family in compartment id ${var.compartment_ocid}",
+@@ -90,6 +97,7 @@ resource "oci_identity_policy" "runtime" {
+   # 単一の既存DGを参照する場合、責務間で同一になる文をまとめる。
+   statements = distinct(concat(
+     local.runtime_statements,
++    local.project_autocreate_statements,
+     local.adb_statements,
+     local.semantic_store_statements,
+   ))
+diff --git a/infra/terraform/modules/iam/tests/iam.tftest.hcl b/infra/terraform/modules/iam/tests/iam.tftest.hcl
+index 7fb7010..7a3f6e4 100644
+--- a/infra/terraform/modules/iam/tests/iam.tftest.hcl
++++ b/infra/terraform/modules/iam/tests/iam.tftest.hcl
+@@ -4,12 +4,13 @@ run "full_public_iam_contract" {
+   command = plan
+ 
+   variables {
+-    tenancy_ocid           = "ocid1.tenancy.oc1..publiciamtest"
+-    compartment_ocid       = "ocid1.compartment.oc1..publiciamtest"
+-    prefix                 = "jetuse-spike-iam01"
+-    enable_semantic_store  = true
+-    create_deployer_policy = true
+-    deployer_group_subject = "Default/JetUseDeployers"
++    tenancy_ocid              = "ocid1.tenancy.oc1..publiciamtest"
++    compartment_ocid          = "ocid1.compartment.oc1..publiciamtest"
++    prefix                    = "jetuse-spike-iam01"
++    enable_semantic_store     = true
++    enable_project_autocreate = true
++    create_deployer_policy    = true
++    deployer_group_subject    = "Default/JetUseDeployers"
+   }
+ 
+   assert {
+@@ -37,8 +38,8 @@ run "full_public_iam_contract" {
+   }
+ 
+   assert {
+-    condition     = length(oci_identity_policy.runtime[0].statements) == 22
+-    error_message = "Full Public runtime policy must contain the reviewed 22 statements."
++    condition     = length(oci_identity_policy.runtime[0].statements) == 23
++    error_message = "Full Public runtime policy must contain the reviewed 23 statements."
+   }
+ 
+   assert {
+@@ -46,6 +47,11 @@ run "full_public_iam_contract" {
+     error_message = "Runtime policy must allow application-managed Vector Stores."
+   }
+ 
++  assert {
++    condition     = contains(oci_identity_policy.runtime[0].statements, "Allow dynamic-group jetuse-spike-iam01-runtime-dg to manage generative-ai-project in compartment id ocid1.compartment.oc1..publiciamtest")
++    error_message = "Runtime policy must allow GenerativeAiProject auto-creation when enable_project_autocreate=true (FIX-47)."
++  }
++
+   assert {
+     condition     = contains(oci_identity_policy.runtime[0].statements, "Allow dynamic-group jetuse-spike-iam01-runtime-dg to manage ai-service-speech-family in compartment id ocid1.compartment.oc1..publiciamtest")
+     error_message = "Runtime policy must allow Speech jobs and TTS."
+@@ -98,6 +104,11 @@ run "minimal_without_semantic_store_or_deployer_policy" {
+     error_message = "Minimal runtime policy must contain runtime and ADB statements only."
+   }
+ 
++  assert {
++    condition     = alltrue([for s in oci_identity_policy.runtime[0].statements : !strcontains(s, "generative-ai-project")])
++    error_message = "generative-ai-project must be omitted when enable_project_autocreate is default(false)."
++  }
++
+   assert {
+     condition     = length(oci_identity_policy.deployer) == 0
+     error_message = "Deployer policy must be omitted when disabled."
+diff --git a/infra/terraform/modules/iam/variables.tf b/infra/terraform/modules/iam/variables.tf
+index d4bd123..950d4b5 100644
+--- a/infra/terraform/modules/iam/variables.tf
++++ b/infra/terraform/modules/iam/variables.tf
+@@ -25,6 +25,12 @@ variable "enable_runtime_policy" {
+   default     = true
+ }
+ 
++variable "enable_project_autocreate" {
++  description = "Allow the runtime to discover and auto-create the GenerativeAiProject required by the OpenAi-Project header (adds 'manage generative-ai-project'). Off by default; the public ORM stack enables it together with PROJECT_AUTOCREATE (FIX-47)."
++  type        = bool
++  default     = false
++}
++
+ variable "enable_semantic_store" {
+   description = "Create the dynamic group and policies required by OCI Generative AI semantic stores (SQL Search)."
+   type        = bool
+diff --git a/packages/api/jetuse_core/genai.py b/packages/api/jetuse_core/genai.py
+index e76b8f4..512f22e 100644
+--- a/packages/api/jetuse_core/genai.py
++++ b/packages/api/jetuse_core/genai.py
+@@ -8,7 +8,10 @@ specs/00 の未文書仕様に対応:
+ CI/Functions上ではリソースプリンシパルに切り替える(INFRA-01 apply後に実装 — TODO)。
+ """
+ 
++import logging
+ import os
++import threading
++import time
+ 
+ import httpx
+ from oci_genai_auth import OciResourcePrincipalAuth, OciUserPrincipalAuth
+@@ -16,6 +19,8 @@ from openai import OpenAI
+ 
+ from .settings import Settings, get_settings
+ 
++logger = logging.getLogger("jetuse.genai")
++
+ 
+ def _signer():
+     # CI/Functions上は AUTH_MODE=resource_principal を環境変数で指定(specs/07)
+@@ -24,6 +29,115 @@ def _signer():
+     return OciUserPrincipalAuth()
+ 
+ 
++# --- GenerativeAiProject 解決(FIX-47 / Issue #47) ---
++# DP 状態API(Files / Vector Store files / Conversations / Responses)は OpenAi-Project ヘッダ必須
++# (specs/00 未文書仕様)。未設定のまま空ヘッダを送ると別テナンシで必ず落ちるため、
++# 設定 > プロセス内キャッシュ > compartment内ACTIVE検索 > 自動作成 の順に解決し、
++# 解決不能なら actionable なメッセージで即時 raise する(空ヘッダは送らない)。
++
++
++class ProjectResolutionError(Exception):
++    """OpenAi-Project に入れる GenerativeAiProject OCID が解決できない。"""
++
++
++_ACTIONABLE = (
++    "GenerativeAI project を解決できません(RAG / Responses / 会話メモリに必須)。"
++    "スタック変数または環境変数 PROJECT_OCID を設定するか、PROJECT_AUTOCREATE=true と "
++    "'manage generative-ai-project' の IAM policy で自動作成を許可してください"
++    "(DG matching rule / リージョンの agentic API 対応も確認)"
++)
++
++_project_lock = threading.Lock()
++_project_cache: str | None = None
++
++
++def _reset_project_cache() -> None:
++    global _project_cache
++    _project_cache = None
++
++
++def _sdk_client(settings: Settings):
++    """GenerativeAiClient(CP)。project は推論リージョンと同一リージョンに置く
++    (project OCID はリージョン別 — docs/tips.md)。"""
++    import oci
++
++    if os.environ.get("AUTH_MODE") == "resource_principal":
++        signer = oci.auth.signers.get_resource_principals_signer()
++        return oci.generative_ai.GenerativeAiClient(
++            {"region": settings.oci_region}, signer=signer
++        )
++    config = oci.config.from_file()
++    config["region"] = settings.oci_region
++    return oci.generative_ai.GenerativeAiClient(config)
++
++
++def _create_project(client, settings: Settings) -> str:
++    """project を自動作成し ACTIVE を有界待ち。非 ACTIVE のまま返すと OpenAi-Project が
++    404 になるため、ACTIVE に達しなければ raise(キャッシュもしない — REV-001 major#2)。"""
++    import oci
++
++    details = oci.generative_ai.models.CreateGenerativeAiProjectDetails(
++        compartment_id=settings.compartment_ocid,
++        display_name="jetuse-project",
++        description="auto-created by JetUse (FIX-47)",
++    )
++    created = client.create_generative_ai_project(details).data
++    for _ in range(15):
++        state = getattr(created, "lifecycle_state", "")
++        if state == "ACTIVE":
++            logger.info("generative-ai project auto-created")
++            return created.id
++        if state in ("FAILED", "DELETING", "DELETED"):
++            break
++        time.sleep(2)
++        created = client.get_generative_ai_project(created.id).data
++    raise ProjectResolutionError(
++        _ACTIONABLE + f" (cause: auto-created project stuck in "
++        f"{getattr(created, 'lifecycle_state', '?')})"
++    )
++
++
++def resolve_project_ocid(settings: Settings | None = None) -> str:
++    """OpenAi-Project 用 project OCID を返す。
++
++    設定 > キャッシュ > compartment内ACTIVE検索 > 自動作成(PROJECT_AUTOCREATE=true のときのみ。
++    公開 ORM スタックが policy とセットで有効化する — ベアランタイム既定は検出のみ)。
++    """
++    global _project_cache
++    settings = settings or get_settings()
++    if settings.project_ocid:
++        return settings.project_ocid
++    if _project_cache:
++        return _project_cache
++    with _project_lock:
++        if _project_cache:
++            return _project_cache
++        try:
++            import oci
++
++            client = _sdk_client(settings)
++            # 全ページ取得(1ページ目に ACTIVE が無いだけで新規作成しない — REV-001 major#1)
++            items = oci.pagination.list_call_get_all_results(
++                client.list_generative_ai_projects, settings.compartment_ocid
++            ).data
++            resolved = next((p.id for p in items if p.lifecycle_state == "ACTIVE"), None)
++            if not resolved:
++                if not settings.project_autocreate:
++                    raise ProjectResolutionError(
++                        _ACTIONABLE + " (cause: no ACTIVE project and autocreate disabled)"
++                    )
++                resolved = _create_project(client, settings)
++        except ProjectResolutionError:
++            raise
++        except Exception as e:
++            status = getattr(e, "status", None)
++            code = getattr(e, "code", None) or type(e).__name__
++            suffix = f" (cause: {code}{f' HTTP {status}' if status else ''})"
++            raise ProjectResolutionError(_ACTIONABLE + suffix) from e
++        _project_cache = resolved
++        return resolved
++
++
+ def make_inference_client(
+     settings: Settings | None = None,
+     *,
+@@ -43,7 +157,8 @@ def make_inference_client(
+         "opc-compartment-id": settings.compartment_ocid,
+     }
+     if with_project:
+-        headers["OpenAi-Project"] = project_ocid or settings.project_ocid
++        # 解決不能なら ProjectResolutionError(空の OpenAi-Project は送らない — FIX-47)
++        headers["OpenAi-Project"] = project_ocid or resolve_project_ocid(settings)
+     return OpenAI(
+         api_key="OCI",  # ダミー。実認証はhttpxのIAM署名
+         base_url=settings.inference_base_url,
+diff --git a/packages/api/jetuse_core/rag.py b/packages/api/jetuse_core/rag.py
+index 04656ae..07c0a63 100644
+--- a/packages/api/jetuse_core/rag.py
++++ b/packages/api/jetuse_core/rag.py
+@@ -16,7 +16,7 @@ import oracledb
+ from openai import NotFoundError
+ 
+ from .db import connect
+-from .genai import make_cp_client, make_inference_client
++from .genai import make_cp_client, make_inference_client, resolve_project_ocid
+ from .settings import get_settings
+ 
+ logger = logging.getLogger("jetuse.rag")
+@@ -161,6 +161,51 @@ def _delete_original(owner: str, file_id: str, filename: str) -> None:
+         logger.exception("rag original delete failed (ignored)")
+ 
+ 
++# --- プリフライト診断(FIX-47) ---
++
++
++def _check_hint(e: Exception, what: str) -> str:
++    """失敗ヒント。レスポンスbody(OCID等を含みうる)は載せずステータスと確認箇所だけ返す。"""
++    code = getattr(e, "status_code", None)
++    base = f"{what} の呼び出しが失敗"
++    if code:
++        base += f" (HTTP {code})"
++    return (base + "。DG matching rule / IAM policy statements / PROJECT_OCID / "
++            "リージョンの agentic API 対応を確認してください")
++
++
++def health_check() -> dict[str, Any]:
++    """RAG 経路の3点検査: ①project解決 ②CP vector_stores.list ③DP files.list(OpenAi-Project付き)。
++
++    Issue #47 の報告者が「どこで落ちているか」を自己診断できる粒度で返す(認可済み前提)。
++    """
++    checks: dict[str, dict[str, Any]] = {}
++    project: str | None = None
++    try:
++        project = resolve_project_ocid()
++        checks["project"] = {
++            "ok": True, "source": "env" if get_settings().project_ocid else "auto",
++        }
++    except Exception as e:  # noqa: BLE001 - 診断エンドポイント。落とさず構造化して返す
++        checks["project"] = {"ok": False, "hint": str(e)}
++    try:
++        make_cp_client().vector_stores.list()
++        checks["control_plane"] = {"ok": True}
++    except Exception as e:  # noqa: BLE001
++        checks["control_plane"] = {"ok": False,
++                                   "hint": _check_hint(e, "CP vector_stores.list")}
++    if project:
++        try:
++            make_inference_client(with_project=True).files.list()
++            checks["data_plane"] = {"ok": True}
++        except Exception as e:  # noqa: BLE001
++            checks["data_plane"] = {"ok": False,
++                                    "hint": _check_hint(e, "DP files.list")}
++    else:
++        checks["data_plane"] = {"ok": False, "hint": "project 未解決のため検査不能"}
++    return {"ok": all(c["ok"] for c in checks.values()), "checks": checks}
++
++
+ # --- Vector Store / Files API ---
+ 
+ 
+diff --git a/packages/api/jetuse_core/settings.py b/packages/api/jetuse_core/settings.py
+index eb63f6e..bb56b8b 100644
+--- a/packages/api/jetuse_core/settings.py
++++ b/packages/api/jetuse_core/settings.py
+@@ -11,6 +11,9 @@ class Settings(BaseSettings):
+     oci_region: str = "ap-osaka-1"
+     compartment_ocid: str = ""
+     project_ocid: str = ""
++    # FIX-47: project_ocid 空のとき、compartment に ACTIVE project が無ければ自動作成を許可する。
++    # 既定 false(検出のみ)。公開 ORM スタックは IAM policy とセットで true を注入する
++    project_autocreate: bool = False
+ 
+     # OpenSearch RAG(ENH-05)。例 http://10.1.1.x:9200。空ならOpenSearchバックエンド無効
+     opensearch_endpoint: str = ""
+diff --git a/packages/api/service/routes/rag.py b/packages/api/service/routes/rag.py
+index fee09d4..d49d409 100644
+--- a/packages/api/service/routes/rag.py
++++ b/packages/api/service/routes/rag.py
+@@ -10,18 +10,46 @@ import pathlib
+ from typing import Annotated
+ 
+ from fastapi import APIRouter, Depends, HTTPException, UploadFile
++from openai import APIStatusError
+ 
+ from jetuse_core import rag
+ from jetuse_core.auth import AuthContext, require_user
++from jetuse_core.genai import ProjectResolutionError
+ 
+ logger = logging.getLogger("jetuse.service")
+ router = APIRouter()
+ 
++# FIX-47: CP/DP 由来の 4xx を 500 のまま漏らさず、原因ヒント付きで表面化する。
++# レスポンスbody(OCID等を含みうる)は返さない。詳細はサーバーログと /api/rag/health で追う。
++_GENAI_HINT = (
++    "OCI GenAI 呼び出しが HTTP {code} で失敗しました。DG matching rule / "
++    "IAM policy statements / PROJECT_OCID / リージョンの agentic API 対応を"
++    "確認してください(GET /api/rag/health で自己診断できます)"
++)
++
++
++async def _rag_call(fn, *args):
++    try:
++        return await asyncio.to_thread(fn, *args)
++    except rag.StoreNotReadyError as e:
++        raise HTTPException(
++            status_code=503, detail="vector store not ready, retry later"
++        ) from e
++    except ProjectResolutionError as e:
++        logger.warning("rag: generative-ai project unresolved: %s", e)
++        raise HTTPException(status_code=503, detail=str(e)) from e
++    except APIStatusError as e:
++        logger.exception("rag: OCI GenAI call failed (HTTP %s)", e.status_code)
++        status = 503 if e.status_code in (401, 403, 404) else 502
++        raise HTTPException(
++            status_code=status, detail=_GENAI_HINT.format(code=e.status_code)
++        ) from e
++
+ 
+ async def list_files_response(ns: str) -> dict:
+-    files = await asyncio.to_thread(rag.list_files, ns)
+-    files = await asyncio.to_thread(rag.refresh_statuses, ns, files)
+-    files = await asyncio.to_thread(rag.attach_backend_status, ns, files)
++    files = await _rag_call(rag.list_files, ns)
++    files = await _rag_call(rag.refresh_statuses, ns, files)
++    files = await _rag_call(rag.attach_backend_status, ns, files)
+     return {"files": files}
+ 
+ 
+@@ -38,20 +66,27 @@ async def upload_file_response(ns: str, file: UploadFile) -> dict:
+         raise HTTPException(status_code=413, detail="file too large (max 20MB)")
+     if not content:
+         raise HTTPException(status_code=422, detail="empty file")
+-    try:
+-        return await asyncio.to_thread(rag.add_file, ns, name, content)
+-    except rag.StoreNotReadyError as e:
+-        raise HTTPException(
+-            status_code=503, detail="vector store not ready, retry later"
+-        ) from e
++    return await _rag_call(rag.add_file, ns, name, content)
+ 
+ 
+ async def delete_file_response(ns: str, file_id: str) -> dict:
+-    if not await asyncio.to_thread(rag.delete_file, ns, file_id):
++    if not await _rag_call(rag.delete_file, ns, file_id):
+         raise HTTPException(status_code=404, detail="file not found")
+     return {"deleted": True}
+ 
+ 
++@router.get("/api/rag/health")
++async def rag_health(user: Annotated[AuthContext, Depends(require_user)]):
++    """プリフライト3点検査(FIX-47): project解決 / CP / DP。失敗点をヒント付きで特定する。"""
++    try:
++        return await asyncio.to_thread(rag.health_check)
++    except Exception as e:  # 診断エンドポイントは 500 を漏らさない(REV-001 minor)
++        logger.exception("rag health check crashed")
++        raise HTTPException(
++            status_code=503, detail=f"health check failed: {type(e).__name__}"
++        ) from e
++
++
+ @router.get("/api/rag/files")
+ async def list_rag_files(user: Annotated[AuthContext, Depends(require_user)]):
+     return await list_files_response(user.subject)

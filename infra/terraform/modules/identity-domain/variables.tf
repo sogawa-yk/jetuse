@@ -9,3 +9,9 @@ variable "prefix" {
 variable "region" {
   type = string
 }
+
+variable "home_region" {
+  description = "テナンシのホームリージョン(Identity Domain 作成先)。空なら region にフォールバック"
+  type        = string
+  default     = ""
+}

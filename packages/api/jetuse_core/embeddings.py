@@ -28,7 +28,9 @@ def _embed_client():
             _client = GenerativeAiInferenceClient({"region": region}, signer=signer,
                                                   service_endpoint=ep)
         else:
-            _client = GenerativeAiInferenceClient(oci.config.from_file(), service_endpoint=ep)
+            from .genai import load_local_oci_config
+
+            _client = GenerativeAiInferenceClient(load_local_oci_config(), service_endpoint=ep)
     return _client
 
 

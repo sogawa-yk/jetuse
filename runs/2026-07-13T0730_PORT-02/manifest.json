@@ -1,0 +1,12 @@
+{
+  "run_id": "2026-07-13T0730_PORT-02",
+  "task_file": "tasks/PORT-02.md",
+  "goal_condition_path": "runs/2026-07-13T0730_PORT-02/goal.txt",
+  "loop_config_snapshot": { "stage": "report-only" },
+  "isolation": { "worktree": true, "working_tree": "/home/opc/jetuse-loops/PORT-02" },
+  "tool_versions": { "claude_code": "2.1.207", "codex": "0.142.5" },
+  "started_at": "2026-07-13T07:30:59+00:00",
+  "ended_at": null,
+  "outcome": "in_progress",
+  "totals": { "turns": 0, "tokens": 0, "reviews": 0, "review_fail": 0 }
+}

@@ -1,0 +1,8 @@
+# prefix 検証ブロックの実挙動確認 (input validation / 回帰)
+full plan(no -target, prefix が参照される) で variable validation が発火:
+  prefix=jetuse-spike-47      -> PASS  (共有スタック prefix。sanitized=jetusespike47=13<=15)
+  prefix=jetuse               -> PASS
+  prefix=jetusetoolongname12  -> FAIL(validation)  sanitized=19>15
+  prefix=Jetuse               -> FAIL(validation)  英大文字始まり
+注: `-target=terraform_data.region_guard` では prefix が依存グラフに無く validation は評価されない
+   (region_guard は prefix を参照しない)。フル plan で確認。

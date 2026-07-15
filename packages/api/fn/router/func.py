@@ -74,6 +74,11 @@ def handler(ctx, data: io.BytesIO):
         return _error(ctx, 403, str(e))
     except nl2sql.SqlRejectedError as e:
         return _error(ctx, 400, str(e))
+    except tts.TtsError as e:
+        # PORT-02: CI(FastAPI)側と同じ縮退(503+ヒント)。捕捉しないと下のExceptionで
+        # 生の"internal error"500に潰れヒントが失われる(ADR-0005: 二重実装の禁止)。
+        logger.warning("fn tts synthesize degraded: %s", e)
+        return _error(ctx, 503, str(e))
     except oracledb.Error as e:
         msg = str(e).splitlines()[0][:300]
         if "DPY-" in msg:
@@ -103,7 +108,16 @@ def _route(ctx, method: str, path: str, body: dict, owner: str):
 
     # --- dbchat (SQL-02/03) ---
     if path == "/api/dbchat/schema" and method == "GET":
-        return _json(ctx, nl2sql.get_schema_info())
+        # PORT-02: CI(FastAPI)側の /api/dbchat/schema と同じ契約に揃える
+        # (sample_available/sample_unavailable_reason。ADR-0005: 二重実装の禁止)。
+        info = nl2sql.get_schema_info()
+        sample = nl2sql.sh_sample_status()
+        return _json(ctx, {
+            **info,
+            "sample_available": sample["available"],
+            **({"sample_unavailable_reason": sample["reason"]}
+               if not sample["available"] else {}),
+        })
     # feedback 20260620 #3: Select AIで選択可能なモデル一覧(dbchatセグメントはFn経由のため要追加)
     if path == "/api/dbchat/select-ai-models" and method == "GET":
         return _json(ctx, {"models": nl2sql.SELECT_AI_MODELS,

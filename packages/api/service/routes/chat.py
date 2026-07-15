@@ -16,7 +16,7 @@ from jetuse_core import mcp_servers as mcp_repo
 from jetuse_core.auth import AuthContext, require_user
 from jetuse_core.chat import GenParams, create_oci_conversation
 from jetuse_core.logging import log_with
-from jetuse_core.models import MODELS
+from jetuse_core.models import DEFAULT_MODEL, MODELS, model_status
 from jetuse_core.owner_keys import owner_key_gate, user_owner_key
 from jetuse_core.settings import get_settings
 
@@ -82,7 +82,15 @@ async def stream_chat_response(  # noqa: ANN202
     強制。demo 会話は OCI Conversation(サーバ側会話状態)を作らず LTM も無効 —
     継続の契約はクライアントが messages に全履歴を再送する(既存 SPA と同じ流儀)。
     """
-    if req.model not in MODELS:
+    # モデル関連の事前検証は agent_id 指定時は行わない: 実行時に req.model ではなく
+    # agent_def["model"] を使う(既存test_chat_with_agent_applies_instructionsが示すとおり
+    # 呼び出し側モデルは定義側で上書きされる仕様)ため、req.modelがMODELS未登録でも
+    # 正当なエージェント実行を拒否してはいけない(レビュー指摘: unknown-model 400の回帰)。
+    # 同様にselect_ai・opensearchバックエンドのRAG(下の分岐がreq.modelを一切使わず終端)も対象外。
+    bypasses_model_check = bool(req.agent_id) or (
+        req.rag and req.rag_backend in ("select_ai", "opensearch")
+    )
+    if not bypasses_model_check and req.model not in MODELS:
         raise HTTPException(status_code=400, detail=f"unknown model: {req.model}")
 
     # 会話の所有者・箱スコープ検証は全早期 return より前で行う(review-1 M001 / review-2 B002)。
@@ -101,6 +109,46 @@ async def stream_chat_response(  # noqa: ANN202
         )
         if not conv:
             raise HTTPException(status_code=404, detail="conversation not found")
+
+    # モデル可用性(PORT-02): 直前の呼び出しで利用不可と判明したモデルは、既定モデルなら
+    # 同系統(chat-family)へフォールバックし、それ以外は生エラーでなくヒント付きで即座に返す。
+    # bypasses_model_check時はreq.modelが未登録キーでもmodel_status()は安全に(True, None)を
+    # 返す(dict.getベース)ため、下のif節がそのまま素通りする。
+    model_ok, model_hint = model_status(req.model)
+    fallback_notice: str | None = None
+    if not model_ok and not bypasses_model_check:
+        # responses-family必須の機能(agent/rag/画像/保存済み会話メモリ)ではchat-familyへの
+        # フォールバックは機能欠落(later checksが400にする、または会話メモリのサイレント
+        # 無効化)につながるため行わない。素のchatリクエストに限定する。
+        needs_responses_family = bool(
+            req.agent or req.agent_id or req.rag or req.images or req.conversation_id
+        )
+        fallback_key = None
+        if req.model == DEFAULT_MODEL and not needs_responses_family:
+            fallback_key = next(
+                (k for k in MODELS
+                 if k != req.model and MODELS[k].api == "chat" and model_status(k)[0]),
+                None,
+            )
+        if fallback_key:
+            fallback_notice = (
+                f"既定モデル {req.model} は利用できません({model_hint})。"
+                f"{fallback_key} に自動フォールバックしました"
+            )
+            req = req.model_copy(update={"model": fallback_key})
+        else:
+            hint = f"モデル {req.model} はこのリージョン/テナンシでは利用できません"
+            if model_hint:
+                hint += f"({model_hint})"
+
+            async def unavailable_gen():
+                yield KEEPALIVE_FRAME
+                yield f"data: {json.dumps({'error': hint}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+
+            return StreamingResponse(
+                unavailable_gen(), media_type="text/event-stream", headers=SSE_HEADERS
+            )
 
     # 監査の機能ラベル(SEC-02)
     audit_feature = (
@@ -218,13 +266,16 @@ async def stream_chat_response(  # noqa: ANN202
 
     # 画像入力(MM-01): visionモデル必須・agent/rag併用不可・最終メッセージはuser
     if req.images:
+        if req.agent or req.rag or req.agent_id:
+            # PORT-02: agent_id時はreq.modelがMODELS未登録キーでありうるため、
+            # MODELS[req.model]参照(vision判定)より先にこちらを判定する
+            # (レビュー指摘: agent_id+images+未知modelがKeyErrorで500していた)。
+            raise HTTPException(
+                status_code=422, detail="images cannot be combined with agent/rag"
+            )
         if not MODELS[req.model].vision:
             raise HTTPException(
                 status_code=422, detail="selected model does not support images"
-            )
-        if req.agent or req.rag or req.agent_id:
-            raise HTTPException(
-                status_code=422, detail="images cannot be combined with agent/rag"
             )
         if req.messages[-1].role != "user":
             raise HTTPException(status_code=422, detail="last message must be user")
@@ -457,6 +508,8 @@ async def stream_chat_response(  # noqa: ANN202
 
     async def gen():
         yield KEEPALIVE_FRAME
+        if fallback_notice:
+            yield f"data: {json.dumps({'notice': fallback_notice}, ensure_ascii=False)}\n\n"
         producer = loop.run_in_executor(None, produce)
         try:
             while True:
@@ -477,20 +530,24 @@ async def stream_chat_response(  # noqa: ANN202
     return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
 
 
+def _model_entry(k: str, m) -> dict:
+    ok, hint = model_status(k)
+    entry = {
+        "key": k,
+        "label": m.label,
+        "default_temperature": m.default_temperature,
+        "api": m.api,
+        "reasoning": m.reasoning,  # UIの出し分け用(CHAT-04b)
+        "min_max_tokens": m.min_max_tokens,
+        "vision": m.vision,  # 画像添付UIの出し分け(MM-01)
+        "multi_image": m.multi_image,  # 複数画像可否(ENH-09)
+        "available": ok,  # PORT-02: リージョン/テナンシで利用不可と判明したものはfalse
+    }
+    if not ok and hint:
+        entry["unavailable_reason"] = hint
+    return entry
+
+
 @router.get("/api/chat/models")
 async def list_models(user: Annotated[AuthContext, Depends(require_user)]):
-    return {
-        "models": [
-            {
-                "key": k,
-                "label": m.label,
-                "default_temperature": m.default_temperature,
-                "api": m.api,
-                "reasoning": m.reasoning,  # UIの出し分け用(CHAT-04b)
-                "min_max_tokens": m.min_max_tokens,
-                "vision": m.vision,  # 画像添付UIの出し分け(MM-01)
-                "multi_image": m.multi_image,  # 複数画像可否(ENH-09)
-            }
-            for k, m in MODELS.items()
-        ]
-    }
+    return {"models": [_model_entry(k, m) for k, m in MODELS.items()]}
