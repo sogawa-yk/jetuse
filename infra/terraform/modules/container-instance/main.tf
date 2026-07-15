@@ -6,7 +6,7 @@ resource "oci_container_instances_container_instance" "this" {
   compartment_id      = var.compartment_ocid
   display_name        = "${var.prefix}-api"
   availability_domain = data.oci_identity_availability_domains.ads.availability_domains[0].name
-  shape               = "CI.Standard.E4.Flex"
+  shape               = var.shape
 
   shape_config {
     ocpus         = var.ocpus

@@ -1,0 +1,1224 @@
+diff --git a/packages/api/tests/test_project_resolution.py b/packages/api/tests/test_project_resolution.py
+index 370977f..552a006 100644
+--- a/packages/api/tests/test_project_resolution.py
++++ b/packages/api/tests/test_project_resolution.py
+@@ -64,6 +64,12 @@ def reset_project_cache():
+     genai._reset_project_cache()
+ 
+ 
++@pytest.fixture(autouse=True)
++def no_real_signer(monkeypatch):
++    """CI(GitHub Actions)には ~/.oci/config が無い。署名器はクライアント構築に不要なのでスタブ。"""
++    monkeypatch.setattr(genai, "_signer", lambda: None)
++
++
+ # --- resolve_project_ocid ---
+ 
+ 
+
+
+===== ライブ E2E ターゲット =====
+TARGET_URL=https://MASKED-GW.apigateway.us-chicago-1.oci.customer-oci.com/
+(Playwright MCP の browser ツールでこの URL を開き、diff 関連の主要フローを実検証すること)
+
+
+===== 実環境 E2E 証跡 (jetuse-dev / Codex は実行せず証跡を評価する) =====
+--- runs/2026-07-10T0842_FIX-47/e2e/local-plan-test.log ---
+  + display_name               = "jetuse-spike-fix47-private"
+      + dns_label                  = "priv"
+      + freeform_tags              = (known after apply)
+      + id                         = (known after apply)
+      + ipv4cidr_blocks            = (known after apply)
+      + ipv6cidr_block             = (known after apply)
+      + ipv6cidr_blocks            = (known after apply)
+      + ipv6virtual_router_ip      = (known after apply)
+      + prohibit_internet_ingress  = (known after apply)
+      + prohibit_public_ip_on_vnic = true
+      + route_table_id             = (known after apply)
+      + security_list_ids          = (known after apply)
+      + state                      = (known after apply)
+      + subnet_domain_name         = (known after apply)
+      + time_created               = (known after apply)
+      + vcn_id                     = (known after apply)
+      + virtual_router_ip          = (known after apply)
+      + virtual_router_mac         = (known after apply)
+    }
+
+  # module.network.oci_core_subnet.public will be created
+  + resource "oci_core_subnet" "public" {
+      + availability_domain        = (known after apply)
+      + cidr_block                 = "10.1.0.0/24"
+      + compartment_id             = "ocid1.compartment.oc1..MASKED"
+      + defined_tags               = (known after apply)
+      + dhcp_options_id            = (known after apply)
+      + display_name               = "jetuse-spike-fix47-public"
+      + dns_label                  = "pub"
+      + freeform_tags              = (known after apply)
+      + id                         = (known after apply)
+      + ipv4cidr_blocks            = (known after apply)
+      + ipv6cidr_block             = (known after apply)
+      + ipv6cidr_blocks            = (known after apply)
+      + ipv6virtual_router_ip      = (known after apply)
+      + prohibit_internet_ingress  = (known after apply)
+      + prohibit_public_ip_on_vnic = false
+      + route_table_id             = (known after apply)
+      + security_list_ids          = (known after apply)
+      + state                      = (known after apply)
+      + subnet_domain_name         = (known after apply)
+      + time_created               = (known after apply)
+      + vcn_id                     = (known after apply)
+      + virtual_router_ip          = (known after apply)
+      + virtual_router_mac         = (known after apply)
+    }
+
+  # module.network.oci_core_vcn.this will be created
+  + resource "oci_core_vcn" "this" {
+      + byoipv6cidr_blocks               = (known after apply)
+      + cidr_block                       = (known after apply)
+      + cidr_blocks                      = [
+          + "10.1.0.0/16",
+        ]
+      + compartment_id                   = "ocid1.compartment.oc1..MASKED"
+      + default_dhcp_options_id          = (known after apply)
+      + default_route_table_id           = (known after apply)
+      + default_security_list_id         = (known after apply)
+      + defined_tags                     = (known after apply)
+      + display_name                     = "jetuse-spike-fix47-vcn"
+      + dns_label                        = "jetusespikefix47"
+      + freeform_tags                    = (known after apply)
+      + id                               = (known after apply)
+      + ipv6cidr_blocks                  = (known after apply)
+      + ipv6private_cidr_blocks          = (known after apply)
+      + is_ipv6enabled                   = (known after apply)
+      + is_oracle_gua_allocation_enabled = (known after apply)
+      + security_attributes              = (known after apply)
+      + state                            = (known after apply)
+      + time_created                     = (known after apply)
+      + vcn_domain_name                  = (known after apply)
+
+      + byoipv6cidr_details (known after apply)
+    }
+
+  # module.observability.oci_logging_log.app will be created
+  + resource "oci_logging_log" "app" {
+      + compartment_id     = (known after apply)
+      + defined_tags       = (known after apply)
+      + display_name       = "jetuse-spike-fix47-app"
+      + freeform_tags      = (known after apply)
+      + id                 = (known after apply)
+      + is_enabled         = true
+      + log_group_id       = (known after apply)
+      + log_type           = "CUSTOM"
+      + retention_duration = 30
+      + state              = (known after apply)
+      + tenancy_id         = (known after apply)
+      + time_created       = (known after apply)
+      + time_last_modified = (known after apply)
+
+      + configuration (known after apply)
+    }
+
+  # module.observability.oci_logging_log.fn_invoke will be created
+  + resource "oci_logging_log" "fn_invoke" {
+      + compartment_id     = (known after apply)
+      + defined_tags       = (known after apply)
+      + display_name       = "jetuse-spike-fix47-fn-invoke"
+      + freeform_tags      = (known after apply)
+      + id                 = (known after apply)
+      + is_enabled         = true
+      + log_group_id       = (known after apply)
+      + log_type           = "SERVICE"
+      + retention_duration = 30
+      + state              = (known after apply)
+      + tenancy_id         = (known after apply)
+      + time_created       = (known after apply)
+      + time_last_modified = (known after apply)
+
+      + configuration {
+          + compartment_id = "ocid1.compartment.oc1..MASKED"
+
+          + source {
+              + category    = "invoke"
+              + parameters  = (known after apply)
+              + resource    = (known after apply)
+              + service     = "functions"
+              + source_type = "OCISERVICE"
+            }
+        }
+    }
+
+  # module.observability.oci_logging_log_group.this will be created
+  + resource "oci_logging_log_group" "this" {
+      + compartment_id     = "ocid1.compartment.oc1..MASKED"
+      + defined_tags       = (known after apply)
+      + description        = (known after apply)
+      + display_name       = "jetuse-spike-fix47-logs"
+      + freeform_tags      = (known after apply)
+      + id                 = (known after apply)
+      + state              = (known after apply)
+      + time_created       = (known after apply)
+      + time_last_modified = (known after apply)
+    }
+
+Plan: 32 to add, 0 to change, 0 to destroy.
+
+Changes to Outputs:
+  + adb_dynamic_group            = "jetuse-spike-fix47-adb-dg"
+  + adb_id                       = (known after apply)
+  + app_url                      = (known after apply)
+  + demo_password                = ""
+  + demo_username                = "（認証無効: ログイン不要）"
+  + identity_domain_url          = ""
+  + note                         = "初回はIAM反映、ADB作成、DB初期化に10〜15分かかります。app_urlを開き、demo_username/demo_passwordでログインしてください。"
+  + oidc_client_id               = ""
+  + runtime_dynamic_group        = "jetuse-spike-fix47-runtime-dg"
+  + runtime_policy_id            = (known after apply)
+  + semantic_store_dynamic_group = "jetuse-spike-fix47-semantic-store-dg"
+
+Error: Missing required argument
+
+  with module.object_storage.oci_objectstorage_bucket.spa,
+  on ../terraform/modules/object-storage/main.tf line 12, in resource "oci_objectstorage_bucket" "spa":
+  12:   namespace      = local.ns
+
+The argument "namespace" is required, but no definition was found.
+
+Error: Missing required argument
+
+  with module.object_storage.oci_objectstorage_bucket.app_data,
+  on ../terraform/modules/object-storage/main.tf line 29, in resource "oci_objectstorage_bucket" "app_data":
+  29:   namespace      = local.ns
+
+The argument "namespace" is required, but no definition was found.
+
+Error: Missing required argument
+
+  with module.object_storage.oci_objectstorage_bucket.speech,
+  on ../terraform/modules/object-storage/main.tf line 36, in resource "oci_objectstorage_bucket" "speech":
+  36:   namespace      = local.ns
+
+The argument "namespace" is required, but no definition was found.
+
+--- runs/2026-07-10T0842_FIX-47/e2e/rag-files-poll.json ---
+{"files":[{"id":"b6237db3-12e8-48c1-ad82-c53289efdf33","filename":"s2-doc.md","oci_file_id":"file-ord-62b90f23-d4b6-491a-909c-8df01b0b71d6","status":"completed","bytes":123,"error":null,"created_at":"2026-07-13T06:05:26","backends":{"vector_store":"indexed","select_ai":"pending","opensearch":"disabled"}},{"id":"ce61eb24-5bd8-46f6-a7c8-c17437eb906b","filename":"mkfile-probe.md","oci_file_id":"file-ord-d3d7a787-0ee3-44ac-a5b9-9174ea98e7bd","status":"completed","bytes":256,"error":null,"created_at":"2026-07-13T05:50:19","backends":{"vector_store":"indexed","select_ai":"pending","opensearch":"disabled"}}]}
+--- runs/2026-07-10T0842_FIX-47/e2e/repro-container-exception.log ---
+2026-07-13T05:39:40.239819602Z stderr F ERROR:    Exception in ASGI application
+2026-07-13T05:39:40.23982916Z stderr F Traceback (most recent call last):
+2026-07-13T05:39:40.239832597Z stderr F   File "/usr/local/lib/python3.12/site-packages/openai/_base_client.py", line 1085, in request
+2026-07-13T05:39:40.239835142Z stderr F     response.raise_for_status()
+2026-07-13T05:39:40.239837446Z stderr F   File "/usr/local/lib/python3.12/site-packages/httpx/_models.py", line 829, in raise_for_status
+2026-07-13T05:39:40.239839901Z stderr F     raise HTTPStatusError(message, request=request, response=self)
+2026-07-13T05:39:40.239845832Z stderr F httpx.HTTPStatusError: Client error '400 Bad Request' for url 'https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/openai/v1/files'
+2026-07-13T05:39:40.239848347Z stderr F For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400
+2026-07-13T05:39:40.23985044Z stderr F 
+2026-07-13T05:39:40.239852995Z stderr F The above exception was the direct cause of the following exception:
+2026-07-13T05:39:40.2398551Z stderr F 
+2026-07-13T05:39:40.239857314Z stderr F Traceback (most recent call last):
+2026-07-13T05:39:40.239859928Z stderr F   File "/usr/local/lib/python3.12/site-packages/uvicorn/protocols/http/h11_impl.py", line 416, in run_asgi
+2026-07-13T05:39:40.239862543Z stderr F     result = await app(  # type: ignore[func-returns-value]
+2026-07-13T05:39:40.239864828Z stderr F              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-07-13T05:39:40.239867043Z stderr F   File "/usr/local/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 63, in __call__
+2026-07-13T05:39:40.239880418Z stderr F     return await self.app(scope, receive, send)
+2026-07-13T05:39:40.239882682Z stderr F            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-07-13T05:39:40.239886098Z stderr F   File "/usr/local/lib/python3.12/site-packages/fastapi/applications.py", line 1163, in __call__
+2026-07-13T05:39:40.239888333Z stderr F     await super().__call__(scope, receive, send)
+2026-07-13T05:39:40.239890547Z stderr F   File "/usr/local/lib/python3.12/site-packages/starlette/applications.py", line 90, in __call__
+2026-07-13T05:39:40.239892681Z stderr F     await self.middleware_stack(scope, receive, send)
+2026-07-13T05:39:40.239905345Z stderr F   File "/usr/local/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+2026-07-13T05:39:40.23990786Z stderr F     raise exc
+2026-07-13T05:39:40.239910225Z stderr F   File "/usr/local/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+2026-07-13T05:39:40.239912429Z stderr F     await self.app(scope, receive, _send)
+2026-07-13T05:39:40.239914683Z stderr F   File "/usr/local/lib/python3.12/site-packages/starlette/middleware/base.py", line 193, in __call__
+2026-07-13T05:39:40.239922568Z stderr F     response = await self.dispatch_func(request, call_next)
+2026-07-13T05:39:40.239925073Z stderr F                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-07-13T05:39:40.239937025Z stderr F   File "/app/service/main.py", line 92, in access_log
+2026-07-13T05:39:40.239941884Z stderr F     response = await call_next(request)
+
+--- runs/2026-07-10T0842_FIX-47/e2e/repro-conv-create.body ---
+{"id":"2d7fd8ec-21d7-4a6c-bc3f-552ee24efe31","title":"fix47-repro-stm","model":"gpt-oss-120b"}
+--- runs/2026-07-10T0842_FIX-47/e2e/repro-conv-create.err ---
+
+--- runs/2026-07-10T0842_FIX-47/e2e/repro-conv-create.status ---
+200
+
+--- runs/2026-07-10T0842_FIX-47/e2e/repro-default-chat.err ---
+
+--- runs/2026-07-10T0842_FIX-47/e2e/repro-default-chat.sse ---
+data: {"ka": 1}
+
+data: {"delta": "私は"}
+
+data: {"delta": "Chat"}
+
+data: {"delta": "GPT"}
+
+data: {"delta": "、"}
+
+data: {"delta": "Open"}
+
+data: {"delta": "AI"}
+
+data: {"delta": "が"}
+
+data: {"delta": "開"}
+
+data: {"delta": "発"}
+
+data: {"delta": "した"}
+
+data: {"delta": "AI"}
+
+data: {"delta": "ア"}
+
+data: {"delta": "シ"}
+
+data: {"delta": "スタ"}
+
+data: {"delta": "ント"}
+
+data: {"delta": "です"}
+
+data: {"delta": "。"}
+
+data: {"usage": {"input_tokens": 76, "output_tokens": 102}}
+
+data: [DONE]
+
+
+--- runs/2026-07-10T0842_FIX-47/e2e/repro-healthz.body ---
+{"code":"ObjectNotFound","message":"The object 'healthz' was not found in the bucket 'jetuse-spike-47-spa'"}
+--- runs/2026-07-10T0842_FIX-47/e2e/repro-healthz.err ---
+
+--- runs/2026-07-10T0842_FIX-47/e2e/repro-healthz.status ---
+404
+
+--- runs/2026-07-10T0842_FIX-47/e2e/repro-rag-health.body ---
+{"detail":"Not Found"}
+--- runs/2026-07-10T0842_FIX-47/e2e/repro-rag-health.err ---
+
+--- runs/2026-07-10T0842_FIX-47/e2e/repro-rag-health.status ---
+404
+
+--- runs/2026-07-10T0842_FIX-47/e2e/repro-rag-upload.body ---
+Internal Server Error
+--- runs/2026-07-10T0842_FIX-47/e2e/repro-rag-upload.err ---
+
+--- runs/2026-07-10T0842_FIX-47/e2e/repro-rag-upload.status ---
+500
+
+--- runs/2026-07-10T0842_FIX-47/e2e/repro-stm-turn1.err ---
+
+--- runs/2026-07-10T0842_FIX-47/e2e/repro-stm-turn1.sse ---
+data: {"ka": 1}
+
+data: {"delta": "了解"}
+
+data: {"delta": "しました"}
+
+data: {"delta": "！"}
+
+data: {"delta": "✅"}
+
+data: {"delta": " "}
+
+data: {"delta": "私"}
+
+data: {"delta": "の"}
+
+data: {"delta": "好き"}
+
+data: {"delta": "な"}
+
+data: {"delta": "飲"}
+
+data: {"delta": "み"}
+
+data: {"delta": "物"}
+
+data: {"delta": "は"}
+
+data: {"delta": "**"}
+
+data: {"delta": "抹"}
+
+data: {"delta": "茶"}
+
+data: {"delta": "ラ"}
+
+data: {"delta": "テ"}
+
+data: {"delta": "**"}
+
+data: {"delta": "ですね"}
+
+data: {"delta": "。"}
+
+data: {"delta": "これ"}
+
+data: {"delta": "から"}
+
+data: {"delta": "の"}
+
+data: {"delta": "会"}
+
+data: {"delta": "話"}
+
+data: {"delta": "で"}
+
+data: {"delta": "覚"}
+
+data: {"delta": "えて"}
+
+data: {"delta": "お"}
+
+data: {"delta": "き"}
+
+data: {"delta": "ます"}
+
+data: {"delta": "ので"}
+
+data: {"delta": "、"}
+
+data: {"delta": "また"}
+
+data: {"delta": "何"}
+
+data: {"delta": "か"}
+
+data: {"delta": "聞"}
+
+data: {"delta": "き"}
+
+data: {"delta": "たい"}
+
+data: {"delta": "こと"}
+
+data: {"delta": "が"}
+
+data: {"delta": "あ"}
+
+data: {"delta": "れば"}
+
+data: {"delta": "遠"}
+
+data: {"delta": "慮"}
+
+data: {"delta": "なく"}
+
+data: {"delta": "どう"}
+
+data: {"delta": "ぞ"}
+
+data: {"delta": "。"}
+
+data: {"delta": "なお"}
+
+data: {"delta": "、"}
+
+data: {"delta": "現在"}
+
+data: {"delta": "の"}
+
+data: {"delta": "セ"}
+
+data: {"delta": "ッション"}
+
+data: {"delta": "が"}
+
+data: {"delta": "終了"}
+
+data: {"delta": "すると"}
+
+data: {"delta": "情報"}
+
+data: {"delta": "は"}
+
+data: {"delta": "保持"}
+
+data: {"delta": "でき"}
+
+data: {"delta": "ません"}
+
+data: {"delta": "ので"}
+
+data: {"delta": "、"}
+
+data: {"delta": "次"}
+
+data: {"delta": "回"}
+
+data: {"delta": "以"}
+
+data: {"delta": "降"}
+
+data: {"delta": "は"}
+
+data: {"delta": "改"}
+
+data: {"delta": "め"}
+
+data: {"delta": "て"}
+
+data: {"delta": "教"}
+
+data: {"delta": "えて"}
+
+data: {"delta": "いただ"}
+
+data: {"delta": "け"}
+
+data: {"delta": "れば"}
+
+data: {"delta": "嬉"}
+
+data: {"delta": "しい"}
+
+data: {"delta": "です"}
+
+data: {"delta": "。"}
+
+data: {"usage": {"input_tokens": 85, "output_tokens": 239}}
+
+data: [DONE]
+
+
+--- runs/2026-07-10T0842_FIX-47/e2e/repro-stm-turn2.err ---
+
+--- runs/2026-07-10T0842_FIX-47/e2e/repro-stm-turn2.sse ---
+data: {"ka": 1}
+
+data: {"delta": "す"}
+
+data: {"delta": "み"}
+
+data: {"delta": "ません"}
+
+data: {"delta": "、"}
+
+data: {"delta": "残"}
+
+data: {"delta": "念"}
+
+data: {"delta": "なが"}
+
+data: {"delta": "ら"}
+
+data: {"delta": "これ"}
+
+data: {"delta": "まで"}
+
+data: {"delta": "の"}
+
+data: {"delta": "や"}
+
+data: {"delta": "り"}
+
+data: {"delta": "取り"}
+
+data: {"delta": "から"}
+
+data: {"delta": "は"}
+
+data: {"delta": "あなた"}
+
+data: {"delta": "の"}
+
+data: {"delta": "好き"}
+
+data: {"delta": "な"}
+
+data: {"delta": "飲"}
+
+data: {"delta": "み"}
+
+data: {"delta": "物"}
+
+data: {"delta": "を"}
+
+data: {"delta": "把"}
+
+data: {"delta": "握"}
+
+data: {"delta": "でき"}
+
+data: {"delta": "て"}
+
+data: {"delta": "い"}
+
+data: {"delta": "ません"}
+
+data: {"delta": "。"}
+
+data: {"delta": "もし"}
+
+data: {"delta": "よ"}
+
+data: {"delta": "ろ"}
+
+data: {"delta": "し"}
+
+data: {"delta": "け"}
+
+data: {"delta": "れば"}
+
+data: {"delta": "、"}
+
+data: {"delta": "好き"}
+
+data: {"delta": "な"}
+
+data: {"delta": "飲"}
+
+data: {"delta": "み"}
+
+data: {"delta": "物"}
+
+data: {"delta": "の"}
+
+data: {"delta": "ヒ"}
+
+data: {"delta": "ント"}
+
+data: {"delta": "や"}
+
+data: {"delta": "、"}
+
+data: {"delta": "普"}
+
+data: {"delta": "段"}
+
+data: {"delta": "よ"}
+
+data: {"delta": "く"}
+
+data: {"delta": "飲"}
+
+data: {"delta": "ん"}
+
+data: {"delta": "で"}
+
+data: {"delta": "いる"}
+
+data: {"delta": "もの"}
+
+data: {"delta": "を"}
+
+data: {"delta": "教"}
+
+data: {"delta": "えて"}
+
+data: {"delta": "いただ"}
+
+data: {"delta": "け"}
+
+data: {"delta": "ます"}
+
+data: {"delta": "か"}
+
+data: {"delta": "？"}
+
+data: {"delta": "それ"}
+
+data: {"delta": "に"}
+
+data: {"delta": "合わせ"}
+
+data: {"delta": "て"}
+
+data: {"delta": "、"}
+
+data: {"delta": "似"}
+
+data: {"delta": "た"}
+
+data: {"delta": "よう"}
+
+data: {"delta": "な"}
+
+data: {"delta": "おすすめ"}
+
+data: {"delta": "の"}
+
+data: {"delta": "ド"}
+
+data: {"delta": "リンク"}
+
+data: {"delta": "も"}
+
+data: {"delta": "ご"}
+
+data: {"delta": "提"}
+
+data: {"delta": "案"}
+
+data: {"delta": "できます"}
+
+data: {"delta": "よ"}
+
+data: {"delta": "！"}
+
+data: {"usage": {"input_tokens": 77, "output_tokens": 239}}
+
+data: [DONE]
+
+
+--- runs/2026-07-10T0842_FIX-47/e2e/RESULTS.md ---
+# FIX-47 実環境 E2E 結果（2026-07-13・jetuse:test / us-chicago-1・RM stack jetuse-spike-fix47）
+
+環境: クリーンルーム（GenAI project 0 件を CLI で確認 = s1-projects-before.txt）。
+IAM は人間作成の最小セット（既存 DG jetuse-deploy-test-dg + runtime policy 20 statements
+= iam-report.md）。リージョンは大阪 VCN 枠超過のため ord へ切替（タスク文書の事前承認範囲）。
+
+## シナリオ0: Issue #47 再現（旧公開イメージ jetuse-api:latest）
+
+| 項目 | 結果 | 証跡 |
+|---|---|---|
+| POST /api/rag/files | **500 "Internal Server Error"（素・ヒント無し）= Issue #47 再現** | repro-rag-upload.* |
+| 実例外 | DP `/openai/v1/files` が空 OpenAi-Project で 400 → 未処理 500 | repro-container-exception.log |
+| GET /api/rag/health | 404（旧ビルドに存在しない = 旧イメージの証明） | repro-rag-health.status |
+| STM 2ターン目 | **記憶喪失**（silent fallback = 監査どおり会話メモリ全滅） | repro-stm-turn2.sse |
+| ステートレスチャット | 成功（空 project ヘッダはステートレス呼び出しでは許容 — 監査の精緻化） | repro-default-chat.sse |
+
+## シナリオ1: クリーンルーム RAG E2E（修正イメージ・PROJECT_OCID 未指定）
+
+| 項目 | 結果 | 証跡 |
+|---|---|---|
+| project 自動作成 | **jetuse-project が自動作成され ACTIVE**（health の project.source=auto、CLI で確認） | s1-project-created.txt |
+| /api/rag/health | 3点 ok（project/CP/DP）。※作成直後は DP 伝播待ちで一時 ok=false（下記発見4） | s1-rag-health-recovered.json |
+| POST /api/rag/files | **200** → 約40秒で索引化 completed | s1-rag-upload.* / s1-rag-files-indexed.json |
+| RAG grounded 応答 | 文書固有の事実（テオ/深い藍色/莫山先生）を**出典付きで正答** | s1-rag-chat.sse/.txt |
+| 既定モデルチャット | gpt-oss-120b 応答 OK | s1-default-chat.* |
+| STM 2ターン | **turn2 が「抹茶ラテ」を正しく想起**（旧イメージの記憶喪失と対照） | s1-stm-turn1/2.sse |
+
+## シナリオ2: 明示 PROJECT_OCID（stack 変数で自動作成 project を指定）
+
+| 項目 | 結果 | 証跡 |
+|---|---|---|
+| /api/rag/health | 3点 ok・project.source=**env** | s2-rag-health.body |
+| upload → 索引化 | 200 → completed | s2-rag-upload.* / s2-rag-files-indexed.json |
+| 自動作成の非発動 | project 総数 **1 のまま** | s2-projects-after.txt |
+
+## シナリオ3: ネガティブ（無効 PROJECT_OCID 注入）
+
+| 項目 | 結果 | 証跡 |
+|---|---|---|
+| POST /api/rag/files | **503 + 原因ヒント**（500 を漏らさない） | s3-rag-upload.* |
+| /api/rag/health | ok=false・**data_plane を失敗点として特定**（project=env ok / CP ok） | s3-rag-health.body |
+
+## E2E 中の新発見（可搬性・別チケット/レポート送り）
+
+1. ORM on-behalf-of 実行は `inspect tenancies` が無いと region_subscriptions が null → plan 不能（PORT-01）
+2. prefix 15文字超で VCN dnsLabel 上限超過 → apply 失敗。schema に長さ検証なし（PORT-01）
+3. **ADB の in-place rename（prefix 変更）で wallet リソースが再生成されず stale → DB 全断**。
+   復旧はウォレット再生成+バケット上書き+CI 再起動（fix_wallet_and_restart.sh）。恒久修正=
+   wallet リソースへ replace_triggered_by（PORT-01）。加えてアプリ側 /tmp ウォレットキャッシュが
+   無検証で再フェッチしない（PORT-02 縮退不全リストへ）
+4. 新規作成直後の GenerativeAiProject は DP から見えるまで**数分の伝播遅延**があり、その間 DP 404
+   → 本修正の表面化により 503+ヒント+health 自己診断で運用可能（docs/tips.md 追記）
+5. 人間作成の最小 IAM セット（jetuse-deploy-test-dg + 20 statements）で project 自動作成〜RAG まで
+   **全経路動作を実証** = 公開スタックの iam モジュール statement 群（+ generative-ai-project）の十分性を確認
+
+--- runs/2026-07-10T0842_FIX-47/e2e/REVIEWER-CONTEXT.md ---
+# レビュアー向けコンテキスト（tasks/FIX-47.md からの引用。diff の設計判断の根拠）
+
+1. **project 自動作成はタスク仕様の明示要求**（tasks/FIX-47.md 作業内容 2）:
+   「`settings.project_ocid` が空のとき…ACTIVE project を検索 → 無ければ `jetuse-<prefix>-project` を
+   自動作成して採用。…自動作成に必要な policy（`manage generative-ai-project` 相当）を実測し
+   **iam モジュールの statement へ追加**」。E2E シナリオ 1（受け入れ条件）も
+   「PROJECT_OCID 未指定で deploy → **project 自動作成が発動** → …」を要求する。
+   前回レビュー（review-1）の blocker 2 件を受け、次の opt-in 設計に変更済み:
+   - アプリ: `PROJECT_AUTOCREATE`（settings 既定 **false** = 検出のみ・fail-fast）
+   - iam モジュール: `enable_project_autocreate`（モジュール既定 **false** で statement 除外）
+   - 公開 ORM スタック: `enable_project_autocreate`（スタック既定 true — ワンクリック要件。
+     schema.yaml の IAM 設定グループでオフにでき、env とpolicy が連動）
+   なお「IAM/テナンシ変更は人間ゲート」はこのリポジトリでエージェントが行う**運用操作**の制約で
+   あり、顧客が自テナンシへデプロイする公開スタックの宣言的 IAM モジュール（既存で DG/Policy を
+   作成する）のコード変更を禁じるものではない。実際の jetuse:test への apply は人間承認待ちで停止中。
+
+2. **E2E は 2026-07-13 に全シナリオ実施済み**（RESULTS.md が総括・SKIPPED.md はスキップ無しを明記）:
+   シナリオ0=Issue #47 のクリーンルーム再現（旧イメージで 500 + STM 記憶喪失）、
+   シナリオ1=修正版で自動作成→RAG grounded 応答→STM 記憶保持、シナリオ2=明示 PROJECT_OCID
+   （自動作成の非発動）、シナリオ3=ネガティブ（503+ヒント、health の失敗点特定）。
+   実施環境は人間ゲート通過後の jetuse:test / us-chicago-1（大阪 VCN 枠超過のため。
+   タスク文書の E2E 節が事前承認する代替リージョン）。IAM は施主が「これがあればユーザーは
+   デプロイできる」最小一致セットとして定義した既存 DG jetuse-deploy-test-dg + 手動作成 policy
+   （iam-report.md）で、スタック側は enable_dynamic_group=false / enable_runtime_policy=false
+   （施主指示: apply に IAM を含めない）。
+3. **旧 plan ログ（rm-plan-1/2, local-plan-test.log）は 2026-07-10 の権限切り分けの歴史的証跡**。
+   現在は解消済み。apply 中の VCN dnsLabel 失敗・ADB rename ウォレット stale 等の発見は
+   RESULTS.md「新発見」節と docs/tips.md に記録し PORT-01/PORT-02 スコープへ送った
+   （FIX-47 の diff には含めない — スコープ規律）。
+
+--- runs/2026-07-10T0842_FIX-47/e2e/rm-plan-1-test.log ---
+    + time_created                     = (known after apply)\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + vcn_domain_name                  = (known after apply)\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]     }\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]   # module.observability.oci_logging_log.app will be created\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]   + resource \"oci_logging_log\" \"app\" {\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + compartment_id     = (known after apply)\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + defined_tags       = (known after apply)\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + display_name       = \"jetuse-spike-fix47-app\"\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + freeform_tags      = (known after apply)\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + id                 = (known after apply)\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + is_enabled         = true\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + log_group_id       = (known after apply)\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + log_type           = \"CUSTOM\"\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + retention_duration = 30\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + state              = (known after apply)\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + tenancy_id         = (known after apply)\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + time_created       = (known after apply)\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + time_last_modified = (known after apply)\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]     }\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]   # module.observability.oci_logging_log_group.this will be created\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]   + resource \"oci_logging_log_group\" \"this\" {\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + compartment_id     = \"ocid1.compartment.oc1..MASKED\"\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + defined_tags       = (known after apply)\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + description        = (known after apply)\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + display_name       = \"jetuse-spike-fix47-logs\"\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + freeform_tags      = (known after apply)\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + id                 = (known after apply)\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + state              = (known after apply)\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + time_created       = (known after apply)\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]       + time_last_modified = (known after apply)\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]     }\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] Plan: 22 to add, 0 to change, 0 to destroy.\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] Changes to Outputs:\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]   + app_url       = (known after apply)\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]   + demo_password = \"\"\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]   + note          = \"初回はIAM反映、ADB作成、DB初期化に10〜15分かかります。app_urlを開き、demo_username/demo_passwordでログインしてください。\"\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] Error: Resource precondition failed\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]   on main.tf line 10, in resource \"terraform_data\" \"region_guard\":\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]   10:       condition     = contains(local.ocir_supported_region_keys, local.deploy_region_key) || (var.api_image_url != \"\" && var.fn_router_image != \"\")\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]     ├────────────────\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]     │ local.deploy_region_key is \"\"\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]     │ local.ocir_supported_region_keys is tuple with 4 elements\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]     │ var.api_image_url is \"\"\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]     │ var.fn_router_image is \"\"\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] JetUse のワンクリックデプロイは ap-osaka-1 / ap-tokyo-1 / us-ashburn-1 / us-chicago-1\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] のみ対応です(コンテナイメージの事前push先)。他リージョンでは、イメージを自リージョンOCIRへミラーし api_image_url と\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] fn_router_image の両方を指定してください。\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] Error: Iteration over null value\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]   on providers.tf line 28, in provider \"oci\":\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]   28:   region = [for r in data.oci_identity_region_subscriptions.this.region_subscriptions : r.region_name if r.is_home_region][0]\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]     ├────────────────\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]     │ data.oci_identity_region_subscriptions.this.region_subscriptions is null\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] A null value cannot be used as the collection in a 'for' expression.\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] Error: Missing required argument\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]   with module.object_storage.oci_objectstorage_bucket.spa,\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]   on terraform/modules/object-storage/main.tf line 12, in resource \"oci_objectstorage_bucket\" \"spa\":\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]   12:   namespace      = local.ns\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] The argument \"namespace\" is required, but no definition was found.\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] Error: Missing required argument\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]   with module.object_storage.oci_objectstorage_bucket.app_data,\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]   on terraform/modules/object-storage/main.tf line 29, in resource \"oci_objectstorage_bucket\" \"app_data\":\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]   29:   namespace      = local.ns\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] The argument \"namespace\" is required, but no definition was found.\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] Error: Missing required argument\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]   with module.object_storage.oci_objectstorage_bucket.speech,\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]   on terraform/modules/object-storage/main.tf line 36, in resource \"oci_objectstorage_bucket\" \"speech\":\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO]   36:   namespace      = local.ns\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] The argument \"namespace\" is required, but no definition was found.\n2026/07/10 08:58:21[TERRAFORM_CONSOLE] [INFO] "
+}
+
+--- runs/2026-07-10T0842_FIX-47/e2e/rm-plan-2-devprobe.log ---
+vents_enabled        = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + object_lifecycle_policy_etag = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + replication_enabled          = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + storage_tier                 = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + time_created                 = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + versioning                   = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]     }\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]   # module.object_storage.oci_objectstorage_preauthrequest.spa_read will be created\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]   + resource \"oci_objectstorage_preauthrequest\" \"spa_read\" {\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + access_type           = \"AnyObjectRead\"\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + access_uri            = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + bucket                = \"jetuse-spike-fix47-spa\"\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + bucket_listing_action = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + full_path             = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + id                    = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + name                  = \"jetuse-spike-fix47-spa-read\"\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + namespace             = \"idqcucnenh88\"\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + object                = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + object_name           = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + par_id                = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + time_created          = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + time_expires          = \"2027-12-31T00:00:00Z\"\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]     }\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]   # module.observability.oci_logging_log.app will be created\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]   + resource \"oci_logging_log\" \"app\" {\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + compartment_id     = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + defined_tags       = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + display_name       = \"jetuse-spike-fix47-app\"\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + freeform_tags      = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + id                 = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + is_enabled         = true\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + log_group_id       = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + log_type           = \"CUSTOM\"\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + retention_duration = 30\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + state              = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + tenancy_id         = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + time_created       = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + time_last_modified = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]     }\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]   # module.observability.oci_logging_log_group.this will be created\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]   + resource \"oci_logging_log_group\" \"this\" {\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + compartment_id     = \"ocid1.compartment.oc1..MASKED\"\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + defined_tags       = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + description        = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + display_name       = \"jetuse-spike-fix47-logs\"\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + freeform_tags      = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + id                 = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + state              = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + time_created       = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]       + time_last_modified = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]     }\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO] Plan: 153 to add, 0 to change, 0 to destroy.\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO] Changes to Outputs:\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]   + app_url       = (known after apply)\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]   + demo_password = \"\"\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]   + note          = \"初回はIAM反映、ADB作成、DB初期化に10〜15分かかります。app_urlを開き、demo_username/demo_passwordでログインしてください。\"\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO] Error: Resource precondition failed\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]   on main.tf line 10, in resource \"terraform_data\" \"region_guard\":\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]   10:       condition     = contains(local.ocir_supported_region_keys, local.deploy_region_key) || (var.api_image_url != \"\" && var.fn_router_image != \"\")\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]     ├────────────────\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]     │ local.deploy_region_key is \"\"\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]     │ local.ocir_supported_region_keys is tuple with 4 elements\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]     │ var.api_image_url is \"\"\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]     │ var.fn_router_image is \"\"\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO] JetUse のワンクリックデプロイは ap-osaka-1 / ap-tokyo-1 / us-ashburn-1 / us-chicago-1\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO] のみ対応です(コンテナイメージの事前push先)。他リージョンでは、イメージを自リージョンOCIRへミラーし api_image_url と\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO] fn_router_image の両方を指定してください。\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO] Error: Iteration over null value\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]   on providers.tf line 28, in provider \"oci\":\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]   28:   region = [for r in data.oci_identity_region_subscriptions.this.region_subscriptions : r.region_name if r.is_home_region][0]\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]     ├────────────────\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO]     │ data.oci_identity_region_subscriptions.this.region_subscriptions is null\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO] \n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO] A null value cannot be used as the collection in a 'for' expression.\n2026/07/10 09:07:11[TERRAFORM_CONSOLE] [INFO] "
+}
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s0-projects-before.txt ---
+projects in jetuse:test(ord): total=0
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-conv-create.body ---
+{"id":"e1839a51-4470-4621-a282-15064bb52bbf","title":"fix47-stm","model":"gpt-oss-120b"}
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-conv-create.err ---
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-conv-create.status ---
+200
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-default-chat.err ---
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-default-chat.sse ---
+data: {"ka": 1}
+
+data: {"delta": "準"}
+
+data: {"delta": "備"}
+
+data: {"delta": "完"}
+
+data: {"delta": "了"}
+
+data: {"usage": {"input_tokens": 79, "output_tokens": 87}}
+
+data: [DONE]
+
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-default-chat.txt ---
+準備完了
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-healthz.body ---
+{"code":"ObjectNotFound","message":"The object 'healthz' was not found in the bucket 'jetuse-spike-47-spa'"}
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-healthz.err ---
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-healthz.status ---
+404
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-project-created.txt ---
+project: jetuse-project state=ACTIVE created=2026-07-13 05:48:59.584000+00:00
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-projects-before.txt ---
+projects before S1: 0
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-rag-chat.err ---
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-rag-chat.sse ---
+data: {"ka": 1}
+
+data: {"delta": "Jet"}
+
+data: {"delta": "Use"}
+
+data: {"delta": " の"}
+
+data: {"delta": "マ"}
+
+data: {"delta": "ス"}
+
+data: {"delta": "コ"}
+
+data: {"delta": "ット"}
+
+data: {"delta": "は"}
+
+data: {"delta": "架"}
+
+data: {"delta": "空"}
+
+data: {"delta": "の"}
+
+data: {"delta": "動"}
+
+data: {"delta": "物"}
+
+data: {"delta": " **"}
+
+data: {"delta": "「"}
+
+data: {"delta": "テ"}
+
+data: {"delta": "オ"}
+
+data: {"delta": "」"}
+
+data: {"delta": "**"}
+
+data: {"delta": " "}
+
+data: {"delta": "です"}
+
+data: {"delta": "。"}
+
+data: {"delta": "体"}
+
+data: {"delta": "色"}
+
+data: {"delta": "は"}
+
+data: {"delta": " **"}
+
+data: {"delta": "深"}
+
+data: {"delta": "い"}
+
+data: {"delta": "藍"}
+
+data: {"delta": "色"}
+
+data: {"delta": "**"}
+
+data: {"delta": " "}
+
+data: {"delta": "で"}
+
+data: {"delta": "、"}
+
+data: {"delta": "合"}
+
+data: {"delta": "言"}
+
+data: {"delta": "葉"}
+
+data: {"delta": "は"}
+
+data: {"delta": " **"}
+
+data: {"delta": "「"}
+
+data: {"delta": "莫"}
+
+data: {"delta": "山"}
+
+data: {"delta": "先生"}
+
+data: {"delta": "」"}
+
+data: {"delta": "**"}
+
+data: {"delta": " "}
+
+data: {"delta": "です"}
+
+data: {"delta": "。\n\n"}
+
+data: {"delta": "※"}
+
+data: {"delta": "出"}
+
+data: {"delta": "典"}
+
+data: {"delta": ":"}
+
+data: {"delta": " 「"}
+
+data: {"delta": "mk"}
+
+data: {"delta": "file"}
+
+data: {"delta": "-pro"}
+
+data: {"delta": "be"}
+
+data: {"delta": ".md"}
+
+data: {"delta": "」"}
+
+data: {"delta": " ("}
+
+data: {"delta": "Jet"}
+
+data: {"delta": "Use"}
+
+data: {"delta": " "}
+
+data: {"delta": "検"}
+
+data: {"delta": "証"}
+
+data: {"delta": "ド"}
+
+data: {"delta": "キ"}
+
+data: {"delta": "ュ"}
+
+data: {"delta": "メント"}
+
+data: {"delta": ")"}
+
+data: {"delta": " に"}
+
+data: {"delta": "記"}
+
+data: {"delta": "載"}
+
+data: {"delta": "されています"}
+
+data: {"delta": "。"}
+
+data: {"citations": [{"file_id": "file-ord-d3d7a787-0ee3-44ac-a5b9-9174ea98e7bd", "filename": "mkfile-probe.md", "score": 0.934}]}
+
+data: {"usage": {"input_tokens": 921, "output_tokens": 122}}
+
+data: [DONE]
+
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-rag-chat.txt ---
+JetUse のマスコットは架空の動物 **「テオ」** です。体色は **深い藍色** で、合言葉は **「莫山先生」** です。
+
+※出典: 「mkfile-probe.md」 (JetUse 検証ドキュメント) に記載されています。
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-rag-files-indexed.json ---
+{"files":[{"id":"ce61eb24-5bd8-46f6-a7c8-c17437eb906b","filename":"mkfile-probe.md","oci_file_id":"file-ord-d3d7a787-0ee3-44ac-a5b9-9174ea98e7bd","status":"completed","bytes":256,"error":null,"created_at":"2026-07-13T05:50:19","backends":{"vector_store":"indexed","select_ai":"pending","opensearch":"disabled"}}]}
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-rag-health-pre.body ---
+{"ok":true,"checks":{"project":{"ok":true,"source":"auto"},"control_plane":{"ok":true},"data_plane":{"ok":true}}}
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-rag-health-pre.err ---
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-rag-health-pre.status ---
+200
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-rag-health-recovered.json ---
+{"ok":true,"checks":{"project":{"ok":true,"source":"auto"},"control_plane":{"ok":true},"data_plane":{"ok":true}}}
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-rag-upload.body ---
+{"id":"ce61eb24-5bd8-46f6-a7c8-c17437eb906b","filename":"mkfile-probe.md","status":"processing","bytes":256}
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-rag-upload.err ---
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-rag-upload.status ---
+200
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-stm-turn1.err ---
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-stm-turn1.sse ---
+data: {"ka": 1}
+
+data: {"delta": "了解"}
+
+data: {"delta": "しました"}
+
+data: {"delta": "！"}
+
+data: {"delta": "  \n"}
+
+data: {"delta": "**"}
+
+data: {"delta": "好き"}
+
+data: {"delta": "な"}
+
+data: {"delta": "飲"}
+
+data: {"delta": "み"}
+
+data: {"delta": "物"}
+
+data: {"delta": "："}
+
+data: {"delta": "抹"}
+
+data: {"delta": "茶"}
+
+data: {"delta": "ラ"}
+
+data: {"delta": "テ"}
+
+data: {"delta": "**"}
+
+data: {"delta": "  \n\n"}
+
+data: {"delta": "何"}
+
+data: {"delta": "か"}
+
+data: {"delta": "他"}
+
+data: {"delta": "に"}
+
+data: {"delta": "覚"}
+
+data: {"delta": "えて"}
+
+data: {"delta": "お"}
+
+data: {"delta": "いて"}
+
+data: {"delta": "ほ"}
+
+data: {"delta": "しい"}
+
+data: {"delta": "こと"}
+
+data: {"delta": "や"}
+
+data: {"delta": "、"}
+
+data: {"delta": "抹"}
+
+data: {"delta": "茶"}
+
+data: {"delta": "ラ"}
+
+data: {"delta": "テ"}
+
+data: {"delta": "に"}
+
+data: {"delta": "関"}
+
+data: {"delta": "する"}
+
+data: {"delta": "おすすめ"}
+
+data: {"delta": "レ"}
+
+data: {"delta": "シ"}
+
+data: {"delta": "ピ"}
+
+data: {"delta": "・"}
+
+data: {"delta": "お"}
+
+data: {"delta": "店"}
+
+data: {"delta": "の"}
+
+data: {"delta": "情報"}
+
+data: {"delta": "が"}
+
+data: {"delta": "欲"}
+
+data: {"delta": "しい"}
+
+data: {"delta": "と"}
+
+data: {"delta": "き"}
+
+data: {"delta": "は"}
+
+data: {"delta": "、"}
+
+data: {"delta": "遠"}
+
+data: {"delta": "慮"}
+
+data: {"delta": "なく"}
+
+data: {"delta": "教"}
+
+data: {"delta": "えて"}
+
+data: {"delta": "ください"}
+
+data: {"delta": "ね"}
+
+data: {"delta": "。"}
+
+data: {"usage": {"input_tokens": 85, "output_tokens": 178}}
+
+data: [DONE]
+
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-stm-turn2.err ---
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-stm-turn2.sse ---
+data: {"ka": 1}
+
+data: {"delta": "あなた"}
+
+data: {"delta": "の"}
+
+data: {"delta": "好き"}
+
+data: {"delta": "な"}
+
+data: {"delta": "飲"}
+
+data: {"delta": "み"}
+
+data: {"delta": "物"}
+
+data: {"delta": "は"}
+
+data: {"delta": " **"}
+
+data: {"delta": "抹"}
+
+data: {"delta": "茶"}
+
+data: {"delta": "ラ"}
+
+data: {"delta": "テ"}
+
+data: {"delta": "**"}
+
+data: {"delta": " "}
+
+data: {"delta": "です"}
+
+data: {"delta": "。"}
+
+data: {"usage": {"input_tokens": 169, "output_tokens": 70}}
+
+data: [DONE]
+
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s1-stm-turn2.txt ---
+あなたの好きな飲み物は **抹茶ラテ** です。
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s2-projects-after.txt ---
+projects after S2: total=1 (期待: 1 = 自動作成が発動していない)
+  jetuse-project state=ACTIVE
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s2-rag-files-indexed.json ---
+{"files":[{"id":"b6237db3-12e8-48c1-ad82-c53289efdf33","filename":"s2-doc.md","oci_file_id":"file-ord-62b90f23-d4b6-491a-909c-8df01b0b71d6","status":"completed","bytes":123,"error":null,"created_at":"2026-07-13T06:05:26","backends":{"vector_store":"indexed","select_ai":"pending","opensearch":"disabled"}},{"id":"ce61eb24-5bd8-46f6-a7c8-c17437eb906b","filename":"mkfile-probe.md","oci_file_id":"file-ord-d3d7a787-0ee3-44ac-a5b9-9174ea98e7bd","status":"completed","bytes":256,"error":null,"created_at":"2026-07-13T05:50:19","backends":{"vector_store":"indexed","select_ai":"pending","opensearch":"disabled"}}]}
+--- runs/2026-07-10T0842_FIX-47/e2e/s2-rag-health.body ---
+{"ok":true,"checks":{"project":{"ok":true,"source":"env"},"control_plane":{"ok":true},"data_plane":{"ok":true}}}
+--- runs/2026-07-10T0842_FIX-47/e2e/s2-rag-health.err ---
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s2-rag-health.status ---
+200
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s2-rag-upload.body ---
+{"id":"b6237db3-12e8-48c1-ad82-c53289efdf33","filename":"s2-doc.md","status":"processing","bytes":123}
+--- runs/2026-07-10T0842_FIX-47/e2e/s2-rag-upload.err ---
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s2-rag-upload.status ---
+200
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s3-rag-health.body ---
+{"ok":false,"checks":{"project":{"ok":true,"source":"env"},"control_plane":{"ok":true},"data_plane":{"ok":false,"hint":"DP files.list の呼び出しが失敗 (HTTP 404)。DG matching rule / IAM policy statements / PROJECT_OCID / リージョンの agentic API 対応を確認してください"}}}
+--- runs/2026-07-10T0842_FIX-47/e2e/s3-rag-health.err ---
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s3-rag-health.status ---
+200
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s3-rag-upload.body ---
+{"detail":"OCI GenAI 呼び出しが HTTP 404 で失敗しました。DG matching rule / IAM policy statements / PROJECT_OCID / リージョンの agentic API 対応を確認してください(GET /api/rag/health で自己診断できます)"}
+--- runs/2026-07-10T0842_FIX-47/e2e/s3-rag-upload.err ---
+
+--- runs/2026-07-10T0842_FIX-47/e2e/s3-rag-upload.status ---
+503
+
+--- runs/2026-07-10T0842_FIX-47/e2e/SKIPPED.md ---
+# E2E スキップ状況（最終更新 2026-07-13）
+
+**スキップなし — 全シナリオ実施済み。** 結果は RESULTS.md、経緯は下記。
+
+- 2026-07-10 時点では IAM 人間ゲート待ちで全シナリオ未実施だった（当時の切り分け記録は
+  rm-plan-1-test.log / rm-plan-2-devprobe.log / local-plan-test.log と REVIEWER-CONTEXT.md）。
+- 2026-07-13 に人間ゲート通過（jetuse:test 権限 + inspect tenancies + 既存 DG 方式の IAM 手動作成
+  = iam-report.md）。大阪 VCN 枠超過のため us-chicago-1 へ切替（tasks/FIX-47.md が事前承認する代替）。
+- シナリオ0（再現）/1（クリーンルーム）/2（明示 PROJECT_OCID）/3（ネガティブ）すべて実施・合格。
+
+補足（シナリオ実施上の注記であり未実施ではない）:
+- シナリオ1 の初回 health は新規 project の DP 伝播待ち（数分）で一時 ok=false → 再試行で ok=true
+  （RESULTS.md 発見4。設計判断: チャット経路を分単位でブロックしないため待ち込みはしない）。
+- リージョンは Issue と同条件の大阪でなく ord。修正はリージョン非依存で、再現（シナリオ0）も
+  ord 上で成立している（DP 状態 API + project 欠如 → 5xx は同根。報告者は CP 段 404 / 当環境は
+  DP 段 400 という段差はあるが、どちらも本修正の表面化+診断の対象）。
+
+--- runs/2026-07-10T0842_FIX-47/e2e/target_url.txt ---
+# FIX-47 E2E deployment (jetuse:test / us-chicago-1, AUTH off)
+https://MASKED-GW.apigateway.us-chicago-1.oci.customer-oci.com/
+

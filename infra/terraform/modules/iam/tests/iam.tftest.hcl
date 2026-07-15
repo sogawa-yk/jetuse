@@ -4,12 +4,13 @@ run "full_public_iam_contract" {
   command = plan
 
   variables {
-    tenancy_ocid           = "ocid1.tenancy.oc1..publiciamtest"
-    compartment_ocid       = "ocid1.compartment.oc1..publiciamtest"
-    prefix                 = "jetuse-spike-iam01"
-    enable_semantic_store  = true
-    create_deployer_policy = true
-    deployer_group_subject = "Default/JetUseDeployers"
+    tenancy_ocid              = "ocid1.tenancy.oc1..publiciamtest"
+    compartment_ocid          = "ocid1.compartment.oc1..publiciamtest"
+    prefix                    = "jetuse-spike-iam01"
+    enable_semantic_store     = true
+    enable_project_autocreate = true
+    create_deployer_policy    = true
+    deployer_group_subject    = "Default/JetUseDeployers"
   }
 
   assert {
@@ -37,13 +38,18 @@ run "full_public_iam_contract" {
   }
 
   assert {
-    condition     = length(oci_identity_policy.runtime[0].statements) == 22
-    error_message = "Full Public runtime policy must contain the reviewed 22 statements."
+    condition     = length(oci_identity_policy.runtime[0].statements) == 23
+    error_message = "Full Public runtime policy must contain the reviewed 23 statements."
   }
 
   assert {
     condition     = contains(oci_identity_policy.runtime[0].statements, "Allow dynamic-group jetuse-spike-iam01-runtime-dg to manage generative-ai-vector-store in compartment id ocid1.compartment.oc1..publiciamtest")
     error_message = "Runtime policy must allow application-managed Vector Stores."
+  }
+
+  assert {
+    condition     = contains(oci_identity_policy.runtime[0].statements, "Allow dynamic-group jetuse-spike-iam01-runtime-dg to manage generative-ai-project in compartment id ocid1.compartment.oc1..publiciamtest")
+    error_message = "Runtime policy must allow GenerativeAiProject auto-creation when enable_project_autocreate=true (FIX-47)."
   }
 
   assert {
@@ -96,6 +102,11 @@ run "minimal_without_semantic_store_or_deployer_policy" {
   assert {
     condition     = length(oci_identity_policy.runtime[0].statements) == 17
     error_message = "Minimal runtime policy must contain runtime and ADB statements only."
+  }
+
+  assert {
+    condition     = alltrue([for s in oci_identity_policy.runtime[0].statements : !strcontains(s, "generative-ai-project")])
+    error_message = "generative-ai-project must be omitted when enable_project_autocreate is default(false)."
   }
 
   assert {

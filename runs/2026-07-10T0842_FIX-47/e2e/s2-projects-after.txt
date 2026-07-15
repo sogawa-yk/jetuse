@@ -1,0 +1,2 @@
+projects after S2: total=1 (期待: 1 = 自動作成が発動していない)
+  jetuse-project state=ACTIVE

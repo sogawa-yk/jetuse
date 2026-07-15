@@ -21,10 +21,12 @@ def test_healthz():
 
 
 def test_api_health():
-    # gateway は /api/* しか CI へルートしないため、/api 配下の health が smoke の契約(SP3-07)
+    # gateway は /api/* しか CI へルートしないため、/api 配下の health が smoke の契約(SP3-07)。
+    # main→dev 同期で capability health(PORT-02)に一本化 — smoke 契約は「HTTP 200」のみ
+    # (ops/deploy-dev-app.sh も 200|401 判定)。body は機能別 readiness を返す。
     res = client.get("/api/health")
     assert res.status_code == 200
-    assert res.json() == {"status": "ok"}
+    assert set(res.json()["capabilities"]) == {"chat", "rag", "dbchat", "speech", "ocr", "tts"}
 
 
 def test_gen_proxy_mounted_with_allowlist():

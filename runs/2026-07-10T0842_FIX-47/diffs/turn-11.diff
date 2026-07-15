@@ -1,0 +1,1369 @@
+diff --git a/.env.example b/.env.example
+index bace2dd..6c395ff 100644
+--- a/.env.example
++++ b/.env.example
+@@ -6,6 +6,13 @@ OS_NAMESPACE=your-object-storage-namespace
+ # OpenAI互換エンドポイント（リージョンから導出可能だが明示）
+ GENAI_BASE_URL=https://inference.generativeai.ap-osaka-1.oci.oraclecloud.com/openai/v1
+ 
++# FIX-47: DP状態API(Files/Conversations等)の OpenAi-Project ヘッダに使う GenerativeAiProject OCID。
++# 空なら compartment 内の ACTIVE project を自動検出（project OCIDはリージョン別）。
++# PROJECT_AUTOCREATE=true なら project が無いとき自動作成する（要 manage generative-ai-project。
++# 公開ORMスタックは既定で有効。ローカル/ベア実行の既定は false=検出のみ）
++PROJECT_OCID=
++PROJECT_AUTOCREATE=false
++
+ # SPIKE-04 (ADB)
+ ADB_ADMIN_PASSWORD=
+ ADB_OCID=
+diff --git a/docs/tips.md b/docs/tips.md
+index f8a2f89..90071de 100644
+--- a/docs/tips.md
++++ b/docs/tips.md
+@@ -126,3 +126,6 @@
+ - **2026-06-18 開発者ごとのデプロイ済みE2E環境(複数人開発)**: 高価な常設リソース(ADB/Identity Domain/VCN/OCIR)は共有し、開発者ごとに分けるのはアプリ層(Container Instance+API Gateway+SPAバケット)とADB専用スキーマだけ、という構成を追加(`docs/guides/dev-environments.md`)。要点: ①既存 `environments/dev` は state移動せず正本のまま、新 `environments/app` が `terraform_remote_state`(localバックエンド, ../dev/terraform.tfstate)で共有OCIDを参照する追加のみの構成。②per-devゲートウェイは `functions_routes={}` で全 `/api` を本人CIへ流す(Functions不要)。③IAM動的グループはリソース種別+コンパートメントで照合するため、同一コンパートメントに作る限り新CIは自動で権限継承(DG/ポリシー増設不要)。④認証は既定 `AUTH_REQUIRED=false`＋専用スキーマで分離=ゲートウェイ毎のOIDCリダイレクトURI登録(人手・承認制)を回避、公開GWは `apigw_allow_cidr` でIP制限。⑤DBスキーマは `settings.adb_user`/`adb_query_user`(env `ADB_USER`/`ADB_QUERY_USER`)で可変化(datasets.py/nl2sql.py のハードコード除去)。⑥ops: `setup-dev-schema.py`(スキーマ作成+権限+migrate)/`dev-env-up.sh`(build/push→plan確認→apply→SPA配信)/`dev-env-down.sh`/`dev-env-stop.sh`(CI停止で課金停止)。注意: イメージ更新=CI再作成=GW再デプロイのためタグは不変shaを固定。共有devは出力追加分を反映するため一度apply(リソース変更0)が必要。
+ - **2026-06-18 agent.framework のレガシー値が実機DBに残存・移行が必要(refactoring P0.6/ADR-0010)**: 入力(API)は現行Literal(`openai_agents`/`adk`/`langgraph`/`select_ai`)のみ受理しレガシー値を422で拒否するが、**DB側には旧値が実在**した。dev ADB(JETUSE_APP)の `SELECT framework,COUNT(*) FROM agents GROUP BY framework` 実測で `agents_sdk`:2 / `native`:2(`010_agent_framework.sql` の `DEFAULT 'native'` 由来)が残存。移行 `012_normalize_framework.sql`(`UPDATE agents SET framework='openai_agents' WHERE framework IN ('native','agents_sdk','hosted')`・冪等)で canonical 化(適用後 openai_agents:8/adk:1/select_ai:1)。read-time `hosted_agent.normalize_sdk()`/`_LEGACY_SDK` は現役の正本で**削除対象外**(P0.7のin-processエンジン削除とは別物)。
+ - **2026-06-18 dev ADBへ手動でSQL/マイグレーションを流す接続レシピ**: `.env` のキー(`ADB_APP_PASSWORD`/`ADB_ADMIN_PASSWORD`/`ADB_QUERY_PASSWORD`)は pydantic `Settings`(env名=フィールド名大文字、別名なし `extra=ignore`)の `adb_password`/`adb_dsn` 等に**直接はマップされない**。手動接続は oracledb で `user='JETUSE_APP', password=ENV['ADB_APP_PASSWORD'], dsn='jetusedev_low', config_dir=/tmp/jetusedev_wallet, wallet_location=同, wallet_password=tfvars(ADB_WALLET_PASSWORD)`。スキーマ横断調査は ADMIN(`ADB_ADMIN_PASSWORD`)で `all_tables`/`<owner>.agents` を参照。`migrate.migrate()` をスクリプトから呼ぶ場合は `os.environ['ADB_USER'/'ADB_PASSWORD'/'ADB_DSN'/'ADB_WALLET_DIR'/'ADB_WALLET_PASSWORD']` を設定してから import すると settings が拾う。ADB夜間停止のため作業前に `bash ops/start-adb-if-stopped.sh`(AVAILABLE化に数分)。
++- **2026-07-13 新規作成直後の GenerativeAiProject は DP から数分見えない(FIX-47 E2E)**: CP で ACTIVE になっても、その OCID を `OpenAi-Project` に載せた DP 呼び出し(files.list 等)は数分間 404 を返す(実測 2〜3分。vector store の CP→DP 伝播と同パターン)。クリーンルーム初回リクエストは project 自動作成→即 DP 呼び出しでこの窓に当たる → 一時的な 503(ヒント付き)は仕様として許容し、`GET /api/rag/health` が ok になってから再試行が正。伝播をコードで待ち込むとチャット経路が分単位でブロックされるため採用しない。
++- **2026-07-13 ADB を prefix 変更で in-place rename すると wallet が stale になり DB 全断(FIX-47 E2E)**: `oci_database_autonomous_database` の db_name 変更は置換でなく in-place 更新で、tnsnames のサービス名(`<dbname>_low`)は変わるのに `oci_database_autonomous_database_wallet` は `autonomous_database_id` 不変のため再生成されない → 旧サービス名のウォレットがバケットに配置され `DPY-4000` で接続不能。復旧=Database API でウォレット再生成→バケット上書き→CI 再起動。恒久修正は wallet リソースに `lifecycle.replace_triggered_by = [db_name]`(PORT-01)。またアプリの `/tmp/adb_wallet` キャッシュは tnsnames 不整合を検知せず再フェッチしないため、復旧には CI 再起動が必須(PORT-02)。
++- **2026-07-13 ORM の on-behalf-of 実行はテナンシレベル読取に明示 policy が要る(FIX-47 E2E)**: `data.oci_identity_region_subscriptions` は直接 CLI(ユーザー認証)では暗黙に読めるが、RM ジョブの OBO トークンでは `inspect tenancies in tenancy` が無いと **エラーでなく null** を返し、home リージョン導出(providers.tf)と deploy_region_key(Issue #55)が `Iteration over null value` / region_guard 失敗で plan 不能になる。deployer policy には既に `inspect tenancies` が含まれるが、含まないグループの実行では再現する。切り分け: ローカル plan は通るのに RM だけ落ちたらこれ(PORT-01)。あわせて prefix は15文字以内でないと VCN dnsLabel 上限(15)で apply が落ちる(schema.yaml に長さ検証なし — PORT-01)。
+diff --git a/docs/verification/fix47-clean-room-e2e.md b/docs/verification/fix47-clean-room-e2e.md
+new file mode 100644
+index 0000000..eb93623
+--- /dev/null
++++ b/docs/verification/fix47-clean-room-e2e.md
+@@ -0,0 +1,83 @@
++# FIX-47 クリーンルーム E2E 検証レポート（Issue #47: RAG アップロード 500）
++
++- 日付: 2026-07-10 起草 / **2026-07-13 E2E 完了**
++- 対象: 公開 ORM スタック（infra/orm + OCIR 公開イメージ）の別テナンシ可搬性
++- 環境: jetuse:test（GenAI project ゼロのクリーンルーム）/ RM スタック `jetuse-spike-fix47`
++  （us-chicago-1 — 大阪 VCN 枠超過のため切替・修正はリージョン非依存）/ IAM は人間作成の
++  最小セット（既存 DG `jetuse-deploy-test-dg` + runtime policy 20 statements。「これがあれば
++  ユーザーはデプロイできる」想定の一致セット — 施主定義）
++- 結論: **Issue #47 をクリーンルームで再現し、修正版で根治を実証**（E2E 4シナリオ合格）
++
++## 1. 事象と根本原因
++
++Issue #47 は「別テナンシの RM デプロイで `POST /api/rag/files` が HTTP 500」。
++コード監査と実機プローブで確定した環境依存は 3 点:
++
++1. **PROJECT_OCID 未配線（CRITICAL）**: DP 状態 API（Files / Vector Store files / Conversations /
++   Responses）は `OpenAi-Project` ヘッダに GenerativeAiProject OCID が必須（specs/00 未文書仕様）なのに、
++   infra/orm はこれを注入せず、アプリは**空ヘッダ**を送っていた。自環境は手動作成した project +
++   `.env` でしか動いていなかった。影響半径は RAG だけでなく**既定チャット（gpt-oss-120b =
++   responses 系）と会話メモリも全滅**（chat.py:540 / chat.py:65,73）。
++2. **IAM 最小権限セット未実証（HIGH）**: 自環境 RP は `manage all-resources` で動いており、
++   iam モジュールの絞った statement 群が agentic API に十分かは未実証だった。
++3. **エラーの表面化不足**: CP/DP の 4xx が rag ルートで未処理のまま 500 になり、現場で切り分け不能。
++
++## 2. 修正内容
++
++| 領域 | 変更 |
++|---|---|
++| packages/api/jetuse_core/genai.py | `resolve_project_ocid()` 新設: 設定 > プロセス内キャッシュ > compartment 内 ACTIVE project 検索（全ページ走査）> 自動作成（`jetuse-project`。**PROJECT_AUTOCREATE=true のときのみ** — ベアランタイム既定は検出のみ。作成後 ACTIVE 未達なら raise しキャッシュしない）の順で解決。解決不能なら `ProjectResolutionError`（actionable メッセージ）で即時 raise し、**空の OpenAi-Project ヘッダを送らない** |
++| packages/api/jetuse_core/rag.py | `health_check()` 新設: ①project 解決 ②CP `vector_stores.list` ③DP `files.list`（OpenAi-Project 付き）の 3 点検査を構造化して返す |
++| packages/api/service/routes/rag.py | `GET /api/rag/health` 追加。rag ルート全経路で CP/DP 由来の 401/403/404→503、その他 4xx/5xx→502 に変換（DG matching rule / policy / PROJECT_OCID / リージョン対応を確認せよのヒント付き。OCID 実値は返さない） |
++| infra/terraform/modules/iam | `enable_project_autocreate`（モジュール既定 false = opt-in）で runtime policy に `manage generative-ai-project` を追加（自動作成の create/get に必要） |
++| infra/orm | `variable "project_ocid"`（既定 ""）+ `variable "enable_project_autocreate"`（**スタック既定 true** — ワンクリックの無手動セットアップ要件）+ schema.yaml 項目 + `api_environment.PROJECT_OCID / PROJECT_AUTOCREATE` を配線。schema version 20260710 |
++| .env.example | PROJECT_OCID 追記 |
++
++ユニットテスト 14 件追加（project 解決の分岐・エラー変換・health 3 点検査）。
++`pytest packages/api/tests` 261 件全緑 / ruff クリーン / `terraform validate` 成功 /
++iam モジュール `terraform test` 6 run 全緑。
++
++## 3. クリーンルーム再現（2026-07-13 実施・再現成功）
++
++旧公開イメージ（`jetuse-api:latest`）+ project ゼロの jetuse:test で:
++
++- `POST /api/rag/files` → **素の 500 "Internal Server Error"（Issue #47 再現）**。実例外は
++  DP `/openai/v1/files` が空 OpenAi-Project ヘッダで **400** → 未処理のまま 500
++  （報告者環境は CP 段の 404 と段差はあるが、「状態系 API + project 欠如 → 未処理 5xx」は同根）。
++- **会話メモリ（STM）も全滅を実証**: 2ターン目が直前の発話内容を想起できない
++  （OCI Conversation 作成失敗 → stateless への silent fallback）。
++- 監査の精緻化: **ステートレスチャットは空 project ヘッダでも成功**する（全滅は状態系に限定）。
++
++## 4. E2E 結果（2026-07-13 完了 — 全シナリオ合格。証跡: runs/2026-07-10T0842_FIX-47/e2e/RESULTS.md）
++
++- [x] シナリオ0: Issue #47 再現（上記 §3）
++- [x] シナリオ1: クリーンルーム RAG E2E — **project 自動作成（jetuse-project）発動** → upload 200 →
++      約40秒で索引化 → **file_search grounded 応答（出典付き正答）** + 既定モデルチャット +
++      **STM 2ターン記憶保持**
++- [x] シナリオ2: 明示 PROJECT_OCID — health 3点 ok（source=env）・upload/索引化成功・
++      **自動作成の非発動**（project 総数 1 のまま）
++- [x] シナリオ3: ネガティブ（無効 PROJECT_OCID）— upload が **503 + 原因ヒント**（500 を漏らさない）・
++      `/api/rag/health` が **data_plane を失敗点として特定**
++
++## 5. 最小 IAM セットの実証（Issue #47 の最有力容疑への回答）
++
++人間作成の最小セット = 既存 DG `jetuse-deploy-test-dg`（matching rule: jetuse:test の
++computecontainerinstance / fnfunc / autonomousdatabase / generativeaisemanticstore）+
++runtime policy **20 statements**（3 DG 構成を単一 DG に畳んで distinct。全文は
++runs/2026-07-10T0842_FIX-47/iam-report.md）+ テナンシの namespace 読取 1 文。
++この構成で project 自動作成〜RAG 全経路の動作を実証 = **iam モジュールの絞った statement 群
++（+ 新規 manage generative-ai-project）は agentic API に十分**。
++→ 報告者の 404 は「DG matching rule がデプロイ先リソースを包含していない」または
++「statements の不足/対象 compartment 不一致」が濃厚で、`/api/rag/health` で自己診断可能になった。
++
++## 6. E2E 中の新発見（後続チケットへ）
++
++1. **ORM on-behalf-of は `inspect tenancies` 必須**（region_subscriptions が null → plan 不能。
++   制限 deployer に効く Issue #55 由来の可搬性ギャップ）→ PORT-01
++2. **prefix 15文字超で VCN dnsLabel 上限超過**（schema に長さ検証なし）→ PORT-01
++3. **ADB in-place rename で wallet リソースが stale のまま** → 新 tnsnames と不整合で DB 全断。
++   恒久修正 = wallet リソースに `replace_triggered_by`（db_name）→ PORT-01。
++   アプリ側 /tmp ウォレットキャッシュの無検証も縮退不全 → PORT-02
++4. **新規 GenerativeAiProject の DP 伝播に数分**かかる（その間 DP 404）。本修正の表面化により
++   503+ヒント+health で運用可能（docs/tips.md 追記）
++5. 大阪 VCN 枠超過（テナンシ実態）→ 対応4リージョン内の代替（ord）で回避可を実証
+diff --git a/infra/orm/locals.tf b/infra/orm/locals.tf
+index a0fe7ef..34454ce 100644
+--- a/infra/orm/locals.tf
++++ b/infra/orm/locals.tf
+@@ -29,10 +29,13 @@ locals {
+   api_environment = {
+     OCI_REGION       = var.region
+     COMPARTMENT_OCID = var.compartment_ocid
+-    AUTH_MODE        = "resource_principal"
+-    AUTH_REQUIRED    = var.enable_auth ? "true" : "false"
+-    OIDC_ISSUER      = var.enable_auth ? "https://identity.oraclecloud.com/" : ""
+-    OIDC_JWKS_URL    = var.enable_auth ? "${local.domain_url}/admin/v1/SigningCert/jwk" : ""
++    # 空ならアプリが自動解決(FIX-47)。genai.py resolve_project_ocid 参照。
++    PROJECT_OCID       = var.project_ocid
++    PROJECT_AUTOCREATE = var.enable_project_autocreate ? "true" : "false"
++    AUTH_MODE          = "resource_principal"
++    AUTH_REQUIRED      = var.enable_auth ? "true" : "false"
++    OIDC_ISSUER        = var.enable_auth ? "https://identity.oraclecloud.com/" : ""
++    OIDC_JWKS_URL      = var.enable_auth ? "${local.domain_url}/admin/v1/SigningCert/jwk" : ""
+     # Select AI は ADB のリソースプリンシパル資格情報を使う(bootstrapがENABLE_RESOURCE_PRINCIPAL)
+     SELECT_AI_CREDENTIAL = "OCI$RESOURCE_PRINCIPAL"
+     # DB自己ブートストラップ(entrypoint.sh → jetuse_core.bootstrap)
+diff --git a/infra/orm/main.tf b/infra/orm/main.tf
+index 10a71ca..59be395 100644
+--- a/infra/orm/main.tf
++++ b/infra/orm/main.tf
+@@ -61,13 +61,14 @@ module "iam" {
+   source    = "../terraform/modules/iam"
+   providers = { oci = oci.home }
+ 
+-  tenancy_ocid           = var.tenancy_ocid
+-  compartment_ocid       = var.compartment_ocid
+-  prefix                 = var.prefix
+-  enable_dynamic_group   = var.enable_dynamic_group
+-  enable_runtime_policy  = var.enable_runtime_policy
+-  enable_semantic_store  = var.enable_semantic_store
+-  create_deployer_policy = false
++  tenancy_ocid              = var.tenancy_ocid
++  compartment_ocid          = var.compartment_ocid
++  prefix                    = var.prefix
++  enable_dynamic_group      = var.enable_dynamic_group
++  enable_runtime_policy     = var.enable_runtime_policy
++  enable_semantic_store     = var.enable_semantic_store
++  enable_project_autocreate = var.enable_project_autocreate
++  create_deployer_policy    = false
+ 
+   existing_dynamic_group = var.existing_dynamic_group
+ }
+diff --git a/infra/orm/schema.yaml b/infra/orm/schema.yaml
+index 22d85a9..9766801 100644
+--- a/infra/orm/schema.yaml
++++ b/infra/orm/schema.yaml
+@@ -5,7 +5,7 @@ description: >-
+   実行ユーザーの権限や既存IAMに応じて、Dynamic GroupとPolicyの作成範囲を選択できます。
+   デプロイ後、出力の app_url を開き demo ユーザーでログインしてください。
+ schemaVersion: 1.1.0
+-version: "20260706"
++version: "20260710"
+ 
+ logoUrl: ""
+ 
+@@ -27,8 +27,10 @@ variableGroups:
+       - existing_dynamic_group
+       - enable_runtime_policy
+       - enable_semantic_store
++      - enable_project_autocreate
+   - title: "オプション（詳細）"
+     variables:
++      - project_ocid
+       - enable_opensearch
+       - rate_limit_rps
+       - ocir_namespace
+@@ -100,6 +102,18 @@ variables:
+     description: "空欄なら自動生成します（出力に表示）。12〜30文字・英大小+数字"
+     required: false
+ 
++  project_ocid:
++    type: string
++    title: "GenerativeAI Project OCID（任意）"
++    description: "RAG・会話メモリが使う GenerativeAiProject。空欄なら既存のACTIVEなprojectを自動検出し、無ければ自動作成します（自動作成は下のIAM設定でオフにできます）"
++    required: false
++
++  enable_project_autocreate:
++    type: boolean
++    title: "GenerativeAI Projectの自動作成を許可"
++    description: "RAG・会話メモリに必須のGenerativeAiProjectが無い場合にアプリが自動作成します（IAMに manage generative-ai-project を含めます）。オフの場合は Project OCID の明示指定を推奨"
++    default: true
++
+   enable_opensearch:
+     type: boolean
+     title: "OpenSearch RAG を有効化"
+diff --git a/infra/orm/variables.tf b/infra/orm/variables.tf
+index 5233f7f..7ed3a25 100644
+--- a/infra/orm/variables.tf
++++ b/infra/orm/variables.tf
+@@ -93,6 +93,24 @@ variable "image_repo_prefix" {
+   default     = "jetuse"
+ }
+ 
++# FIX-47: DP 状態API(Files / Vector Store files / Conversations)は OpenAi-Project ヘッダに
++# GenerativeAiProject OCID が必須。空ならアプリが compartment 内の ACTIVE project を自動検出し、
++# 無ければ自動作成する(GenerativeAiProject は TF provider 未対応のためアプリ側で解決)。
++variable "project_ocid" {
++  description = "GenerativeAI Project OCID(空なら自動検出/自動作成)"
++  type        = string
++  default     = ""
++}
++
++# 自動作成の opt-in(既定 on — ワンクリックの無手動セットアップを成立させる)。
++# off にする場合は project_ocid の明示指定が実質必須。IAM の
++# 'manage generative-ai-project' もこのフラグと連動する。
++variable "enable_project_autocreate" {
++  description = "GenerativeAI Project の自動作成を許可(IAM policy 'manage generative-ai-project' を含む)"
++  type        = bool
++  default     = true
++}
++
+ # 明示指定時は合成より優先(空なら ocir_* / image_repo_prefix から合成)。
+ variable "api_image_url" {
+   type    = string
+diff --git a/infra/terraform/modules/iam/main.tf b/infra/terraform/modules/iam/main.tf
+index 72fc07a..a6b2a78 100644
+--- a/infra/terraform/modules/iam/main.tf
++++ b/infra/terraform/modules/iam/main.tf
+@@ -66,6 +66,13 @@ locals {
+     "Allow any-user to use functions-family in compartment id ${var.compartment_ocid} where ALL {request.principal.type = 'ApiGateway', request.resource.compartment.id = '${var.compartment_ocid}'}",
+   ]
+ 
++  # DP 状態API(Files/Conversations等)必須の OpenAi-Project を自動解決するため、
++  # GenerativeAiProject の検索と自動作成をアプリに許可する(FIX-47 / Issue #47)。
++  # opt-in: PROJECT_OCID を明示配線する運用では不要なので既定では付与しない。
++  project_autocreate_statements = var.enable_project_autocreate ? [
++    "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage generative-ai-project in compartment id ${var.compartment_ocid}",
++  ] : []
++
+   adb_statements = [
+     # DBMS_CLOUD_AI / Select AI が ADB の resource principal で推論・RAGを行う。
+     "Allow dynamic-group ${local.adb_dynamic_group_name} to use generative-ai-family in compartment id ${var.compartment_ocid}",
+@@ -90,6 +97,7 @@ resource "oci_identity_policy" "runtime" {
+   # 単一の既存DGを参照する場合、責務間で同一になる文をまとめる。
+   statements = distinct(concat(
+     local.runtime_statements,
++    local.project_autocreate_statements,
+     local.adb_statements,
+     local.semantic_store_statements,
+   ))
+diff --git a/infra/terraform/modules/iam/tests/iam.tftest.hcl b/infra/terraform/modules/iam/tests/iam.tftest.hcl
+index 7fb7010..7a3f6e4 100644
+--- a/infra/terraform/modules/iam/tests/iam.tftest.hcl
++++ b/infra/terraform/modules/iam/tests/iam.tftest.hcl
+@@ -4,12 +4,13 @@ run "full_public_iam_contract" {
+   command = plan
+ 
+   variables {
+-    tenancy_ocid           = "ocid1.tenancy.oc1..publiciamtest"
+-    compartment_ocid       = "ocid1.compartment.oc1..publiciamtest"
+-    prefix                 = "jetuse-spike-iam01"
+-    enable_semantic_store  = true
+-    create_deployer_policy = true
+-    deployer_group_subject = "Default/JetUseDeployers"
++    tenancy_ocid              = "ocid1.tenancy.oc1..publiciamtest"
++    compartment_ocid          = "ocid1.compartment.oc1..publiciamtest"
++    prefix                    = "jetuse-spike-iam01"
++    enable_semantic_store     = true
++    enable_project_autocreate = true
++    create_deployer_policy    = true
++    deployer_group_subject    = "Default/JetUseDeployers"
+   }
+ 
+   assert {
+@@ -37,8 +38,8 @@ run "full_public_iam_contract" {
+   }
+ 
+   assert {
+-    condition     = length(oci_identity_policy.runtime[0].statements) == 22
+-    error_message = "Full Public runtime policy must contain the reviewed 22 statements."
++    condition     = length(oci_identity_policy.runtime[0].statements) == 23
++    error_message = "Full Public runtime policy must contain the reviewed 23 statements."
+   }
+ 
+   assert {
+@@ -46,6 +47,11 @@ run "full_public_iam_contract" {
+     error_message = "Runtime policy must allow application-managed Vector Stores."
+   }
+ 
++  assert {
++    condition     = contains(oci_identity_policy.runtime[0].statements, "Allow dynamic-group jetuse-spike-iam01-runtime-dg to manage generative-ai-project in compartment id ocid1.compartment.oc1..publiciamtest")
++    error_message = "Runtime policy must allow GenerativeAiProject auto-creation when enable_project_autocreate=true (FIX-47)."
++  }
++
+   assert {
+     condition     = contains(oci_identity_policy.runtime[0].statements, "Allow dynamic-group jetuse-spike-iam01-runtime-dg to manage ai-service-speech-family in compartment id ocid1.compartment.oc1..publiciamtest")
+     error_message = "Runtime policy must allow Speech jobs and TTS."
+@@ -98,6 +104,11 @@ run "minimal_without_semantic_store_or_deployer_policy" {
+     error_message = "Minimal runtime policy must contain runtime and ADB statements only."
+   }
+ 
++  assert {
++    condition     = alltrue([for s in oci_identity_policy.runtime[0].statements : !strcontains(s, "generative-ai-project")])
++    error_message = "generative-ai-project must be omitted when enable_project_autocreate is default(false)."
++  }
++
+   assert {
+     condition     = length(oci_identity_policy.deployer) == 0
+     error_message = "Deployer policy must be omitted when disabled."
+diff --git a/infra/terraform/modules/iam/variables.tf b/infra/terraform/modules/iam/variables.tf
+index d4bd123..950d4b5 100644
+--- a/infra/terraform/modules/iam/variables.tf
++++ b/infra/terraform/modules/iam/variables.tf
+@@ -25,6 +25,12 @@ variable "enable_runtime_policy" {
+   default     = true
+ }
+ 
++variable "enable_project_autocreate" {
++  description = "Allow the runtime to discover and auto-create the GenerativeAiProject required by the OpenAi-Project header (adds 'manage generative-ai-project'). Off by default; the public ORM stack enables it together with PROJECT_AUTOCREATE (FIX-47)."
++  type        = bool
++  default     = false
++}
++
+ variable "enable_semantic_store" {
+   description = "Create the dynamic group and policies required by OCI Generative AI semantic stores (SQL Search)."
+   type        = bool
+diff --git a/packages/api/jetuse_core/genai.py b/packages/api/jetuse_core/genai.py
+index e76b8f4..512f22e 100644
+--- a/packages/api/jetuse_core/genai.py
++++ b/packages/api/jetuse_core/genai.py
+@@ -8,7 +8,10 @@ specs/00 の未文書仕様に対応:
+ CI/Functions上ではリソースプリンシパルに切り替える(INFRA-01 apply後に実装 — TODO)。
+ """
+ 
++import logging
+ import os
++import threading
++import time
+ 
+ import httpx
+ from oci_genai_auth import OciResourcePrincipalAuth, OciUserPrincipalAuth
+@@ -16,6 +19,8 @@ from openai import OpenAI
+ 
+ from .settings import Settings, get_settings
+ 
++logger = logging.getLogger("jetuse.genai")
++
+ 
+ def _signer():
+     # CI/Functions上は AUTH_MODE=resource_principal を環境変数で指定(specs/07)
+@@ -24,6 +29,115 @@ def _signer():
+     return OciUserPrincipalAuth()
+ 
+ 
++# --- GenerativeAiProject 解決(FIX-47 / Issue #47) ---
++# DP 状態API(Files / Vector Store files / Conversations / Responses)は OpenAi-Project ヘッダ必須
++# (specs/00 未文書仕様)。未設定のまま空ヘッダを送ると別テナンシで必ず落ちるため、
++# 設定 > プロセス内キャッシュ > compartment内ACTIVE検索 > 自動作成 の順に解決し、
++# 解決不能なら actionable なメッセージで即時 raise する(空ヘッダは送らない)。
++
++
++class ProjectResolutionError(Exception):
++    """OpenAi-Project に入れる GenerativeAiProject OCID が解決できない。"""
++
++
++_ACTIONABLE = (
++    "GenerativeAI project を解決できません(RAG / Responses / 会話メモリに必須)。"
++    "スタック変数または環境変数 PROJECT_OCID を設定するか、PROJECT_AUTOCREATE=true と "
++    "'manage generative-ai-project' の IAM policy で自動作成を許可してください"
++    "(DG matching rule / リージョンの agentic API 対応も確認)"
++)
++
++_project_lock = threading.Lock()
++_project_cache: str | None = None
++
++
++def _reset_project_cache() -> None:
++    global _project_cache
++    _project_cache = None
++
++
++def _sdk_client(settings: Settings):
++    """GenerativeAiClient(CP)。project は推論リージョンと同一リージョンに置く
++    (project OCID はリージョン別 — docs/tips.md)。"""
++    import oci
++
++    if os.environ.get("AUTH_MODE") == "resource_principal":
++        signer = oci.auth.signers.get_resource_principals_signer()
++        return oci.generative_ai.GenerativeAiClient(
++            {"region": settings.oci_region}, signer=signer
++        )
++    config = oci.config.from_file()
++    config["region"] = settings.oci_region
++    return oci.generative_ai.GenerativeAiClient(config)
++
++
++def _create_project(client, settings: Settings) -> str:
++    """project を自動作成し ACTIVE を有界待ち。非 ACTIVE のまま返すと OpenAi-Project が
++    404 になるため、ACTIVE に達しなければ raise(キャッシュもしない — REV-001 major#2)。"""
++    import oci
++
++    details = oci.generative_ai.models.CreateGenerativeAiProjectDetails(
++        compartment_id=settings.compartment_ocid,
++        display_name="jetuse-project",
++        description="auto-created by JetUse (FIX-47)",
++    )
++    created = client.create_generative_ai_project(details).data
++    for _ in range(15):
++        state = getattr(created, "lifecycle_state", "")
++        if state == "ACTIVE":
++            logger.info("generative-ai project auto-created")
++            return created.id
++        if state in ("FAILED", "DELETING", "DELETED"):
++            break
++        time.sleep(2)
++        created = client.get_generative_ai_project(created.id).data
++    raise ProjectResolutionError(
++        _ACTIONABLE + f" (cause: auto-created project stuck in "
++        f"{getattr(created, 'lifecycle_state', '?')})"
++    )
++
++
++def resolve_project_ocid(settings: Settings | None = None) -> str:
++    """OpenAi-Project 用 project OCID を返す。
++
++    設定 > キャッシュ > compartment内ACTIVE検索 > 自動作成(PROJECT_AUTOCREATE=true のときのみ。
++    公開 ORM スタックが policy とセットで有効化する — ベアランタイム既定は検出のみ)。
++    """
++    global _project_cache
++    settings = settings or get_settings()
++    if settings.project_ocid:
++        return settings.project_ocid
++    if _project_cache:
++        return _project_cache
++    with _project_lock:
++        if _project_cache:
++            return _project_cache
++        try:
++            import oci
++
++            client = _sdk_client(settings)
++            # 全ページ取得(1ページ目に ACTIVE が無いだけで新規作成しない — REV-001 major#1)
++            items = oci.pagination.list_call_get_all_results(
++                client.list_generative_ai_projects, settings.compartment_ocid
++            ).data
++            resolved = next((p.id for p in items if p.lifecycle_state == "ACTIVE"), None)
++            if not resolved:
++                if not settings.project_autocreate:
++                    raise ProjectResolutionError(
++                        _ACTIONABLE + " (cause: no ACTIVE project and autocreate disabled)"
++                    )
++                resolved = _create_project(client, settings)
++        except ProjectResolutionError:
++            raise
++        except Exception as e:
++            status = getattr(e, "status", None)
++            code = getattr(e, "code", None) or type(e).__name__
++            suffix = f" (cause: {code}{f' HTTP {status}' if status else ''})"
++            raise ProjectResolutionError(_ACTIONABLE + suffix) from e
++        _project_cache = resolved
++        return resolved
++
++
+ def make_inference_client(
+     settings: Settings | None = None,
+     *,
+@@ -43,7 +157,8 @@ def make_inference_client(
+         "opc-compartment-id": settings.compartment_ocid,
+     }
+     if with_project:
+-        headers["OpenAi-Project"] = project_ocid or settings.project_ocid
++        # 解決不能なら ProjectResolutionError(空の OpenAi-Project は送らない — FIX-47)
++        headers["OpenAi-Project"] = project_ocid or resolve_project_ocid(settings)
+     return OpenAI(
+         api_key="OCI",  # ダミー。実認証はhttpxのIAM署名
+         base_url=settings.inference_base_url,
+diff --git a/packages/api/jetuse_core/rag.py b/packages/api/jetuse_core/rag.py
+index 04656ae..07c0a63 100644
+--- a/packages/api/jetuse_core/rag.py
++++ b/packages/api/jetuse_core/rag.py
+@@ -16,7 +16,7 @@ import oracledb
+ from openai import NotFoundError
+ 
+ from .db import connect
+-from .genai import make_cp_client, make_inference_client
++from .genai import make_cp_client, make_inference_client, resolve_project_ocid
+ from .settings import get_settings
+ 
+ logger = logging.getLogger("jetuse.rag")
+@@ -161,6 +161,51 @@ def _delete_original(owner: str, file_id: str, filename: str) -> None:
+         logger.exception("rag original delete failed (ignored)")
+ 
+ 
++# --- プリフライト診断(FIX-47) ---
++
++
++def _check_hint(e: Exception, what: str) -> str:
++    """失敗ヒント。レスポンスbody(OCID等を含みうる)は載せずステータスと確認箇所だけ返す。"""
++    code = getattr(e, "status_code", None)
++    base = f"{what} の呼び出しが失敗"
++    if code:
++        base += f" (HTTP {code})"
++    return (base + "。DG matching rule / IAM policy statements / PROJECT_OCID / "
++            "リージョンの agentic API 対応を確認してください")
++
++
++def health_check() -> dict[str, Any]:
++    """RAG 経路の3点検査: ①project解決 ②CP vector_stores.list ③DP files.list(OpenAi-Project付き)。
++
++    Issue #47 の報告者が「どこで落ちているか」を自己診断できる粒度で返す(認可済み前提)。
++    """
++    checks: dict[str, dict[str, Any]] = {}
++    project: str | None = None
++    try:
++        project = resolve_project_ocid()
++        checks["project"] = {
++            "ok": True, "source": "env" if get_settings().project_ocid else "auto",
++        }
++    except Exception as e:  # noqa: BLE001 - 診断エンドポイント。落とさず構造化して返す
++        checks["project"] = {"ok": False, "hint": str(e)}
++    try:
++        make_cp_client().vector_stores.list()
++        checks["control_plane"] = {"ok": True}
++    except Exception as e:  # noqa: BLE001
++        checks["control_plane"] = {"ok": False,
++                                   "hint": _check_hint(e, "CP vector_stores.list")}
++    if project:
++        try:
++            make_inference_client(with_project=True).files.list()
++            checks["data_plane"] = {"ok": True}
++        except Exception as e:  # noqa: BLE001
++            checks["data_plane"] = {"ok": False,
++                                    "hint": _check_hint(e, "DP files.list")}
++    else:
++        checks["data_plane"] = {"ok": False, "hint": "project 未解決のため検査不能"}
++    return {"ok": all(c["ok"] for c in checks.values()), "checks": checks}
++
++
+ # --- Vector Store / Files API ---
+ 
+ 
+diff --git a/packages/api/jetuse_core/settings.py b/packages/api/jetuse_core/settings.py
+index eb63f6e..bb56b8b 100644
+--- a/packages/api/jetuse_core/settings.py
++++ b/packages/api/jetuse_core/settings.py
+@@ -11,6 +11,9 @@ class Settings(BaseSettings):
+     oci_region: str = "ap-osaka-1"
+     compartment_ocid: str = ""
+     project_ocid: str = ""
++    # FIX-47: project_ocid 空のとき、compartment に ACTIVE project が無ければ自動作成を許可する。
++    # 既定 false(検出のみ)。公開 ORM スタックは IAM policy とセットで true を注入する
++    project_autocreate: bool = False
+ 
+     # OpenSearch RAG(ENH-05)。例 http://10.1.1.x:9200。空ならOpenSearchバックエンド無効
+     opensearch_endpoint: str = ""
+diff --git a/packages/api/service/routes/rag.py b/packages/api/service/routes/rag.py
+index fee09d4..d49d409 100644
+--- a/packages/api/service/routes/rag.py
++++ b/packages/api/service/routes/rag.py
+@@ -10,18 +10,46 @@ import pathlib
+ from typing import Annotated
+ 
+ from fastapi import APIRouter, Depends, HTTPException, UploadFile
++from openai import APIStatusError
+ 
+ from jetuse_core import rag
+ from jetuse_core.auth import AuthContext, require_user
++from jetuse_core.genai import ProjectResolutionError
+ 
+ logger = logging.getLogger("jetuse.service")
+ router = APIRouter()
+ 
++# FIX-47: CP/DP 由来の 4xx を 500 のまま漏らさず、原因ヒント付きで表面化する。
++# レスポンスbody(OCID等を含みうる)は返さない。詳細はサーバーログと /api/rag/health で追う。
++_GENAI_HINT = (
++    "OCI GenAI 呼び出しが HTTP {code} で失敗しました。DG matching rule / "
++    "IAM policy statements / PROJECT_OCID / リージョンの agentic API 対応を"
++    "確認してください(GET /api/rag/health で自己診断できます)"
++)
++
++
++async def _rag_call(fn, *args):
++    try:
++        return await asyncio.to_thread(fn, *args)
++    except rag.StoreNotReadyError as e:
++        raise HTTPException(
++            status_code=503, detail="vector store not ready, retry later"
++        ) from e
++    except ProjectResolutionError as e:
++        logger.warning("rag: generative-ai project unresolved: %s", e)
++        raise HTTPException(status_code=503, detail=str(e)) from e
++    except APIStatusError as e:
++        logger.exception("rag: OCI GenAI call failed (HTTP %s)", e.status_code)
++        status = 503 if e.status_code in (401, 403, 404) else 502
++        raise HTTPException(
++            status_code=status, detail=_GENAI_HINT.format(code=e.status_code)
++        ) from e
++
+ 
+ async def list_files_response(ns: str) -> dict:
+-    files = await asyncio.to_thread(rag.list_files, ns)
+-    files = await asyncio.to_thread(rag.refresh_statuses, ns, files)
+-    files = await asyncio.to_thread(rag.attach_backend_status, ns, files)
++    files = await _rag_call(rag.list_files, ns)
++    files = await _rag_call(rag.refresh_statuses, ns, files)
++    files = await _rag_call(rag.attach_backend_status, ns, files)
+     return {"files": files}
+ 
+ 
+@@ -38,20 +66,27 @@ async def upload_file_response(ns: str, file: UploadFile) -> dict:
+         raise HTTPException(status_code=413, detail="file too large (max 20MB)")
+     if not content:
+         raise HTTPException(status_code=422, detail="empty file")
+-    try:
+-        return await asyncio.to_thread(rag.add_file, ns, name, content)
+-    except rag.StoreNotReadyError as e:
+-        raise HTTPException(
+-            status_code=503, detail="vector store not ready, retry later"
+-        ) from e
++    return await _rag_call(rag.add_file, ns, name, content)
+ 
+ 
+ async def delete_file_response(ns: str, file_id: str) -> dict:
+-    if not await asyncio.to_thread(rag.delete_file, ns, file_id):
++    if not await _rag_call(rag.delete_file, ns, file_id):
+         raise HTTPException(status_code=404, detail="file not found")
+     return {"deleted": True}
+ 
+ 
++@router.get("/api/rag/health")
++async def rag_health(user: Annotated[AuthContext, Depends(require_user)]):
++    """プリフライト3点検査(FIX-47): project解決 / CP / DP。失敗点をヒント付きで特定する。"""
++    try:
++        return await asyncio.to_thread(rag.health_check)
++    except Exception as e:  # 診断エンドポイントは 500 を漏らさない(REV-001 minor)
++        logger.exception("rag health check crashed")
++        raise HTTPException(
++            status_code=503, detail=f"health check failed: {type(e).__name__}"
++        ) from e
++
++
+ @router.get("/api/rag/files")
+ async def list_rag_files(user: Annotated[AuthContext, Depends(require_user)]):
+     return await list_files_response(user.subject)
+diff --git a/packages/api/tests/test_project_resolution.py b/packages/api/tests/test_project_resolution.py
+new file mode 100644
+index 0000000..370977f
+--- /dev/null
++++ b/packages/api/tests/test_project_resolution.py
+@@ -0,0 +1,268 @@
++"""FIX-47: PROJECT_OCID 解決(検索→自動作成→fail-fast)・ragルートのエラー表面化・/api/rag/health。
++
++Issue #47 根治: DP 状態API(OpenAi-Project ヘッダ必須)へ空ヘッダを送らない。
++"""
++
++from types import SimpleNamespace
++
++import httpx
++import openai
++import pytest
++from fastapi.testclient import TestClient
++
++from jetuse_core import genai, rag
++from jetuse_core.settings import Settings
++from service.main import app
++
++client = TestClient(app)
++
++COMP = "ocid1.compartment.oc1..testcomp"
++
++
++def _settings(**kw):
++    kw.setdefault("compartment_ocid", COMP)
++    return Settings(_env_file=None, **kw)
++
++
++class FakeSdk:
++    """GenerativeAiClient の list/create/get だけを再現(oci.pagination 互換)。"""
++
++    def __init__(self, items=None, fail=None, create_state="ACTIVE"):
++        self.items = list(items or [])
++        self.fail = fail
++        self.create_state = create_state
++        self.list_calls = 0
++        self.created = []
++
++    def list_generative_ai_projects(self, compartment_id, **kw):
++        self.list_calls += 1
++        if self.fail:
++            raise self.fail
++        return SimpleNamespace(
++            data=SimpleNamespace(items=self.items), has_next_page=False, next_page=None,
++            status=200, headers={}, request=None,
++        )
++
++    def create_generative_ai_project(self, details):
++        if self.fail:
++            raise self.fail
++        self.created.append(details)
++        proj = SimpleNamespace(
++            id="ocid1.generativeaiproject.oc1..auto", lifecycle_state=self.create_state
++        )
++        self.items.append(proj)
++        return SimpleNamespace(data=proj)
++
++    def get_generative_ai_project(self, project_id):
++        return SimpleNamespace(data=self.items[-1])
++
++
++@pytest.fixture(autouse=True)
++def reset_project_cache():
++    genai._reset_project_cache()
++    yield
++    genai._reset_project_cache()
++
++
++# --- resolve_project_ocid ---
++
++
++def test_env_project_short_circuits(monkeypatch):
++    def boom(settings):
++        raise AssertionError("SDK must not be called when PROJECT_OCID is set")
++
++    monkeypatch.setattr(genai, "_sdk_client", boom)
++    s = _settings(project_ocid="ocid1.generativeaiproject.oc1..env")
++    assert genai.resolve_project_ocid(s) == "ocid1.generativeaiproject.oc1..env"
++
++
++def test_auto_picks_active_and_caches(monkeypatch):
++    sdk = FakeSdk(items=[
++        SimpleNamespace(id="ocid1.generativeaiproject.oc1..dead", lifecycle_state="DELETED"),
++        SimpleNamespace(id="ocid1.generativeaiproject.oc1..live", lifecycle_state="ACTIVE"),
++    ])
++    monkeypatch.setattr(genai, "_sdk_client", lambda s: sdk)
++    s = _settings()
++    assert genai.resolve_project_ocid(s) == "ocid1.generativeaiproject.oc1..live"
++    assert genai.resolve_project_ocid(s) == "ocid1.generativeaiproject.oc1..live"
++    assert sdk.list_calls == 1  # 2回目はプロセス内キャッシュ
++    assert sdk.created == []  # 既存があれば作らない
++
++
++def test_auto_creates_when_none_and_enabled(monkeypatch):
++    sdk = FakeSdk(items=[])
++    monkeypatch.setattr(genai, "_sdk_client", lambda s: sdk)
++    s = _settings(project_autocreate=True)
++    assert genai.resolve_project_ocid(s) == "ocid1.generativeaiproject.oc1..auto"
++    assert len(sdk.created) == 1
++    assert sdk.created[0].compartment_id == COMP
++
++
++def test_autocreate_disabled_fails_fast(monkeypatch):
++    """既定(PROJECT_AUTOCREATE=false)では作成せず actionable に raise(REV-001 blocker#2)。"""
++    sdk = FakeSdk(items=[])
++    monkeypatch.setattr(genai, "_sdk_client", lambda s: sdk)
++    with pytest.raises(genai.ProjectResolutionError) as ei:
++        genai.resolve_project_ocid(_settings())
++    assert sdk.created == []
++    assert "PROJECT_OCID" in str(ei.value)
++
++
++def test_nonactive_created_project_not_cached(monkeypatch):
++    """作成後 ACTIVE に達しない project は使わずキャッシュもしない(REV-001 major#2)。"""
++    sdk = FakeSdk(items=[], create_state="FAILED")
++    monkeypatch.setattr(genai, "_sdk_client", lambda s: sdk)
++    s = _settings(project_autocreate=True)
++    with pytest.raises(genai.ProjectResolutionError) as ei:
++        genai.resolve_project_ocid(s)
++    assert "FAILED" in str(ei.value)
++    assert genai._project_cache is None
++
++
++def test_resolution_failure_is_actionable(monkeypatch):
++    sdk = FakeSdk(fail=RuntimeError("boom"))
++    monkeypatch.setattr(genai, "_sdk_client", lambda s: sdk)
++    with pytest.raises(genai.ProjectResolutionError) as ei:
++        genai.resolve_project_ocid(_settings())
++    msg = str(ei.value)
++    assert "PROJECT_OCID" in msg
++    assert "generative-ai-project" in msg  # 権限付与の促し
++
++
++# --- make_inference_client: 空の OpenAi-Project を送らない ---
++
++
++def test_with_project_never_sends_empty_header(monkeypatch):
++    sdk = FakeSdk(fail=RuntimeError("no permission"))
++    monkeypatch.setattr(genai, "_sdk_client", lambda s: sdk)
++    with pytest.raises(genai.ProjectResolutionError):
++        genai.make_inference_client(_settings(), with_project=True)
++
++
++def test_with_project_uses_resolved_header(monkeypatch):
++    sdk = FakeSdk(items=[SimpleNamespace(id="ocid1.generativeaiproject.oc1..live",
++                                         lifecycle_state="ACTIVE")])
++    monkeypatch.setattr(genai, "_sdk_client", lambda s: sdk)
++    c = genai.make_inference_client(_settings(), with_project=True)
++    assert c._client.headers["OpenAi-Project"] == "ocid1.generativeaiproject.oc1..live"
++
++
++def test_explicit_project_arg_wins(monkeypatch):
++    def boom(settings):
++        raise AssertionError("SDK must not be called with explicit project_ocid")
++
++    monkeypatch.setattr(genai, "_sdk_client", boom)
++    c = genai.make_inference_client(
++        _settings(), with_project=True, project_ocid="ocid1.generativeaiproject.oc1..agent"
++    )
++    assert c._client.headers["OpenAi-Project"] == "ocid1.generativeaiproject.oc1..agent"
++
++
++# --- rag ルートのエラー表面化(500 → ヒント付き 503/502) ---
++
++
++def _api_error(cls, status):
++    req = httpx.Request("POST", "https://genai.test/v1/x")
++    resp = httpx.Response(status, request=req, json={"message": "denied"})
++    return cls("denied", response=resp, body=None)
++
++
++def test_upload_surfaces_notfound_as_503(monkeypatch):
++    def raise_404(owner, filename, content):
++        raise _api_error(openai.NotFoundError, 404)
++
++    monkeypatch.setattr(rag, "add_file", raise_404)
++    res = client.post("/api/rag/files", files={"file": ("a.md", b"x", "text/markdown")})
++    assert res.status_code == 503
++    assert "PROJECT_OCID" in res.json()["detail"]
++    assert "404" in res.json()["detail"]
++
++
++def test_upload_surfaces_badrequest_as_502(monkeypatch):
++    def raise_400(owner, filename, content):
++        raise _api_error(openai.BadRequestError, 400)
++
++    monkeypatch.setattr(rag, "add_file", raise_400)
++    res = client.post("/api/rag/files", files={"file": ("a.md", b"x", "text/markdown")})
++    assert res.status_code == 502
++
++
++def test_upload_surfaces_project_resolution_as_503(monkeypatch):
++    def raise_unresolved(owner, filename, content):
++        raise genai.ProjectResolutionError("set PROJECT_OCID or grant generative-ai-project")
++
++    monkeypatch.setattr(rag, "add_file", raise_unresolved)
++    res = client.post("/api/rag/files", files={"file": ("a.md", b"x", "text/markdown")})
++    assert res.status_code == 503
++    assert "PROJECT_OCID" in res.json()["detail"]
++
++
++def test_list_surfaces_permission_denied_as_503(monkeypatch):
++    def raise_403(owner):
++        raise _api_error(openai.PermissionDeniedError, 403)
++
++    monkeypatch.setattr(rag, "list_files", raise_403)
++    res = client.get("/api/rag/files")
++    assert res.status_code == 503
++    assert "policy" in res.json()["detail"]
++
++
++# --- /api/rag/health: 3点検査 ---
++
++
++def _fake_cp(fail=None):
++    def _list(**kw):
++        if fail:
++            raise fail
++        return SimpleNamespace(data=[])
++
++    return SimpleNamespace(vector_stores=SimpleNamespace(list=_list))
++
++
++def _fake_dp(fail=None):
++    def _list(**kw):
++        if fail:
++            raise fail
++        return SimpleNamespace(data=[])
++
++    return SimpleNamespace(files=SimpleNamespace(list=_list))
++
++
++def test_rag_health_all_ok(monkeypatch):
++    monkeypatch.setattr(rag, "resolve_project_ocid",
++                        lambda: "ocid1.generativeaiproject.oc1..live")
++    monkeypatch.setattr(rag, "make_cp_client", lambda: _fake_cp())
++    monkeypatch.setattr(rag, "make_inference_client", lambda **kw: _fake_dp())
++    res = client.get("/api/rag/health")
++    assert res.status_code == 200
++    body = res.json()
++    assert body["ok"] is True
++    assert body["checks"]["project"]["ok"] is True
++    assert body["checks"]["control_plane"]["ok"] is True
++    assert body["checks"]["data_plane"]["ok"] is True
++
++
++def test_rag_health_pinpoints_cp_failure(monkeypatch):
++    monkeypatch.setattr(rag, "resolve_project_ocid",
++                        lambda: "ocid1.generativeaiproject.oc1..live")
++    monkeypatch.setattr(rag, "make_cp_client",
++                        lambda: _fake_cp(fail=_api_error(openai.NotFoundError, 404)))
++    monkeypatch.setattr(rag, "make_inference_client", lambda **kw: _fake_dp())
++    body = client.get("/api/rag/health").json()
++    assert body["ok"] is False
++    assert body["checks"]["control_plane"]["ok"] is False
++    assert "404" in body["checks"]["control_plane"]["hint"]
++    assert body["checks"]["data_plane"]["ok"] is True  # 失敗点の特定(CPだけ落ちる)
++
++
++def test_rag_health_project_unresolved_skips_dp(monkeypatch):
++    def raise_unresolved():
++        raise genai.ProjectResolutionError("set PROJECT_OCID")
++
++    monkeypatch.setattr(rag, "resolve_project_ocid", raise_unresolved)
++    monkeypatch.setattr(rag, "make_cp_client", lambda: _fake_cp())
++    body = client.get("/api/rag/health").json()
++    assert body["ok"] is False
++    assert body["checks"]["project"]["ok"] is False
++    assert "PROJECT_OCID" in body["checks"]["project"]["hint"]
++    assert body["checks"]["data_plane"]["ok"] is False  # project無しでDPは検査不能
+diff --git a/tasks/FIX-47.md b/tasks/FIX-47.md
+new file mode 100644
+index 0000000..fa49e5a
+--- /dev/null
++++ b/tasks/FIX-47.md
+@@ -0,0 +1,140 @@
++# タスク: FIX-47 Issue #47 — 公開 ORM スタックのテナンシ可搬性（RAG アップロード 500）修正
++
++## 目的
++Issue #47「RAGチャットのファイルアップロードで HTTP 500」の根治。公開 ORM スタック
++（infra/orm + OCIR 公開イメージ）を**自テナンシ固有の手動セットアップに依存せず**別テナンシで
++動くようにする（環境依存の排除）。修正後は jetuse:test コンパートメントに実リソースを作成して
++クリーンルーム E2E まで実施する（施主指示 2026-07-10）。
++
++## 事前調査で確定済みの事実（orchestrator probe 2026-07-10。再検証不要・前提としてよい）
++- 事象: 別テナンシの RM デプロイ（**旧公開イメージ** — コンテナログの適用 migration が 001–015）で
++  `POST /api/rag/files` → `ensure_store()` → CP `vector_stores.create` が
++  **404 NotAuthorizedOrNotFound** → 未処理例外で 500。`OciResourcePrincipalAuth` 初期化直後の失敗
++  = RP 署名リクエスト。報告者は DG / IAM Policy / RP / compartment 設定は確認済みと主張。
++  Console（user principal・ネイティブ API）からは同一 compartment に Vector Store 作成可。
++- 自テナンシプローブ（2026-07-10・user principal・ap-osaka-1）: CP `vector_stores.create` は
++  **GenerativeAiProject ゼロの jetuse:test でも成功**（completed 到達・削除済み）。
++  → 「compartment に project が無いと CP create が 404」仮説は**棄却**。この日の大阪 CP create は健全。
++- jetuse:test compartment = `jetuse` の子 `test`
++  （OCID は `oci iam compartment list -c <jetuse> --name test` で解決。実値のコミット禁止）。
++  GenAI project ゼロのクリーンルーム。
++- **排除できていない環境依存（確定・修正対象）**:
++  1. **PROJECT_OCID 未配線**: DP 状態 API（files.create / attach / files.list 等）は `OpenAi-Project`
++     ヘッダ必須（specs/00 未文書仕様）なのに、infra/orm の `api_environment` に PROJECT_OCID が無い・
++     stack 変数も無い・`.env.example` にも無い。GenerativeAiProject は TF provider 未対応
++     （infra/terraform/environments/loop/main.tf 注記）で、自環境は手動 CLI 作成した project に依存。
++     → 仮に CP create が通っても、その先の DP 呼び出し（`make_inference_client(with_project=True)` が
++     **空の OpenAi-Project ヘッダ**を送る）で別テナンシは必ず落ちる。
++  2. **IAM 最小権限セット未実証**: 自環境の RP は `manage all-resources`（jetuse-internal-dg）で動いて
++     おり、infra/orm の iam モジュールの絞った statement 群（`use generative-ai-family` +
++     `manage generative-ai-vector-store` / `generative-ai-vectorstore-file` / `generative-ai-file`）が
++     agentic API に十分かはクリーンルーム未実証。報告者の 404（RP でのみ発生）はここが最有力容疑。
++  3. **エラーの表面化不足**: CP/DP の 4xx が rag ルートで未処理のまま 500 になり、現場で
++     policy / DG matching rule / project / リージョン対応のどれが原因か切り分け不能。
++- RM ZIP（GitHub リリース orm-main）は Terraform + SPA dist のみで **API コードを含まない**
++  （scripts/package-orm-stacks.sh）。報告者の「RM ZIP 上の genai.py 修正」は実行コードに反映され得ない
++  （API は OCIR イメージ経由でしか変わらない）— 診断上のノイズとして扱う。
++- OCI Python SDK は GenerativeAiProject CRUD 対応済み
++  （`GenerativeAiClient.create/list/get/delete_generative_ai_project` — .venv で確認済み）。
++- 大阪 GenAI agentic は 2026-07-08〜09 に store/file 索引の障害（docs/tips.md 2026-07-08 2件）。
++  E2E リージョン選定に影響（下記 E2E 前提）。
++- **コードベース監査（2026-07-10）で PROJECT_OCID の影響半径拡大を確認**: 既定チャットモデル
++  `gpt-oss-120b` は responses 系（models.py `DEFAULT_MODEL`）で chat.py:540 が
++  `with_project=(api=="responses")` → **別テナンシでは既定チャットも全滅**。会話永続化
++  （chat.py:65,73 `with_project=True`）も project 必須で、失敗時は stateless へ silent fallback
++  （メモリ喪失）。いずれも本タスクの genai.py fail-fast + PROJECT_OCID 配線で同時に根治する。
++  監査で見つかったその他の環境依存は PORT-01（infra）/ PORT-02（api 縮退）に分割
++  （キュー: tasks/FIX47-PROGRESS.md）。
++
++## 仕様参照
++specs/00-architecture.md（DP は OpenAi-Project 必須）、specs/09-rag.md、specs/18 §3（箱ライフサイクル・
++write-ahead 台帳）、docs/tips.md（大阪障害・project OCID はリージョン別）
++
++## 前提（依存タスク / 人間の事前作業）
++- base ブランチ: **main**（Public 変更 — infra/orm・packages/api・iam モジュール。
++  `docs/guides/branching-and-releases.md`）。起動は `BASE_BRANCH=main` を渡す。
++- **人間ゲート（このタスク固有）**: jetuse:test への RM apply のうち **IAM（Dynamic Group + Policy）
++  作成部分は適用前に人間承認必須**（CLAUDE.md）。承認対象の statement 一式を提示して停止する。
++- E2E は施主指示（2026-07-10）により **jetuse:test に実リソースを作成して実施**
++  （loop-config の e2e.compartment=jetuse-dev をこのタスクに限り上書き。リソース名は
++  `jetuse-spike-fix47` プレフィックス必須）。
++
++## 対象 area
++api（packages/api: genai.py / rag.py / bootstrap or health）。
++infra（infra/orm・infra/terraform/modules/iam）は area 定義外のため、`terraform validate` と
++RM plan 成功を完了条件に**明示的に**含める（loop-config.yml は編集しない — 仕組みの人間ゲート）。
++
++## 作業内容
++1. **クリーンルーム再現（診断が先）**: HEAD の infra/orm + 現行公開イメージ（`jetuse-api:latest` の
++   まま）を RM スタック `jetuse-spike-fix47` として jetuse:test に deploy
++   （`enable_dynamic_group=true`・`enable_runtime_policy=true`。**IAM 部分は人間承認後に** apply。
++   RM ジョブは `oci resource-manager job` 経由 — ローカル apply は権限層で遮断される）。
++   gateway 経由で RAG upload を実行し、Issue #47 の 404 が再現するか確認する。
++   - **再現した場合**: 不足 policy statement を二分探索で特定（自環境 DG との差分から当たりを付ける。
++     project の read/manage、agentic 系 resource-kind 等）→ iam モジュールへ追加して根治。
++   - **再現しない場合**: 残る差分はテナンシ側（agentic API の利用可否/allowlist 等）。下記 4 の診断
++     エンドポイントと runbook を成果物にし、Issue #47 への確認依頼コメント案を書く（投稿は人間ゲート）。
++2. **PROJECT_OCID の配線と自動解決（依存排除の本丸）**:
++   - infra/orm: `variable "project_ocid"`（既定 ""）+ schema.yaml 項目 +
++     `api_environment.PROJECT_OCID` を追加。
++   - アプリ側: `settings.project_ocid` が空のとき、初回 GenAI 利用時（または bootstrap）に SDK で
++     compartment 内の ACTIVE project を検索 → 無ければ `jetuse-<prefix>-project` を自動作成して採用。
++     解決結果はプロセス内キャッシュ（毎回作らない・既存があれば再利用）。自動作成に必要な policy
++     （`manage generative-ai-project` 相当）を実測し iam モジュールの statement へ追加。
++   - genai.py: `with_project=True` で project が未解決なら**空ヘッダを送らず**、actionable な
++     メッセージ（PROJECT_OCID 設定 or 自動作成権限の付与を促す）で即時 raise。
++   - `.env.example` に PROJECT_OCID を追記。
++3. **エラーの表面化**: rag ルート（upload / ensure_store 経路）で CP/DP 由来の 400/403/404 を
++   500 のまま漏らさず、原因ヒント付き 503/502 に変換（「DG matching rule / policy statements /
++   PROJECT_OCID / リージョンの agentic API 対応を確認」の粒度。秘密値・OCID 実値はログに出さない）。
++4. **プリフライト診断**: `GET /api/rag/health`（または既存 health の拡張）で
++   ① CP `vector_stores.list` ② DP `files.list`（OpenAi-Project 付き） ③ project 解決状態
++   の 3 点を検査し、どこで落ちるかを構造化して返す（Issue 報告者が自己診断できる粒度・認可済み前提）。
++5. **修正版イメージの E2E 投入**: 修正コードで API イメージをビルドし、**専用タグ**
++   （例 `jetuse-api:fix47-e2e`）で OCIR へ push → stack 変数 `api_image_url` で参照して再 deploy。
++   **`:latest` タグへの push は禁止**（公開経路。正規リリースは release.yml + 人間ゲート）。
++6. **ドキュメント**: docs/verification/fix47-clean-room-e2e.md（再現有無・最小 IAM statement 群・
++   E2E 結果）。実機の新発見は docs/tips.md へ追記。
++
++## 完了条件（検証可能な述語で）
++- packages/api: `.venv/bin/pytest packages/api/tests` 全緑・`.venv/bin/ruff check packages/api`
++  クリーン（新規分のユニットテスト含む: project 自動解決の分岐・エラー変換・health の 3 点検査）。
++- infra: `terraform validate`（infra/orm）成功、jetuse:test への RM plan 成功。
++- codex-review の review_verdict=PASS。
++- 下記 E2E シナリオを jetuse:test 実環境で通過し、証跡を runs/<run-id>/e2e/ に記録。
++
++## E2E シナリオ（完了ゲート・min_scenarios=2 以上）
++前提: RM スタック `jetuse-spike-fix47`（jetuse:test）。リージョンは原則 ap-osaka-1（Issue と同条件）。
++ただし大阪 agentic 障害（tips 2026-07-08〜09）の継続は「store 作成 + file attach + 索引化完了」を
++1 セットのプローブで先に判定し、継続中なら該当部分のみ ord（us-chicago-1。ORM 対応 4 リージョンに
++含まれ公開イメージも push 済み）で代替してその旨を証跡に記す。大阪 VCN 枠不足で apply が落ちる場合も
++同様に ord へ切替可（修正自体はリージョン非依存）。
++1. **クリーンルーム RAG E2E（本命）**: PROJECT_OCID 未指定・修正版イメージで deploy →
++   gateway 経由 `POST /api/rag/files` が 500 にならず成功（project 自動作成が発動 →
++   store 作成 → file attach → 索引化完了）→ RAG チャットで file_search の grounded 応答を確認。
++   project が compartment に自動作成されたことを CLI（list-generative-ai-projects）で確認。
++   併せて**既定モデル（gpt-oss-120b）のチャット応答**と**会話 2 ターン目の文脈保持（STM）**を確認
++   （PROJECT_OCID の影響半径 — 監査 2026-07-10）。
++2. **明示 PROJECT_OCID E2E**: PROJECT_OCID を stack 変数で明示して再 deploy（または env 更新）→
++   同 upload フローが指定 project 配下で成功（自動作成が**発動しない**ことも確認）。
++3. **ネガティブ（表面化）**: 無効な PROJECT_OCID を注入（or 人間承認の範囲で policy statement を
++   一時除去）→ API が 500 でなくヒント付き 4xx/503 を返し、`/api/rag/health` が失敗点を特定して
++   返すことを確認。
++証跡: リクエスト/レスポンス・コンテナログ・CLI 出力。スタック `jetuse-spike-fix47` は
++**PORT-01 / PORT-02（tasks/FIX47-PROGRESS.md）の E2E でも再利用するため残置**し、キュー全体の
++完了後に destroy して jetuse:test を掃除する（jetuse-spike- プレフィックスのリソースのみ。
++自動作成 project も削除。後始末の正本はキュー側）。
++
++## 成果物
++- コード: infra/orm（variables/schema/locals）・infra/terraform/modules/iam・
++  packages/api（genai.py / rag.py / bootstrap or health / tests）・.env.example
++- docs/verification/fix47-clean-room-e2e.md（再現有無・最小 IAM・E2E 証跡）
++- Issue #47 への返信コメント案（修正内容 + 報告者向け確認手順。**投稿は人間ゲート**）
++
++## 禁止事項
++- 認証情報・テナンシ/コンパートメント OCID 実値・エンドポイント実値のコミット
++  （TF_VAR / .env / RM 変数で注入）
++- `jetuse-spike-` プレフィックス以外のリソース削除、jetuse:dev / jetuse:public の既存リソース変更
++- OCIR `:latest` タグへの push（正規リリース経路は release.yml + 人間ゲート）
++- IAM（DG/Policy）の無承認 apply、コミット / PR / push / Issue コメント投稿の無承認実行
++- loop-config.yml・スキル・hooks の編集（仕組みの人間ゲート）
+diff --git a/tasks/FIX47-PROGRESS.md b/tasks/FIX47-PROGRESS.md
+new file mode 100644
+index 0000000..788c247
+--- /dev/null
++++ b/tasks/FIX47-PROGRESS.md
+@@ -0,0 +1,63 @@
++# Issue #47 可搬性修正 進捗キュー（loop-runner / stage-runner の単一の真実源）
++
++Issue #47（別テナンシで RAG アップロード 500）の根治と、コードベース監査（2026-07-10）で確定した
++「他テナンシーで起こる環境依存」の排除。**base=`main`**（Public 変更 — infra/orm・packages/api・
++iam モジュール。`docs/guides/branching-and-releases.md`）。タスク起動時は `BASE_BRANCH=main` を渡す。
++
++- **E2E 環境**: 施主指示（2026-07-10）により **jetuse:test コンパートメントに実リソースを作成**して
++  実施（loop-config の e2e.compartment=jetuse-dev をこのキューに限り上書き）。RM スタック
++  `jetuse-spike-fix47` を 3 タスクで共有し、**キュー全体の完了後に destroy**（後始末参照）。
++- **人間ゲート**: IAM（DG/Policy）apply の承認・コミット / PR / push・Issue #47 コメント投稿・
++  OCIR `:latest` への push（正規リリースは release.yml）。
++
++status: `todo` | `in_progress` | `blocked` | `done`
++
++| 順 | タスク | 依存 | 人間ゲート | status |
++|---|---|---|---|---|
++| 1 | [FIX-47 RAG 500 根治 + PROJECT_OCID / IAM 可搬性](FIX-47.md) | — | ~~IAM apply 承認~~済 + コミット | in_progress |
++| 2 | [PORT-01 ORM スタックの plan/apply 可搬性](PORT-01.md) | FIX-47 | （IAM を伴う場合 apply 承認）+ コミット | todo |
++| 3 | [PORT-02 ランタイム縮退（機能別環境依存の表面化）](PORT-02.md) | FIX-47 | コミット | todo |
++
++> 第1波 = FIX-47（クリーンルーム再現・PROJECT_OCID 配線・IAM 最小権限・E2E 基盤の構築）。
++> 第2波 = PORT-01 ∥ PORT-02（相互独立: PORT-01 は infra のみ・PORT-02 は api のみに閉じる —
++> ファイル衝突なし・並列可）。
++>
++> **2026-07-13 第1波 完了ゲート充足**: FIX-47 は codex PASS（review-3・実ブラウザ live check 込み）+
++> test/lint 緑 + jetuse:test 実環境 E2E 4シナリオ合格（再現/クリーンルーム/明示 PROJECT_OCID/
++> ネガティブ — runs/2026-07-10T0842_FIX-47/e2e/RESULTS.md）。**残る人間ゲート=コミットのみ**
++> （commit 時 runs/ 証跡の実 OCID/エンドポイント値の扱いに注意）。IAM は施主の方針変更により
++> スタック外へ: 既存 DG jetuse-deploy-test-dg + 手動 policy（iam-report.md が正本）で
++> enable_dynamic_group=false / enable_runtime_policy=false。E2E リージョンは大阪 VCN 枠超過で
++> us-chicago-1 に変更（チケットの事前承認範囲）。スタック jetuse-spike-fix47 は PORT-01/02 の
++> E2E で再利用するため残置（後始末はキュー完了後 — 自動作成 project jetuse-project 含む）。
++> コミット後に done → 第2波（PORT-01 ∥ PORT-02 並列）へ。
++
++## 監査サマリ（2026-07-10。詳細・file:line は各チケットの「事前調査で確定済みの事実」）
++
++- **CRITICAL**: PROJECT_OCID 未配線 — RAG だけでなく**既定チャットモデル・会話メモリも全滅**
++  （FIX-47）／ GenAI 未検証リージョン（nrt/iad）へ無警告 deploy 可（PORT-01）
++- **HIGH**: ocir_namespace の schema 説明が誤誘導（自 namespace を入れると image 404 で全滅、
++  PORT-01）／ ADB 26ai・ECPU 固定で新規テナンシの apply が枠不足で失敗（PORT-01）／
++  モデル可用性・semantic store 未構成・Select AI RP・Speech/OCR の縮退不全（PORT-02）
++- **MEDIUM**: SPA PAR が 2027-12-31 固定の時限爆弾（PORT-01）／ TTS の Phoenix 購読前提が不可視
++  （PORT-02）／ obs「oci log ship failed」spam（PORT-02）／ identity-domain home_region・
++  destroy の CLI 依存（PORT-01）
++- **LOW**: CI shape 固定・METRICS_NAMESPACE 未配線・semstore の死に IAM（PORT-01）／
++  AUTH_MODE 未設定時の未処理クラッシュ（PORT-02）
++- **可搬と確認済み（対処不要）**: SPA（焼き込みなし・相対パス + 実行時 config.json）、
++  ORM zip（秘密の同梱なし）、Functions の同一リージョン OCIR（自動導出済み）、LOG_OCID 配線、
++  translate/guardrails/moderation/OpenSearch/VPD/hosted-agent の縮退
++
++## キュー完了条件
++
++- 3 タスクすべて codex-review PASS・test/lint（infra は validate/fmt/plan）クリーン・
++  jetuse:test 実環境 E2E（または理由付き SKIPPED）通過。
++- クリーンルーム（GenAI project ゼロ・手動セットアップなしの jetuse:test）で
++  「deploy → 既定モデル chat → RAG upload → file_search 応答 → dbchat 応答」が通る。
++- Issue #47 への返信コメント案（修正内容 + 自己診断手順）が起草済み（投稿は人間ゲート）。
++
++## 後始末（最終タスクの E2E 完了後）
++
++- RM スタック `jetuse-spike-fix47` を destroy（jetuse-spike- プレフィックスのみ。
++  自動作成された GenerativeAiProject・専用タグの OCIR イメージも削除）。
++- jetuse:test に残存リソースが無いことを CLI で確認し、証跡を最終タスクの runs/<run-id>/e2e/ に残す。
+diff --git a/tasks/PORT-01.md b/tasks/PORT-01.md
+new file mode 100644
+index 0000000..16cd651
+--- /dev/null
++++ b/tasks/PORT-01.md
+@@ -0,0 +1,102 @@
++# タスク: PORT-01 公開 ORM スタックの可搬性修正（plan / apply / 初回配信の環境依存）
++
++## 目的
++FIX-47 のコードベース監査（2026-07-10）で確定した、**別テナンシへの deploy が plan/apply 時
++または初回起動・配信で壊れる infra 側の環境依存**を排除する。Issue #47 と同種の
++「自環境でだけ動く」問題の infra 面での根治。
++
++## 事前調査で確定済みの事実（2026-07-10 監査。file:line 検証済み・再検証不要）
++- **ocir_namespace の誤誘導**: 既定値は開発テナンシの公開レジストリ namespace で正しい
++  （variables.tf:102-106 — 公開イメージの cross-tenancy pull に必須）が、
++  `infra/orm/schema.yaml:136-140` が「= Object Storage namespace（tenancy固有）」と説明し
++  required 扱い → 誠実な外部デプロイヤほど**自分の namespace を入れて image 404**
++  → Container Instance / Functions が起動せずアプリ全滅（plan エラーなし・サイレント）。
++- **region_guard は OCIR 可用性しか見ない**（infra/orm/main.tf:7-14・locals.tf:14 =
++  kix/nrt/iad/ord）: GenAI（推論 + agentic API）の対応リージョンはより狭く、実証済みは
++  **kix（大阪）と ord（Chicago）のみ**（docs/tips.md）。nrt/iad へ deploy すると apply は
++  綺麗に通るが GenAI が全滅。README は 4 リージョン対応と主張している。
++- **SPA PAR の絶対期限 2027-12-31 固定**（modules/object-storage/variables.tf:12 と
++  modules/spa-bucket/variables.tf:12、main.tf の time_expires で消費）→ その日以降の新規
++  deploy は**最初から失効した PAR** で SPA 配信が 403（時限爆弾）。
++- **ADB のバージョン/サイズ固定**: db_version "26ai"・ECPU 2・LICENSE_INCLUDED がモジュール
++  固定で ORM から変更不可（modules/adb）。新規テナンシは ADB ECPU 枠 0 が普通で apply が
++  LimitExceeded で落ちる。26ai が提供されないリージョン/レルムでも落ちる。
++- **identity-domain の home_region = var.region**（modules/identity-domain/main.tf:7）:
++  deploy リージョン ≠ テナンシのホームリージョンだと domain 作成が落ちうる（enable_auth=true
++  時のみ）。destroy は local-exec + oci CLI 依存（同 main.tf:16-25）で RM ランナーでの認証が
++  未保証 → destroy 失敗 → 同 prefix 再デプロイが衝突。
++- **CI shape `CI.Standard.E4.Flex` 固定**（modules/container-instance/main.tf:9）: E4 が無い
++  リージョンで apply 失敗の可能性。
++- **METRICS_NAMESPACE 未配線**（settings 既定 "jetuse_dev" のまま別テナンシに出る）。
++  semantic-store は IAM（DG+policy）だけ作られ実体と SEMSTORE_OCID 配線が無い（死に statement。
++  enable_semantic_store 既定値の確認込み）。
++- 参考（正しく可搬なもの・変更不要）: SPA は相対 `/api/*` + 実行時 config.json で焼き込みなし。
++  package-orm-stacks.sh は git 管理 TF + dist のみで秘密の同梱なし。Functions の同一リージョン
++  OCIR 制約は locals の自動導出で解決済み（ADR-0011/0017）。LOG_OCID は配線済み。
++
++## 仕様参照
++specs/00、docs/tips.md（リージョン可用性・project はリージョン別）、
++docs/guides/branching-and-releases.md、ADR-0011 / ADR-0017（OCIR とリージョン）
++
++## 前提（依存タスク / 人間の事前作業）
++- 依存: **FIX-47 が done**（jetuse:test の RM スタック `jetuse-spike-fix47` と承認済み IAM を
++  E2E で再利用する）。
++- base ブランチ: **main**（`BASE_BRANCH=main`）。
++- 人間ゲート: IAM 変更を伴う apply の承認（変更が IAM に及ぶ場合のみ）・コミット / PR / push。
++
++## 対象 area
++infra（infra/orm・infra/terraform/modules）。loop-config の area 定義外のため、
++`terraform validate` + `terraform fmt -check` + jetuse:test への RM plan 成功を test/lint 相当
++として完了条件に明示する。**packages/api には触れない**（PORT-02 と衝突させない）。
++
++## 作業内容
++1. **ocir_namespace の説明修正**: schema.yaml の説明を「JetUse 公開イメージのレジストリ
++   namespace。**通常は変更しない**（イメージを自テナンシへミラーした場合のみ上書き）」に改め、
++   required から外す（グルーピングも Advanced/Hidden 寄りへ）。
++2. **GenAI リージョンガード**: region_guard に GenAI 検証済みリージョン（kix/ord）の
++   precondition を追加。未検証リージョンは新変数 `allow_unvalidated_genai_region=true` で
++   明示オプトイン（エラーメッセージに「GenAI/agentic API の提供状況を確認せよ」と根拠を書く）。
++   README・schema.yaml の対応リージョン記述を実態（アプリ=4 リージョン、GenAI 検証済=2）に修正。
++3. **SPA PAR の相対期限化**: 絶対日付既定をやめ、apply 時刻起点（例: `timeadd(timestamp(), "8760h")`
++   か time_offset リソース）へ。object-storage / spa-bucket の両モジュール。plan 毎の差分暴発を
++   避ける実装（ignore_changes 等）に注意。
++4. **ADB 変数の公開**: db_version / ecpu_count を ORM スタック変数として公開（既定は現行値）。
++   schema.yaml に「ADB ECPU のサービス枠を事前確認（新規テナンシは枠 0 が普通）」を明記。
++5. **identity-domain**: home_region をテナンシのホームリージョンから導出（providers.tf の
++   home 導出と同一の式）。destroy の CLI 依存は実挙動を確認し、最低限 schema/docs に手動
++   デアクティベート手順を明記（enable_auth=true の場合の注意として）。
++6. **CI shape の変数化**（既定 E4.Flex 維持）。
++7. **配線の穴埋め**: METRICS_NAMESPACE を api_environment へ（prefix 由来の値）。semantic-store
++   の IAM 死に statement は enable_semantic_store ゲートの実効性を確認し、SEMSTORE_OCID 変数の
++   追加（説明付き）か statement 整理のどちらかに倒す（比較して小さい方 — 実体の自動作成はしない）。
++8. **前提チェックリスト**: 外部デプロイヤ向けに「リージョン購読 / ADB・CI・Functions・VCN の
++   サービス枠 / GenAI 対応リージョン / OCIR はそのまま」のチェックリストを README（または
++   docs/guides）へ。リージョン可用性の実測値は docs/tips.md に追記。
++
++## 完了条件（検証可能な述語で）
++- `terraform validate`（infra/orm と変更した全モジュール）成功・`terraform fmt -check` 差分なし。
++- jetuse:test（`jetuse-spike-fix47` スタック）への RM plan 成功、変更部分の apply 成功
++  （IAM を伴う場合は人間承認後）。
++- codex-review の review_verdict=PASS。
++- 下記 E2E シナリオ通過・証跡を runs/<run-id>/e2e/ に記録。
++
++## E2E シナリオ（完了ゲート・min_scenarios=2 以上）
++1. **PAR 相対期限**: 変更 apply 後、新規発行 PAR の time_expires が apply 時刻起点で将来日付に
++   なっていることを CLI で確認し、gateway 経由の SPA 配信が 200 であること。
++2. **リージョンガード**: `region=ap-tokyo-1` 指定の plan が明示エラーになり、
++   `allow_unvalidated_genai_region=true` で通ること。kix/ord は従来どおり通ること（plan のみで可）。
++3. **schema 妥当性**: 変更後 schema.yaml で `oci resource-manager stack update` が受理される
++   （Console スキーマとして valid）こと。
++（ADB 変数・CI shape は plan 差分ゼロ（既定値時）を確認 — 挙動不変の回帰確認として証跡に含める）
++
++## 成果物
++- infra/orm（schema.yaml / variables.tf / main.tf / locals.tf）、
++  infra/terraform/modules/{object-storage, spa-bucket, adb, identity-domain, container-instance, iam}
++- README / docs/guides の前提チェックリスト、docs/tips.md 追記
++- docs/verification/port01-orm-portability.md（E2E 証跡サマリ）
++
++## 禁止事項
++- 認証情報・テナンシ/コンパートメント OCID 実値・エンドポイント実値のコミット
++- `jetuse-spike-` プレフィックス以外のリソース削除、jetuse:dev / jetuse:public の既存リソース変更
++- OCIR `:latest` タグへの push、IAM の無承認 apply、コミット / PR / push の無承認実行
++- loop-config.yml・スキル・hooks の編集（仕組みの人間ゲート）
+diff --git a/tasks/PORT-02.md b/tasks/PORT-02.md
+new file mode 100644
+index 0000000..603f240
+--- /dev/null
++++ b/tasks/PORT-02.md
+@@ -0,0 +1,108 @@
++# タスク: PORT-02 ランタイムのグレースフルデグレード（機能別環境依存の表面化）
++
++## 目的
++別テナンシで「サービス / リソース未整備の機能」が生の 500 / SSE 生エラー文字列 / サイレント故障で
++死ぬのを止め、**原因ヒント付きで機能単位に安全に縮退**させる。FIX-47 が入れる genai fail-fast と
++`/api/rag/health` の考え方を、GenAI 以外の機能面（モデル可用性・NL2SQL・Speech・OCR・TTS・観測）へ
++広げる。Issue #47 の「切り分け不能」問題のアプリ全域での根治。
++
++## 事前調査で確定済みの事実（2026-07-10 監査。file:line 検証済み・再検証不要）
++- **モデル可用性**: レジストリ（jetuse_core/models.py:24-48）はハードコードで、リージョン/
++  テナンシに無いモデルを選ぶと chat.py:573-577 が provider の生エラーを SSE `{"error":...}` で
++  返すだけ。`GET /api/chat/models`（routes/chat.py:480-496）は無条件に全モデルを列挙し UI で
++  選択可能に見える。モデルのリージョン別提供差は実在（CLAUDE.md: Grok/Llama4 は大阪不可 等）。
++- **dbchat 既定バックエンドは semantic store**（routes/dbchat.py:138-139）: SEMSTORE_OCID
++  未設定なら nl2sql.py:56-57 が RuntimeError → SSE 生エラー。公開 ORM スタックは semantic store
++  を作らないので**別テナンシの既定 dbchat は必ず壊れる**（select_ai バックエンドは動きうるのに）。
++- **Select AI の RP 有効化は best-effort**（bootstrap.py:106-116 — 失敗しても警告のみ）:
++  失敗すると CREATE_PROFILE / GENERATE が後段で全部 SSE 生エラー・502 になり原因が見えない。
++- **Speech（minutes batch + realtime STT）/ Document Understanding**: `oci_region` にサービスが
++  ある前提 + IAM 前提（minutes.py:44-58, stt_realtime.py:104-110, docunderstand.py:78-86）。
++  未整備時は「IAM 未整備の可能性」程度の 503 か生 502。
++- **TTS は us-phoenix-1 固定**（settings.py:99。TTS 自体が Phoenix 限定というサービス制約は正）:
++  Phoenix **未購読テナンシ**では 404→503 になるが、購読が原因と分からない。TTS_REGION は
++  設定にあるが ORM 未配線・ヒントなし。
++- **dbchat sample ターゲットは ADB 同梱 SH スキーマの PUBLIC 公開依存**（nl2sql.py:214、
++  bootstrap は SH への grant をしない）: SH が読めない ADB では ORA-00942 → 400、サンプルタブは
++  空表示のサイレント故障。
++- **obs の ship 失敗 spam**（obs.py:80-97 log / 157-164 metrics）: 失敗のたび stderr 1 行・
++  バックオフなし = Issue #47 コンテナログの「oci log ship failed」洪水の正体。実ログを埋める。
++- **AUTH_MODE 未設定コンテナは ~/.oci/config を探して未処理クラッシュ**: `oci.config.from_file()`
++  フォールバックが genai.py:24 ほか計 9 箇所（obs/tts/stt_realtime/translate/guardrails/
++  docunderstand/embeddings/minutes）。ORM は AUTH_MODE を配線済みだが、手動/部分デプロイで
++  欠けると ConfigFileNotFound → 500。
++- 参考（既に正しく縮退するもの・変更不要）: translate の LLM フォールバック（translate.py:87-98）、
++  guardrails / moderation の fail-open、OpenSearch バックエンドの self-disable
++  （rag_opensearch.py:31-39）、VPD の fail-closed 503、hosted-agent の「エージェント未設定」。
++
++## 仕様参照
++specs/00-architecture.md、specs/09-rag.md、specs/10 相当（NL2SQL）、specs/12 相当（voice）、
++docs/tips.md
++
++## 前提（依存タスク / 人間の事前作業）
++- 依存: **FIX-47 が done**（genai.py fail-fast・`/api/rag/health` の器・jetuse:test の
++  `jetuse-spike-fix47` スタックを再利用）。
++- base ブランチ: **main**（`BASE_BRANCH=main`）。
++- 人間ゲート: コミット / PR / push。**infra には触れない**（PORT-01 と衝突させない。
++  TTS_REGION / METRICS_NAMESPACE の ORM 配線は PORT-01 側）。
++
++## 対象 area
++api（packages/api）。
++
++## 作業内容
++1. **モデル可用性の反映**: モデルごとの利用可否を判定（実装は軽量に: 初回失敗時に「利用不可」を
++   プロセス内でマークする lazy 方式を基本とし、起動時プローブは任意）。
++   `GET /api/chat/models` は利用可能なもののみ（または `available` フラグ付きで）返す。
++   利用不可モデルへの chat は生エラーでなく「このリージョン/テナンシでは利用できません」を返す。
++   既定モデルが利用不可なら chat-family（llama/gemini）へのフォールバックを応答に明示。
++2. **dbchat の既定切替**: `semstore_ocid` が空なら既定バックエンドを select_ai にする。
++   semantic store 明示指定で未設定なら「SemanticStore 未構成（SEMSTORE_OCID）。Select AI を
++   使うか構成せよ」の設定ヒント付きエラー。
++3. **Select AI の可視化**: bootstrap の ENABLE_RESOURCE_PRINCIPAL 失敗を起動ログで明確化し
++   health（下記 8）に反映。プロファイル作成失敗のエラーに必要ポリシー（DG への
++   generative-ai-family / バケット read）のヒントを付す。
++4. **Speech / OCR / TTS の縮退メッセージ**: 未認可 404・サービス不在を機能別の明確な 503 に変換
++   （TTS は「テナンシが us-phoenix-1 未購読の可能性」を明示。TTS_REGION 設定は尊重）。
++5. **SH sample の検査**: bootstrap（または初回参照時）に SH 可視性を検査し、読めなければ
++   sample ターゲットを disabled（UI に理由が出るエラー形）にする。
++6. **obs の抑制**: log/metric ship 失敗の出力を指数バックオフ + N 回に 1 回のサマリへ。
++   恒常的な 401/403 は WARNING 1 回で detach（以後リトライしない）を検討・実装。
++7. **AUTH_MODE ガード**: `oci.config.from_file()` フォールバック 9 箇所を共通ヘルパ経由にし、
++   設定ファイル不在時は「AUTH_MODE=resource_principal の設定漏れの可能性」を含む明確な
++   設定エラー（未処理 500 にしない）。
++8. **health の拡張**: FIX-47 の `/api/rag/health` を capability readiness へ拡張し、
++   {chat(モデル別), rag, dbchat(semantic/select_ai), speech, ocr, tts} ごとに
++   ok / degraded / unavailable + 理由を構造化して返す（Issue 報告者が自己診断できる粒度）。
++
++## 完了条件（検証可能な述語で）
++- `.venv/bin/pytest packages/api/tests` 全緑・`.venv/bin/ruff check packages/api` クリーン
++  （新規分のユニットテスト: モデル可用性マーク・dbchat 既定切替・obs バックオフ・
++  AUTH_MODE ガード・health 集約）。
++- codex-review の review_verdict=PASS。
++- 下記 E2E シナリオを jetuse:test 実環境で通過し、証跡を runs/<run-id>/e2e/ に記録。
++
++## E2E シナリオ（完了ゲート・min_scenarios=2 以上。`jetuse-spike-fix47` スタックを再利用し、
++修正版イメージは FIX-47 と同じ専用タグ方式で投入）
++1. **モデル可用性**: `GET /api/chat/models` が実際に応答するモデルのみ（または available
++   フラグ付き）を返し、利用不可モデル指定の chat がヒント付きエラーになること。
++2. **dbchat 縮退**: SEMSTORE_OCID 未設定のクリーンルームで dbchat 既定が select_ai 経路で
++   応答する（Select AI 側も不成立の環境なら、設定ヒント付きエラーになることの確認で代替し
++   SKIPPED.md に理由を明記）。
++3. **health 集約**: 拡張 health が機能別 readiness を返し、無効機能（例: semantic store 未構成）
++   の理由が特定できること。
++4. **obs 抑制**: コンテナログで ship 失敗 spam が抑制されている（意図的に権限を欠いた状態を
++   作れる場合。不能なら単体テスト証跡 + SKIPPED.md）。
++証跡: リクエスト/レスポンス・コンテナログ・CLI 出力。スタックの destroy はキュー後始末
++（tasks/FIX47-PROGRESS.md）で行う。
++
++## 成果物
++- packages/api（models.py / chat.py / routes/chat.py / routes/dbchat.py / nl2sql.py /
++  bootstrap.py / obs.py / voice 系 / tts.py / health + tests）
++- docs/verification/port02-graceful-degradation.md（E2E 証跡サマリ）、実機の新発見は docs/tips.md
++- Issue #47 返信コメント案への追記（自己診断手順 = 拡張 health の使い方。投稿は人間ゲート）
++
++## 禁止事項
++- 認証情報・テナンシ/コンパートメント OCID 実値・エンドポイント実値のコミット
++- `jetuse-spike-` プレフィックス以外のリソース削除、jetuse:dev / jetuse:public の既存リソース変更
++- OCIR `:latest` タグへの push、コミット / PR / push の無承認実行
++- infra（infra/orm・modules）と loop-config.yml・スキル・hooks の編集

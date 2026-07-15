@@ -7,7 +7,7 @@ variable "prefix" {
 }
 
 variable "spa_par_expiry" {
-  description = "SPA配信PAR(AnyObjectRead)の失効日時(RFC3339)。dev環境は長めに"
+  description = "SPA配信PAR(AnyObjectRead)の失効日時(RFC3339)。空ならapply時刻起点+1年の相対期限"
   type        = string
-  default     = "2027-12-31T00:00:00Z"
+  default     = ""
 }

@@ -1,0 +1,14 @@
+data: {"ka": 1}
+
+data: {"delta": "準"}
+
+data: {"delta": "備"}
+
+data: {"delta": "完"}
+
+data: {"delta": "了"}
+
+data: {"usage": {"input_tokens": 79, "output_tokens": 87}}
+
+data: [DONE]
+

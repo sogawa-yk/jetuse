@@ -29,7 +29,7 @@ from openai import NotFoundError
 from . import demo_targets, rag_ledger
 from .db import connect
 from .demo_lease import DemoLease, require_lease_for
-from .genai import make_cp_client, make_inference_client
+from .genai import make_cp_client, make_inference_client, resolve_project_ocid
 from .owner_keys import (
     file_key,
     is_demo_namespace,
@@ -170,7 +170,9 @@ def _os_client(region: str | None = None):
         return oci.object_storage.ObjectStorageClient(
             {"region": region or get_settings().oci_region}, signer=signer
         )
-    cfg = oci.config.from_file()
+    from .genai import load_local_oci_config
+
+    cfg = load_local_oci_config()
     # settings.oci_region を region の既定にする(RP 経路と一貫)。write-ahead locator は
     # settings.oci_region を記録するため、OS クライアントもそれに揃える(別リージョン配備/
     # Chicago fallback で config ファイルの region と食い違っても locator と整合)。
@@ -307,6 +309,54 @@ def bucket_versioning(locator: dict | None = None) -> str | None:
     client = _os_client((locator or {}).get("region"))
     ns = (locator or {}).get("os_namespace") or s.os_namespace or client.get_namespace().data
     return client.get_bucket(ns, bucket).data.versioning
+
+
+# --- プリフライト診断(FIX-47) ---
+
+
+def _check_hint(e: Exception, what: str) -> str:
+    """失敗ヒント。レスポンスbody(OCID等を含みうる)は載せずステータスと確認箇所だけ返す。"""
+    code = getattr(e, "status_code", None)
+    base = f"{what} の呼び出しが失敗"
+    if code:
+        base += f" (HTTP {code})"
+    return (base + "。DG matching rule / IAM policy statements / PROJECT_OCID / "
+            "リージョンの agentic API 対応を確認してください")
+
+
+def health_check(*, allow_autocreate: bool = True) -> dict[str, Any]:
+    """RAG 経路の3点検査: ①project解決 ②CP vector_stores.list ③DP files.list(OpenAi-Project付き)。
+
+    Issue #47 の報告者が「どこで落ちているか」を自己診断できる粒度で返す(認可済み前提)。
+    allow_autocreate=False は集約health(/api/health)からの呼び出し向け(PORT-02):
+    GETの読み取り専用ポーリングだけでGenerativeAiProjectを作ってしまわないようにする
+    (/api/rag/health は既定のallow_autocreate=True=従来どおりの挙動を維持)。
+    """
+    checks: dict[str, dict[str, Any]] = {}
+    project: str | None = None
+    try:
+        project = resolve_project_ocid(allow_autocreate=allow_autocreate)
+        checks["project"] = {
+            "ok": True, "source": "env" if get_settings().project_ocid else "auto",
+        }
+    except Exception as e:  # noqa: BLE001 - 診断エンドポイント。落とさず構造化して返す
+        checks["project"] = {"ok": False, "hint": str(e)}
+    try:
+        make_cp_client().vector_stores.list()
+        checks["control_plane"] = {"ok": True}
+    except Exception as e:  # noqa: BLE001
+        checks["control_plane"] = {"ok": False,
+                                   "hint": _check_hint(e, "CP vector_stores.list")}
+    if project:
+        try:
+            make_inference_client(with_project=True).files.list()
+            checks["data_plane"] = {"ok": True}
+        except Exception as e:  # noqa: BLE001
+            checks["data_plane"] = {"ok": False,
+                                    "hint": _check_hint(e, "DP files.list")}
+    else:
+        checks["data_plane"] = {"ok": False, "hint": "project 未解決のため検査不能"}
+    return {"ok": all(c["ok"] for c in checks.values()), "checks": checks}
 
 
 # --- Vector Store / Files API ---

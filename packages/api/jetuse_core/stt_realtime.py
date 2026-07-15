@@ -112,8 +112,10 @@ def _build_client(session: SttSession) -> Any:
         signer = oci.auth.signers.get_resource_principals_signer()
         config: dict = {"region": s.oci_region}
     else:
+        from .genai import load_local_oci_config
+
         signer = None
-        config = oci.config.from_file()
+        config = load_local_oci_config()
     return RealtimeSpeechClient(
         config=config,
         realtime_speech_parameters=params,

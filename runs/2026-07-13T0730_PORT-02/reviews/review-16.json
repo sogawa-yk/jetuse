@@ -1,0 +1,71 @@
+{
+  "review_n": 16,
+  "timestamp": "2026-07-13T09:53:57+00:00",
+  "reviewer": "codex",
+  "model": "gpt-5.5",
+  "input_diff_path": "reviews/review-16.input.diff",
+  "raw_output_path": "reviews/review-16.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "実装自体は主要経路に対する単体テストが厚く追加されていますが、追跡対象の検証ドキュメントに実環境OCIR URLが入っており、リポジトリ固有の環境依存値コミット禁止に抵触します。加えて、モデル不可判定とE2E証跡にはまだ誤判定・裏づけ不足があります。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 4,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "docs/verification/port02-graceful-degradation.md",
+      "line": 8,
+      "issue": "実環境のOCIRエンドポイント/namespaceを含む `ord.ocir.io/idqcucnenh88/jetuse-api:port02-e2e` が追跡対象ドキュメントに追加されています。本リポジトリ固有ルールでは、エンドポイント実値や環境依存値はコミットせず .env/非公開証跡で管理する必要があります。",
+      "suggestion": "OCIR URLは `<ocir-region>.ocir.io/<namespace>/jetuse-api:<tag>` のようにマスクし、実値は .env または未追跡のE2E証跡側だけに置いてください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/chat.py",
+      "line": 580,
+      "issue": "`model_only_call` が `project_ocid` 引数の有無だけを見ているため、Responses系の通常チャットで内部解決された `OpenAi-Project` の不備/DP伝播待ち/IAM不足による 401/403/404 もモデル未提供として `mark_unavailable()` されます。結果として既定モデルが最大5分誤って不可扱いになり、不要なフォールバックや誤った `/api/chat/models` 表示につながります。",
+      "suggestion": "Responses系の 401/403/404 は project/IAM 起因を除外できる場合だけモデル不可にする、または chat-family API のみに lazy mark を限定してください。少なくともエラー本文/コードでモデル不在と判別できない場合は mark しない方が安全です。"
+    },
+    {
+      "id": "F-003",
+      "severity": "major",
+      "file": "packages/api/service/routes/chat.py",
+      "line": 472,
+      "issue": "フォールバック発生時に `{\"notice\": ...}` をSSEへ流していますが、既存Web側の `ChatStreamEvent` と `useChatStream` は `notice` を扱っていません。このままだと「自動フォールバックした旨を明示」というユーザー向け契約がUIでは満たされません。",
+      "suggestion": "`packages/web/src/pages/chat/types.ts` に `notice?: string` を追加し、`useChatStream` で通知表示へ配線するか、既存クライアントが処理できる `delta`/`error` 等の契約に寄せてください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/health.py",
+      "line": 79,
+      "issue": "`select_ai.ok is None` を生成バックエンドなしとして扱うため、SemanticStore未設定かつSelect AI未検証の状態を top-level `dbchat.status: unavailable` にしています。E2E証跡でも `/api/health` は dbchat unavailable を返す一方、後続の `/api/chat/nl2sql` はSelect AI経路で成功しており、readinessが実態より悪く表示され得ます。",
+      "suggestion": "`ok=None` は `unavailable` ではなく `degraded/unknown` 相当に集約する、またはSelect AI成功時に `resource_principal_status` を更新するなど、未検証と確認済み失敗を分離してください。"
+    },
+    {
+      "id": "F-005",
+      "severity": "major",
+      "file": "docs/verification/port02-graceful-degradation.md",
+      "line": 34,
+      "issue": "E2Eの「モデル可用性 — 合格」は、全モデルavailable、通常チャット成功、未知モデル400のみを示しており、今回の中核であるプロバイダ401/403/404による lazy mark と既定モデルフォールバックを実環境で裏づけていません。SKIPPED.mdにもこの未実施理由がありません。",
+      "suggestion": "登録済みだが当該テナンシ/リージョンで使えないモデル、または制御された権限/リージョン条件で fallback/unavailable SSE を実測する証跡を追加してください。実環境で再現不能ならSKIPPED.mdに理由と単体テスト代替範囲を明記してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "insufficient",
+    "notes": "証跡パスは `runs/2026-07-13T0730_PORT-02/e2e/`。scenario1はモデル一覧/通常チャット/未知モデル400、scenario2はdbchatのSelect AI切替、scenario3は集約health、scenario4はobs抑制のSKIPPED理由を確認。最低2シナリオは満たしますが、モデル不可時のlazy mark/フォールバックは実環境で未検証、Functions経路の新schema/TtsErrorも未デプロイでSKIPPED扱いのため、diff全体の裏づけとしては不十分です。なお添付E2Eログには実OCIDが含まれるため、未追跡のままコミット対象から除外する必要があります。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲットURL未提供の指示のため、実ブラウザE2Eは実施していません。"
+    }
+  }
+}

@@ -115,6 +115,8 @@ def _read_secret(secret_ocid: str) -> str:
         signer = oci.auth.signers.get_resource_principals_signer()
         client = oci.secrets.SecretsClient({}, signer=signer)
     else:
-        client = oci.secrets.SecretsClient(oci.config.from_file())
+        from .genai import load_local_oci_config
+
+        client = oci.secrets.SecretsClient(load_local_oci_config())
     bundle = client.get_secret_bundle(secret_ocid).data
     return base64.b64decode(bundle.secret_bundle_content.content).decode()

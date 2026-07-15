@@ -1,0 +1,55 @@
+{
+  "review_n": 2,
+  "timestamp": "2026-07-10T09:25:53+00:00",
+  "reviewer": "codex",
+  "model": "gpt-5.5",
+  "input_diff_path": "reviews/review-2.input.diff",
+  "raw_output_path": "reviews/review-2.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "Project OCID の自動解決と RAG エラー表面化の方向性は妥当ですが、初回/異常系で不要な OCI リソースを作るリスクが残っています。実環境 E2E は人間ゲート待ちの SKIPPED があり、成功裏付けではないものの未実施理由は明示されています。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 3,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/genai.py",
+      "line": 123,
+      "issue": "`resolve_project_ocid()` は ACTIVE project が無い場合に即 `_create_project()` へ進むため、別プロセスや直前リクエストが作成した CREATING project を待たずに重複作成できます。`_project_lock` はプロセス内だけなので、Functions/複数コンテナの初回アクセスでは競合し得ます。",
+      "suggestion": "JetUse 管理 project を display_name/freeform tag などで識別し、CREATING/UPDATING があれば ACTIVE まで待つか失敗を返してください。作成時は `opc_retry_token` も渡し、同時実行・リトライ時の重複作成を避けるテストを追加してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag.py",
+      "line": 217,
+      "issue": "初回 RAG upload では project 解決より先に CP の vector store を作成しています。その後 `make_inference_client(with_project=True)` で ProjectResolutionError/IAM エラーになると、DB 行が無い未管理 vector store が残り、再試行のたびに同じ漏れが起きます。",
+      "suggestion": "`ensure_store()` の冒頭で `resolve_project_ocid()` などを呼んで DP project を先に検証するか、CP 作成後の project 解決失敗時に作成済み vector store を best-effort で削除してから例外を返してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/genai.py",
+      "line": 100,
+      "issue": "stdin の差分には、`resolve_project_ocid()`、空ヘッダ抑止、`PROJECT_AUTOCREATE=false`、RAG ルートの 503/502 変換、`/api/rag/health` の Python 側テストが含まれていません。IAM tftest は更新されていますが、今回の主要な実行時挙動は未カバーです。",
+      "suggestion": "project 解決分岐、明示 `project_ocid` 優先、SDK 失敗時の ProjectResolutionError、RAG route の APIStatusError 変換、health の project/CP/DP 成否を単体テストとしてコミット対象に含めてください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "`runs/2026-07-10T0842_FIX-47/e2e/SKIPPED.md` に、クリーンルーム RAG E2E・明示 PROJECT_OCID E2E・ネガティブ E2E が IAM/tenancy 権限の人間ゲート待ちで未実施と明記されています。添付ログは plan 失敗の一次証跡であり、diff の成功を裏付けるものではありませんが、未実施理由は正当化されています。証跡ログには実 compartment OCID や Object Storage namespace が含まれるため、`runs/` をコミットする場合はマスクまたは除外が必要です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲット URL が提供されていないため、指示どおり実ブラウザ E2E は実施していません。"
+    }
+  }
+}

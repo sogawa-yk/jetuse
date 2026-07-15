@@ -1,0 +1,71 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-07-10T09:12:01+00:00",
+  "reviewer": "codex",
+  "model": "gpt-5.5",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "RAG の project 自動解決を追加する意図は分かるが、実装は IAM 権限拡大と実行時リソース自動作成をデフォルト化しており、本リポジトリの人間ゲート方針に反しています。加えて、E2E 証跡はすべて plan 失敗で、FIX-47 の主張を裏づける実環境シナリオは実施されていません。",
+  "severity_counts": {
+    "blocker": 2,
+    "major": 2,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "infra/terraform/modules/iam/main.tf",
+      "line": 54,
+      "issue": "runtime dynamic group に `manage generative-ai-project` を常時付与しており、IAM 変更を Terraform 適用時に自動で入れる差分になっています。本リポジトリ方針では IAM/テナンシ変更は人間ゲート対象で、既存リソース変更も参照に留める必要があります。",
+      "suggestion": "この権限追加をデフォルト適用から外し、明示 opt-in 変数と承認済み環境だけで有効化してください。PROJECT_OCID 明示指定を通常経路にし、自動作成を使う場合は人間承認済みの専用スタック/ポリシーでのみ有効化してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "blocker",
+      "file": "packages/api/jetuse_core/genai.py",
+      "line": 84,
+      "issue": "`PROJECT_OCID` 未設定時にアプリが `create_generative_ai_project` を実行し、実行時に OCI リソースを自動作成します。これは「既存リソースを参照のみに留める」「jetuse-dev への開発リソース作成は承認済み、IAM/既存変更は人間ゲート」という運用制約に対して、環境を問わず自動作成をデフォルト化しています。",
+      "suggestion": "デフォルトは検出/失敗に留め、作成は `ALLOW_PROJECT_AUTOCREATE=true` のような明示フラグと環境ガード付きにしてください。公開スタック説明も、自動作成ではなく PROJECT_OCID 指定または承認済み作成手順へ寄せてください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/genai.py",
+      "line": 78,
+      "issue": "`list_generative_ai_projects(settings.compartment_ocid).data.items` はページングを考慮していません。ACTIVE project が 1 ページ目に無い場合、既存 project を見逃して `jetuse-project` を新規作成します。",
+      "suggestion": "OCI SDK の pagination helper（例: `oci.pagination.list_call_get_all_results`）で全ページを取得してから ACTIVE project を選択してください。可能なら display_name/tag で JetUse 管理 project を優先する選択規則も追加してください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/genai.py",
+      "line": 92,
+      "issue": "作成後 30 秒待っても ACTIVE にならない場合でも `resolved` をキャッシュして返します。CREATING/FAILED/DELETING の project OCID が `OpenAi-Project` ヘッダに使われ、後続の Files/Conversations が 404/失敗する可能性があります。",
+      "suggestion": "待機後に lifecycle_state が ACTIVE でなければ `ProjectResolutionError` を raise し、非 ACTIVE な OCID はキャッシュしないでください。必要なら待機時間を設定化し、FAILED は即時エラーにしてください。"
+    },
+    {
+      "id": "F-005",
+      "severity": "minor",
+      "file": "packages/api/service/routes/rag.py",
+      "line": 78,
+      "issue": "新設した `/api/rag/health` は `rag.health_check` を直接 `asyncio.to_thread` しており、通常 RAG 経路で追加した `ProjectResolutionError` / `APIStatusError` の HTTP 変換を通りません。`health_check` 内では例外を握る設計ですが、予期しない例外は 500 になり、診断エンドポイントとしての一貫性が弱いです。",
+      "suggestion": "`_rag_call(rag.health_check)` を使うか、health 専用に予期しない例外も構造化して 503/502 へ変換してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 3,
+    "adequacy": "insufficient",
+    "notes": "証跡は `runs/2026-07-10T0842_FIX-47/e2e/local-plan-test.log`、`rm-plan-1-test.log`、`rm-plan-2-devprobe.log`、`SKIPPED.md`。3本とも Terraform plan が失敗しており、クリーンルーム RAG、明示 PROJECT_OCID、ネガティブ表面化の本命 E2E は未実施です。SKIPPED.md は権限不足を理由にしているため未実施理由は記録されていますが、diff の実動作を裏づける十分な実環境証跡ではありません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されておらず、指示によりブラウザツールは使用していません。"
+    }
+  }
+}

@@ -1,0 +1,14 @@
+# Scenario 1 — PAR 相対期限 + gateway 200（共有スタック apply 後・実環境）
+apply job: SUCCEEDED — "Apply complete! Resources: 131 added, 2 changed, 130 destroyed"
+  (131 add = 127 SPA object 再upload[mtime churn・同内容] + time_offset + 置換分の新規側 等)
+  IAM 変更 0 / ADB database 置換 0（apply 前 plan の hard gate で確認済）。
+wallet fix: fix_wallet_and_restart.sh 実行 → "correct wallet re-uploaded" → CI restart → DB READY(200)。
+
+1a) PAR 相対期限（oci os preauth-request list）:
+    name=jetuse-spike-47-spa-read  created=2026-07-13T10:12:41Z  expires=2027-07-13T10:12:40Z
+    => apply 時刻起点でちょうど +1年（相対）。旧固定 2027-12-31 ではない＝time_offset が機能。
+1b) gateway 経由 SPA 配信:
+    GET /            -> 200
+    GET /index.html  -> 200
+    GET /config.json -> 200
+=> tasks/PORT-01.md E2E シナリオ1 合格。

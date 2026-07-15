@@ -47,7 +47,9 @@ def _wallet_bytes(settings: Settings) -> bytes:
                 {"region": settings.oci_region}, signer=_rp_signer()
             )
         else:
-            client = oci.object_storage.ObjectStorageClient(oci.config.from_file())
+            from .genai import load_local_oci_config
+
+            client = oci.object_storage.ObjectStorageClient(load_local_oci_config())
         ns = client.get_namespace().data
         obj = client.get_object(ns, settings.adb_wallet_bucket, settings.adb_wallet_object)
         content = obj.data.content
@@ -58,7 +60,9 @@ def _wallet_bytes(settings: Settings) -> bytes:
         if rp:
             db = oci.database.DatabaseClient({"region": settings.oci_region}, signer=_rp_signer())
         else:
-            db = oci.database.DatabaseClient(oci.config.from_file())
+            from .genai import load_local_oci_config
+
+            db = oci.database.DatabaseClient(load_local_oci_config())
         resp = db.generate_autonomous_database_wallet(
             settings.adb_ocid,
             oci.database.models.GenerateAutonomousDatabaseWalletDetails(

@@ -6,9 +6,27 @@ from fastapi.testclient import TestClient
 import service.main as service_main
 from jetuse_core import datasets, nl2sql
 from jetuse_core.nl2sql import SqlRejectedError, sanitize_sql
+from jetuse_core.settings import get_settings
 from service.main import app
 
 client = TestClient(app)
+
+_FAKE_SCHEMA = {
+    "schema": "SH",
+    "tables": [{"name": "SALES", "comment": "売上明細", "rows": 1, "columns": []}],
+}
+
+
+@pytest.fixture(autouse=True)
+def dbchat_defaults(monkeypatch):
+    """既定: SHサンプルは読める(sample_available=True) / SEMSTORE_OCIDは設定済み
+    (=既存の"sql_search既定"経路のテストが引き続き成立するようにする)。
+    unset/emptyにしたいテストは各テスト内で上書きする(PORT-02)。"""
+    monkeypatch.setattr(service_main.nl2sql, "get_schema_info", lambda: dict(_FAKE_SCHEMA))
+    monkeypatch.setenv("SEMSTORE_OCID", "ocid1.semanticstore.oc1..default")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 def test_sanitize_accepts_select_and_with():
@@ -194,6 +212,153 @@ def test_execute_readonly_ownerless_skips_gate(monkeypatch):
     with pytest.raises(RuntimeError):
         nl2sql.execute_readonly("SELECT 1 FROM dual", owner_key=None)
     assert calls == []  # owner なしはゲートを呼ばない
+
+
+# --- PORT-02: dbchat既定切替(SEMSTORE_OCID空→select_ai) ---
+
+
+def test_generate_sql_raises_hinted_error_when_semstore_unset(monkeypatch):
+    monkeypatch.delenv("SEMSTORE_OCID", raising=False)
+    get_settings.cache_clear()
+    with pytest.raises(RuntimeError) as ei:
+        nl2sql.generate_sql("売上は？")
+    assert "SEMSTORE_OCID" in str(ei.value)
+    assert "Select AI" in str(ei.value)
+
+
+def test_sample_target_defaults_to_select_ai_when_semstore_unset(monkeypatch):
+    monkeypatch.delenv("SEMSTORE_OCID", raising=False)
+    get_settings.cache_clear()
+    called = {}
+    monkeypatch.setattr(
+        service_main.nl2sql, "generate_sql",
+        lambda q: called.setdefault("b", "ss") or "SELECT 1 FROM dual",
+    )
+    monkeypatch.setattr(
+        service_main.nl2sql, "generate_sql_select_ai",
+        lambda q, **k: called.setdefault("b", "sai") or "SELECT 2 FROM dual",
+    )
+    res = client.post("/api/chat/nl2sql", json={"question": "売上は？"})
+    assert res.status_code == 200
+    assert called["b"] == "sai"
+
+
+def test_explicit_sql_search_also_switches_to_select_ai_when_semstore_unset(monkeypatch):
+    """PORT-02: web UIは常にbackendを明示送信し既定値は"sql_search"のため、「未指定」と
+    「明示sql_search」をワイヤ上で区別できない(対象areaはpackages/apiのためUI変更は
+    このタスクでは行わない — schemas.Nl2SqlRequestのponytailコメント参照)。よって
+    backend="sql_search"は実UIの既定操作(=通常の「サンプルに質問する」)そのものであり、
+    ここを弾くとSEMSTORE_OCID未設定環境でdbchatの既定挙動が実UIから一切到達不能になる
+    (レビューでblocker指摘)。実UI到達性を優先しselect_aiへ自動切替する。"""
+    monkeypatch.delenv("SEMSTORE_OCID", raising=False)
+    get_settings.cache_clear()
+    called = {}
+    monkeypatch.setattr(
+        service_main.nl2sql, "generate_sql_select_ai",
+        lambda q, **k: called.setdefault("b", "sai") or "SELECT 1 FROM dual",
+    )
+    res = client.post(
+        "/api/chat/nl2sql", json={"question": "売上は？", "backend": "sql_search"}
+    )
+    assert res.status_code == 200
+    assert called["b"] == "sai"
+
+
+def test_sample_target_uses_semantic_store_when_semstore_set(monkeypatch):
+    # dbchat_defaults フィクスチャがSEMSTORE_OCIDを設定済み → 従来どおりsql_search経路
+    called = {}
+    monkeypatch.setattr(
+        service_main.nl2sql, "generate_sql",
+        lambda q: called.setdefault("b", "ss") or "SELECT 1 FROM dual",
+    )
+    res = client.post("/api/chat/nl2sql", json={"question": "売上は？"})
+    assert res.status_code == 200
+    assert called["b"] == "ss"
+
+
+def test_sh_sample_status_available_when_tables_present():
+    assert nl2sql.sh_sample_status() == {"available": True}
+
+
+def test_sh_sample_status_unavailable_when_no_tables(monkeypatch):
+    monkeypatch.setattr(
+        service_main.nl2sql, "get_schema_info",
+        lambda: {"schema": "SH", "tables": []},
+    )
+    status = nl2sql.sh_sample_status()
+    assert status["available"] is False
+    assert "SH" in status["reason"]
+
+
+def test_sample_target_unavailable_returns_hint_without_generating(monkeypatch):
+    monkeypatch.setattr(
+        service_main.nl2sql, "get_schema_info",
+        lambda: {"schema": "SH", "tables": []},
+    )
+
+    def boom(*a, **kw):
+        raise AssertionError("SQL生成を呼んではいけない(SH未整備の時点で打ち切る)")
+
+    monkeypatch.setattr(service_main.nl2sql, "generate_sql", boom)
+    monkeypatch.setattr(service_main.nl2sql, "generate_sql_select_ai", boom)
+    res = client.post("/api/chat/nl2sql", json={"question": "売上は？"})
+    assert res.status_code == 200
+    assert "SH" in res.text
+    assert '"error"' in res.text
+
+
+def test_sample_target_precheck_crash_returns_sse_error_not_500(monkeypatch):
+    # PORT-02 レビュー指摘F-003: sh_sample_status()自体が例外を投げても、SSE契約を破る
+    # 生500にせずSSEの{"error":...}へ正規化する。
+    def boom():
+        raise RuntimeError("DPY-4000: unable to find wallet")
+
+    monkeypatch.setattr(service_main.nl2sql, "sh_sample_status", boom)
+    res = client.post("/api/chat/nl2sql", json={"question": "売上は？"})
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("text/event-stream")
+    assert '"error"' in res.text
+    assert res.text.rstrip().endswith("data: [DONE]")
+
+
+def test_schema_endpoint_reports_sample_available():
+    res = client.get("/api/dbchat/schema")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["sample_available"] is True
+    assert "sample_unavailable_reason" not in body
+
+
+def test_schema_endpoint_reports_sample_unavailable_reason(monkeypatch):
+    monkeypatch.setattr(
+        service_main.nl2sql, "get_schema_info",
+        lambda: {"schema": "SH", "tables": []},
+    )
+    res = client.get("/api/dbchat/schema")
+    body = res.json()
+    assert body["sample_available"] is False
+    assert body["sample_unavailable_reason"]
+
+
+# --- PORT-02: Select AI可視化(create_profileのヒント付きエラー) ---
+
+
+def test_create_profile_wraps_database_error_with_hint():
+    import oracledb as oracledb_mod
+
+    class FakeErr:
+        code = 20000
+        message = "ORA-20000"
+
+    class FakeCursor:
+        def execute(self, sql, **kw):
+            if "CREATE_PROFILE" in sql:
+                raise oracledb_mod.DatabaseError(FakeErr())
+
+    with pytest.raises(RuntimeError) as ei:
+        nl2sql.create_profile(FakeCursor(), "PROF", "meta.llama-3.3-70b-instruct", [])
+    assert "generative-ai-family" in str(ei.value)
+    assert "/api/health" in str(ei.value)
 
 
 def test_sample_data_csv_valid():

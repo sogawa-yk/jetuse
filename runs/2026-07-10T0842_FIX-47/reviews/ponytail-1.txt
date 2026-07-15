@@ -1,0 +1,14 @@
+ponytail self-review (maker, 非採点) — FIX-47 diff 2026-07-10
+
+判定: 差分は最小構成に近い。削除した項目なし、確認済みの許容項目のみ列挙。
+
+1. genai.py resolve_project_ocid の threading.Lock + double-checked cache:
+   維持。asyncio.to_thread 並行下で project 自動作成が二重発火する実害(重複リソース)を防ぐ。
+   ladder「When NOT to be lazy: データ損失を防ぐエラー処理」相当の副作用ガード。
+2. ACTIVE 待ち(15×2s 有界ループ): 維持。CREATING project を OpenAi-Project に使うと 404 のため。
+3. _reset_project_cache(): テスト専用 2 行ヘルパ。テストが private global を直接触るより明示的。許容。
+4. routes/rag.py _rag_call 共有ラッパ: 全 rag エンドポイントのエラー変換を1箇所に集約
+   (per-route ガードの重複を回避 — ladder 準拠)。
+5. rag.py _check_hint と routes の _GENAI_HINT の文言重複: 文脈が違う(health の構造化 hint vs
+   HTTP detail)。共有定数化はモジュール間結合を増やすだけなので見送り。
+6. 投機的抽象なし・新規依存なし(oci SDK は既存依存)。stdlib(threading/time)のみ追加使用。

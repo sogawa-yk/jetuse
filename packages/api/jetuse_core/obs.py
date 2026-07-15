@@ -21,6 +21,56 @@ _internal = logging.getLogger("jetuse.obs")
 
 _BATCH_MAX = 50
 _FLUSH_SECONDS = 5.0
+_MAX_BACKOFF_SECONDS = 300.0
+
+
+def _is_auth_error(e: Exception) -> bool:
+    return getattr(e, "status", None) in (401, 403)
+
+
+class _ShipThrottle:
+    """送信失敗の抑制(PORT-02): 指数バックオフ + N回に1回のstderrサマリ。
+
+    恒常的な401/403(認可エラー)はWARNING1回だけ出し、以後リトライしない
+    (failed()がTrueを返すのでworker側でスレッドを終了=detachする)。
+    """
+
+    def __init__(self, name: str):
+        self.name = name
+        self.fail_count = 0
+        self.retry_after = 0.0
+
+    def blocked(self) -> bool:
+        return time.monotonic() < self.retry_after
+
+    def ok(self) -> None:
+        self.fail_count = 0
+        self.retry_after = 0.0
+
+    def failed(self, e: Exception) -> bool:
+        self.fail_count += 1
+        if _is_auth_error(e):
+            _internal.warning(
+                "%s: 認可エラーのため送信を停止します"
+                "(AUTH_MODE設定漏れ/IAMポリシー未整備の可能性): %s", self.name, e,
+            )
+            return True
+        if self.fail_count == 1 or self.fail_count % 10 == 0:
+            import sys
+
+            print(f"{self.name} failed x{self.fail_count} (backing off)", file=sys.stderr)
+        backoff = min(_MAX_BACKOFF_SECONDS, _FLUSH_SECONDS * (2 ** min(self.fail_count, 6)))
+        self.retry_after = time.monotonic() + backoff
+        return False
+
+
+def _retain_buffer(buf: list, cap: int) -> list:
+    """バックオフ中はバッファを破棄せず保持する(直近capまで、超過分は古いものから捨てる)。
+
+    障害発生中ほど観測データが欠落しては意味がないため、送信を一時停止していても
+    キューから引いた分は失わない(全体の上限はself._q自体のmaxsizeで別途effectively bound)。
+    """
+    return buf[-cap:] if len(buf) > cap else buf
 
 
 def _signer_args() -> dict:
@@ -31,7 +81,9 @@ def _signer_args() -> dict:
             "config": {"region": get_settings().oci_region},
             "signer": oci.auth.signers.get_resource_principals_signer(),
         }
-    return {"config": oci.config.from_file()}
+    from .genai import load_local_oci_config
+
+    return {"config": load_local_oci_config()}
 
 
 class OciLogHandler(logging.Handler):
@@ -64,6 +116,7 @@ class OciLogHandler(logging.Handler):
 
         buf: list = []
         last = time.monotonic()
+        throttle = _ShipThrottle("oci log ship")
         while True:
             timeout = max(0.2, _FLUSH_SECONDS - (time.monotonic() - last))
             try:
@@ -71,6 +124,10 @@ class OciLogHandler(logging.Handler):
             except queue.Empty:
                 pass
             if buf and (len(buf) >= _BATCH_MAX or time.monotonic() - last >= _FLUSH_SECONDS):
+                if throttle.blocked():
+                    buf = _retain_buffer(buf, _BATCH_MAX)
+                    last = time.monotonic()
+                    continue
                 try:
                     now = datetime.now(UTC)
                     entries = [
@@ -89,13 +146,15 @@ class OciLogHandler(logging.Handler):
                             )],
                         ),
                     )
-                except Exception:  # noqa: BLE001
-                    # 送信失敗はstderrへ1行だけ(無限ループ防止のためloggingは使わない)
-                    import sys
-
-                    print("oci log ship failed", file=sys.stderr)
+                    throttle.ok()
+                    buf = []
+                except Exception as e:  # noqa: BLE001
+                    # 失敗した当該バッチも破棄しない(レビュー指摘: バックオフに入る直前の
+                    # 1回目の失敗バッチだけ従来 buf=[] で毎回捨てていた)。
                     self._client = None  # 次回再接続
-                buf = []
+                    if throttle.failed(e):
+                        return  # 認可エラー: 以後リトライせずdetach
+                    buf = _retain_buffer(buf, _BATCH_MAX)
                 last = time.monotonic()
 
 
@@ -128,6 +187,7 @@ def _metrics_worker() -> None:
     client = None
     buf: list = []
     last = time.monotonic()
+    throttle = _ShipThrottle("oci metric ship")
     while True:
         timeout = max(0.2, _FLUSH_SECONDS - (time.monotonic() - last))
         try:
@@ -135,6 +195,10 @@ def _metrics_worker() -> None:
         except queue.Empty:
             pass
         if buf and (len(buf) >= _BATCH_MAX or time.monotonic() - last >= _FLUSH_SECONDS):
+            if throttle.blocked():
+                buf = _retain_buffer(buf, _BATCH_MAX)
+                last = time.monotonic()
+                continue
             try:
                 if client is None:
                     args = _signer_args()
@@ -157,12 +221,13 @@ def _metrics_worker() -> None:
                 client.post_metric_data(
                     post_metric_data_details=mm.PostMetricDataDetails(metric_data=data)
                 )
-            except Exception:  # noqa: BLE001
-                import sys
-
-                print("oci metric ship failed", file=sys.stderr)
+                throttle.ok()
+                buf = []
+            except Exception as e:  # noqa: BLE001
                 client = None
-            buf = []
+                if throttle.failed(e):
+                    return  # 認可エラー: 以後リトライせずdetach
+                buf = _retain_buffer(buf, _BATCH_MAX)
             last = time.monotonic()
 
 

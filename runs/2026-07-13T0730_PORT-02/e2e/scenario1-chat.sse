@@ -1,0 +1,10 @@
+data: {"ka": 1}
+
+data: {"delta": "東京"}
+
+data: {"delta": "。"}
+
+data: {"usage": {"input_tokens": 76, "output_tokens": 53}}
+
+data: [DONE]
+

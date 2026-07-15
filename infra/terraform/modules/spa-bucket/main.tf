@@ -17,10 +17,17 @@ resource "oci_objectstorage_bucket" "spa" {
 
 # bucket_listing_actionは未指定=リスト不可。"Deny"明示はAPIが値を返さず
 # 毎applyで再作成(URL変化)になるため指定しない(object-storageモジュールと同挙動)
+# 相対期限の基準時刻を state に固定(object-storage モジュールと同挙動。ignore_changes 不要)。
+resource "time_offset" "spa_par" {
+  count        = var.spa_par_expiry == "" ? 1 : 0
+  offset_years = 1
+}
+
 resource "oci_objectstorage_preauthrequest" "spa_read" {
-  namespace    = local.ns
-  bucket       = oci_objectstorage_bucket.spa.name
-  name         = "${var.prefix}-spa-read"
-  access_type  = "AnyObjectRead"
-  time_expires = var.spa_par_expiry
+  namespace   = local.ns
+  bucket      = oci_objectstorage_bucket.spa.name
+  name        = "${var.prefix}-spa-read"
+  access_type = "AnyObjectRead"
+  # 空なら apply 時刻(time_offset の base)起点 +1年。明示指定時はその値を尊重(変更も反映)。
+  time_expires = var.spa_par_expiry != "" ? var.spa_par_expiry : time_offset.spa_par[0].rfc3339
 }
