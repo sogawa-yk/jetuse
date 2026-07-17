@@ -67,15 +67,20 @@ def test_dbchat_health_unavailable_when_no_generation_backend_works(monkeypatch)
     assert out["status"] == "unavailable"  # …生成経路が無いのでunavailable
 
 
-def test_dbchat_health_reports_unverified_select_ai_as_not_ok():
-    # PORT-02 F-003: bootstrap未完了(未検証)をokと偽らない — ok=Noneで区別する
-    bootstrap._rp_status = {
-        "ok": None,
-        "hint": "起動時のENABLE_RESOURCE_PRINCIPAL検証が未実行です(bootstrap未完了)",
-    }
+def test_dbchat_health_probes_select_ai_rp_when_bootstrap_unverified(monkeypatch):
+    # PORT-02 F-003 + dev-app: bootstrap(別プロセス起動)が rp を未検証(ok=None)のときは、
+    # okと偽らず uvicorn プロセスで RP 経路を実測する(nl2sql.select_ai_rp_status)。
+    bootstrap._rp_status = {"ok": None, "hint": "bootstrap未完了"}
+    # プローブ失敗 → select_ai not-ok(okと偽らない)
+    monkeypatch.setattr(nl2sql, "select_ai_rp_status",
+                        lambda: {"ok": False, "hint": "RP不可"})
     out = health.dbchat_health()
-    assert out["select_ai"]["ok"] is None
+    assert out["select_ai"]["ok"] is False
     assert out["select_ai"]["hint"]
+    # プローブ成功 → select_ai ok(dev-app の RP フォールバックが効く)
+    bootstrap._rp_status = {"ok": None, "hint": "bootstrap未完了"}
+    monkeypatch.setattr(nl2sql, "select_ai_rp_status", lambda: {"ok": True})
+    assert health.dbchat_health()["select_ai"]["ok"] is True
 
 
 def test_dbchat_health_survives_sample_check_crash(monkeypatch):

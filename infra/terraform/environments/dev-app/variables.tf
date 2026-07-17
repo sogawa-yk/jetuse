@@ -136,3 +136,12 @@ variable "gen_shared_compartment_ocid" {
   type    = string
   default = ""
 }
+
+# --- 全機能有効化(施主指示 2026-07-17): speech(議事録/音声) ---
+# 議事録/音声(speech)の音声・文字起こし保管バケット名。空 = speech unavailable(503)。
+# dbchat(Select AI/RP)は ADB 側の一回手動セットアップ + uvicorn 内プローブで有効化するため
+# ここに ADB ADMIN パスワードは持たない(共有 ADB を自動 push で変更しない — codex review-1 B001)。
+variable "speech_bucket" {
+  type    = string
+  default = ""
+}
