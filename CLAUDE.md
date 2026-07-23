@@ -36,7 +36,8 @@ docs/plan.md         # 作業計画書（正本）
 specs/               # 機能仕様（フェーズごと）
 docs/decisions/      # ADR
 docs/verification/   # スパイク・検証レポート
-spikes/              # Phase 0 検証スクリプト
+docs/archive/         # 陳腐化した計画・Phase 0 スパイク（git 履歴から復元可）
+spikes/sp3_03_scaffold/  # 生成デモの実行時スキャフォールド（後続で本来の場所へ移設予定）
 packages/web/        # React SPA
 packages/api/        # FastAPI
 infra/terraform/     # Terraformモジュール
