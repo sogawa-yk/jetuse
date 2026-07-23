@@ -41,7 +41,7 @@
 1. **コスト削減効果は小さい**（月$4〜、CIがSSE/状態系で残るため）。削減の主役は
    CIの右サイズと停止運用（③で半減以下）であり、Functions化そのものではない
 2. **障害分離の価値が実証済みで大きい**: 2026-06-12にCI再作成失敗で**全API停止**の実障害
-   （image pull失敗、復旧15分 — docs/verification/FW-02.md）。D区分がFunctionsなら
+   （image pull失敗、復旧15分 — docs/verification/jetuse-app/FW-02.md）。D区分がFunctionsなら
    CRUD・一覧・TTS等は生き残り、チャット系のみの部分障害に抑えられた
 3. **デプロイ独立性**: 現行は1行の変更でも全API再作成（壊してから作る）。Functions側は
    機能単位の独立デプロイになり、リスクと停止窓が縮む

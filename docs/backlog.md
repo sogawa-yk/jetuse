@@ -5,16 +5,16 @@
 | # | 課題 | 記録日 | 備考 |
 |---|---|---|---|
 | 1 | **モバイルUXの使い勝手**（ドロワー化はしたが「若干使いにくい」— ユーザーフィードバック）。ナビ構造・タップ領域・入力体験の見直し | 2026-06-10 | チェックポイント②のフィードバックと合わせて改善タスク化 |
-| ~~2~~ | ~~チャット停止時の上流ストリーム完走~~ **解消（CHAT-08）** | 2026-06-10 | docs/verification/CHAT-07-09.md |
-| ~~3~~ | ~~会話削除時のOCI Conversation削除同期~~ **解消（CHAT-09）**。retention明示管理は未着手 | 2026-06-10 | docs/verification/CHAT-07-09.md |
-| ~~4~~ | ~~compaction効果未計測~~ **解消（CP②計測+CHAT-06bで圧縮有効化、42%削減実測）** | 2026-06-10 | docs/verification/CP2-measurements.md |
+| ~~2~~ | ~~チャット停止時の上流ストリーム完走~~ **解消（CHAT-08）** | 2026-06-10 | docs/verification/jetuse-app/CHAT-07-09.md |
+| ~~3~~ | ~~会話削除時のOCI Conversation削除同期~~ **解消（CHAT-09）**。retention明示管理は未着手 | 2026-06-10 | docs/verification/jetuse-app/CHAT-07-09.md |
+| ~~4~~ | ~~compaction効果未計測~~ **解消（CP②計測+CHAT-06bで圧縮有効化、42%削減実測）** | 2026-06-10 | docs/verification/jetuse-app/CP2-measurements.md |
 | 5 | パスワード・トークン類がコンテナ環境変数（Vault未使用） | 2026-06-10 | Phase 8（PLT-02相当）でVault移行 |
 | 6 | 会話の共有リンク（読み取り専用公開）の要否と認可設計 | 2026-06-10 | Phase 2出口で判断 |
 | 7 | CI-01のGitHub Actionsがgreenか未確認（privateリポジトリ+gh CLI未認証） | 2026-06-10 | `sudo dnf install gh` + `gh auth login` で解消 |
 | 8 | SPAデプロイのCI化（定型化は完了: `packages/web/scripts/deploy.sh`、CHAT-03bで作成） | 2026-06-10 | CI-02相当 |
 | 9 | APIGWホスト名がdestroy/再applyで変わる（カスタムドメイン未設定） | 2026-06-10 | 本番化時にDNS+証明書 |
 | 10 | **夜間停止でjetuse-dev-adbがSTOPPEDのまま放置される**（ADBは自動再開なし→翌日アプリ全死。2026-06-10に実発生、**2026-06-13にも再発**） | 2026-06-10 | **判断済み（2026-06-13ユーザー指示）: 手動運用とする**（ユーザーが手動起動、またはエージェントが作業開始時に `ops/start-adb-if-stopped.sh` で起動）。cron自動化・停止除外は採用しない。**作業セッション開始時はADB状態確認を必須手順とする** |
-| ~~11~~ | ~~DB停止中のAPI無限ハング~~ **解消（CHAT-07: 503即時+ステートレス継続）** | 2026-06-10 | docs/verification/CHAT-07-09.md |
+| ~~11~~ | ~~DB停止中のAPI無限ハング~~ **解消（CHAT-07: 503即時+ステートレス継続）** | 2026-06-10 | docs/verification/jetuse-app/CHAT-07-09.md |
 | 12 | API GW経由の長時間SSE（30秒級）でバッチ連続実行時に間欠切断（incomplete chunked read、10問中2問。単発では再現せず） | 2026-06-11 | 頻度の監視。UI側はエラー表示+再試行で運用可 |
 | 13 | MCP付きresponsesはOCI側の応答開始まで60秒超かかることがある（その間keepaliveのみ。長い無音がGW/ブラウザ間欠切断を誘発しやすい） | 2026-06-11 | フロント自動リトライ実装済(AGT-02b)。頻発時はOCI側レイテンシをSR起票 |
 | 14 | **音声チャットの自動送信（発話終了の自動検知）** — 現状は「停止して送信」の手動。実現可否の調査結果（2026-06-12）: ①OCI Speech機能のみでは不可 — 終端検出パラメータ `finalSilenceThresholdInMs` とpartialはORACLEネイティブモデル限定で、**ORACLEモデルは日本語非対応**（日本語=Whisper必須、Whisperでは同パラメータ送信が400 — SPIKE-06実測）。②アプリ側の工夫で実現可能 — AudioWorkletで取得済みPCMのRMSを監視し「無音がN秒継続」で自動停止+送信（クライアントVAD）。Whisperのfinalイベント到着と組み合わせると誤検知を抑制できる。実装はvoicechat.tsxのみで完結する見込み | 2026-06-12 | ユーザー要望（VOICE-03フィードバック）。VAD閾値・無音秒数のチューニングが必要 |

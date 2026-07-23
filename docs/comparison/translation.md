@@ -13,4 +13,4 @@ ENH-10(リアルタイム文字起こし→翻訳)の翻訳バックエンド。
 - UIで方式を切替可能(realtime画面)。文字起こし(Whisper)→確定テキストを逐次翻訳して原文/訳文を併記。
 
 ## 実機根拠
-JP→EN: LLM 0.20–0.54s/文、OCI Language 0.12s/文(いずれも自然な訳)。docs/verification/ENH-10.md。
+JP→EN: LLM 0.20–0.54s/文、OCI Language 0.12s/文(いずれも自然な訳)。docs/verification/jetuse-app/ENH-10.md。

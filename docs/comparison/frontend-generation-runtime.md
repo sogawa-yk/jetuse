@@ -2,7 +2,7 @@
 
 日付: 2026-07-07（実測追記: 2026-07-08）。対象: specs/19-sp3-builder.md §4.4 の委譲論点の予備整理。
 **本ドキュメントは決定しない** — 決定は SP3-03 の ADR（OpenCode 統合方式・adr_approval 人間ゲート →
-ADR-0023 ドラフト起草済み）。定量欄は下記「実測」に反映済み（詳細 docs/verification/SP3-03.md）。
+ADR-0023 ドラフト起草済み）。定量欄は下記「実測」に反映済み（詳細 docs/verification/demo-platform/SP3-03.md）。
 
 ## 実測（2026-07-08 / SP3-03 第一関門。環境: dev インスタンス + 大阪 GenAI + jetuse:dev 実 CI）
 

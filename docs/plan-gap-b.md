@@ -39,7 +39,7 @@ Phase B-implement（goになったものだけ）
   3. **バッファ＋遅延フラッシュ**（N文字バッファしてから判定して放出）
 - 高速モデル(llama-3.3-70b, TTFT 0.07s)で1文あたりの判定レイテンシを実測
 - 既存の `jetuse_core/moderation.py`（入力用）を出力にも使えるか、プロンプト調整の要否
-- 成果物: `docs/verification/SPIKE-G1.md`（方式比較＋レイテンシ実測）
+- 成果物: `docs/verification/spikes/SPIKE-G1.md`（方式比較＋レイテンシ実測）
 - **ゲート**: 体感を損なわない方式が成立するか（センテンス単位が有望と想定）
 
 ### 実装
@@ -61,7 +61,7 @@ Phase B-implement（goになったものだけ）
   ③Identity Domain同士のSAMLフェデレーション（OCI内で完結する検証）
 - **OCI内完結の検証経路**が取れるか（別Identity DomainをIdPに見立てる）を最優先で確認
   → 取れれば人間のIdPテナント準備を待たずにエージェント主導で検証可能
-- 成果物: `docs/verification/SPIKE-G2.md`（検証経路の決定）
+- 成果物: `docs/verification/spikes/SPIKE-G2.md`（検証経路の決定）
 
 ### 実装/検証
 - 調査でOCI内完結が可能なら: テスト用Domain作成→SAML設定→E2E（手順書のチェックリスト消化）
@@ -84,7 +84,7 @@ Phase B-implement（goになったものだけ）
 - アプリからホスト型エージェントを呼ぶ経路の設計: SPA→API(CI)→ホスト型エージェントのinvoke
   （認証トークンの受け渡し、SSE対応可否を実機確認）
 - 「インプロセス3エンジン」との差別化（いつホスト型を使うべきか）を整理
-- 成果物: `docs/verification/SPIKE-G4.md`（呼び出し経路＋ユースケース位置づけ）
+- 成果物: `docs/verification/spikes/SPIKE-G4.md`（呼び出し経路＋ユースケース位置づけ）
 - **ゲート**: ホスト型を常設する価値があるか（コスト増 vs マネージド実行の利点）
 
 ### 実装
@@ -109,7 +109,7 @@ Phase B-implement（goになったものだけ）
      （候補: 別コンテナ/gVisor/サブプロセス+リソース制限/制限付きインタプリタ）。
      **任意コード実行のセキュリティ評価が必須**（ネットワーク遮断・CPU/mem/時間制限・FS隔離）
   3. **OCI Functionsを使い捨て実行環境にする**案の可否
-- 成果物: `docs/verification/SPIKE-G3.md`（方式比較＋セキュリティ評価＋ADR案）
+- 成果物: `docs/verification/spikes/SPIKE-G3.md`（方式比較＋セキュリティ評価＋ADR案）
 - **ゲート**: 安全に実行できる方式が現実的か。**安全性に確信が持てなければ実装しない**
   （その場合「コード実行が必要ならnativeエンジンを選ぶ」を正式な使い分けとして確定）
 
@@ -133,7 +133,7 @@ Phase B-implement（goになったものだけ）
 - 無い場合の代替: リアルタイムSTT(VOICE-02、partialなし) + ストリーミングTTS + **バージイン(割り込み)**で
   「連続対話」をどこまで近づけられるか。partial無し制約下でのUX上限を見極める
 - WebのVAD(クライアント側無音検知、backlog #14)との組み合わせで自動ターン検出が可能か
-- 成果物: `docs/verification/SPIKE-G5.md`（OCIモデル有無の確定＋到達可能なUXの見極め）
+- 成果物: `docs/verification/spikes/SPIKE-G5.md`（OCIモデル有無の確定＋到達可能なUXの見極め）
 - **ゲート**: 真の全二重が不可なら「連続半二重(自動ターン検出+割り込み)」を到達目標に再定義してgo、
   または A項目（プラットフォーム制約）へ降格
 

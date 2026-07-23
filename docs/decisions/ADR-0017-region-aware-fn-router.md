@@ -63,4 +63,4 @@ Issue #55: `ap-tokyo-1` で ORM スタックを apply すると
 
 ## 検証
 
-`docs/verification/issue-55-region-aware-fn-router.md` 参照。
+`docs/verification/fixes/issue-55-region-aware-fn-router.md` 参照。

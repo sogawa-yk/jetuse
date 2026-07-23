@@ -37,4 +37,4 @@ FW-01時点のSDKパスは「自動実行のみ・MCP/rag_search/code_interprete
 ## 参照
 
 - 原因分析（Responses直結不可・ChatCompletionsModel採用）: ADR-0007
-- 検証: docs/verification/FW-01.md（FW-01b追補）、spikes/spike12_agents_sdk.py
+- 検証: docs/verification/jetuse-app/FW-01.md（FW-01b追補）、spikes/spike12_agents_sdk.py
