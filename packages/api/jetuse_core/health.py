@@ -66,6 +66,10 @@ def dbchat_health() -> dict[str, Any]:
     sem_ok = bool(s.semstore_ocid)
     semantic = _check(sem_ok, "SEMSTORE_OCID 未設定" if not sem_ok else None)
     rp = resource_principal_status()
+    if rp.get("ok") is None:
+        # bootstrap(別プロセス起動 = dev-app では未実行)で rp 未検証のときは、uvicorn プロセスで
+        # RP 経路を一度実測する(nl2sql.select_ai_rp_status はキャッシュ)。共有 ADB は変更しない。
+        rp = nl2sql.select_ai_rp_status()
     select_ai = _check(rp["ok"], rp.get("hint"))
     try:
         sample = nl2sql.sh_sample_status()

@@ -177,17 +177,20 @@ PY
     echo "== vault secret new version created (ACTIVE)"
   fi
   oci resource-manager stack get --stack-id "${sid}" --query data.variables > "${tmp}/vars.json"
+  # SPEECH_BUCKET(議事録/音声)は宣言的に seed する(空なら speech 無効=空値を明示設定 —
+  # codex review-2 M004。全機能有効化 2026-07-17)。
   jq --arg comp "${GEN_SHARED_COMPARTMENT_OCID}" \
      --arg bucket "${RAG_BUCKET}" --arg app_secret "${APP_SESSION_SECRET}" \
+     --arg speech "${SPEECH_BUCKET:-}" \
      '. + {gen_shared_compartment_ocid: $comp,
-           rag_bucket: $bucket, app_session_secret: $app_secret}
+           rag_bucket: $bucket, app_session_secret: $app_secret, speech_bucket: $speech}
       | del(.gen_shared_profile, .gen_shared_user_ocid, .gen_shared_tenancy_ocid,
             .gen_shared_fingerprint, .gen_shared_region, .gen_shared_key_pem_b64)' \
      "${tmp}/vars.json" > "${tmp}/vars.new.json"
   oci resource-manager stack update --stack-id "${sid}" \
     --variables "file://${tmp}/vars.new.json" --force >/dev/null
   echo "== seeded: vault secret + stack vars (gen_shared_compartment_ocid, rag_bucket," \
-       "app_session_secret; key-material vars removed)"
+       "app_session_secret${SPEECH_BUCKET:+, speech_bucket}; key-material vars removed)"
 }
 
 _wait_no_active_job() { # 共有スタックにつき apply は直列: 先行 job の完了を待つ(最大30分)

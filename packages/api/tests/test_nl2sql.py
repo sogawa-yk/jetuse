@@ -374,3 +374,43 @@ def test_sample_data_csv_valid():
         assert all(h.isascii() and h == h.lower() for h in header)
         # 全行の列数がヘッダと一致
         assert all(len(ln.split(",")) == len(header) for ln in lines)
+
+
+def test_select_ai_rp_status_caches_success(monkeypatch):
+    # dev-app health 用の read-only チェック: 成功は長期キャッシュ(再実測しない)。
+    nl2sql._rp_probe = {"result": None, "at": 0.0}
+    calls = []
+    monkeypatch.setattr(
+        nl2sql, "_check_select_ai_ready", lambda: (calls.append(1), {"ok": True})[1]
+    )
+    assert nl2sql.select_ai_rp_status() == {"ok": True}
+    assert nl2sql.select_ai_rp_status() == {"ok": True}
+    assert len(calls) == 1
+
+
+def test_select_ai_rp_status_is_readonly_no_profile_or_generate(monkeypatch):
+    # /api/health 経路は create_profile / GENERATE を呼ばない(read-only — codex review-2 B001)。
+    nl2sql._rp_probe = {"result": None, "at": 0.0}
+
+    def forbidden(*a, **k):
+        raise AssertionError("health からプロファイル作成/GENERATE を呼んではいけない")
+
+    monkeypatch.setattr(nl2sql, "generate_sql_select_ai", forbidden)
+    monkeypatch.setattr(nl2sql, "create_profile", forbidden)
+    monkeypatch.setattr(nl2sql, "_check_select_ai_ready", lambda: {"ok": True})
+    assert nl2sql.select_ai_rp_status()["ok"] is True
+
+
+def test_select_ai_rp_status_failure_recovers_after_ttl(monkeypatch):
+    # 失敗は短命キャッシュ。TTL 経過後は再実測して回復する(codex review-2 M002)。
+    nl2sql._rp_probe = {"result": None, "at": 0.0}
+    state = {"ok": False}
+    monkeypatch.setattr(
+        nl2sql, "_check_select_ai_ready",
+        lambda: {"ok": True} if state["ok"] else {"ok": False, "hint": "x"},
+    )
+    assert nl2sql.select_ai_rp_status()["ok"] is False
+    state["ok"] = True
+    assert nl2sql.select_ai_rp_status()["ok"] is False  # TTL 内は失敗キャッシュ
+    nl2sql._rp_probe["at"] -= nl2sql._RP_PROBE_FAIL_TTL_S + 1  # TTL 経過を模す
+    assert nl2sql.select_ai_rp_status()["ok"] is True

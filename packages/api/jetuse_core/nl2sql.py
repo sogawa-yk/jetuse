@@ -197,6 +197,64 @@ def generate_sql_select_ai(
     return sql
 
 
+_SELECT_AI_RP_HINT = (
+    "Select AI(dbchat)の下地が未整備です。ADB で ENABLE_RESOURCE_PRINCIPAL + DBMS_CLOUD_AI 付与"
+    "(承認済み一回セットアップ: ops/setup-select-ai-rp.py)、および動的グループへの"
+    "generative-ai-family / Object Storage read 権限(IAM)を確認してください"
+)
+# 失敗は短命キャッシュ(ADB 起動直後/IAM 伝播中の一時失敗から回復する — codex review-2 M002)。
+_RP_PROBE_FAIL_TTL_S = 60
+_rp_probe_lock = threading.Lock()
+_rp_probe: dict[str, Any] = {"result": None, "at": 0.0}
+
+
+def _check_select_ai_ready() -> dict:
+    """**read-only** で Select AI(dbchat)の下地が整っているか判定する。
+
+    /api/health から呼ばれるため、プロファイル作成/DROP・DBMS_CLOUD_AI.GENERATE(課金)・
+    ADMIN/ENABLE_RESOURCE_PRINCIPAL・migrate は**一切行わない**(codex review-2 B001)。
+    データ辞書参照のみ: SELECT_AI_CREDENTIAL=OCI$RESOURCE_PRINCIPAL 構成で、承認済み一回
+    セットアップ(ops/setup-select-ai-rp.py = grants + ENABLE_RESOURCE_PRINCIPAL)が済んでいるか
+    を DBMS_CLOUD_AI の EXECUTE 権限の有無で見る(=RP 経路の下地が有効)。
+    """
+    if get_settings().select_ai_credential != "OCI$RESOURCE_PRINCIPAL":
+        return {"ok": None, "hint": "SELECT_AI_CREDENTIAL が OCI$RESOURCE_PRINCIPAL ではありません"}
+    from .db import connect
+
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM user_tab_privs_recd "
+            "WHERE table_name = 'DBMS_CLOUD_AI' AND privilege = 'EXECUTE'"
+        )
+        granted = (cur.fetchone() or [0])[0] > 0
+    return {"ok": True} if granted else {"ok": False, "hint": _SELECT_AI_RP_HINT}
+
+
+def select_ai_rp_status() -> dict:
+    """uvicorn プロセスで Select AI(dbchat)の下地を **read-only** で一度実測しキャッシュする。
+
+    bootstrap(別プロセス起動 = dev-app では未実行)の resource_principal_status に依存せず
+    /api/health を正すための軽量チェック。成功は長期キャッシュ、失敗は短命(TTL)キャッシュで
+    一時障害から回復する。lock 内で実測し並行初回でも 1 回だけ実行(codex review-2 B001/M002/M003)。
+    """
+    with _rp_probe_lock:
+        cached = _rp_probe["result"]
+        if cached is not None and (
+            cached.get("ok") is True
+            or (time.monotonic() - _rp_probe["at"]) < _RP_PROBE_FAIL_TTL_S
+        ):
+            return dict(cached)
+        try:
+            result = _check_select_ai_ready()
+        except Exception as e:  # noqa: BLE001 — 診断エンドポイントは落とさない
+            logger.info("select_ai readiness check failed: %s", str(e)[:200])
+            result = {"ok": False, "hint": _SELECT_AI_RP_HINT}
+        _rp_probe["result"] = result
+        _rp_probe["at"] = time.monotonic()
+        return dict(result)
+
+
 def _get_query_pool() -> oracledb.ConnectionPool:
     """JETUSE_QUERY(読取専用)の小プール"""
     global _query_pool

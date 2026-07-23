@@ -53,8 +53,13 @@ module "container_instance" {
     # 生成 SPA バンドル配信(demo-bundles/)+RAG。app-session は配信の認可(§3.5)に必須
     RAG_BUCKET         = var.rag_bucket
     APP_SESSION_SECRET = var.app_session_secret
-    # RUN_DB_BOOTSTRAP は設定しない — 共有 loop ADB へのマイグレーション適用は自動 push デプロイに
-    # 含めず、明示の人間/承認ステップで行う(review-1 B002。適用手順は docs/guides/dev-environments.md)
+    # RUN_DB_BOOTSTRAP は設定しない — 共有 loop ADB への migrate/ADMIN 変更を自動 push デプロイに
+    # 含めない設計を維持(review-1 B002 / codex review-1 B001)。dbchat の Select AI は RP を使う。
+    # ENABLE_RESOURCE_PRINCIPAL は承認済みの一回手動セットアップ(ops/setup-select-ai-rp.py)。
+    # health は uvicorn プロセス内の一回実測プローブ(nl2sql.select_ai_rp_status)で反映する。
+    SELECT_AI_CREDENTIAL = "OCI$RESOURCE_PRINCIPAL"
+    # 議事録/音声(speech)の保管バケット。空なら speech は 503 のまま。
+    SPEECH_BUCKET = var.speech_bucket
     # SP3-06/09 生成系(共有テナンシの鍵材料は env に置かない — Vault シークレット vault.tf。
     # API が RP で取得し in-memory 署名。未 seed/取得失敗は共有モデルのみ 403 の fail-closed)
     GENERATION_PROXY_URL        = var.generation_proxy_url
