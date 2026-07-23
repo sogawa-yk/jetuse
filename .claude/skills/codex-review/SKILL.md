@@ -17,9 +17,17 @@ maker/checker をツールをまたいで分離するための中核スキル。
 3. スクリプトが書いた `review-<n>.json` を読み、その verdict / severity_counts / findings を確認する。
    blocker が1件でもあれば verdict は FAIL（スキーマ側で強制。手で緩めない）。
 4. STATE.md の `review_verdict` と `last_review_ref` を、いま得た結果で更新する。
+5. **findings をタスクパケットへ渡す（露出は例外だけ）。** 完了ゲートで作る HTML タスクパケット
+   （`loop-protocol` 参照）への転記ルール:
+   - **clean PASS（例外なし）**: パケットには**判定1行のみ**（`PASS (review-N) / blocker0 major0`）。
+     全 findings は `<details class="aud">` 監査用テーブルに畳む＝人間の必読ではない。バナーは出さない。
+   - **FAIL を override して統合する / 未対応 residual を残す**ときだけ、その決定に関わる**具体 findings
+     （id・severity・file:line・issue）と理由**をパケットの「判断が要る事項」バナーへ inline する。
+     これが唯一「人間が Codex 指摘を読む」ケース（SP3-03 の 18×FAIL override が表の1セルに埋もれた失敗の是正）。
 
 > スキーマで JSON を直接生成させているため、生出力からの手動抽出は不要。
 > 抽出に失敗した／JSON が空のときだけ `review-<n>.raw.txt` を読んで原因を確認する。
+> **判定は Codex のもの。** パケットは判定を "見せ方" として整えるだけで、verdict を Claude が動かしてはならない。
 
 ## 実環境 E2E 証跡の添付（完了ゲート時）
 Codex は **read-only sandbox でコードを（シェルとして）実行できない**。完了ゲートでは、Claude が先に
