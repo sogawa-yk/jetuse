@@ -37,9 +37,9 @@ dist/
 .DS_Store
 tmp/
 
-# spike audio artifacts
-spikes/data/*.mp3
-spikes/data/*.wav
+# spike audio artifacts (archived)
+docs/archive/spikes/data/*.mp3
+docs/archive/spikes/data/*.wav
 .playwright-mcp/
 
 # 個人フィードバック原文はリポジトリに含めない(ローカル管理)
