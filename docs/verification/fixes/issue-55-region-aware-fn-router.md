@@ -40,7 +40,7 @@
   `CompartmentIdNotFound` となり namespace が null → object_storage 依存の
   CI / router / API GW deployment が plan から脱落する。CLI 実測で
   `oci os ns get --compartment-id <ocid>` も同エラー（引数なしは成功）。
-  Resource Manager（デプロイヤ権限）では従来から成功している（docs/verification/orm-jetuse-apply.md）。
+  Resource Manager（デプロイヤ権限）では従来から成功している（docs/verification/jetuse-app/orm-jetuse-apply.md）。
 - **release.yml の4リージョン push**: merge 後の Actions 実行で確認（事前に nrt/iad/ord への
   OCIR repo 作成が必要 — ADR-0017「前提となる人間側の作業」）。
 - **東京/アシュバーン/シカゴでの RM 実 apply**: 人間ゲート。イメージ push 完了後に実施可能。

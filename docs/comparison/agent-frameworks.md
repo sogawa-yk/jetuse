@@ -1,7 +1,7 @@
 # 比較: OCI Enterprise AIでのエージェント実装方式（FW-04）
 
 フルスクラッチ実装と主要エージェントフレームワークを**すべてOCI実機（大阪・gpt-oss-120b）で検証**した比較。
-エビデンス: SPIKE-12/13/14（spikes/）、docs/verification/FW-01.md / FW-02.md / AGT-01〜04。
+エビデンス: SPIKE-12/13/14（spikes/）、docs/verification/jetuse-app/FW-01.md / FW-02.md / AGT-01〜04。
 
 ## 結論（推奨の早見）
 

@@ -87,7 +87,7 @@ oci raw-request --target-uri "$BASE/semanticStores/$SS/actions/enrich" --http-me
   --request-body '{"enrichmentJobType":"FULL_BUILD","enrichmentJobConfiguration":{"enrichmentJobType":"FULL_BUILD","schemaName":"SH"}}'
 # 2) generateSqlFromNl で spike04_select_ai.py と同じ日本語10問を評価
 #    body: {"inputNaturalLanguageQuery": "..."} / SQLは jobOutput.content
-# 3) docs/verification/SPIKE-04.md の評価表を更新（Select AIとの比較を完成）
+# 3) docs/verification/spikes/SPIKE-04.md の評価表を更新（Select AIとの比較を完成）
 ```
 
 ### チェックポイント①承認後（Phase 1着手、`docs/plan.md` §3）

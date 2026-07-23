@@ -56,7 +56,7 @@ Phase E-implement（goになったものだけ）
 **実装(goの場合)**:
 - `POST /api/db/datasets`(CSVアップロード→Object Storage一時格納→`DBMS_CLOUD.COPY_DATA`でユーザー専用表作成)。
 - SemanticStore/Select AIプロファイルの `object_list` に当該表を追加(動的)。dbchatの対象に選択可能化。
-- 完了条件: CSVアップロード→生成された表に対しNL2SQLが回り結果表示。レポート `docs/verification/ENH-01.md`。
+- 完了条件: CSVアップロード→生成された表に対しNL2SQLが回り結果表示。レポート `docs/verification/jetuse-app/ENH-01.md`。
 
 **リスク/見込み**: 中。ADBロードはDBMS_CLOUDでマネージド。スキーマ分離と後始末の設計が肝。
 
@@ -109,7 +109,7 @@ ADBは26ai。
 - **プリビルド/インスペクション系エージェント**の有無と作成・実行方法(DBスキーマ理解・データ品質点検等)。
 - アプリからの呼び出し経路(SQL経由 `DBMS_CLOUD_AI.GENERATE`/agent実行プロシージャ)とストリーミング可否。
 - ADR-0009のエージェント抽象に「framework=select_ai」を**第4の実行種別**として無理なく足せるか。
-- 成果物: `docs/verification/SPIKE-E1.md` + `docs/comparison/agent-runtimes.md`(hosted SDK 3種 vs Select AI Agentの使い分け)。
+- 成果物: `docs/verification/spikes/SPIKE-E1.md` + `docs/comparison/agent-runtimes.md`(hosted SDK 3種 vs Select AI Agentの使い分け)。
 - **ゲート**: Select AI Agentが実機で有用に動くか。動けば「DBネイティブ・エージェント」として差別化価値大。
 
 **実装(goの場合)**:
@@ -132,7 +132,7 @@ ADBは26ai。
 - **OCI Search with OpenSearch** の大阪可用性・クラスタ構成・コスト・IAM。
 - 文書取り込み(チャンク化・埋め込み生成=Enterprise AI embeddings)→インデックス→検索の経路。
 - 既存RAG抽象(`rag.py`)に「検索バックエンド=OpenSearch」を足す方式。kNN/ハイブリッド検索の品質。
-- 成果物: `docs/verification/SPIKE-E2.md` + `docs/comparison/rag-backends.md`(VectorStore / Select AI RAG / OpenSearch)。
+- 成果物: `docs/verification/spikes/SPIKE-E2.md` + `docs/comparison/rag-backends.md`(VectorStore / Select AI RAG / OpenSearch)。
 - **ゲート**: マネージドで構築でき、既存RAGと統合する価値があるか(検索品質/運用)。
 
 **実装(goの場合)**: OpenSearchクラスタ(検証用は小構成)、取り込み・検索アダプタ、RAG UIの検索方式選択。
@@ -147,7 +147,7 @@ ADBは26ai。
 - 「Trusted Answer Search」が指す機能の特定(候補: ADB Select AIの根拠付き回答/`narrate`、
   OCI内の信頼回答検索機能、または特定プロダクト名)。**まず正体を確定**し、OCIマネージドで使えるかを判定。
 - 使える場合の統合方式・既存RAGとの差別化。
-- 成果物: `docs/verification/SPIKE-E3.md`(機能特定＋go/no-go)。
+- 成果物: `docs/verification/spikes/SPIKE-E3.md`(機能特定＋go/no-go)。
 - **ゲート**: マネージドで実体があり適用可能か。実体不明/不可ならA項目(未提供)として記録。
 
 **リスク/見込み**: 不確実(用語特定次第)。調査優先。
@@ -164,7 +164,7 @@ ADBは26ai。
 - **OCI Document Understanding** の大阪可用性、対応機能(OCR/テーブル/キーバリュー/分類)、**日本語精度**、
   同期/非同期(バッチ)API、IAM、コスト。
 - ユースケース接続先: ①単発OCR画面 ②RAG取り込み前処理(スキャンPDF→テキスト) ③DBチャットの帳票取り込み。
-- 成果物: `docs/verification/SPIKE-E4.md`(可用性＋日本語精度実測)。
+- 成果物: `docs/verification/spikes/SPIKE-E4.md`(可用性＋日本語精度実測)。
 - **ゲート**: 大阪で日本語OCRが実用精度か。不可なら代替(他リージョン/vision LLM OCR)を比較記録。
 
 **実装(goの場合)**: `jetuse_core/docunderstand.py` + OCR画面 or RAG取り込み前処理に組込。
@@ -190,7 +190,7 @@ ADBは26ai。
 **目的**: `pages/video.tsx`(MM-01)の既知エラーを修正する。
 
 **調査(軽)**: エラーの再現と原因特定(フレーム抽出 or vision呼び出し or モデル可用性)。
-- まず再現手順とエラーメッセージを収集(`docs/verification/ENH-09.md`)。
+- まず再現手順とエラーメッセージを収集(`docs/verification/jetuse-app/ENH-09.md`)。
 
 **実装**: 原因に応じた修正。完了条件: 映像→フレーム抽出→分析が再度通る。
 

@@ -14,7 +14,7 @@
 5. **モバイルUX**（backlog #1 — 前回「若干使いにくい」とのことだったので、具体的にどこが使いにくいか教えてください）
 6. **放置試験**: 1時間以上放置→白画面にならない/送信が通ること（INFRA-02b修正の確認）
 
-## 定量データ（詳細: docs/verification/CP2-measurements.md）
+## 定量データ（詳細: docs/verification/jetuse-app/CP2-measurements.md）
 
 - TTFT（API GW経由・中央値）: llama 0.17s / gemini-flash 1.04s / gpt-oss 1.26s / **gemini-pro 5.80s**（keepalive 15sで吸収済み。UI側「考え中」表示は要否判断ください）
 - 短期メモリ圧縮（CHAT-06bで有効化）: 長会話で**入力トークン42%削減**、圧縮後も記憶保持OK

@@ -135,5 +135,5 @@
 - リファクタ(`main.py`/`chat.py` 分割、`jetuse_shared` 抽出、SSE 共通化)後も
   挙動・ステータス・SSE フレーム形状に退行なし。
 
-成果物: 本レポート `/home/opc/jetuse/docs/verification/perf-refactor.md`。
+成果物: 本レポート `/home/opc/jetuse/docs/verification/jetuse-app/perf-refactor.md`。
 スクリプト: `/tmp/integration_golden.py`, `/tmp/live_smoke.py`, `/tmp/live_smoke2.py`, `/tmp/perf_bench.py`。

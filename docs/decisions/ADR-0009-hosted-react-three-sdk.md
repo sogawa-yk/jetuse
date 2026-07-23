@@ -58,7 +58,7 @@
 1. 共通ReActコンテナ契約の確定と3コンテナ実装
 2. OCIR push → IDCS → Hosted App+Deployment ×3（**課金。最終承認制**）
 3. アプリrouting改修＋UI(SDK選択)更新、in-process廃止
-4. E2E検証(docs/verification/AGT-MULTI.md) + comparison更新
+4. E2E検証(docs/verification/jetuse-app/AGT-MULTI.md) + comparison更新
 
 ## 追記（2026-06-18・refactoring P0.7）
 
@@ -66,7 +66,7 @@
 `jetuse_core/agents_sdk.py`（`stream_agents_sdk` = FW-01）と
 `jetuse_core/langgraph_engine.py`（`stream_langgraph` = FW-02）。いずれも production の
 エージェント実行経路（`service/main.py`）から未参照で、hosted コンテナ（本ADR）へ
-置換済みだったため。検証成果は git 履歴と `docs/verification/FW-01.md`/`FW-02.md` に残る。
+置換済みだったため。検証成果は git 履歴と `docs/verification/jetuse-app/FW-01.md`/`FW-02.md` に残る。
 
 **削除しないもの（現役）**: ① framework 値 `langgraph`/`adk`/`openai_agents`/`select_ai`
 （hosted ルーティングの分岐キー）② `hosted_agent.normalize_sdk`/`_LEGACY_SDK`

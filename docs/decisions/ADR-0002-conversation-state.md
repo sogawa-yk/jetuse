@@ -2,7 +2,7 @@
 
 日付: 2026-06-10
 状態: 承認済み（2026-06-10 人間チェックポイント①）
-根拠: docs/verification/SPIKE-05.md
+根拠: docs/verification/spikes/SPIKE-05.md
 
 ## 背景
 

@@ -18,7 +18,7 @@ React SPAは本家JetUse（CloudFront + S3）と同様に**静的サイトホス
 - ユーザー指示（2026-06-10）: AWS版と同じ静的ホスティング方式とし、OCIではAPI GW → Object Storageで代替する
 - SPA配信のためだけにコンテナ/ネイティブサーバーを常駐させない（運用・課金の削減）
 
-## INFRA-01での実機検証結果（2026-06-10、詳細は docs/verification/INFRA-01.md）
+## INFRA-01での実機検証結果（2026-06-10、詳細は docs/verification/jetuse-app/INFRA-01.md）
 
 1. パスマッピング: **成立**。`/{object*}` → PAR基底URL + `${request.path[object]}` で200応答
 2. アクセス方式: **非公開バケット + 読取専用PAR（AnyObjectRead, リスト不可）で確定**。注意: `bucket_listing_action="Deny"` をTerraformで明示するとAPIが値を返さず毎applyでPAR再作成（=URL変化）になるため未指定とする

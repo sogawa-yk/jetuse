@@ -168,7 +168,7 @@ jetuse-oci/
 - AGT-01: Function Callingフレームワーク（ツールレジストリ、Web検索ツール、Code Interpreter built-in tool統合、ツール実行の承認UI）
 - AGT-02: MCPチャット（MCPサーバー登録UI、認証情報はOCI Vault保存、MCP Calling経由実行）
 - AGT-03: Agent Builder（エージェントCRUD、Project割当による記憶分離、タグ・公開共有）
-- AGT-04: Applications/Deploymentsインポート（LangGraph製サンプルエージェント1体のデプロイ手順込み。Galley既存エージェントを題材化）— **2026-06-12 完了**: IAM整備後にデプロイ〜invoke E2E成功（未文書のinvoke URL規則を実機確定）。アプリへの本格統合はPhase 9の実行基盤として実施（docs/verification/agt-04.md）
+- AGT-04: Applications/Deploymentsインポート（LangGraph製サンプルエージェント1体のデプロイ手順込み。Galley既存エージェントを題材化）— **2026-06-12 完了**: IAM整備後にデプロイ〜invoke E2E成功（未文書のinvoke URL規則を実機確定）。アプリへの本格統合はPhase 9の実行基盤として実施（docs/verification/jetuse-app/agt-04.md）
 - AGT-05: **【必須・ユーザー指示2026-06-10】Enterprise AI Agentsの長期メモリ統合** — `subject_id`（=JWTのsub）による会話横断のパーソナライズ。Project単位の記憶分離（AGT-03）と整合させ、ガバナンス（保持期間・削除権）をPhase 10要件に接続
 
 ## 9. Phase 7: UI改善 — OCIコンソール風管理画面（2026-06-12追加・ユーザー指示）
