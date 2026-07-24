@@ -81,7 +81,7 @@ areas:
     lint_cmd: "npm --prefix packages/web run lint"
     build_cmd: "npm --prefix packages/web run build"
     # 完了ゲートの実環境デプロイ（jetuse-dev の固定 loop 環境を再利用）。
-    deploy_cmd: "ops/dev-env-up.sh loop"
+    deploy_cmd: "ops/dev-env-up.sh loop --apply"
     # E2E はデプロイURLに対する複数シナリオ。具体は tasks/<id>.md の「E2E シナリオ」に従う。
     e2e_cmd: ""
   api:

@@ -125,7 +125,7 @@ cd packages/api && AUTH_REQUIRED=false uvicorn service.main:app --port 8000
 # SPA（/api を localhost:8000 へプロキシ）
 cd packages/web && VITE_AUTH_REQUIRED=false npm run dev
 ```
-- コミット前: `ruff check . && pytest`（API） / `npm run build && npm run lint`（web）
+- コミット前: `make lint && make test && make build`（単一コマンド入口 = root `Makefile`。個別は `make help`）
 - 検証は実機確認主義（結果は `docs/verification/`）。複数人での実機E2Eは [docs/guides/dev-environments.md](./docs/guides/dev-environments.md)
 - ブランチとリリース: `main` = Public 正式版、`dev` = Internal 次期版。Public の変更は `main` から `dev` へ forward merge（[運用詳細](./docs/guides/branching-and-releases.md)）。
 
