@@ -4,7 +4,13 @@
 # 既存アクティブdeploymentは直接削除できないが、アプリ削除でカスケードされる(実機確定)。
 set -uo pipefail
 cd "$(dirname "$0")/.."
-TAG="${1:?tag required}"
+YES=0; TAG=""
+for a in "$@"; do case "$a" in --yes) YES=1;; -*) echo "unknown flag: $a" >&2; exit 2;; *) TAG="$a";; esac; done
+[ -n "$TAG" ] || { echo "usage: recreate-agents.sh <tag> --yes  (破壊的: 既存3アプリを --force 削除)"; exit 1; }
+if [ "$YES" -ne 1 ]; then
+  echo "[recreate-agents] 破壊的操作（既存3 Hosted Application を --force 削除して作り直し）。実行するには --yes を渡す。"
+  exit 1
+fi
 TFV=infra/terraform/environments/dev/terraform.tfvars
 COMP=$(grep '^COMPARTMENT_OCID=' .env | cut -d= -f2)
 tfvocid() { grep -E "^  $1 *=" "$TFV" | head -1 | sed -E 's/.*= *"(.*)"/\1/'; }

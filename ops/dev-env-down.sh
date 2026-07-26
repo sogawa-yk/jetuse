@@ -6,9 +6,15 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-DEV="${1:?usage: dev-env-down.sh <dev>}"
+YES=0; DEV=""
+for a in "$@"; do case "$a" in --yes) YES=1;; -*) echo "unknown flag: $a" >&2; exit 2;; *) DEV="$a";; esac; done
+[ -n "$DEV" ] || { echo "usage: dev-env-down.sh <dev> --yes  (破壊的: terraform destroy)"; exit 1; }
 APPDIR=infra/terraform/environments/app
 [ -f "$APPDIR/${DEV}.tfvars" ] || { echo "missing $APPDIR/${DEV}.tfvars"; exit 1; }
+if [ "$YES" -ne 1 ]; then
+  echo "[dev-env-down] 破壊的操作（${DEV} の app スタックを terraform destroy）。実行するには --yes を渡す。"
+  exit 1
+fi
 
 ( cd "$APPDIR"
   terraform init -input=false >/dev/null
