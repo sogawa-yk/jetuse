@@ -161,23 +161,17 @@ def _update_status(owner: str, file_id: str, status: str, error: str | None = No
 
 
 def _os_client(region: str | None = None):
-    import os
-
     import oci
 
-    if os.environ.get("AUTH_MODE") == "resource_principal":
-        signer = oci.auth.signers.get_resource_principals_signer()
-        return oci.object_storage.ObjectStorageClient(
-            {"region": region or get_settings().oci_region}, signer=signer
-        )
-    from .genai import load_local_oci_config
+    from .oci_auth import sdk_signer_args
 
-    cfg = load_local_oci_config()
+    eff_region = region or get_settings().oci_region
+    args = sdk_signer_args(eff_region)
     # settings.oci_region を region の既定にする(RP 経路と一貫)。write-ahead locator は
     # settings.oci_region を記録するため、OS クライアントもそれに揃える(別リージョン配備/
     # Chicago fallback で config ファイルの region と食い違っても locator と整合)。
-    cfg = {**cfg, "region": region or get_settings().oci_region}
-    return oci.object_storage.ObjectStorageClient(cfg)
+    args["config"]["region"] = eff_region
+    return oci.object_storage.ObjectStorageClient(**args)
 
 
 _versioning_checked: set[str] = set()

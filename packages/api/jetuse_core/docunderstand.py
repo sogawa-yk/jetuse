@@ -21,7 +21,6 @@ import base64
 import io
 import json
 import logging
-import os
 
 from .settings import get_settings
 
@@ -75,16 +74,11 @@ def _doc_client():
     if _client is None:
         import oci
 
-        region = get_settings().oci_region
-        if os.environ.get("AUTH_MODE") == "resource_principal":
-            signer = oci.auth.signers.get_resource_principals_signer()
-            _client = oci.ai_document.AIServiceDocumentClient(
-                {"region": region}, signer=signer
-            )
-        else:
-            from .genai import load_local_oci_config
+        from .oci_auth import sdk_signer_args
 
-            _client = oci.ai_document.AIServiceDocumentClient(load_local_oci_config())
+        _client = oci.ai_document.AIServiceDocumentClient(
+            **sdk_signer_args(get_settings().oci_region)
+        )
     return _client
 
 

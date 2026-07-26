@@ -8,7 +8,6 @@
 """
 
 import logging
-import os
 
 from .genai import make_inference_client
 from .settings import get_settings
@@ -34,16 +33,11 @@ def _oci_language_client():
     if _lang_client is None:
         import oci
 
-        region = get_settings().oci_region
-        if os.environ.get("AUTH_MODE") == "resource_principal":
-            signer = oci.auth.signers.get_resource_principals_signer()
-            _lang_client = oci.ai_language.AIServiceLanguageClient(
-                {"region": region}, signer=signer
-            )
-        else:
-            from .genai import load_local_oci_config
+        from .oci_auth import sdk_signer_args
 
-            _lang_client = oci.ai_language.AIServiceLanguageClient(load_local_oci_config())
+        _lang_client = oci.ai_language.AIServiceLanguageClient(
+            **sdk_signer_args(get_settings().oci_region)
+        )
     return _lang_client
 
 

@@ -4,8 +4,6 @@
 cohere.embed-multilingual-v3.0(1024次元、日本語対応。Select AI RAGと同一モデル)。
 """
 
-import os
-
 from .settings import get_settings
 
 EMBED_MODEL = "cohere.embed-multilingual-v3.0"
@@ -18,19 +16,15 @@ _client = None
 def _embed_client():
     global _client
     if _client is None:
-        import oci
         from oci.generative_ai_inference import GenerativeAiInferenceClient
+
+        from .oci_auth import sdk_signer_args
 
         region = get_settings().oci_region
         ep = f"https://inference.generativeai.{region}.oci.oraclecloud.com"
-        if os.environ.get("AUTH_MODE") == "resource_principal":
-            signer = oci.auth.signers.get_resource_principals_signer()
-            _client = GenerativeAiInferenceClient({"region": region}, signer=signer,
-                                                  service_endpoint=ep)
-        else:
-            from .genai import load_local_oci_config
-
-            _client = GenerativeAiInferenceClient(load_local_oci_config(), service_endpoint=ep)
+        _client = GenerativeAiInferenceClient(
+            **sdk_signer_args(region), service_endpoint=ep
+        )
     return _client
 
 
