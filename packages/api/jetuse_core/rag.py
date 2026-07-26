@@ -7,7 +7,6 @@ SPIKE-03実機確定事項に準拠:
 """
 
 import logging
-import os
 import time
 import uuid
 from typing import Any
@@ -129,14 +128,9 @@ def _delete_row(owner: str, file_id: str) -> dict | None:
 def _os_client():
     import oci
 
-    if os.environ.get("AUTH_MODE") == "resource_principal":
-        signer = oci.auth.signers.get_resource_principals_signer()
-        return oci.object_storage.ObjectStorageClient(
-            {"region": get_settings().oci_region}, signer=signer
-        )
-    from .genai import load_local_oci_config
+    from .oci_auth import sdk_signer_args
 
-    return oci.object_storage.ObjectStorageClient(load_local_oci_config())
+    return oci.object_storage.ObjectStorageClient(**sdk_signer_args(get_settings().oci_region))
 
 
 def _backup_original(owner: str, file_id: str, filename: str, content: bytes) -> None:

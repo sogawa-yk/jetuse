@@ -74,16 +74,9 @@ def _retain_buffer(buf: list, cap: int) -> list:
 
 
 def _signer_args() -> dict:
-    import oci
+    from .oci_auth import sdk_signer_args
 
-    if os.environ.get("AUTH_MODE") == "resource_principal":
-        return {
-            "config": {"region": get_settings().oci_region},
-            "signer": oci.auth.signers.get_resource_principals_signer(),
-        }
-    from .genai import load_local_oci_config
-
-    return {"config": load_local_oci_config()}
+    return sdk_signer_args(get_settings().oci_region)
 
 
 class OciLogHandler(logging.Handler):

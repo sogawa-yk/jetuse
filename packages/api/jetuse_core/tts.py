@@ -6,7 +6,6 @@
 """
 
 import logging
-import os
 import threading
 from typing import Any
 
@@ -35,18 +34,12 @@ def _speech_client() -> Any:
             if _client is None:
                 import oci
 
-                region = get_settings().tts_region
-                if os.environ.get("AUTH_MODE") == "resource_principal":
-                    signer = oci.auth.signers.get_resource_principals_signer()
-                    _client = oci.ai_speech.AIServiceSpeechClient(
-                        {"region": region}, signer=signer
-                    )
-                else:
-                    from .genai import load_local_oci_config
+                from .oci_auth import sdk_signer_args
 
-                    cfg = load_local_oci_config()
-                    cfg["region"] = region
-                    _client = oci.ai_speech.AIServiceSpeechClient(cfg)
+                region = get_settings().tts_region
+                args = sdk_signer_args(region)
+                args["config"]["region"] = region  # config_file の config にも region を効かせる
+                _client = oci.ai_speech.AIServiceSpeechClient(**args)
     return _client
 
 
@@ -60,7 +53,7 @@ def synthesize(text: str, voice: str) -> bytes:
     try:
         client = _speech_client()
     except RuntimeError as e:
-        # AUTH_MODEガード(genai.load_local_oci_config)由来。TtsErrorに統一し
+        # AUTH_MODEガード(oci_auth.load_local_oci_config)由来。TtsErrorに統一し
         # FastAPI/Functionsルーター双方で同じ縮退(503+ヒント)にする(レビュー指摘)。
         raise TtsError(str(e)) from e
     try:
