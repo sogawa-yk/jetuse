@@ -44,19 +44,12 @@ TEMPLATES: dict[str, str] = {
 def _clients():
     import oci
 
-    if os.environ.get("AUTH_MODE") == "resource_principal":
-        signer = oci.auth.signers.get_resource_principals_signer()
-        cfg = {"region": get_settings().oci_region}
-        return (
-            oci.object_storage.ObjectStorageClient(cfg, signer=signer),
-            oci.ai_speech.AIServiceSpeechClient(cfg, signer=signer),
-        )
-    from .genai import load_local_oci_config
+    from .oci_auth import sdk_signer_args
 
-    cfg = load_local_oci_config()
+    args = sdk_signer_args(get_settings().oci_region)
     return (
-        oci.object_storage.ObjectStorageClient(cfg),
-        oci.ai_speech.AIServiceSpeechClient(cfg),
+        oci.object_storage.ObjectStorageClient(**args),
+        oci.ai_speech.AIServiceSpeechClient(**args),
     )
 
 

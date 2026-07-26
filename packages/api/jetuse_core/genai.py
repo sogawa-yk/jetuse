@@ -9,55 +9,21 @@ CI/Functions上ではリソースプリンシパルに切り替える(INFRA-01 a
 """
 
 import logging
-import os
 import threading
 import time
 
 import httpx
-from oci_genai_auth import OciResourcePrincipalAuth, OciUserPrincipalAuth
 from openai import OpenAI
 
+from .oci_auth import httpx_auth, sdk_signer_args
 from .settings import Settings, get_settings
 
 logger = logging.getLogger("jetuse.genai")
 
-_AUTH_MODE_HINT = (
-    "OCI設定ファイル(~/.oci/config)が見つかりません。"
-    "AUTH_MODE=resource_principal の設定漏れの可能性があります"
-)
-
 
 def _signer():
-    # CI/Functions上は AUTH_MODE=resource_principal を環境変数で指定(specs/07)
-    if os.environ.get("AUTH_MODE") == "resource_principal":
-        return OciResourcePrincipalAuth()
-    try:
-        # OciUserPrincipalAuth()内部でもoci.config.from_file()を呼ぶため、
-        # ここで捕捉しないとload_local_oci_config()の外側で生ConfigFileNotFoundが
-        # 漏れる(make_inference_client/make_cp_client/nl2sql等genai系全経路の入口 —
-        # レビュー指摘: AUTH_MODEガードがOpenAI互換クライアント側に届いていなかった)。
-        return OciUserPrincipalAuth()
-    except Exception as e:
-        import oci
-
-        if isinstance(e, oci.exceptions.ConfigFileNotFound):
-            raise RuntimeError(_AUTH_MODE_HINT) from e
-        raise
-
-
-def load_local_oci_config() -> dict:
-    """AUTH_MODE!=resource_principal のときの ~/.oci/config フォールバック(PORT-02)。
-
-    未設定コンテナでの ConfigFileNotFound を未処理500で落とさず、原因(AUTH_MODE設定漏れ)を
-    明示する。genai/obs/tts/stt_realtime/docunderstand/minutes/guardrails/embeddings/
-    mcp_servers/agents/rag/translate/db の各モジュールが共通で使う(root-causeを1箇所に集約)。
-    """
-    import oci
-
-    try:
-        return oci.config.from_file()
-    except oci.exceptions.ConfigFileNotFound as e:
-        raise RuntimeError(_AUTH_MODE_HINT) from e
+    """OpenAI 互換 httpx への署名注入。OCI ログイン解決は jetuse_core.oci_auth に集約。"""
+    return httpx_auth()
 
 
 # --- GenerativeAiProject 解決(FIX-47 / Issue #47) ---
@@ -92,14 +58,9 @@ def _sdk_client(settings: Settings):
     (project OCID はリージョン別 — docs/tips.md)。"""
     import oci
 
-    if os.environ.get("AUTH_MODE") == "resource_principal":
-        signer = oci.auth.signers.get_resource_principals_signer()
-        return oci.generative_ai.GenerativeAiClient(
-            {"region": settings.oci_region}, signer=signer
-        )
-    config = load_local_oci_config()
-    config["region"] = settings.oci_region
-    return oci.generative_ai.GenerativeAiClient(config)
+    args = sdk_signer_args(settings.oci_region)
+    args["config"]["region"] = settings.oci_region  # config_file の config にも region を効かせる
+    return oci.generative_ai.GenerativeAiClient(**args)
 
 
 def _create_project(client, settings: Settings) -> str:

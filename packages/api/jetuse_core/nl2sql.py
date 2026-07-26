@@ -29,7 +29,7 @@ from jetuse_shared.sqlguard import (  # noqa: F401
 )
 
 from .db import _wallet_dir  # ウォレット取得を共用
-from .genai import _signer
+from .oci_auth import httpx_auth
 from .settings import get_settings
 
 logger = logging.getLogger("jetuse.nl2sql")
@@ -57,7 +57,7 @@ def generate_sql(question: str) -> str:
         raise RuntimeError(
             "SemanticStore 未構成(SEMSTORE_OCID)。Select AI を使うか構成してください"
         )
-    with httpx.Client(auth=_signer(), timeout=GENERATE_TIMEOUT) as client:
+    with httpx.Client(auth=httpx_auth(), timeout=GENERATE_TIMEOUT) as client:
         res = client.post(
             f"{_base()}/semanticStores/{s.semstore_ocid}/actions/generateSqlFromNl",
             json={"inputNaturalLanguageQuery": question},

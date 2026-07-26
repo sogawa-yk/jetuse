@@ -311,7 +311,8 @@ def test_upstream_errors_map_to_502_504(env, monkeypatch):
 def test_own_tenancy_auth_follows_auth_mode(monkeypatch):
     """配備(Container Instance)では AUTH_MODE=resource_principal で RP 署名(コンテナに
     ~/.oci の DEFAULT プロファイルを置かない — SP3-07)。共有テナンシは常にユーザープリンシパル。"""
-    from jetuse_core import genai
+    from jetuse_core import oci_auth
+    from jetuse_core.settings import get_settings
 
     class _RP:
         pass
@@ -320,12 +321,15 @@ def test_own_tenancy_auth_follows_auth_mode(monkeypatch):
         def __init__(self, profile_name=None):
             self.profile_name = profile_name
 
-    monkeypatch.setattr(genai, "OciResourcePrincipalAuth", _RP)
-    monkeypatch.setattr(genai, "OciUserPrincipalAuth", _UP)
+    # 集約後 own-tenancy: genai._signer→oci_auth.httpx_auth 経由。Auth は oci_auth を patch。
+    monkeypatch.setattr(oci_auth, "OciResourcePrincipalAuth", _RP)
+    monkeypatch.setattr(oci_auth, "OciUserPrincipalAuth", _UP)
     monkeypatch.setattr(sp, "OciUserPrincipalAuth", _UP)
     monkeypatch.setenv("AUTH_MODE", "resource_principal")
+    get_settings.cache_clear()
     assert isinstance(sp._auth_for(""), _RP)
     monkeypatch.delenv("AUTH_MODE")
+    get_settings.cache_clear()
     assert isinstance(sp._auth_for(""), _UP)
     assert sp._auth_for("SHAREDPROF").profile_name == "SHAREDPROF"
 

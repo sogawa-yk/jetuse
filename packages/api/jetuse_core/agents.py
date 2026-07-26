@@ -137,22 +137,13 @@ def delete_agent(owner: str, aid: str) -> bool:
 
 def list_projects() -> list[dict[str, str]]:
     """Project割当の選択肢(コンパートメント内ACTIVE)。SDKで取得"""
-    import os
-
     import oci
 
+    from .oci_auth import sdk_signer_args
     from .settings import get_settings
 
     s = get_settings()
-    if os.environ.get("AUTH_MODE") == "resource_principal":
-        signer = oci.auth.signers.get_resource_principals_signer()
-        client = oci.generative_ai.GenerativeAiClient(
-            {"region": s.oci_region}, signer=signer
-        )
-    else:
-        from .genai import load_local_oci_config
-
-        client = oci.generative_ai.GenerativeAiClient(load_local_oci_config())
+    client = oci.generative_ai.GenerativeAiClient(**sdk_signer_args(s.oci_region))
     res = client.list_generative_ai_projects(compartment_id=s.compartment_ocid)
     return [
         {"id": p.id, "name": p.display_name}
