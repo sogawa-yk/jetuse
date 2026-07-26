@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     oci_region: str = "ap-osaka-1"
+    # OCI ログイン方式。env AUTH_MODE を読む（後方互換）。既定 config_file=ローカル ~/.oci/config。
+    # config_file | resource_principal | instance_principal。解決は jetuse_core.oci_auth 経由。
+    auth_mode: str = "config_file"
+    # ~/.oci/config のプロファイル名（空=DEFAULT）。config_file モードで使用。
+    oci_profile: str = ""
     compartment_ocid: str = ""
     project_ocid: str = ""
     # FIX-47: project_ocid 空のとき、compartment に ACTIVE project が無ければ自動作成を許可する。
