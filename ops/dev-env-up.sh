@@ -10,7 +10,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-DEV="${1:?usage: dev-env-up.sh <dev>}"
+APPLY=0; DEV=""
+for a in "$@"; do case "$a" in --apply) APPLY=1;; -*) echo "unknown flag: $a" >&2; exit 2;; *) DEV="$a";; esac; done
+[ -n "$DEV" ] || { echo "usage: dev-env-up.sh <dev> [--apply]"; exit 1; }
 APPDIR=infra/terraform/environments/app
 TFVARS="$APPDIR/${DEV}.tfvars"
 [ -f "$TFVARS" ] || { echo "missing $TFVARS (copy alice.tfvars.example)"; exit 1; }
@@ -32,9 +34,11 @@ echo "== terraform plan (state: ${DEV}.tfstate)"
   terraform plan -input=false -var-file="${DEV}.tfvars" \
     -var "api_image_url=${IMAGE}" -state="${DEV}.tfstate" -out="${DEV}.tfplan"
 )
-# CLAUDE.md: terraform apply は承認ゲート。明示確認してから適用する。
-read -r -p "上記planを適用しますか? [y/N] " ans
-[ "$ans" = "y" ] || { echo "中止"; exit 1; }
+# CLAUDE.md: terraform apply は承認ゲート。ヘッドレス安全のため対話確認はせず、--apply 明示時のみ適用する。
+if [ "$APPLY" -ne 1 ]; then
+  echo "== plan のみ完了（適用するには --apply を渡す）。SPA 配信もスキップ。"
+  exit 0
+fi
 ( cd "$APPDIR" && terraform apply -input=false -state="${DEV}.tfstate" "${DEV}.tfplan" )
 
 echo "== build & deploy SPA -> jetuse-${DEV}-spa"

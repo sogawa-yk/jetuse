@@ -10,7 +10,8 @@
   - **`main → dev` 同期は `ops/sync-main-to-dev.sh`** を使う（同期ブランチを `refactor/*` で切り deploy-dev.yml の自動配備を回避。push / PR は人間ゲート）。
 - **実機検証主義**: 「ドキュメントにそう書いてある」は完了条件にならない。OCI実環境での実行結果をもって完了とする。検証結果は `docs/verification/` にレポートとして残す。
 - **比較ドキュメント主義**（ユーザー指示 2026-06-11）: 複数のOCIサービス/方式の選択肢から1つを採用する場合は、`docs/comparison/` に比較ドキュメントを残す（プリセールス転用可能な粒度。可能なら定量比較付き）。実機の発見・Tipsは `docs/tips.md` に追記。
-- **コミット前チェック**: lint / type check / unit test を通す。フロントは `npm run build` 成功まで。
+- **コミット前チェック**: `make lint && make test && make build` を通す（単一コマンド入口は root `Makefile`。`make help` で一覧。build/test/lint/e2e/deploy/down）。
+- **破壊的スクリプトは明示フラグ必須**（ヘッドレス安全）: `ops/dev-env-up.sh <dev> --apply`（terraform apply）／`ops/dev-env-down.sh <dev> --yes`（destroy）／`ops/recreate-agents.sh <tag> --yes`（削除）。無フラグは plan のみ／拒否で停止する（対話プロンプトは持たない）。
 
 ## 環境・認証の扱い
 
