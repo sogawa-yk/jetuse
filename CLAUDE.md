@@ -6,6 +6,8 @@
 
 - **spec-driven**: 各タスクは `specs/` 配下の仕様を正とする。仕様にない実装判断が必要になったら、実装せず `docs/decisions/` にADR案を書いて人間レビューを要求する。
 - **1タスク = 1ブランチ + PR**。Public 変更は `main` から分岐して `main` へ入れ、直後に `main → dev` で同期する。Internal 固有変更は `dev` から分岐して `dev` のみに入れる。`dev` 全体を `main` へ merge しない。正本は `docs/guides/branching-and-releases.md`。
+  - **どちら起点か判定の目安**: 変更ファイルが **main にも dev にも在る共有物**（docs・CLAUDE.md・specs・`.claude/` ループ機構・公開アプリコード等）なら **main 起点**。**dev だけに在るファイル**（internal 固有機能）のみ dev 起点。共有物を dev 起点にすると `main` に届かず両系統が乖離する（実例: 2026-07 の docs 整理を dev 起点にして main 側 PR を後追いで足す羽目になった）。
+  - **`main → dev` 同期は `ops/sync-main-to-dev.sh`** を使う（同期ブランチを `refactor/*` で切り deploy-dev.yml の自動配備を回避。push / PR は人間ゲート）。
 - **実機検証主義**: 「ドキュメントにそう書いてある」は完了条件にならない。OCI実環境での実行結果をもって完了とする。検証結果は `docs/verification/` にレポートとして残す。
 - **比較ドキュメント主義**（ユーザー指示 2026-06-11）: 複数のOCIサービス/方式の選択肢から1つを採用する場合は、`docs/comparison/` に比較ドキュメントを残す（プリセールス転用可能な粒度。可能なら定量比較付き）。実機の発見・Tipsは `docs/tips.md` に追記。
 - **コミット前チェック**: lint / type check / unit test を通す。フロントは `npm run build` 成功まで。
