@@ -37,6 +37,9 @@ dist/
 .DS_Store
 tmp/
 
+# Obsidian 出力先の絶対パス（環境依存・共有しない・ハンドオフ ch.5）
+.obsidian-dir
+
 # spike audio artifacts (archived)
 docs/archive/spikes/data/*.mp3
 docs/archive/spikes/data/*.wav
@@ -47,3 +50,6 @@ docs/archive/spikes/data/*.wav
 
 # loop 成果物（stage-runner 統合で混入防止）
 .current_run_id
+
+# 無人 claude 実行ログ（ヘッドレス委譲・ハンドオフ ch.4）
+.agent-runs/

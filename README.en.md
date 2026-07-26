@@ -88,7 +88,7 @@ nightly stops (start it before working).
 cd packages/api && AUTH_REQUIRED=false uvicorn service.main:app --port 8000
 cd packages/web && VITE_AUTH_REQUIRED=false npm run dev   # proxies /api to :8000
 ```
-Before commit: `ruff check . && pytest` (API) / `npm run build && npm run lint` (web).
+Before commit: `make lint && make test && make build` (single-command entry = root `Makefile`; see `make help`).
 
 ## Docs
 
