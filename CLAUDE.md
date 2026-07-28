@@ -12,17 +12,23 @@
 - **比較ドキュメント主義**（ユーザー指示 2026-06-11）: 複数のOCIサービス/方式の選択肢から1つを採用する場合は、`docs/comparison/` に比較ドキュメントを残す（プリセールス転用可能な粒度。可能なら定量比較付き）。実機の発見・Tipsは `docs/tips.md` に追記。
 - **コミット前チェック**: `make lint && make test && make build` を通す（単一コマンド入口は root `Makefile`。`make help` で一覧。build/test/lint/e2e/deploy/down）。
 - **破壊的スクリプトは明示フラグ必須**（ヘッドレス安全）: `ops/dev-env-up.sh <dev> --apply`（terraform apply）／`ops/dev-env-down.sh <dev> --yes`（destroy）／`ops/recreate-agents.sh <tag> --yes`（削除）。無フラグは plan のみ／拒否で停止する（対話プロンプトは持たない）。
+- **ローカル開発フロー**: 実装 → `make test`（単体） → `make deploy DEV=<名>`（自分の app スタック） → 実 OCI へ E2E（`tasks/<id>.md` のシナリオ・**dev コンパートメント限定・モック不可**） → コミット。各段が単一コマンド。事前に必要な OCI リソース＝共有 `environments/dev` apply 済・自分の ADB スキーマ（`ops/setup-dev-schema.py`）・`infra/terraform/environments/app/<dev>.tfvars`・OCIR ログイン（詳細 `docs/guides/dev-environments.md`）。
+- **報告・委譲（個人スキル・ホーム側 `~/.claude` が自動読込）**: 人が読む成果物は **`preview` スキル**で Obsidian の `_renders/<topic>.html`（単一ファイル・`.obsidian-dir` で出力先解決）へ出す（リポジトリ内ドキュメントは markdown のまま・HTML はコミットしない）。長時間タスクは **`dispatch-remote` スキル**でインスタンス `dev` へ無人委譲（結果は `agent/<id>` ブランチで返る）。
 
 ## 環境・認証の扱い
 
-- OCI認証は `~/.oci/config`（DEFAULTプロファイル）。**認証情報・テナンシ/コンパートメントOCID・エンドポイント実値をリポジトリにコミットしない**。環境依存値は `.env`（gitignore済み）に置き、雛形は `.env.example`。
+- **OCI ログイン方式は1スイッチ（`jetuse_core.oci_auth` リゾルバ・env `AUTH_MODE`。分岐を各所に散らさず必ず経由する）**:
+  - `config_file`（既定）= `~/.oci/config` のプロファイル（`OCI_PROFILE` で選択・空=DEFAULT）。**ローカル(macOS)開発の既定**。
+  - `resource_principal` = 配備済みサービス（Container Instance / Functions）。Terraform が `AUTH_MODE=resource_principal` を注入。
+  - `instance_principal` = OCI インスタンス自身。**インスタンスへの無人委譲（dispatch-remote）実行時に `AUTH_MODE=instance_principal`**（`dev` インスタンスで有効確認済）。
+- **認証情報・テナンシ/コンパートメント OCID・エンドポイント実値をリポジトリにコミットしない**。環境依存値は `.env`（gitignore 済み）に置き、雛形は `.env.example`。
 - エージェントが実行してよい操作: OCI CLI/SDKでのリソース参照、検証用リソースの作成・削除（**`jetuse-spike-` プレフィックス必須**）、Terraform plan。
 - 人間の承認が必要な操作: 本番相当のTerraform apply、IAMポリシー変更、Identity Domain設定変更、スパイク用プレフィックス以外のリソース削除。
 - 既存リソース（VCN `develop`、インスタンス `dev`、バケット `jetuse-oci-source-documents`）は参照のみ。削除・変更禁止。
 
 ## 環境の確定事実（2026-06-10時点）
 
-- 実行環境: OCI computeインスタンス `dev`（VM.Standard.E6.Flex / Oracle Linux 9.7 / ap-osaka-1。ブートボリューム150GB — 2026-06-13拡張・ユーザー承認）。
+- **開発モデル（2026-07-26〜）**: **ローカル(macOS)が主開発環境**（実装・単体は `make`。OCI認証は config_file＝`~/.oci/config`）。**OCI compute インスタンス `dev`（VM.Standard.E6.Flex / OL9.7 / ap-osaka-1・ブートボリューム150GB）は長時間タスクの無人実行機**（`dispatch-remote` で `claude -p` を委譲・`AUTH_MODE=instance_principal`）。移動でローカルが切れても委譲実行は継続する。コードは OneDrive 配下に置かない（`.git` 破損回避）。
 - コンパートメント: `jetuse-proto`（OCIDは `.env` の `COMPARTMENT_OCID`）。計画書の `jetuse-spike` は存在しないため代替使用（ADR-0001）。
 - ツール: Python 3.12（venv: `.venv`）/ Node 22 / Terraform 1.15 / podman 5.6 / OCI CLI 3.85。
 - **大阪リージョン（ap-osaka-1）はOpenAI互換 agentic API フル対応**: ベースURL `https://inference.generativeai.ap-osaka-1.oci.oraclecloud.com/openai/v1` 配下に Responses / Conversations / Files / Vector Stores / File Search / Code Interpreter。
@@ -34,17 +40,18 @@
 ## リポジトリ構成
 
 ```
-CLAUDE.md            # 本ファイル
-docs/plan.md         # 作業計画書（正本）
-specs/               # 機能仕様（フェーズごと）
-docs/decisions/      # ADR
-docs/verification/   # スパイク・検証レポート
-docs/archive/         # 陳腐化した計画・Phase 0 スパイク（git 履歴から復元可）
-spikes/sp3_03_scaffold/  # 生成デモの実行時スキャフォールド（後続で本来の場所へ移設予定）
-packages/web/        # React SPA
-packages/api/        # FastAPI
-infra/terraform/     # Terraformモジュール
-infra/orm/           # IAMとアプリを含むResource Managerスタック
+CLAUDE.md      # 本ファイル（プロジェクト規約）。個人共通規約はホーム側 ~/.claude が自動読込
+Makefile       # 単一コマンド入口（make build/test/lint/e2e/deploy/down・make help）
+docs/          # plan.md(正本) / decisions=ADR / verification / comparison / guides / tips.md / archive(退避)
+specs/         # 機能仕様（フェーズごと）
+packages/web/  # React SPA（Vite/Tailwind・build→Object Storage）
+packages/api/  # FastAPI(service/) + Functions(fn/) + 共有ロジック(jetuse_core/・認証は jetuse_core/oci_auth.py)
+packages/*     # jetuse_shared(セキュリティlib) / registry(登録簿) / agent-containers / hosted-agent-sample
+infra/terraform/  # Terraform（modules/ + environments/{dev=共有基盤, app=開発者ごと}）
+infra/orm/     # ワンクリック Resource Manager スタック（IAM+アプリ）
+ops/           # 運用スクリプト（dev-env-up/down・deploy・sync-main-to-dev 等。破壊系は明示フラグ必須）
+.claude/       # ループ機構（skills/hooks/loop・下記「ループエンジニアリング」）
+spikes/sp3_03_scaffold/  # 生成デモの実行時スキャフォールド（dev 固有・後続で本来の場所へ移設予定）
 ```
 
 ## タスクチケット書式
