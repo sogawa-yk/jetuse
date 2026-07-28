@@ -1,0 +1,55 @@
+{
+  "review_n": 8,
+  "timestamp": "2026-07-29T06:40:07+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-8.input.diff",
+  "raw_output_path": "reviews/review-8.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker はありませんが、Identity Domain パスワード設定の再試行性に major が残っています。E2E は主要38シナリオを広く裏づけていますが、応答喪失経路の説明が実装と矛盾するため、差分全体の証跡としては不十分です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 1,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "major",
+      "file": "infra/terraform/modules/identity-domain-app/main.tf",
+      "line": 118,
+      "issue": "UserPasswordChanger の PUT がサーバー側で成功した後に応答だけ失われると、次の試行は同一パスワードの pwdpolicyViolation となり即座に失敗します。以後の apply も同じ値では再開できず、利用者が demo_password_version を変更して資格情報を再発行するまで Stack が失敗状態になります。",
+      "suggestion": "APIが対応するなら冪等性トークンを使用し、そうでなければ要求したパスワードが現在値であることを検証できる postcondition を設けてください。fail-closedを維持する場合は、この異常系をテストし、手動ローテーションが必要な残存制約として明記してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "minor",
+      "file": "runs/2026-07-28T2226_PUBLIC-DEPLOY-E2E/e2e/upgrade-path.md",
+      "line": 35,
+      "issue": "証跡は「最初の失敗後に pwdpolicyViolation になれば成功扱い」と記載していますが、最終実装は試行回数にかかわらず pwdpolicyViolation を失敗扱いにします。応答喪失経路を検証済みと誤認させる記録です。",
+      "suggestion": "記述を最終実装の fail-closed と demo_password_version による復旧手順へ合わせ、未実施の応答喪失経路を SKIPPED.md に残存リスクとして追加してください。"
+    },
+    {
+      "id": "F003",
+      "severity": "minor",
+      "file": "docs/architecture/system.md",
+      "line": 127,
+      "issue": "現在のアーキテクチャ文書には「TTSのみ us-phoenix-1」と残っており、今回導入したデプロイリージョン優先・Phoenixフォールバック仕様と矛盾します。docs/architecture/README.md や音声チャット図にも同じ固定表現が残っています。",
+      "suggestion": "現行アーキテクチャ文書と音声チャット図を自動リージョン選択仕様へ更新し、Phoenix固定だった過去の検証結果とは日付付きで区別してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 38,
+    "adequacy": "insufficient",
+    "notes": "e2e-results.json は38/38 PASSで、ログイン、Responses/Conversations、RAG初回アップロード、DBチャット、OCR/STT/TTS、管理画面、ページ描画を網羅しています。source-ref.txt の検証オブジェクトは提示された追跡対象差分と一致し、upgrade・再起動・destroy の補助証跡もあります。TTSフォールバックとIAM分割を未実施としたSKIPPED.mdの理由は妥当ですが、UserPasswordChangerの応答喪失経路は未検証かつupgrade-path.mdが実装と矛盾しています。実パスワード、実OCID、未マスクの実エンドポイントの混入は見当たりません。実行先はDEPLOYTEST/jetuse-testですが、READMEには人間の承認、専用コンパートメントでの新規作成、既存リソース非変更、teardown完了が記録されています。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

@@ -32,9 +32,14 @@ cp -R "${source_tree}/infra/orm/." "${app_stage}/"
 mkdir -p "${app_stage}/terraform" "${app_stage}/packages/web"
 cp -R "${source_tree}/infra/terraform/modules" "${app_stage}/terraform/"
 cp -R "${repo_root}/packages/web/dist" "${app_stage}/packages/web/"
-sed -i 's#../terraform/modules/#./terraform/modules/#g' "${app_stage}/main.tf"
-sed -i 's#${path.module}/../../packages/web/dist#${path.module}/packages/web/dist#g' \
-  "${app_stage}/spa.tf"
+# in-place 置換は使わない: GNU と BSD(macOS) で `sed -i` の引数解釈が異なり、macOS では
+# 置換式がバックアップ拡張子として食われて壊れる。開発者がローカルでも zip を検証できるよう、
+# 一時ファイル経由の移植可能な形にする。
+rewrite() { # rewrite <file> <sed-expr>
+  sed "$2" "$1" > "$1.tmp" && mv "$1.tmp" "$1"
+}
+rewrite "${app_stage}/main.tf" 's#../terraform/modules/#./terraform/modules/#g'
+rewrite "${app_stage}/spa.tf" 's#${path.module}/../../packages/web/dist#${path.module}/packages/web/dist#g'
 
 if find "${app_stage}" -type d -name .terraform -print -quit | grep -q .; then
   echo "unexpected .terraform directory in ${app_stage}" >&2

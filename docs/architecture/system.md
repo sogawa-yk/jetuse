@@ -31,7 +31,7 @@ JetUse（AISA製。OCI版 JetUse プロトタイプ）のアーキテクチャ�
 | エージェント | ●(Select AI Agent) | ●OpenAI/ADK/LangGraph | ○定義/Select AI Agent | | | | |
 | 議事録 | ●整形 | | ○保存 | ●STTバッチ(話者分離) | | | |
 | リアルタイム翻訳 | ○LLM翻訳 | | | ●STTリアルタイム | ○OCI Language翻訳 | | |
-| 音声チャット | ● | | | ●STT + ●TTS(Phoenix) | | | |
+| 音声チャット | ● | | | ●STT + ●TTS(リージョン自動) | | | |
 | 映像分析 | ●vision | | | | | | |
 | OCR / 文書認識 | ●VLMエンジン | | | | | ●Document Understanding | |
 | 管理 / 設定 | | | ○監査ログ | | | | |
@@ -53,7 +53,7 @@ flowchart LR
     HOST["GenAI Hosted Applications<br/>(エージェント3SDK)"]
     ADB["Autonomous DB 26ai<br/>(Select AI / SQL Search / Agent)"]
     OSRCH["Search with OpenSearch"]
-    SPEECH["OCI Speech<br/>(STT大阪 / TTS Phoenix)"]
+    SPEECH["OCI Speech<br/>(STT大阪 / TTS リージョン自動)"]
     LANG["OCI Language"]
     DOCU["Document Understanding"]
   end
@@ -99,7 +99,7 @@ flowchart TB
     DOCU["Document Understanding (OCR)"]
   end
 
-  PHX["OCI Speech TTS<br/>us-phoenix-1(日本語ボイス)"]
+  PHX["OCI Speech TTS<br/>日本語ボイス(リージョン自動選択)"]
   EXT["外部: DuckDuckGo検索 / Webページ / MCPサーバー"]
 
   USER -->|HTTPS| GW
@@ -124,7 +124,7 @@ flowchart TB
 - **ネットワーク**: API GW=publicサブネット、CI/Functions/OpenSearch=privateサブネット。CI→OpenSearchは
   nsg-opensearch(9200, VCN内)で許可。CIはegress全開放。
 - **CI再作成でプライベートIPが変わる**ため、イメージ更新後は**フル`terraform apply`**でGWのbackend IPまで反映（[KNOWLEDGE.md §8](../KNOWLEDGE.md#8-インフラデプロイのハマり所重要)）。
-- **TTSのみ us-phoenix-1**（大阪にTTSモデルなし。クロスリージョン呼び出しは追加IAM不要）。
+- **TTSはリージョン自動選択**（`TTS_REGION` 未指定ならデプロイリージョン → `us-phoenix-1` の順に試行）。大阪にはTTSモデルが無いため大阪デプロイではPhoenixへのクロスリージョン呼び出しになる（追加IAM不要）。us-chicago-1 では同一リージョンで利用可（2026-07-28実測）。
 - Terraform: `infra/terraform/`（modules: network/object_storage/adb/ocir/container-instance/functions/api-gateway/observability/identity_domain/iam/**opensearch**）。
 
 ---

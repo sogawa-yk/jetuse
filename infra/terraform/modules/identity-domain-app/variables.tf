@@ -23,3 +23,10 @@ variable "demo_password" {
   type        = string
   sensitive   = true
 }
+
+# Identity Domain はホームリージョンにあるため、oci CLI の呼び出しにも同リージョンを渡す。
+variable "home_region" {
+  description = "テナンシのホームリージョン(Identity Domain の所在。空ならCLI既定に委ねる)"
+  type        = string
+  default     = ""
+}

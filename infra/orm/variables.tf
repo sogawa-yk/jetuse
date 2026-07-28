@@ -74,6 +74,18 @@ variable "demo_email" {
   default     = "demo@example.com"
 }
 
+variable "demo_password_version" {
+  description = "この値を変えるとデモユーザーのパスワードを再発行する（パスワード履歴と衝突して更新が失敗したときの復旧手段）"
+  type        = string
+  default     = "1"
+}
+
+variable "admin_users" {
+  description = "管理ダッシュボード(/admin)を見られるユーザー(カンマ区切り。JWTのsubまたはemailと一致)。空かつenable_auth=trueならスタックが作る demo ユーザーを管理者にする"
+  type        = string
+  default     = ""
+}
+
 variable "enable_auth" {
   description = "OIDC認証を有効化(Identity Domain + OIDCアプリ + デモユーザーを作成)"
   type        = bool

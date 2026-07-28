@@ -50,6 +50,13 @@ locals {
     "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage generative-ai-vector-store in compartment id ${var.compartment_ocid}",
     "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage generative-ai-vectorstore-file in compartment id ${var.compartment_ocid}",
     "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage generative-ai-file in compartment id ${var.compartment_ocid}",
+    # agentic API 本体(Responses / Conversations)は generative-ai-family に**含まれない**独立
+    # resource-type。欠けると POST /openai/v1/responses と /conversations がリソース
+    # プリンシパルでのみ 404 になり、既定チャットモデル(responses系)・RAG の引用付き回答・
+    # 会話メモリが揃って失敗する(ユーザープリンシパルでは通るため切り分けが難しい)。
+    # DEPLOYTEST テナンシ(us-chicago-1)で 2026-07-28 に実機再現・修正確認。
+    "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage generative-ai-response in compartment id ${var.compartment_ocid}",
+    "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage generative-ai-conversation in compartment id ${var.compartment_ocid}",
     # ADB wallet 取得、RAG/議事録ファイル、AIサービス、可観測性。
     "Allow dynamic-group ${local.runtime_dynamic_group_name} to use autonomous-database-family in compartment id ${var.compartment_ocid}",
     "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage objects in compartment id ${var.compartment_ocid}",

@@ -1,0 +1,26 @@
+# 検証用リソースの後始末（2026-07-29 完了）
+
+## 最終検証サイクル（実機での通し）
+その時点の作業ツリーから ORM zip とコンテナイメージを作り、**まっさらな新規スタック**を作成して
+apply → E2E(38/38 PASS) → destroy まで一巡させた。
+なお、この通し実行の**後**に destroy 用 local-exec へ `OCI_CLI_REGION` の明示と失敗時の警告出力を
+追加している（`infra/terraform/environments/dev` への destroy 順序反映・単体テスト・文書も同様）。
+これらは実機で再実行していない。差分の範囲は
+`docs/verification/PUBLIC-DEPLOY-E2E.md`「検証の範囲」節に明記した。
+- 最終 destroy ログ: `Destroy complete! Resources: 180 destroyed.`
+- `409-BucketNotEmpty` も `No such option: --force` も発生せず（どちらも修正前は必ず起きていた）。
+
+## destroy / delete 済み
+- CLI プローブ用スタック `jetuse-probe-cli`
+- 不具合再現用スタック `jetuse-deploytest`（旧実装で作成 → 修正版でアップグレード → destroy）
+- 検証用スタック `jetuse-deploytest-fixed`
+- 最終検証スタック `jetuse-final-verify`
+- 検証用 OCIR リポジトリ（`jetuse-api` / `jetuse-fn-router`）と検証用 OCI auth token
+- 検証用に作った Identity Domain のテストユーザー（pwtest-a / pwtest-b）
+
+## 残存確認（コンパートメント `jetuse-test` / テナンシ）
+Resource Manager スタック: 0 / Object Storage バケット: 0 / VCN: 0 /
+Identity Domain: 0 / OCIR リポジトリ: 0 / テナンシの `jetuse*` Dynamic Group: 0
+
+## 既存リソースへの影響
+無し。作成先は新規の専用コンパートメント `jetuse-test` のみで、既存リソースの変更・削除は行っていない。
