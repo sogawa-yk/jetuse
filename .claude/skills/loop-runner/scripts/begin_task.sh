@@ -25,7 +25,7 @@ echo "$RUN_ID" > .current_run_id
 DIR="runs/${RUN_ID}"
 mkdir -p "$DIR/turns" "$DIR/diffs" "$DIR/reviews"
 
-printf '%s\n' "${GOAL:-<未登録: /goal で完了条件を登録すること>}" > "$DIR/goal.txt"
+printf '%s\n' "${GOAL:-<未登録: 起動時に GOAL env で完了条件を渡すこと>}" > "$DIR/goal.txt"
 
 CLAUDE_VER="$(claude --version 2>/dev/null | awk '{print $1}' || echo unknown)"
 CODEX_VER="$(codex --version 2>/dev/null | awk '{print $2}' || echo unknown)"

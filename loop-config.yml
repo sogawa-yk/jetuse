@@ -33,11 +33,13 @@ review:
   blocker_blocks_completion: true
 
 # ponytail(DietrichGebert/ponytail)統合: maker 側の実装最小化規律。採点は Codex のまま(判定を動かさない)。
-# loop-protocol 手順2(実装時の ponytail 適用)/手順2.5(codex 前の ponytail-review 自己短縮)が参照する。
+# loop-protocol「実装規律」(実装時の ponytail 適用)が参照する。
 ponytail:
   enabled: true
   intensity: full       # lite | full | ultra。実装時 ponytail の既定強度(ultra は要件まで削るため人間明示時のみ)
-  self_review: true     # codex-review 前に ponytail-review を当て runs/<id>/reviews/ponytail-<n>.txt に証跡(非採点)
+  # 2026-07-28: Opus 5 系はプロンプトなしで自己修正するため、codex-review 前の ponytail-review
+  # 自己レビューは既定オフ(公式 Opus 5 プロンプティングガイド「タスクのスコープと過剰な検証」準拠)。
+  self_review: false
 
 # Superpowers(obra/Superpowers)統合: 開発者規律の「層」を無改造 install して合成(C案・施主承認 2026-06-30)。
 # こちらのループは採点(Codex)/実環境E2Eゲート/fail-closed/loop-doctor の「強制と運用の殻」を担い、
@@ -46,15 +48,16 @@ ponytail:
 #       /plugin marketplace add obra/superpowers-marketplace && /plugin install superpowers@superpowers-marketplace
 superpowers:
   enabled: true
-  # 毎ターンの実装で踏む規律(歯は付けない=採点は Codex のまま)。loop-protocol 手順2 が参照。
+  # 毎ターンの実装で踏む規律(歯は付けない=採点は Codex のまま)。loop-protocol「実装規律」が参照。
   per_turn_skills:
     - superpowers:test-driven-development        # 非自明ロジックは RED-GREEN-REFACTOR。実環境E2E証跡と相補。
-  # タスク特性で随時 reach する規律。loop-protocol 手順2 / stage・loop-runner の起票前段。
+  # タスク特性で随時 reach する規律。loop-protocol「実装規律」/ stage・loop-runner の起票前段。
+  # 2026-07-28: verification-before-completion は削除。Opus 5 系は指示なしで完了前に自己検証する
+  # ため重複コストになる(公式ガイド「タスクのスコープと過剰な検証」)。完了の担保は Codex 採点＋実環境 E2E ゲート。
   on_demand_skills:
     - superpowers:brainstorming                  # 要件が曖昧なとき(着手前の設計詰め)
     - superpowers:writing-plans                  # 多段タスクの分解(タスク起票の前段)
     - superpowers:systematic-debugging           # 不具合の根本原因解析(symptom でなく root cause)
-    - superpowers:verification-before-completion # 完了主張前の自己検証(こちらの実環境E2Eゲートの前段)
 
 budget:
   max_turns: 20
@@ -73,7 +76,7 @@ worktree:
                                       # LOOP_SKIP_BOOTSTRAP=1 で無効化。
 
 # 本リポジトリはモノレポ。area ごとにテスト/lint コマンドが異なる。
-# /goal 完了条件には「変更した area の」コマンドを当てる（goal_template の {test_cmd}）。
+# goal 完了条件には「変更した area の」コマンドを当てる（goal_template の {test_cmd}）。
 areas:
   web:
     path: packages/web

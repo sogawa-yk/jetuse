@@ -61,18 +61,19 @@ description: STAGE<N>-PROGRESS.md のステージ全体を自走で実装し切�
 4. **不能/FAIL なら** `git merge --abort` して当該タスクを status=`blocked`（理由=統合衝突）にし、ステージ報告で提示。
 
 ## ハードゲート（自走中も必ず停止・越えない）
-`loop-config.yml` `stage_runner.hard_gates`:
-- **push**（リモート push） / **pr_to_base**（base への PR・merge） / **terraform_apply**（apply・課金） /
-  **billing** / **iam_identity**（IAM・Identity Domain） / **adr_approval**（真の決定を伴う ADR 承認）。
+ゲート一覧の単一真実源は `loop-config.yml` の `stage_runner.hard_gates`（push / base への PR /
+apply・課金 / IAM / ADR 承認 の系統）。ここに列挙を複製しない＝変更は loop-config 側だけで行う。
 
-当該ゲートに当たったタスクは**越えずに** status=`blocked`、理由を記録して他タスクを進める。
+当該ゲートに当たったタスクは status=`blocked` にし、理由を記録して他タスクを進める。
 - **ADR**: ドラフト作成は進めてよい（成果物）。**承認**は越えない＝ステージ報告でまとめて提示。
   ただしテナンシ/IAM/ポリシー系 ADR はドラフト時点でも慎重に扱い、判断を仰ぐ。
 - **デモ品質ゲート**（SBA 系・HBD-05 等）: 自動では合格判定しない。実装・E2E まで進めて
   **ステージ報告で一括レビュー**を仰ぐ（＝ご要望の「ステージ完了時に1回チェック」）。
 
 ## ステージ報告（出口・ヒューマンゲート）
-`runs/_stages/<stage>/REPORT.md` に集約して提示する（テンプレ: `references/stage-report-template.md`）:
+`runs/_stages/<stage>/REPORT.md` に集約して提示する（テンプレ: `references/stage-report-template.md`）。
+報告は「索引＋例外の集約」に徹し、必要な実質だけを書く（埋め草セクション・重複要約で水増ししない。
+各タスクの詳細は HTML パケット側にある）:
 - **判断が要る事項を最上段バナーに**：どのタスクで override / 未対応 residual / 後続未起票があるか。
   例外を表の1セルに埋めない（SP3-03 の 18×FAIL override が埋もれた失敗の是正）。例外が無ければ「なし」。
 - 全タスクの {status, review_verdict, E2E 結果, **HTML パケット `docs/verification/<TASK>.html` へのリンク**}。
@@ -82,10 +83,10 @@ description: STAGE<N>-PROGRESS.md のステージ全体を自走で実装し切�
 - 人間は `feat/stage-<N>` を見てチェック → 承認後に **base への PR / push** を人間（または別途指示）で実施。
 
 ## 原則
-- **隔離**: 自動統合は `feat/stage-<N>` 限定。リモート/base/apply には絶対に出さない。
-- **ゲートは飛ばさない**: タスク単位ゲートをステージ境界に集約するだけ。push/PR/apply/ADR/IAM は据え置きで停止。
-- **証跡主義**: タスクごとに Codex PASS＋実環境 E2E 必須。統合後も test/lint 緑を再確認。
-- **むやみに増やさない**: ステージ worktree は1本、loop ADB は再利用（タスクは `JETUSE_<task>` スキーマ隔離）。
+- 隔離: 自動統合は `feat/stage-<N>` 限定。リモート/base/apply はハードゲートの先＝人間が行う。
+- ゲートはタスク単位からステージ境界へ集約するだけで、hard_gates は据え置きで停止する。
+- 証跡主義: タスクごとに Codex PASS＋実環境 E2E。統合後も test/lint 緑を再確認する。
+- ステージ worktree は1本、loop ADB は再利用（タスクは `JETUSE_<task>` スキーマ隔離）。
 - 後始末: ステージ承認・base マージ後に `end-loop.sh <task>` で各タスク worktree を、
   `git worktree remove` で統合 worktree を撤去する。
 
