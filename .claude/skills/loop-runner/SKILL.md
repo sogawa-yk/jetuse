@@ -75,7 +75,7 @@ herdr 内で回っている場合は、各タスクを**専用ペインで起動
 **完全なタスク仕様を最初に渡す**（Opus 5 系は仕様一式を先に与えて実行を任せたときに最良。
 あとから小出しにしない）。起動プロンプトに次をすべて埋める:
 - タスク: `tasks/<id>.md` の受け入れ条件・E2E シナリオ（パス参照だけでなく要点を展開して渡す）。
-  base ブランチ: `feat/loop-engineering`（依存連鎖時は `feat/<dep>`）。
+  base ブランチ: `dev`（`loop-config.yml` の `worktree.base_branch`。依存連鎖時は `feat/<dep>`）。
 - 完了条件: `loop-config.yml` の `goal_template` を当該タスクで具体化（test_cmd/area・E2E 含む）。
 - 手順: 下記「タスク実行契約」＝ loop-protocol を毎ターン辿り、完了ゲート
   （review_verdict=PASS・area の test/lint クリーン・実環境 E2E 通過）まで自走する。

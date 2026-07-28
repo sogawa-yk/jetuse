@@ -13,7 +13,8 @@ ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
 TASK="${1:?usage: ensure_task_branch.sh <task-id>}"
-BASE="${BASE_BRANCH:-feat/loop-engineering}"
+# 既定の派生元は loop-config.yml の worktree.base_branch（＝dev）に合わせる。
+BASE="${BASE_BRANCH:-dev}"
 BR="feat/${TASK}"
 
 cur="$(git branch --show-current 2>/dev/null || true)"
@@ -25,7 +26,7 @@ fi
 # worktree（linked working tree）内ではブランチは固定。共有チェックアウトの切替ロジックは適用しない。
 # 並行セッションの衝突は worktree 分離（start-loop.sh）で防ぐ前提。
 if [ "$(git rev-parse --git-dir)" != "$(git rev-parse --git-common-dir)" ]; then
-  echo "[branch] worktree 内（現在 $cur）。期待は $BR。ブランチ切替は行わない。" >&2
+  echo "[branch] worktree 内（現在 ${cur}）。期待は ${BR}。ブランチ切替は行わない。" >&2
   echo "[branch] 別タスクの worktree なら start-loop.sh で正しい worktree を起動してください。" >&2
   exit 0
 fi
@@ -39,8 +40,11 @@ if git show-ref --verify --quiet "refs/heads/${BR}"; then
   git checkout "$BR" >&2
 elif git show-ref --verify --quiet "refs/heads/${BASE}"; then
   git checkout -b "$BR" "$BASE" >&2
+elif git show-ref --verify --quiet "refs/remotes/origin/${BASE}"; then
+  # ローカルに base が無い運用が普通なので、リモート追跡ブランチから分岐する。
+  git checkout -b "$BR" "origin/${BASE}" >&2
 else
   echo "[branch] base($BASE) が無いため現在地から $BR を作成" >&2
   git checkout -b "$BR" >&2
 fi
-echo "[branch] $BR に切替（base=$BASE）" >&2
+echo "[branch] $BR に切替（base=${BASE}）" >&2
