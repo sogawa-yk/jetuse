@@ -26,8 +26,11 @@ want() { case " $AREAS " in *" $1 "*) return 0;; *) return 1;; esac; }
 # --- api: 専用 .venv + editable install ---
 if want api && [ -f packages/api/pyproject.toml ]; then
   if [ ! -x .venv/bin/python ]; then
-    echo "[bootstrap] api: .venv 作成（python3.12）" >&2
-    python3.12 -m venv .venv
+    # ローカル macOS=3.13 / dev インスタンス(OL9.7)=3.12 の両対応（2026-07-28）
+    PY_BIN="$(command -v python3.13 || command -v python3.12 || command -v python3)" \
+      || { echo "[bootstrap] api: python3.13 / python3.12 / python3 が見つからない" >&2; exit 1; }
+    echo "[bootstrap] api: .venv 作成（${PY_BIN##*/}）" >&2
+    "$PY_BIN" -m venv .venv
     .venv/bin/python -m pip install -q --upgrade pip
   fi
   echo "[bootstrap] api: packages/api を editable install" >&2
