@@ -1,6 +1,6 @@
 # ステージ報告: <stage-id>
 
-**統合ブランチ:** `feat/<stage-id>`（base=`feat/loop-engineering` / **未 push・未 PR**）
+**統合ブランチ:** `feat/<stage-id>`（base=`dev` / **未 push・未 PR**）
 **生成:** <ISO日時> / stage-runner
 **結果サマリ:** 完了 <done数>/<総数>・blocked <数>・残ハードゲート <数>
 
@@ -25,7 +25,7 @@
 
 ## 2. 統合差分（base 比）
 - 変更ファイル数 / 主な追加・変更点（タスク横断で何が入ったか）。
-- `git -C <stage-worktree> diff --stat feat/loop-engineering...feat/<stage-id>` の要約。
+- `git -C <stage-worktree> diff --stat dev...feat/<stage-id>` の要約。
 
 ## 3. 残ハードゲート（人間の承認が必要な事項）
 - [ ] base への PR / push（このステージ全体）

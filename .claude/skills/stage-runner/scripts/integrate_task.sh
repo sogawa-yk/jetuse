@@ -19,11 +19,13 @@ TASK="${2:?usage: integrate_task.sh <stage-id> <task-id>}"
 BR="feat/${STAGE}"
 TBR="feat/${TASK}"
 WT_ROOT="${LOOP_WORKTREE_ROOT:-$(cd "$ROOT/.." && pwd)/$(basename "$ROOT")-loops}"
-TWT="$(realpath -m "${WT_ROOT}/${TASK}")"
-SWT="$(realpath -m "${WT_ROOT}/_${STAGE}")"
+# BSD realpath（macOS）には -m が無い。ディレクトリ部だけ実体解決し、無ければ文字列のまま扱う。
+WT_ABS="$(cd "$WT_ROOT" 2>/dev/null && pwd || printf '%s' "$WT_ROOT")"
+TWT="${WT_ABS}/${TASK}"
+SWT="${WT_ABS}/_${STAGE}"
 
 [ -d "$TWT" ] || { echo "[stage] ERROR: task worktree 無し: $TWT" >&2; exit 1; }
-[ -d "$SWT" ] || { echo "[stage] ERROR: stage worktree 無し: $SWT（begin_stage.sh 未実行?）" >&2; exit 1; }
+[ -d "$SWT" ] || { echo "[stage] ERROR: stage worktree 無し: ${SWT}（begin_stage.sh 未実行?）" >&2; exit 1; }
 
 # 1) タスク worktree で deliverable をコミット（loop 成果物は除外）。
 #    add -A は gitignore 済（.current_run_id / .env 等）を自動スキップ。tracked/untracked の
@@ -37,7 +39,7 @@ SWT="$(realpath -m "${WT_ROOT}/_${STAGE}")"
   git reset -q -- '*.zip' '*wallet*' 'conn.env' '*.pem' '*.key' 2>/dev/null || true
   # 安全網: staged 内容に明白な秘匿値が混入していたら**コミットせず中断**（exit 4）。
   if git diff --cached -U0 | grep -aErqi '(ADB_ADMIN_PASSWORD|ADB_WALLET_PASSWORD|BEGIN [A-Z ]*PRIVATE KEY|aws_secret_access_key|password\s*=\s*[^ ]{6,})'; then
-    echo "[stage] ABORT: staged 差分に秘匿値らしき内容を検出。コミットしない（$TASK / worktree=$TWT）。" >&2
+    echo "[stage] ABORT: staged 差分に秘匿値らしき内容を検出。コミットしない（$TASK / worktree=${TWT}）。" >&2
     echo "[stage] → 当該ファイルをリポジトリ外（セッション scratchpad）へ退避し .gitignore してから再実行。" >&2
     git reset -q
     exit 4
@@ -57,9 +59,9 @@ set +e
 rc=$?
 set -e
 if [ "$rc" -ne 0 ]; then
-  echo "[stage] CONFLICT: $TASK を $BR へ統合中にコンフリクト（自動解決しない / worktree=$SWT）。" >&2
+  echo "[stage] CONFLICT: $TASK を $BR へ統合中にコンフリクト（自動解決しない / worktree=${SWT}）。" >&2
   echo "[stage] → SKILL の conflict_policy（サブエージェント解決→Codex レビュー）に従う。不能なら $SWT で git merge --abort。" >&2
   exit 3
 fi
 
-echo "[stage] 統合完了: $TBR → $BR（worktree=$SWT・未 push）。area テストを再実行して緑を確認すること。" >&2
+echo "[stage] 統合完了: $TBR → ${BR}（worktree=${SWT}・未 push）。area テストを再実行して緑を確認すること。" >&2
