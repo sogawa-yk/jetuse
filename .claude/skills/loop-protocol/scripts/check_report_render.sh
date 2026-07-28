@@ -22,7 +22,7 @@ BASE="$(basename "${ABS%.html}")"
 CH="${CHROME_BIN:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 
 if [ ! -x "$CH" ]; then
-  echo "[report] Chrome が見つからない: $CH（CHROME_BIN で指定可）。" >&2
+  echo "[report] Chrome が見つからない: ${CH}（CHROME_BIN で指定可）。" >&2
   echo "[report] レンダリング確認をスキップした旨を報告に明記すること。" >&2
   exit 3
 fi

@@ -5,7 +5,7 @@
 #       取り合って互いの変更を壊す（実害事例あり）。タスク=1 worktree に分離して物理的に防ぐ。
 #
 # 使い方:
-#   [GOAL="完了条件"] [CODEX_MODEL=...] [BASE_BRANCH=feat/loop-engineering] \
+#   [GOAL="完了条件"] [CODEX_MODEL=...] [BASE_BRANCH=dev] \
 #   [LOOP_WORKTREE_ROOT=/path] [LOOP_SKIP_BOOTSTRAP=1] .claude/loop/start-loop.sh <task-id>
 #
 # 既定の worktree 配置: <repo>/../<repo名>-loops/<task-id>（リポジトリ外の兄弟ディレクトリ）。
@@ -17,12 +17,15 @@ TASK="${1:?usage: start-loop.sh <task-id>}"
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
-BASE="${BASE_BRANCH:-feat/loop-engineering}"
+# 既定の派生元は loop-config.yml の worktree.base_branch（＝dev）に合わせる。
+# 依存連鎖は BASE_BRANCH=feat/<dep> で上書きする。
+BASE="${BASE_BRANCH:-dev}"
 BR="feat/${TASK}"
 WT_ROOT="${LOOP_WORKTREE_ROOT:-$(cd "$ROOT/.." && pwd)/$(basename "$ROOT")-loops}"
-WT="$(realpath -m "${WT_ROOT}/${TASK}")"
 
 mkdir -p "$WT_ROOT"
+# BSD realpath（macOS）には未作成パスを正規化する -m が無い。ディレクトリ部だけ実体解決する。
+WT="$(cd "$WT_ROOT" && pwd)/${TASK}"
 
 # 既存 worktree を再利用、無ければ作成。
 if git worktree list --porcelain | grep -qx "worktree ${WT}"; then
@@ -32,11 +35,19 @@ elif [ -e "$WT" ]; then
   exit 1
 elif git show-ref --verify --quiet "refs/heads/${BR}"; then
   git worktree add "$WT" "$BR" >&2
-elif git show-ref --verify --quiet "refs/heads/${BASE}"; then
-  git worktree add -b "$BR" "$WT" "$BASE" >&2
 else
-  echo "[loop] ERROR: base ブランチ '$BASE' が見つからない。BASE_BRANCH を指定してください。" >&2
-  exit 1
+  # base はローカルブランチが無ければ origin/<base> から分岐する（ローカルに dev を持たない
+  # 運用が普通なので、ローカル ref だけを見ると起動できない）。
+  if git show-ref --verify --quiet "refs/heads/${BASE}"; then
+    BASE_REF="$BASE"
+  elif git show-ref --verify --quiet "refs/remotes/origin/${BASE}"; then
+    BASE_REF="origin/${BASE}"
+    echo "[loop] ローカルに $BASE が無いため origin/$BASE から分岐する" >&2
+  else
+    echo "[loop] ERROR: base '$BASE' がローカルにも origin にも無い。git fetch するか BASE_BRANCH を指定してください。" >&2
+    exit 1
+  fi
+  git worktree add -b "$BR" "$WT" "$BASE_REF" >&2
 fi
 echo "[loop] worktree=$WT branch=$BR base=$BASE" >&2
 
@@ -64,13 +75,13 @@ export LOOP_TASK="$TASK"
 #   完了条件は呼び出し側が GOAL env で登録済み（session_start.sh が goal.txt に記録）。
 # - 未設定（人間が付く逐次/worktree 起動）: 従来どおり対話モード。GOAL env を渡せば goal.txt に記録される。
 if [ "${LOOP_AUTONOMOUS:-0}" = "1" ]; then
-  echo "[loop] 自律モードで起動（bypassPermissions＋ハードゲート deny / LOOP_TASK=$TASK）。" >&2
+  echo "[loop] 自律モードで起動（bypassPermissions＋ハードゲート deny / LOOP_TASK=${TASK}）。" >&2
   exec claude --permission-mode bypassPermissions \
     --disallowedTools \
       "Bash(git commit:*)" "Bash(git push:*)" "Bash(git merge:*)" \
       "Bash(gh pr create:*)" "Bash(gh pr merge:*)" \
       "Bash(terraform apply:*)" "Bash(terraform destroy:*)"
 else
-  echo "[loop] worktree で起動します（cd $WT / LOOP_TASK=$TASK）。完了条件は GOAL env で登録（goal.txt）。" >&2
+  echo "[loop] worktree で起動します（cd $WT / LOOP_TASK=${TASK}）。完了条件は GOAL env で登録（goal.txt）。" >&2
   exec claude
 fi
