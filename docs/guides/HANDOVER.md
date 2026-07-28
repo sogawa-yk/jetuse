@@ -25,7 +25,7 @@ AWSの JetUse（generative-ai-use-cases）相当の生成AIユースケース集
 | 実行マシン | OCIインスタンス `dev`（VM.Standard.E6.Flex / Oracle Linux 9.7 / **ap-osaka-1** / sudo可） |
 | コンパートメント | `jetuse-proto`（OCIDは `.env` の `COMPARTMENT_OCID`。計画書の `jetuse-spike` は存在せず代替 — ADR-0001） |
 | OCI認証 | `~/.oci/config` DEFAULT（ユーザー: yuki.sogawa.2@oracle.com）。**鍵ファイル末尾に `OCI_API_KEY` マーカー行あり（流用時は除去必須）** |
-| 導入済みツール | Python 3.12（venv: `.venv`）/ Node 22 / Terraform 1.15 / podman 5.6 / OCI CLI 3.85 / mpg123 |
+| 導入済みツール | Python 3.12（venv: `.venv`。ローカル macOS 開発は 3.13）/ Node 22 / Terraform 1.15 / podman 5.6 / OCI CLI 3.85 / mpg123 |
 | Python venv | `openai, oci, oci-genai-auth, oracledb, fastapi, httpx, gTTS, websockets, oci-ai-speech-realtime, reportlab, python-docx` 等導入済み |
 | 秘密情報 | すべて `.env`（gitignore済み）。ADBウォレット: `/home/opc/adb_wallet/` |
 
