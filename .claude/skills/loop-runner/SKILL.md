@@ -67,22 +67,26 @@ herdr 内で回っている場合は、各タスクを**専用ペインで起動
 戻り値を集約する。可視化ペインは無いが実行モデルは同じ。
 
 ### 各エージェントへ渡すプロンプト（両方式共通）
-そのタスクの **goal を回す**指示。**本リポジトリに `/goal` というスラッシュコマンドは存在しない**
+そのタスクの **goal を回す**指示。本リポジトリに `/goal` というスラッシュコマンドは存在しない
 （Stop hook `log_turn.sh` はターン記録のみで、goal 採点・再プロンプトはしない）。ループは
-**エージェント自身が loop-protocol を毎ターン辿って自走**することで回る。よって完了条件は
-（A）起動時の `GOAL` env で `goal.txt` に記録し、（B）下記プロンプトに完了条件を埋めて agent に渡す、
-の二点で伝える（スラッシュコマンドは使わない）:
-- タスク: `tasks/<id>.md`（受け入れ条件・E2E シナリオ）。base ブランチ: `feat/loop-engineering`
-  （依存連鎖時は `feat/<dep>`）。
+エージェント自身が loop-protocol を毎ターン辿って自走することで回る。完了条件は
+（A）起動時の `GOAL` env で `goal.txt` に記録し、（B）下記プロンプトに埋めて渡す。
+
+**完全なタスク仕様を最初に渡す**（Opus 5 系は仕様一式を先に与えて実行を任せたときに最良。
+あとから小出しにしない）。起動プロンプトに次をすべて埋める:
+- タスク: `tasks/<id>.md` の受け入れ条件・E2E シナリオ（パス参照だけでなく要点を展開して渡す）。
+  base ブランチ: `feat/loop-engineering`（依存連鎖時は `feat/<dep>`）。
 - 完了条件: `loop-config.yml` の `goal_template` を当該タスクで具体化（test_cmd/area・E2E 含む）。
-- 手順: 下記「タスク実行契約」を厳守（実装 → `codex-review` → FAIL は修正 → **review_verdict=PASS** かつ
-  test/lint クリーン かつ **実環境 E2E 通過** まで自走）。
-- **実環境 E2E の並列隔離**: 共有 loop ADB（`jetuse-loop-adb`）を再利用しつつ、**タスク専用スキーマ
-  `JETUSE_<TASK>` で隔離**する（ADMIN で `CREATE USER JETUSE_<task>` → そのスキーマへ migrate/E2E。
+- 手順: 下記「タスク実行契約」＝ loop-protocol を毎ターン辿り、完了ゲート
+  （review_verdict=PASS・area の test/lint クリーン・実環境 E2E 通過）まで自走する。
+- 実環境 E2E の並列隔離: 共有 loop ADB（`jetuse-loop-adb`）を再利用しつつ、タスク専用スキーマ
+  `JETUSE_<TASK>` で隔離する（ADMIN で `CREATE USER JETUSE_<task>` → そのスキーマへ migrate/E2E。
   ADB は増やさない）。非 DB タスクは ADB に触れない。
-- **コミットしない**。PASS まで実装したら停止し、完了ゲートで **HTML タスクパケット
-  `docs/verification/<task>.html` を生成**（loop-protocol）した上で、最終メッセージに {task, review_verdict,
-  e2e結果, パケットパス, 残る人間ゲート} を構造化して返す（方式Bでは最終メッセージをペインに出力する）。
+- 出力の抑制: 「ターン出力は loop-protocol『ターン出力の書き方』に従い、簡潔に保つ」の1文を
+  含める（無人ペインのログ肥大防止）。
+- 停止: コミットせず、完了ゲートで HTML タスクパケット `docs/verification/<task>.html` を生成
+  （loop-protocol）した上で、最終メッセージに {task, review_verdict, e2e結果, パケットパス,
+  残る人間ゲート} を構造化して返す（方式Bでは最終メッセージをペインに出力する）。
 
 オーケストレータは全エージェントの戻り（方式B では各ペインの `pane read` 結果）を集約し、
 **人間ゲートをまとめて提示**する（下記ゲートで停止）。
@@ -95,7 +99,7 @@ herdr 内で回っている場合は、各タスクを**専用ペインで起動
    - 追跡ファイルに未コミット変更が残るとブランチ切替は中断 → 先に手順4のゲートを片付ける。
 2. `tasks/<task>.md` の受け入れ条件と `goal_template` から完了条件を組み、STATE.md「現在のタスク」に記入。
 3. `loop-protocol` を回す: 実装 → `codex-review` → `runs/<id>/` と STATE.md に記録 → FAIL は次ターンで修正。
-   **review_verdict=PASS かつ area の test/lint クリーン かつ 実環境 E2E 通過**まで。verdict は自分で書き換えない。
+   完了ゲート（review_verdict=PASS・area の test/lint クリーン・実環境 E2E 通過）まで。
 4. **人間ゲートで必ず停止**（自動で越えない）:
    - コミット / PR / push（全タスク共通）
    - ADR 承認（PLG-01）／ Terraform apply・課金（PLG-04）／ デモ品質（SBA-02, PLG-08）／ VLM 前提（SBA-05）
@@ -105,8 +109,11 @@ herdr 内で回っている場合は、各タスクを**専用ペインで起動
 6. 依存未達・能力前提なし等で進めないものは status=`blocked` にして理由を書く。
 
 ## 原則
-- 並列は**実行可能集合（相互独立）に限る**。依存があるものは依存先が base にマージされるまで回さない。
-- 同時実行は最大 3。各並列タスクは worktree 隔離（`HERDR_ENV=1` は herdr ペイン＋start-loop.sh、
+- 並列は**実行可能集合（相互独立）に限る**。依存があるものは依存先が base にマージされてから回す。
+- サブエージェントは 1エージェント=1タスク・同時最大 3（超過は次の波）。オーケストレータ自身で
+  数回のツール呼び出しで済む作業（PROGRESS 更新・結果集約等）は委譲せず自分でやる。
+  自分やタスクエージェントの作業の検証にサブエージェントを増やさない（検証は Codex の役割）。
+- 各並列タスクは worktree 隔離（`HERDR_ENV=1` は herdr ペイン＋start-loop.sh、
   それ以外は Agent ツール `isolation: worktree`）／実環境 E2E は `JETUSE_<task>` スキーマで隔離。
 - Stage は `loop-config.yml` に従う（既定 report-only ＝ コミットしない）。無人度を上げるのは人間ゲート。
 - **完全無人化はしない。ゲートを飛ばさないことがこの仕組みの価値。** 並列でもゲートはタスクごとに必ず止める。
