@@ -24,6 +24,28 @@ stage_runner:
   report_at: stage_completion                    # ステージ完了で1回だけ人間へ報告・チェック。
   stage_token_budget: 20000000                   # ステージ全体のトークン天井（タスクごとの budget に上乗せ）。
 
+# 人間向け報告書（HTML）の出力パイプ（ADR-0018）。報告書は仕様でも証跡でもなく「読み物」なので、
+# リポジトリに閉じず読む人の環境に置く。リポジトリが持つのは様式（task-packet-template.html）と
+# 中身と証跡（runs/）だけ。置き場の解決は各自のホーム側（~/.claude）スキルに委ねる。
+# 接点の契約は docs/guides/report-pipe.md（入力=完成済みHTML+topic / 出力=絶対パス+埋め込み記法）。
+report:
+  # 原本の生成先。証跡と同じ run 配下に置き、git 追跡はしない（.gitignore で塞いである）。
+  build_dir: "runs/<run-id>/report"
+  pipe: personal_skill        # personal_skill | repo_local（repo_local は build_dir に置くだけ）
+  skill: preview              # ホーム側 ~/.claude/skills/<name>。LOOP_REPORT_SKILL で上書き可。
+  mode: place_only            # 完成済み HTML をそのまま配置させる（スキル側で再生成・改変させない）
+  topic:
+    task: "<TASK>"            # → <Obsidian案件フォルダ>/_renders/<TASK>.html
+    stage: "<stage>-report"   # → <Obsidian案件フォルダ>/_renders/<stage>-report.html
+  # パイプ未設定（個人スキル未導入 / .obsidian-dir 未設定）のときの退避。ループは止めない。
+  fallback: artifact          # artifact | none。build_dir の HTML を Artifact 化して提示＋1行警告。
+  # 「読めない報告書は失敗」（2026-07-28 の差し戻しを受けて明文化）。書き方の正本と様式・検証。
+  style_guide: ".claude/skills/loop-protocol/references/report-style.md"
+  templates:
+    task: ".claude/skills/loop-protocol/references/task-packet-template.html"        # 実装タスクの完了報告
+    decision: ".claude/skills/loop-protocol/references/decision-packet-template.html" # 方式・設計の判断を仰ぐ
+  render_check: ".claude/skills/loop-protocol/scripts/check_report_render.sh"  # 提示前に実行し PNG を目視（省略不可）
+
 review:
   reviewer: codex
   # 空文字なら codex の ~/.codex/config.toml の既定モデルを使う。

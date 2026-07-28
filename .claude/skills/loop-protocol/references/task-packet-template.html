@@ -2,7 +2,10 @@
   タスクパケット・テンプレート（人間ゲートに出す HTML）
   ============================================================
   loop-protocol の完了ゲートで、これをコピーしてプレースホルダを埋め、
-  docs/verification/<TASK>.html として書き出す。人間ゲートでは Artifact 化して提示する。
+  loop-config.yml の report.build_dir（= runs/<run-id>/report/<TASK>.html）として書き出す。
+  書き出した後は報告パイプ（report.pipe・docs/guides/report-pipe.md）で人間の閲覧場所へ配置する。
+  パイプ未設定なら Artifact 化して提示する。この様式（本テンプレ）はリポジトリ側が持ち、
+  配置スキルに再生成・改変させない。
 
   埋め方の原則（loop-protocol / codex-review の指示に従う）:
   - {{何を・なぜ}} … 製品/デモ目線で 3〜5 行。専門語は展開（施主が読んで分かる言葉に）。
@@ -13,6 +16,9 @@
   - 差分 … このタスク1件分の git diff --stat と「必読ファイル」。
   - 単一の値（TASK_ID 等）は {{...}} を素直に置換。プレースホルダを残さないこと。
 -->
+<!-- charset は必須: 報告パイプで Obsidian の _renders/ へ単体ファイルとして置かれると、
+     宣言が無い場合に日本語が文字化けする（Artifact 経路では外殻が付くため無害な重複）。 -->
+<meta charset="utf-8">
 <title>{{TASK_ID}} — タスクパケット</title>
 <style>
   :root{
