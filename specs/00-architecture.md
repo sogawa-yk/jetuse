@@ -17,7 +17,7 @@ graph LR
   FN --> OS[(Object Storage<br/>アプリデータ)]
   GENAI --- VS[Vector Store / File Search<br/>CP+DP 2ホスト構成]
   GENAI --- NL2SQL[SQL Search /20260325<br/>SemanticStore]
-  FN --> SPEECH[OCI Speech<br/>STT: Whisper ja 大阪<br/>TTS: Phoenix 日本語5ボイス]
+  FN --> SPEECH[OCI Speech<br/>STT: Whisper ja 大阪<br/>TTS: 日本語5ボイス/リージョン自動選択]
   U -.->|OIDC PKCE| IDCS[IAM Identity Domain]
   U -.->|WSS 直接続<br/>短命トークン| RT[Speech Realtime<br/>大阪]
 ```

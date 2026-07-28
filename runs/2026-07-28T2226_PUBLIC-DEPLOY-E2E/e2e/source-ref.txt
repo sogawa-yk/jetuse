@@ -1,0 +1,12 @@
+# 検証の対象ツリー
+
+## E2E（新規デプロイ → 38/38 PASS → destroy）を実施したツリー
+実施時点の作業ツリーから ORM zip とコンテナイメージを作成した。
+zip の sha256 とイメージ digest は image-digests.txt に記録している。
+base commit: 5545161957f634c35701eaea14adc2904019202c
+
+## 現在の差分との関係
+E2E 実施後に入れた変更は、destroy 用 local-exec への OCI_CLI_REGION 明示・
+infra/terraform/environments/dev への同じ destroy 順序の反映・単体テスト追加・ドキュメント更新のみで、
+**アプリの実行時経路のコードは E2E 実施時と同一**。
+範囲は docs/verification/PUBLIC-DEPLOY-E2E.md「検証の範囲」節に明記した。
