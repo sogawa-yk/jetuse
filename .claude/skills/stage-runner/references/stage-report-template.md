@@ -4,8 +4,11 @@
 **生成:** <ISO日時> / stage-runner
 **結果サマリ:** 完了 <done数>/<総数>・blocked <数>・残ハードゲート <数>
 
+**報告書(HTML)の配置先:** `<絶対パス>/_renders/<stage-id>-report.html`（報告パイプ・未設定時は Artifact）
+
 > 人間チェック用。`feat/<stage-id>` を確認 → 承認後に base への PR/push を人間が実施する。
-> 各タスクの詳細レビューは HTML パケット（`docs/verification/<TASK>.html`）で行う。本報告は索引＋例外の集約。
+> 各タスクの詳細レビューは HTML パケット（配置先の同じフォルダの `<TASK>.html`）で行う。
+> 本報告は索引＋例外の集約。本 markdown は証跡側の原本（リポジトリ）。
 > 長さはタスクに必要な分だけ: 各節は実質のみを書き、該当がなければ「なし」1行。定型の埋め草・重複要約を足さない。
 
 ## 0. ⚠ 判断が要る事項（最上段・無ければ「なし」）
@@ -15,9 +18,9 @@
 - [ ] **<TASK>**: 後続タスク未起票 — <内容>
 
 ## 1. タスク別結果
-| タスク | status | verdict | E2E | パケット(HTML) |
+| タスク | status | verdict | E2E | パケット(HTML・同フォルダ) |
 |---|---|---|---|---|
-| HBD-01 | done | PASS | n/n 通過 | `docs/verification/HBD-01.html` |
+| HBD-01 | done | PASS | n/n 通過 | `![[HBD-01.html]]` |
 | … | | | | |
 
 ## 2. 統合差分（base 比）

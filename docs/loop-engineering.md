@@ -17,6 +17,7 @@ Claude Code（実装＝maker）× Codex（レビュー＝checker）× 完了ゲ�
 | 自己改善 | `.claude/skills/loop-doctor/`（+ `references/component-map.md`） |
 | 履歴要約 | `.claude/agents/log-summarizer.md` |
 | 自動記録 | `.claude/hooks/session_start.sh`（run採番）/ `log_turn.sh`（ターン記録） |
+| 人間向け報告 | 書き方=`loop-protocol/references/report-style.md`（正本）・様式=`task-packet-template.html`(実装完了) / `decision-packet-template.html`(判断を仰ぐ)・検証=`scripts/check_report_render.sh`・配置=各自のホーム側スキル（契約 `docs/guides/report-pipe.md`・設定 `loop-config.yml` の `report:`） |
 | 並行分離 | `.claude/loop/start-loop.sh`（worktree 起動）/ `end-loop.sh`（撤去）/ `bootstrap-env.sh`（隔離環境） |
 
 ## 回し方
@@ -50,8 +51,12 @@ Claude Code（実装＝maker）× Codex（レビュー＝checker）× 完了ゲ�
    実装 → `codex-review`（差分を Codex に渡し `review-<n>.json` 生成）→ 履歴記録 → STATE 更新。
    FAIL の指摘は次ターンで修正。Claude は `review_verdict` を自分で PASS にできない。
 5. **停止**: 完了ゲート（review_verdict=PASS・test/lint クリーン・実環境 E2E 通過）に達したら、
-   エージェントが `loop-protocol` の停止規律（手順6）に従い停止する。
-6. **人間がレビュー** → コミット / PR は**人間承認後**に実行（Stage 1 では自動コミットしない）。
+   エージェントが `loop-protocol` の停止規律（手順6）に従い停止する。停止時は HTML タスクパケットを
+   `runs/<run-id>/report/<TASK>.html` に生成し、**報告パイプ**で各自の閲覧場所（既定は Obsidian の
+   `_renders/<TASK>.html`）へ配置して提示する（ADR-0018 / `docs/guides/report-pipe.md`）。
+   パイプ未設定なら Artifact 提示にフォールバックし、ループは止めない。
+6. **人間がレビュー**（配置された HTML を読む → 例外バナーだけ判断 → 挙動を確認）
+   → コミット / PR は**人間承認後**に実行（Stage 1 では自動コミットしない）。
 7. **問題があれば** `loop-doctor` に渡す → 仕組みの修正案を提示（承認後のみ編集）。
 
 ## 段階導入（loop-config.yml の `stage`）
