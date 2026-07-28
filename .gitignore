@@ -51,5 +51,10 @@ docs/archive/spikes/data/*.wav
 # loop 成果物（stage-runner 統合で混入防止）
 .current_run_id
 
+# 人間向け報告書 HTML（ADR-0018）。報告書は仕様でも証跡でもなく「読み物」なので、
+# 原本は runs/ に生成しつつ git には入れず、報告パイプで各自の閲覧環境へ配置する。
+runs/**/*.html
+docs/verification/*.html
+
 # 無人 claude 実行ログ（ヘッドレス委譲・ハンドオフ ch.4）
 .agent-runs/

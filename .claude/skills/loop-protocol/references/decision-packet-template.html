@@ -1,0 +1,256 @@
+<!--
+  判断パケット・テンプレート（方式・設計の判断を仰ぐ HTML）
+  ============================================================
+  ADR の承認、やり方の変更、選択肢の提示など「文脈を共有していない相手に判断を求める」報告に使う。
+  実装タスクの完了報告は task-packet-template.html（別様式）。使い分けは references/report-style.md。
+
+  骨格: ① 前提 → ② なぜ（Before/After 図）→ ③ どのように（構造図）→ ④ 承認してほしいこと
+
+  埋め方の原則（report-style.md が正本。要点だけ再掲）:
+  - 前提から書く。専門語は展開する。詳細は <details> に畳み、開かずに承認可否が決まる状態にする。
+  - 図は下の HTML+CSS の枠をそのまま使う（div の箱＋文字の矢印）。SVG で座標を手置きしない
+    ＝テキストが伸びても重ならない。780px 未満では自動で縦積みになる。
+  - 提示前に必ず scripts/check_report_render.sh でレンダリングし、PNG を Read で見て確認する。
+  - プレースホルダ {{...}} はすべて埋める。不要な節・不要な箱は削る（埋め草にしない）。
+-->
+<meta charset="utf-8">
+<title>{{ID}} — {{一言タイトル}}</title>
+<style>
+  :root{
+    --bg:#F4F6F8;--panel:#FFF;--panel-2:#F7F9FA;--ink:#151A21;--ink-soft:#3B4650;
+    --muted:#68737E;--faint:#98A2AD;--line:#E4E8EC;--accent:#0C7A70;--accent-bg:#0C7A7010;
+    --warn:#B06C08;--warn-bg:#B06C0812;--warn-line:#E4B65C;--old:#98A2AD;--old-bg:#98A2AD14;
+    --shadow:0 1px 2px rgba(20,26,33,.04),0 4px 16px rgba(20,26,33,.05);
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --bg:#0C0F13;--panel:#151A20;--panel-2:#1A2027;--ink:#E8EDF3;--ink-soft:#BAC3CD;
+    --muted:#8A95A1;--faint:#5D6771;--line:#242B33;--accent:#33CBBB;--accent-bg:#33CBBB14;
+    --warn:#E1A73E;--warn-bg:#E1A73E14;--warn-line:#7E6226;--old:#5D6771;--old-bg:#5D677122;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.28);
+  }}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-size:16px;line-height:1.75;
+    font-family:"Hiragino Kaku Gothic ProN","Hiragino Sans","Yu Gothic","Noto Sans JP",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.86em}
+  /* 長い語（パス・識別子）でも枠からはみ出さない＝狭い幅での見切れ防止 */
+  .b strong,.b span,.facts b,.facts .s,.mono,.ask li{overflow-wrap:anywhere}
+  .wrap{max-width:780px;margin:0 auto;padding:0 20px 64px}
+  .band{height:3px;background:linear-gradient(90deg,var(--accent),transparent 82%)}
+  header{padding:34px 0 6px}
+  .eyebrow{font-size:11.5px;letter-spacing:.15em;text-transform:uppercase;color:var(--accent);font-weight:700;margin:0 0 10px}
+  h1{font-size:25px;line-height:1.45;margin:0;letter-spacing:-.01em}
+  .lede{color:var(--muted);font-size:14.5px;margin:10px 0 0}
+  .badge{display:inline-block;font-size:12px;font-weight:700;padding:4px 11px;border-radius:7px;
+    background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-line);margin-top:14px}
+
+  .step{margin-top:38px}
+  .n{display:flex;align-items:center;gap:11px;margin:0 0 14px}
+  .num{font-family:ui-monospace,monospace;font-size:12px;font-weight:800;color:var(--accent);
+    border:1.5px solid var(--accent);border-radius:50%;width:24px;height:24px;display:grid;place-items:center;flex:none}
+  .n h2{font-size:18px;margin:0;letter-spacing:-.01em}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 20px;box-shadow:var(--shadow)}
+
+  .facts{display:grid;margin:0;padding:0;list-style:none}
+  .facts li{display:flex;gap:13px;align-items:flex-start;padding:12px 0;border-top:1px solid var(--line)}
+  .facts li:first-child{border-top:0;padding-top:2px}
+  .facts li:last-child{padding-bottom:2px}
+  .facts .k{flex:none;width:22px;height:22px;margin-top:4px}
+  .facts .s{color:var(--muted);font-size:13.5px;display:block}
+
+  /* ---- 図の共通部品（すべて HTML+CSS。幅に応じて折り返す） ---- */
+  .lab{font-size:12px;font-weight:800;letter-spacing:.06em;color:var(--faint);margin:0 0 3px}
+  .sublab{font-size:11.5px;color:var(--faint);margin:0 0 11px}
+  .b{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 13px}
+  .b + .b{margin-top:9px}
+  .b strong{display:block;font-size:14px;font-weight:700;line-height:1.5}
+  .b span{display:block;font-size:12.5px;color:var(--muted);line-height:1.6}
+  .b.dash{border-style:dashed;border-color:var(--old);background:var(--old-bg)}
+  .b.acc{border-color:var(--accent);background:var(--accent-bg)}
+  .b .plus{color:var(--accent);font-weight:700}
+  .b .here{color:var(--accent);font-weight:700}
+  .arrow{color:var(--accent);font-size:22px;line-height:1;text-align:center;padding:4px 0}
+  .note{font-size:13px;font-weight:700;text-align:center;margin:11px 0 0}
+  .note.bad{color:var(--old)}
+  .note.good{color:var(--accent)}
+  .cap{color:var(--faint);font-size:12.5px;margin:12px 2px 0;text-align:center;line-height:1.65}
+
+  /* 図2: これまで / これから */
+  .cmp{display:grid;grid-template-columns:1fr auto 1fr;gap:14px;align-items:start}
+  .side{border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--panel-2)}
+  .side.new{border-color:var(--accent)}
+  .cmp .arrow{align-self:center;padding-top:40px}
+
+  /* 図3: 責務の分け方 */
+  .flow{display:grid;grid-template-columns:1fr auto 1fr;gap:14px;align-items:center}
+  .lane{border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--panel-2)}
+  .lane.own{border-style:dashed;border-color:var(--accent)}
+  .mid{text-align:center}
+  .pill{border-color:var(--accent);background:var(--accent-bg);text-align:center;min-width:118px}
+  .pill strong{font-size:13.5px}
+  .pill span{color:var(--accent);font-weight:700;font-size:11.5px;margin-top:4px}
+  .flow .tail{grid-column:1/-1;text-align:center;font-size:12px;color:var(--faint);margin:2px 0 0}
+
+  /* 図3 は3カラムだと窮屈になるので、Obsidian の埋め込み幅では縦に積む（上から下へ流れる形） */
+  @media (max-width:780px){
+    .flow{grid-template-columns:1fr}
+    .mid .arrow{padding:2px 0;transform:rotate(90deg)}
+    .mid .pill{max-width:280px;margin:0 auto}
+  }
+  @media (max-width:640px){
+    .cmp{grid-template-columns:1fr}
+    .cmp .arrow{padding:2px 0;transform:rotate(90deg)}
+  }
+
+  .ask{margin-top:38px;background:var(--warn-bg);border:1px solid var(--warn-line);border-radius:14px;padding:17px 20px}
+  .ask .h{color:var(--warn);font-weight:800;font-size:14.5px;margin:0 0 10px}
+  .ask ol{margin:0;padding-left:20px;display:grid;gap:8px}
+  .ask li{font-size:15px;color:var(--ink-soft)}
+  .foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--line);color:var(--faint);font-size:12px}
+  details{margin-top:14px;border:1px dashed var(--line);border-radius:10px;padding:10px 14px;background:var(--panel-2)}
+  summary{cursor:pointer;font-size:13px;color:var(--muted);font-weight:600;list-style:none}
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"▸ ";color:var(--faint)}
+  details[open] summary::before{content:"▾ "}
+  details ul{margin:10px 0 2px;padding-left:18px;display:grid;gap:6px}
+  details li{font-size:13.5px;color:var(--ink-soft)}
+</style>
+
+<div class="band"></div>
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">{{ID（ADR-00XX / TASK-ID）}} · 承認のお願い</p>
+    <h1>{{一文で「何をしたい/したか」。実装語でなく施主の言葉で}}</h1>
+    <p class="lede">{{一行の要約。影響範囲（例: アプリの動作は変わりません）を添える}}</p>
+    <span class="badge">承認待ち</span>
+  </header>
+
+  <!-- ① 前提: 読み手が持っている前提を確認してから本題に入る（2〜3項目） -->
+  <section class="step">
+    <div class="n"><span class="num">1</span><h2>前提</h2></div>
+    <div class="card">
+      <ul class="facts">
+        <li>
+          <svg class="k" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h11l5 5v11H4z"/><path d="M15 4v5h5"/><path d="M8 13h8M8 17h5"/></svg>
+          <span><b>{{前提1（いま何がどうなっているか）}}</b>
+          <span class="s">{{補足1行}}</span></span>
+        </li>
+        <li>
+          <svg class="k" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>
+          <span><b>{{前提2（施主の関わり方・何を判断する立場か）}}</b>
+          <span class="s">{{補足1行}}</span></span>
+        </li>
+        <li>
+          <svg class="k" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 016.5 3H19v18H6.5A2.5 2.5 0 014 18.5z"/><path d="M8 3v18"/></svg>
+          <span><b>{{前提3}}</b>
+          <span class="s">{{補足1行}}</span></span>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ② なぜ: Before / After の対比図。文章で語らず図で示す -->
+  <section class="step">
+    <div class="n"><span class="num">2</span><h2>なぜ変えるか</h2></div>
+    <div class="card">
+      <div class="cmp">
+        <div class="side">
+          <p class="lab">これまで</p>
+          <div class="b">
+            <strong>{{現状の要素A}}</strong>
+            <span>{{中身}}</span>
+          </div>
+          <div class="b dash">
+            <strong>{{現状の要素B（問題のある側は dash で灰色に）}}</strong>
+            <span>{{中身}}</span>
+          </div>
+          <p class="note bad">{{何が問題か（短く）}}</p>
+        </div>
+
+        <div class="arrow">→</div>
+
+        <div class="side new">
+          <p class="lab">これから</p>
+          <div class="b acc">
+            <strong>{{変更後の要素}}</strong>
+            <span>{{中身}}</span>
+            <span class="plus">{{増える/変わる点}}</span>
+          </div>
+          <p class="note good">{{何が良くなるか（短く）}}</p>
+        </div>
+      </div>
+      <p class="cap">{{図の主張を1行で}}</p>
+
+      <details>
+        <summary>{{副次的な理由の見出し}}</summary>
+        <ul>
+          <li>{{理由}}</li>
+          <li>{{理由}}</li>
+        </ul>
+      </details>
+    </div>
+  </section>
+
+  <!-- ③ どのように: 構造・流れの図。多カラムは 780px 未満で自動的に縦積みになる -->
+  <section class="step">
+    <div class="n"><span class="num">3</span><h2>どのように実現するか</h2></div>
+    <div class="card">
+      <div class="flow">
+        <div class="lane">
+          <p class="lab">{{左のまとまり（例: リポジトリ＝全員で共通）}}</p>
+          <p class="sublab">{{一言でどういう性格のものか}}</p>
+          <div class="b"><strong>{{要素}}</strong><span>{{説明}}</span></div>
+          <div class="b"><strong>{{要素}}</strong><span>{{説明}}</span></div>
+          <div class="b"><strong>{{要素}}</strong><span>{{説明}}</span></div>
+        </div>
+
+        <div class="mid">
+          <div class="arrow">→</div>
+          <div class="b pill">
+            <strong>{{受け渡すもの}}</strong>
+            <span>{{これだけ、を強調}}</span>
+          </div>
+          <div class="arrow">→</div>
+        </div>
+
+        <div class="lane own">
+          <p class="lab">{{右のまとまり（例: 各自の環境＝個人ごと）}}</p>
+          <p class="sublab">{{一言でどういう性格のものか}}</p>
+          <div class="b"><strong>{{要素}}</strong><span>{{説明}}</span></div>
+          <div class="arrow">↓</div>
+          <div class="b acc">
+            <strong>{{最終的な到達点}}</strong>
+            <span class="mono">{{パス等（あれば）}}</span>
+            <span class="here">{{補足}}</span>
+          </div>
+        </div>
+
+        <p class="tail">{{この分け方の要点を1行。「右側/左側」など横並び前提の語を使わない（縦積みになる）}}</p>
+      </div>
+      <p class="cap">{{図の主張を1〜2行で}}</p>
+
+      <details>
+        <summary>技術的な詳細（読まなくてよい）</summary>
+        <ul>
+          <li>{{パス・設定キー・ファイル数など。ここに全部畳む}}</li>
+        </ul>
+      </details>
+    </div>
+  </section>
+
+  <!-- ④ 承認: 何を答えれば前に進むか。選択肢の形で -->
+  <div class="ask">
+    <p class="h">⚠ 承認をお願いしたいこと</p>
+    <ol>
+      <li><b>{{判断1}}</b>{{却下した場合どうなるか}}</li>
+      <li><b>{{判断2}}</b>{{補足}}</li>
+      <li><b>{{判断3}}</b>{{補足}}</li>
+    </ol>
+  </div>
+
+  <div class="foot">
+    {{日付}} · ブランチ <span class="mono">{{branch}}</span> · {{run-id 等（あれば）}}
+  </div>
+
+</div>

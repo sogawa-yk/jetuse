@@ -30,6 +30,24 @@ loop-doctor が診断時に引く対応表。証跡（runs/ のファイルパ�
   `bootstrap-env.sh`（worktree 隔離環境）。設定は `loop-config.yml` の `worktree:`。
   並行セッションは必ず start-loop.sh で起動させる（共有チェックアウトの並行起動は禁止する運用に倒す）。
 
+## 人間向け報告（パケット / 報告パイプ）
+- 症状: 報告が読みにくい・例外が埋もれる・報告書がどこにあるか分からない・Obsidian に置かれない。
+- 証跡: `runs/<id>/report/` に HTML が無い（生成されていない）／あるが配置先が返っていない（パイプ未設定）。
+- 編集対象:
+  - **書き方の正本** = `loop-protocol/references/report-style.md`（様式の選び方・図は HTML+CSS で描く・
+    詳細は畳む・提示前に `scripts/check_report_render.sh` で目視確認）。「読みにくい」「図が崩れる」
+    「専門語だらけ」はここを直す。
+  - **様式・中身**（何を書くか・例外の出し方）= `.claude/skills/loop-protocol/`（「人間ゲートに出す
+    タスクパケット」）と `references/task-packet-template.html`（実装タスクの完了報告）/
+    `references/decision-packet-template.html`（方式・設計の判断を仰ぐ）、
+    `stage-runner/references/stage-report-template.md`。**用途に合わない様式を使った**のが
+    2026-07-28 の差し戻しの原因。
+  - **置き場・配置**（どこへ出すか）= `loop-config.yml` の `report:` と、各自のホーム側スキル
+    （契約 `docs/guides/report-pipe.md`・ADR-0018）。**個人環境の話をリポジトリ側に持ち込まない**
+    （vault パスは `.obsidian-dir`、スキル名は `LOOP_REPORT_SKILL`）。
+  - 無人ループが出力先の確認で止まる = `.obsidian-dir` が worktree に無い →
+    `start-loop.sh` / `begin_stage.sh` の複製処理を点検。
+
 ## Plugins / Connectors
 - 症状: テスト/CI/課題管理に届かない、手作業が残る。
 - 編集対象: MCP・コネクタ追加、`.claude/settings.json` の allowlist。
