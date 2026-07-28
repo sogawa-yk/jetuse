@@ -70,10 +70,31 @@ Codex はコードを実行できない（read-only）。だから Claude がデ
    既存リソース（VCN develop / インスタンス dev / バケット）変更、コミット/PR/push は引き続き人間ゲート。
 
 ## 人間ゲートに出すタスクパケット（HTML・完了ゲートで1回）
+**書き方の正本は `references/report-style.md`（様式の選び方・図の描き方・提示前のレンダリング確認）。
+報告書を書く前に必ず読む。** 要点:
+- 実装タスクの完了報告は `references/task-packet-template.html`、**方式・設計の判断を仰ぐ報告
+  （ADR 承認・やり方の変更・選択肢の提示）は `references/decision-packet-template.html`**（前提→なぜ→
+  どのように→承認）。判断を仰ぐ報告に完了報告の様式を使わない（読み手は文脈を共有していない）。
+- 図は HTML+CSS で描く（SVG で座標を手置きしない＝テキストが伸びると重なる）。詳細は `<details>` に畳む。
+- **提示前に `scripts/check_report_render.sh <html>` でレンダリングし、出力 PNG を Read で見て
+  重なり・見切れが無いことを確認する**（省略不可。Chrome 不在でスキップした場合は報告に明記）。
+
 完了ゲート（`review_verdict=PASS` かつ test/lint 緑 かつ実環境 E2E 通過）に達したら、人間ゲートに出す
-タスクパケットを `references/task-packet-template.html` からコピーして埋め、`docs/verification/<TASK>.html`
-に書き出す。これが per-task の唯一のレビュー成果物（従来の 5〜20KB の密な散文レポートを置き換える）。
-人間ゲートで停止する際は Artifact 化して提示（`artifact-design` skill を読んでから）か browser で開く。
+タスクパケットを `references/task-packet-template.html` からコピーして埋め、`loop-config.yml` の
+`report.build_dir`（＝`runs/<run-id>/report/<TASK>.html`）に書き出す。これが per-task の唯一の
+レビュー成果物（従来の 5〜20KB の密な散文レポートを置き換える）。
+
+書き出したら**報告パイプで人間の閲覧場所へ配置する**（`loop-config.yml` の `report`・契約は
+`docs/guides/report-pipe.md`）。報告書は仕様でも証跡でもないのでリポジトリに閉じない:
+- `report.pipe: personal_skill`（既定）: ホーム側の個人スキル（既定 `preview`・env `LOOP_REPORT_SKILL`
+  で上書き）を**配置モード**（`report.mode: place_only`）で呼ぶ。**完成済み HTML のパスを渡し、
+  再生成・改変をさせない**（様式はリポジトリ側が持つ）。返る絶対パスと `![[<topic>.html]]` を
+  ターンの最終メッセージに載せる。topic は `report.topic.task`。
+- 個人スキル未導入 / `.obsidian-dir` 未設定で配置できないときは `report.fallback`（既定 `artifact`）:
+  `build_dir` の HTML をそのまま Artifact 化して提示し（`artifact-design` skill を読んでから）、
+  「報告パイプ未設定（docs/guides/report-pipe.md）」を1行添える。**ループは止めない。**
+
+HTML はリポジトリにコミットしない（`.gitignore` で `runs/**/*.html` を塞いである）。
 
 設計思想＝「例外だけ露出」。施主に読ませる面積を最小化し、判断が要る箇所だけ立てる:
 - **何を・なぜ**: 製品/デモ目線で 3〜5 行。専門語（`§`参照・HTTP コード・内部識別子）は展開して、

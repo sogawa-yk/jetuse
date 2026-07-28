@@ -13,7 +13,7 @@
 - **コミット前チェック**: `make lint && make test && make build` を通す（単一コマンド入口は root `Makefile`。`make help` で一覧。build/test/lint/e2e/deploy/down）。
 - **破壊的スクリプトは明示フラグ必須**（ヘッドレス安全）: `ops/dev-env-up.sh <dev> --apply`（terraform apply）／`ops/dev-env-down.sh <dev> --yes`（destroy）／`ops/recreate-agents.sh <tag> --yes`（削除）。無フラグは plan のみ／拒否で停止する（対話プロンプトは持たない）。
 - **ローカル開発フロー**: 実装 → `make test`（単体） → `make deploy DEV=<名>`（自分の app スタック） → 実 OCI へ E2E（`tasks/<id>.md` のシナリオ・**dev コンパートメント限定・モック不可**） → コミット。各段が単一コマンド。事前に必要な OCI リソース＝共有 `environments/dev` apply 済・自分の ADB スキーマ（`ops/setup-dev-schema.py`）・`infra/terraform/environments/app/<dev>.tfvars`・OCIR ログイン（詳細 `docs/guides/dev-environments.md`）。
-- **報告・委譲（個人スキル・ホーム側 `~/.claude` が自動読込）**: 人が読む成果物は **`preview` スキル**で Obsidian の `_renders/<topic>.html`（単一ファイル・`.obsidian-dir` で出力先解決）へ出す（リポジトリ内ドキュメントは markdown のまま・HTML はコミットしない）。長時間タスクは **`dispatch-remote` スキル**でインスタンス `dev` へ無人委譲（結果は `agent/<id>` ブランチで返る）。
+- **報告・委譲（個人スキル・ホーム側 `~/.claude` が自動読込）**: 人が読む成果物は **`preview` スキル**で Obsidian の `_renders/<topic>.html`（単一ファイル・`.obsidian-dir` で出力先解決）へ出す（リポジトリ内ドキュメントは markdown のまま・HTML はコミットしない）。**ループの報告書（タスクパケット / ステージ報告）も同じ経路**に乗せる＝リポジトリは様式・中身・証跡だけを持ち、置き場の解決は各自のホーム側スキルに委ねる（契約 `docs/guides/report-pipe.md`・設定 `loop-config.yml` の `report:`・ADR-0018）。長時間タスクは **`dispatch-remote` スキル**でインスタンス `dev` へ無人委譲（結果は `agent/<id>` ブランチで返る）。
 
 ## 環境・認証の扱い
 

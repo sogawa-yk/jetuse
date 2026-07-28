@@ -40,6 +40,14 @@ else
 fi
 echo "[loop] worktree=$WT branch=$BR base=$BASE" >&2
 
+# 報告パイプ（docs/guides/report-pipe.md）の出力先解決に使う .obsidian-dir は gitignore 済みで、
+# git worktree add では worktree に来ない。親チェックアウトにあればコピーする（無人ループが
+# 出力先の確認プロンプトで止まるのを防ぐ）。無ければ報告は fallback（Artifact 提示）で動く。
+if [ -f "$ROOT/.obsidian-dir" ] && [ ! -f "$WT/.obsidian-dir" ]; then
+  cp "$ROOT/.obsidian-dir" "$WT/.obsidian-dir"
+  echo "[loop] .obsidian-dir を worktree へ複製（報告パイプ用）" >&2
+fi
+
 # 環境ブートストラップ（任意・冪等）。失敗してもセッションは続行する。
 if [ "${LOOP_SKIP_BOOTSTRAP:-0}" != "1" ]; then
   "$ROOT/.claude/loop/bootstrap-env.sh" "$WT" "$TASK" \

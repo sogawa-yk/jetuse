@@ -44,6 +44,11 @@ else
   git worktree add "$WT" "$BR" >&2
 fi
 
+# 報告パイプ（docs/guides/report-pipe.md）用。.obsidian-dir は gitignore 済みで worktree に来ない。
+if [ -f "$ROOT/.obsidian-dir" ] && [ ! -f "$WT/.obsidian-dir" ]; then
+  cp "$ROOT/.obsidian-dir" "$WT/.obsidian-dir"
+fi
+
 # ステージ run ディレクトリ（報告・断面の置き場）。
 SDIR="runs/_stages/${STAGE}"
 mkdir -p "$SDIR"
