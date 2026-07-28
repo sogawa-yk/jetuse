@@ -18,7 +18,7 @@ loop-doctor が診断時に引く対応表。証跡（runs/ のファイルパ�
 - 証跡: reviews に規約系 finding が頻出。
 - 編集対象: `loop-protocol/SKILL.md` や規約スキルへ明文追記（「なぜそうするか」も書く）。
 
-## Automations / /goal 完了条件
+## Automations / goal 完了条件
 - 症状: 終わらない／空回り／早すぎる完了。
 - 証跡: turns の `goal_checker.reason` の繰り返し、または PASS なのに受け入れ条件未達。
 - 編集対象: `loop-config.yml` の `goal_template` の述語を厳密化、`max_turns`・しきい値。

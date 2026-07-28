@@ -30,7 +30,7 @@
 
 - **開発モデル（2026-07-26〜）**: **ローカル(macOS)が主開発環境**（実装・単体は `make`。OCI認証は config_file＝`~/.oci/config`）。**OCI compute インスタンス `dev`（VM.Standard.E6.Flex / OL9.7 / ap-osaka-1・ブートボリューム150GB）は長時間タスクの無人実行機**（`dispatch-remote` で `claude -p` を委譲・`AUTH_MODE=instance_principal`）。移動でローカルが切れても委譲実行は継続する。コードは OneDrive 配下に置かない（`.git` 破損回避）。
 - コンパートメント: `jetuse-proto`（OCIDは `.env` の `COMPARTMENT_OCID`）。計画書の `jetuse-spike` は存在しないため代替使用（ADR-0001）。
-- ツール: Python 3.12（venv: `.venv`）/ Node 22 / Terraform 1.15 / podman 5.6 / OCI CLI 3.85。
+- ツール: Python 3.13（ローカル macOS・venv: `.venv`。2026-07-28 に 3.12→3.13 へ更新。インスタンス `dev` は 3.12 のまま）/ Node 22 / Terraform 1.15 / podman 5.6 / OCI CLI 3.85。
 - **大阪リージョン（ap-osaka-1）はOpenAI互換 agentic API フル対応**: ベースURL `https://inference.generativeai.ap-osaka-1.oci.oraclecloud.com/openai/v1` 配下に Responses / Conversations / Files / Vector Stores / File Search / Code Interpreter。
 - 認証は IAM署名（`oci-genai-auth` パッケージでopenai-pythonに署名注入）を採用。
 - 大阪のオンデマンドモデル: gpt-oss-120b/20b, command-a-03-2025, command-a-reasoning/vision, gemini-2.5-pro/flash, llama-3.3-70b 等。**Grok系・Llama 4系は大阪不可**（ADR-0001）。

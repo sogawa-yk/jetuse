@@ -1,6 +1,8 @@
 # ループエンジニアリング 使い方ガイド
 
-Claude Code（実装＝maker）× Codex（レビュー＝checker）× `/goal`（完了採点）の三層ループ。
+Claude Code（実装＝maker）× Codex（レビュー＝checker）× 完了ゲート（goal 条件）のループ。
+`/goal` というスラッシュコマンドは存在しない。完了条件は起動時の `GOAL` env（→ `runs/<id>/goal.txt`）と
+起動プロンプトで渡し、エージェント自身が `loop-protocol` を毎ターン辿って自走・停止判定する。
 設計の根拠は `loop-impl.md`、導入時の判断は `docs/decisions/ADR-0012-loop-engineering.md`。
 
 ## 構成要素の在りか
@@ -41,12 +43,14 @@ Claude Code（実装＝maker）× Codex（レビュー＝checker）× `/goal`（
    この場合 SessionStart hook が `feat/<task>` へ自動切替する。**並行起動は厳禁**（ブランチを
    取り合って衝突する）。並行が要るなら必ず `start-loop.sh` を使う。
    </details>
-3. **`/goal` を実行**: `loop-config.yml` の `goal_template` を埋めた完了条件を登録する。
+3. **完了条件を渡す**: `loop-config.yml` の `goal_template` を埋めた完了条件を、起動時の `GOAL` env
+   （SessionStart hook が `runs/<id>/goal.txt` に記録）と最初のプロンプトの両方で渡す。
    完了条件には必ず「STATE.md の review_verdict が PASS」を含める（停止判定に外部レビューを結ぶ）。
 4. **ループが回る**（毎ターン `loop-protocol`）:
    実装 → `codex-review`（差分を Codex に渡し `review-<n>.json` 生成）→ 履歴記録 → STATE 更新。
    FAIL の指摘は次ターンで修正。Claude は `review_verdict` を自分で PASS にできない。
-5. **停止**: テスト・lint クリーン かつ review_verdict=PASS で `/goal` が停止。
+5. **停止**: 完了ゲート（review_verdict=PASS・test/lint クリーン・実環境 E2E 通過）に達したら、
+   エージェントが `loop-protocol` の停止規律（手順6）に従い停止する。
 6. **人間がレビュー** → コミット / PR は**人間承認後**に実行（Stage 1 では自動コミットしない）。
 7. **問題があれば** `loop-doctor` に渡す → 仕組みの修正案を提示（承認後のみ編集）。
 
@@ -83,6 +87,21 @@ Claude Code（実装＝maker）× Codex（レビュー＝checker）× `/goal`（
 
 > 共有チェックアウトで loop を**並行**起動すると、ブランチ・インデックスを取り合って互いの変更を
 > 壊す（実害事例あり）。単一セッションなら共有チェックアウトでも可だが、並行は worktree 必須。
+
+## Opus 5 系向け調整（2026-07-28）
+
+実行モデルが Opus 5 系（Fable 5）になったのに合わせ、公式の Opus 5 プロンプティングガイドに
+沿ってスキル群を調整した（対象: loop-protocol / loop-runner / stage-runner / codex-review / loop-config.yml）:
+
+- **明示的な自己検証ステップを削除**: codex-review 前の ponytail-review（旧 loop-protocol 手順2.5、
+  `ponytail.self_review: false`）と `superpowers:verification-before-completion`。Opus 5 系は指示なしで
+  自己検証・自己修正するため、明示指示は品質を上げずにトークンを消費する（ガイド「タスクのスコープと
+  過剰な検証」）。完了の担保は従来どおり Codex 採点＋実環境 E2E ゲート（別モデルの checker なので維持）。
+- **ナレーション・成果物長の明示指示を追加**（loop-protocol「ターン出力の書き方」）: Opus 5 系は既定で
+  出力・文書が長く、無人ループでは毎ターン積み上がるため。
+- **同一指示の多重記述を一本化**: verdict 不可侵・E2E 本数（`e2e.min_scenarios`）・ハードゲート一覧を
+  各1箇所（loop-config.yml またはスキル1箇所）に集約。Opus 5 系は指示を文字通りに守るため、
+  反復・過剰な強調はかえって挙動を歪める。
 
 ## トラブル時
 

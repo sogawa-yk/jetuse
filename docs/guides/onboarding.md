@@ -19,7 +19,7 @@
 |---|---|
 | OCIアクセス | テナンシ/コンパートメント `jetuse-proto` への権限、`~/.oci/config`(DEFAULTプロファイル, APIキー) |
 | 秘密値 | `.env`(ADB等の接続情報)。**リポジトリには無い**ので管理者/チームから受領 |
-| ツール | Python 3.12 / Node 22 / podman / Terraform 1.15+ / OCI CLI。開発ホスト `dev` には導入済み |
+| ツール | Python 3.13（開発ホスト `dev` は 3.12）/ Node 22 / podman / Terraform 1.15+ / OCI CLI。`dev` には導入済み |
 
 > 開発ホスト(`dev` インスタンス)上で作業する場合、ツールとウォレットは整備済み。手元PCで動かす場合は上記ツールを各自導入する。
 
@@ -30,7 +30,7 @@ git clone <repo>            # GitHub経由
 cd jetuse
 
 # --- Python(API) ---
-python3.12 -m venv .venv
+python3.13 -m venv .venv        # dev インスタンス上では python3.12
 .venv/bin/pip install -e "packages/api[dev]"   # 実行+開発依存(pytest/ruff/uvicorn)
 
 # --- Node(SPA) ---
