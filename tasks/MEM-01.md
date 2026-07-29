@@ -6,7 +6,7 @@ RAG の高機能バックエンド（`adb`）と同じ土台・同じ権限体�
 「記憶も業務データと同じ場所で、同じ SQL・同じアクセス制御で扱える」を成立させる。
 
 ## 仕様参照
-- `docs/decisions/ADR-0019-rag-metadata-backend.md` §2（Accepted。2026-07-29 のユーザー方針が根拠）
+- `docs/decisions/ADR-0020-rag-metadata-backend.md` §2（Accepted。2026-07-29 のユーザー方針が根拠）
 - `docs/decisions/ADR-0006-long-term-memory.md`（**Accepted。棄却しない**。OCI ネイティブ長期メモリ）
 
 ## 対象 area

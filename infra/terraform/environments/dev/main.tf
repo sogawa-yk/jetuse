@@ -11,6 +11,7 @@ module "object_storage" {
   source           = "../../modules/object-storage"
   compartment_ocid = var.compartment_ocid
   prefix           = var.prefix
+  region           = var.region
 }
 
 module "adb" {
@@ -40,6 +41,9 @@ module "container_instance" {
   registry_password     = var.registry_password
   environment_variables = merge(var.api_environment, { LOG_OCID = module.observability.app_log_id })
   memory_gb             = 4 # 右サイズ(ARCH-01試算、ユーザー承認 2026-06-12)
+
+  # destroy 順序: バケット掃除(object_storage)より先にアプリを止める
+  depends_on = [module.object_storage]
 }
 
 module "opensearch" {
@@ -63,6 +67,9 @@ module "functions" {
     AUTH_MODE = "resource_principal"
     LOG_OCID  = module.observability.app_log_id
   })
+
+  # destroy 順序: バケット掃除(object_storage)より先にアプリを止める
+  depends_on = [module.object_storage]
 }
 
 locals {

@@ -33,7 +33,7 @@
   ① 121.5 ms（検索のみ）。生成込みは ① 4324 ms / ② 3276 ms。
   実行ごとの揺れが大きく **レイテンシは方式選択の決め手にならない**（同じ桁）。
 - 成果物: `docs/verification/SPIKE-M1.md` / `docs/comparison/rag-metadata-backends.md` /
-  `docs/decisions/ADR-0019-rag-metadata-backend.md`（**proposed**）/ `docs/tips.md` 追記 /
+  `docs/decisions/ADR-0020-rag-metadata-backend.md`（**proposed**）/ `docs/tips.md` 追記 /
   `spikes/spike_m1/`。E2E 証跡は `runs/<run-id>/e2e/`（scenario-1〜3 + SKIPPED.md + 生ログ）。
 - `.venv/bin/pytest packages/api/tests` 325 passed / `.venv/bin/ruff check packages/api spikes/` クリーン。
 
@@ -158,11 +158,11 @@ review-8 は blocker 0 で PASS。以下は**修正せず残した**助言（loo
 | major | `spikes/spike_m1/method_b_refresh_check.py:54` | プローブの `put_object` が try/finally の外 |
 | major | `spikes/spike_m1/teardown.py:196` | Vector Store の削除後確認だけ先頭ページ限定 |
 | major | `STATE.md:82` | 「エンドポイント実値」の扱い（→ 本ターンで `<region>` 化して解消済み） |
-| minor | `docs/decisions/ADR-0019…:30` | 本文の旧計測値（→ 本ターンで解消済み） |
+| minor | `docs/decisions/ADR-0020…:30` | 本文の旧計測値（→ 本ターンで解消済み） |
 
 ## 人間ゲートの結果（2026-07-29）
 
-- **ADR-0019 承認済み**。承認時にユーザーが決定内容を拡張:
+- **ADR-0020 承認済み**。承認時にユーザーが決定内容を拡張:
   「どちらか一方でなく **選べる 2 バックエンド**（手軽さ＝マネージド Vector Store /
   高機能＝Oracle AI Database）」「**Oracle AI Database は Agent Memory の格納先としても使う**」
   「**高機能側で何が増えるかが API だけでなくフロントからも分かること**」。

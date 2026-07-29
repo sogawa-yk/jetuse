@@ -5,7 +5,7 @@
 「Oracle AI Database を選ぶとここまでできる」を、API と画面の双方で示す。
 
 ## 仕様参照
-- `docs/decisions/ADR-0019-rag-metadata-backend.md` §3（Accepted。2026-07-29 のユーザー指示が根拠）
+- `docs/decisions/ADR-0020-rag-metadata-backend.md` §3（Accepted。2026-07-29 のユーザー指示が根拠）
 - 能力カタログの追加手順: `packages/api/jetuse_core/capabilities.py` の冒頭コメント（正本）
 - 比較表の中身: `docs/comparison/rag-metadata-backends.md`
 

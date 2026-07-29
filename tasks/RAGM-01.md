@@ -6,14 +6,14 @@
 SPIKE-M1 で「OCI 側は属性もフィルタも対応済み・不足はアプリ側の実装」と確定したので、その穴を塞ぐ。
 
 ## 仕様参照
-- `docs/decisions/ADR-0019-rag-metadata-backend.md` §1（Accepted）
+- `docs/decisions/ADR-0020-rag-metadata-backend.md` §1（Accepted）
 - 実測の根拠: `docs/verification/SPIKE-M1.md` ①-a〜①-e
 
 ## 対象 area
 api
 
 ## 前提（依存タスク / 人間の事前作業）
-- 依存タスクなし（ADR-0019 承認済み）。
+- 依存タスクなし（ADR-0020 承認済み）。
 - SPIKE-M1 の実測どおり、属性はキー最大 16・値 512 文字・文字列/数値/真偽のみ・入れ子不可。
 
 ## 作業内容

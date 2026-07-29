@@ -1,0 +1,63 @@
+{
+  "review_n": 10,
+  "timestamp": "2026-07-29T06:55:12+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-10.input.diff",
+  "raw_output_path": "reviews/review-10.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker はありませんが、Object Storage の destroy 失敗時に再試行不能となる問題と、現行差分に E2E の source-ref が一致しない問題があります。認証情報・実 OCID・未マスクの実エンドポイント値は検出していません。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 2,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "major",
+      "file": "infra/terraform/modules/object-storage/main.tf",
+      "line": 73,
+      "issue": "`on_failure = continue` に加え、削除処理の失敗を `|| true` 等で握り潰しています。OCI CLI の一時障害や multipart 列挙失敗でも cleanup resource は正常に破棄され、後続のバケット削除だけが 409 で失敗します。次回 destroy では cleanup resource が state に残っていないため自動再試行できません。",
+      "suggestion": "安全な「対象なし」以外は非ゼロ終了させ、destroy-time provisioner を state に残して再実行可能にしてください。CLI 一時失敗後の再 destroy をテストしてください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "runs/2026-07-28T2226_PUBLIC-DEPLOY-E2E/e2e/source-ref.txt",
+      "line": 2,
+      "issue": "検証対象として固定された tree object `414ec0a...` と現行差分が一致しません。この object には Object Storage cleanup の region 配線と jetuse-dev の writer 停止順序などが含まれず、teardown.txt の「最終コードで destroy」という主張を現在の実装へ結び付けられません。",
+      "suggestion": "現行差分から新しい immutable treeまたはcommitを作成し、source-refとORM zip hashを更新してください。その同一artifactで、CLI既定リージョンが異なる条件とwriter停止順序を含むdestroyを再検証してください。"
+    },
+    {
+      "id": "F003",
+      "severity": "minor",
+      "file": "docs/verification/VOICE-03.md",
+      "line": 46,
+      "issue": "参照先 `docs/verification/PUBLIC-DEPLOY-E2E.md` はbaseに存在せず、提示されたgit差分にも新規ファイルとして含まれていません。この差分だけをコミットすると参照が切れます。",
+      "suggestion": "参照先ファイルを同じ変更へ追加するか、既存の追跡済み文書へ参照を変更してください。"
+    },
+    {
+      "id": "F004",
+      "severity": "minor",
+      "file": "packages/api/tests/test_bootstrap.py",
+      "line": 125,
+      "issue": "必須設定不足時にRP statusをfalseへ確定する変更と、timeout時に最終例外をstatus fileへ保存する変更が未テストです。現行テストは設定不足時に接続しないことだけを確認し、status値やtimeout分岐を検証していません。",
+      "suggestion": "設定不足後のfalse/hintと、monotonic・sleep・_provisionを制御したtimeout後のstatus file内容を検証するテストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 38,
+    "adequacy": "insufficient",
+    "notes": "38/38 PASSで、ログイン、Responses/Conversations、通常RAG初回upload、DB再起動、OCR/STT/TTS、管理画面、ページ描画を広く確認しています。SKIPPED.mdにもTTS fallback、IAM分割、demo-scoped経路の未実施理由があります。ただしsource-refが現行差分と一致せず、現在のObject Storage region配線とjetuse-dev destroy順序を裏づけていません。実行先はDEPLOYTEST/jetuse-testですが、READMEには人間承認、新規専用コンパートメントのみの使用、既存リソース非変更、teardown完了が記録されています。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURL未提供のため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

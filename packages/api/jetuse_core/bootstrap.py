@@ -13,6 +13,7 @@
 エントリポイント(entrypoint.sh)から `RUN_DB_BOOTSTRAP=true` のとき呼ばれる。
 """
 
+import json
 import logging
 import os
 import threading
@@ -42,15 +43,48 @@ _RP_HINT = (
 )
 
 
+# bootstrap は entrypoint.sh から**別プロセス**で起動される(`python -m jetuse_core.bootstrap &`)
+# ため、プロセス内のグローバル変数だけでは uvicorn 側の /api/health から見えず、配備が
+# 正常でも dbchat が恒久的に "unavailable"(select_ai.ok=null)と表示されてしまう。
+# 同一コンテナのファイルシステム経由で結果を渡す(2026-07-28 実機で誤判定を確認)。
+_RP_STATUS_FILE = os.environ.get("RP_STATUS_FILE", "/tmp/jetuse-rp-status.json")  # noqa: S108
+
+
 def resource_principal_status() -> dict:
+    with _rp_lock:
+        if _rp_status.get("ok") is not None:
+            return dict(_rp_status)
+    try:
+        with open(_RP_STATUS_FILE, encoding="utf-8") as f:
+            loaded = json.load(f)
+        if isinstance(loaded, dict) and "ok" in loaded:
+            return loaded
+    except (OSError, ValueError):
+        pass
     with _rp_lock:
         return dict(_rp_status)
 
 
-def _set_resource_principal_status(ok: bool, hint: str | None = None) -> None:
+def _set_resource_principal_status(ok: bool | None, hint: str | None = None) -> None:
     global _rp_status
+    status: dict = {"ok": ok, **({"hint": hint} if hint else {})}
     with _rp_lock:
-        _rp_status = {"ok": ok, **({"hint": hint} if hint else {})}
+        _rp_status = status
+    # 直接 open("w") で書くと truncate 済み・未書き込みの瞬間に uvicorn 側が壊れたJSONを
+    # 読みうる。同一ディレクトリの一時ファイル → os.replace で原子的に差し替える。
+    tmp = f"{_RP_STATUS_FILE}.tmp.{os.getpid()}"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(status, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, _RP_STATUS_FILE)
+    except OSError:  # 書けなくても bootstrap 本体は続行する(health の精度だけが落ちる)
+        logger.warning("resource principal status を %s へ書けませんでした", _RP_STATUS_FILE)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
 # ADB ACTIVE 待ちの上限(秒)と間隔。ADB作成は実測10-15分。
 BOOTSTRAP_TIMEOUT_S = int(os.environ.get("DB_BOOTSTRAP_TIMEOUT_S", "1500"))
@@ -78,14 +112,47 @@ def _admin_conn(settings: Settings, wallet_dir: str, admin_password: str) -> ora
     )
 
 
-def _ensure_user(cur, user: str, password: str) -> None:
-    """ユーザーを冪等に用意し、パスワードを env と一致させる(ORA-01920=既存は無視)。"""
+def _ensure_user(cur, user: str, password: str) -> bool:
+    """ユーザーを冪等に用意し、パスワードを env と一致させる(ORA-01920=既存は無視)。
+
+    戻り値: パスワード再利用制限(ORA-28007)で ALTER を諦めた場合 True
+    (呼び出し側が実ログインで裏取りする)。
+    """
     try:
         cur.execute(f'CREATE USER {user} IDENTIFIED BY "{password}"')
     except oracledb.DatabaseError as e:
         if _ora_code(e) != 1920:  # ORA-01920: user name conflicts
             raise
-        cur.execute(f'ALTER USER {user} IDENTIFIED BY "{password}"')
+        try:
+            cur.execute(f'ALTER USER {user} IDENTIFIED BY "{password}"')
+        except oracledb.DatabaseError as e2:
+            # ORA-28007: 同じパスワードは再設定できない(プロファイルのパスワード再利用制限)。
+            # Terraform 生成のパスワードは state に固定されているため、**コンテナが再起動する
+            # たび**(イメージ更新・CI再作成・クラッシュ復帰)に同じ値で ALTER しようとして必ず
+            # ここに来る。これを失敗扱いにすると bootstrap 全体が 25 分リトライして諦め、
+            # migrate() まで実行されない(2026-07-28 実機で再現 — FIX-58)。
+            if _ora_code(e2) != 28007:
+                raise
+            logger.info("%s は既存でパスワード再設定不可(ORA-28007) — ログインで確認する", user)
+            return True
+    return False
+
+
+def _verify_login(settings: Settings, wallet_dir: str, user: str, password: str) -> None:
+    """ORA-28007 で ALTER を諦めた場合の裏取り。目的のパスワードで実際に入れるか確認する。
+
+    ORA-28007 は「履歴にある」という意味で「現在のパスワードと同じ」とは限らない
+    (誰かが手動で変えた等)。無検証で通すと後段のDB接続が原因不明で落ちるため確かめる。
+    """
+    oracledb.connect(
+        user=user,
+        password=password,
+        dsn=settings.adb_dsn,
+        config_dir=wallet_dir,
+        wallet_location=wallet_dir,
+        wallet_password=settings.adb_wallet_password,
+        tcp_connect_timeout=20.0,
+    ).close()
 
 
 def _provision(settings: Settings) -> None:
@@ -93,7 +160,14 @@ def _provision(settings: Settings) -> None:
     app_user, qry_user = settings.adb_user, settings.adb_query_user
     app_pw, qry_pw = settings.adb_password, settings.adb_query_password
     if not (admin_pw and app_pw and qry_pw and settings.adb_dsn):
-        logger.warning("bootstrap skipped: ADB_ADMIN_PASSWORD / passwords / dsn が未設定")
+        hint = (
+            "bootstrap をスキップしました(ADB_ADMIN_PASSWORD / ADB_PASSWORD / "
+            "ADB_QUERY_PASSWORD / ADB_DSN のいずれかが未設定)。Select AI は未検証です"
+        )
+        logger.warning(hint)
+        # ここで抜けると bootstrap は「成功」としてループを出るため、起動時に書いた
+        # ok=None(実行中)のままになり health が永久に「実行中」と表示される(F005)。
+        _set_resource_principal_status(False, hint)
         return
 
     wallet = _wallet_dir(settings)
@@ -108,7 +182,7 @@ def _provision(settings: Settings) -> None:
     try:
         cur = conn.cursor()
         # アプリスキーマ(CREATE TABLE/VIEW + データセットのSelect AI実行に必要なDBMS_CLOUD系)
-        _ensure_user(cur, app_user, app_pw)
+        reuse_blocked = {app_user: _ensure_user(cur, app_user, app_pw)}
         cur.execute(f"GRANT CREATE SESSION, RESOURCE, CREATE VIEW TO {app_user}")
         cur.execute(f"ALTER USER {app_user} QUOTA UNLIMITED ON DATA")
         for pkg in _DBMS_CLOUD_PKGS:
@@ -127,8 +201,14 @@ def _provision(settings: Settings) -> None:
                 p=app_user,
             )
         # 読取専用ユーザー(CREATE SESSIONのみ。datasetsが個別表にSELECTを付与)
-        _ensure_user(cur, qry_user, qry_pw)
+        reuse_blocked[qry_user] = _ensure_user(cur, qry_user, qry_pw)
         cur.execute(f"GRANT CREATE SESSION TO {qry_user}")
+        conn.commit()
+        # ORA-28007 でパスワード同期を諦めたユーザーは、実際に入れるか裏取りする
+        # (失敗すればリトライループへ送り、原因つきでログに残す)
+        for user, pw in ((app_user, app_pw), (qry_user, qry_pw)):
+            if reuse_blocked.get(user):
+                _verify_login(settings, wallet, user, pw)
         # Select AI のクレデンシャル: APIキー版JETUSE_OCI_CREDはRP不可。
         # リソースプリンシパルを有効化し OCI$RESOURCE_PRINCIPAL を使えるようにする(best-effort)。
         try:
@@ -150,16 +230,29 @@ def _provision(settings: Settings) -> None:
 def bootstrap() -> None:
     """ADB ACTIVE まで待ってスキーマを用意し、マイグレーションを適用する。"""
     settings = get_settings()
+    # 前回起動が残した ok=true を今回の起動の結果として読ませない(コンテナ再起動で
+    # bootstrap が恒久的に失敗しても health が「Select AI 利用可」と偽り続ける — F-004)。
+    # 起動のたびに「未検証」へ戻し、結論が出た時点で上書きする。
+    _set_resource_principal_status(None, "bootstrap 実行中(ENABLE_RESOURCE_PRINCIPAL 未検証)")
     deadline = time.monotonic() + BOOTSTRAP_TIMEOUT_S
     while True:
         try:
             _provision(settings)
             break
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
             if time.monotonic() >= deadline:
                 logger.exception("bootstrap がタイムアウト。API起動は継続(DB系は503)")
+                _set_resource_principal_status(
+                    False,
+                    f"bootstrap がタイムアウトしました({type(e).__name__}: {e})。"
+                    "ADB の状態と ADB_ADMIN_PASSWORD / ウォレット / 権限を確認してください",
+                )
                 return
-            logger.info("ADB 未準備のため %ss 後に再試行", RETRY_INTERVAL_S)
+            # 例外を出さずに「ADB 未準備」とだけ書くと、恒久的な失敗(権限不足・ORA-*)が
+            # プロビジョニング待ちと見分けられず 25 分間埋もれる(FIX-58)。理由を必ず残す。
+            logger.info(
+                "bootstrap 再試行(%ss後): %s: %s", RETRY_INTERVAL_S, type(e).__name__, e
+            )
             time.sleep(RETRY_INTERVAL_S)
 
     try:

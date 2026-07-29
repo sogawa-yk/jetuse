@@ -20,7 +20,9 @@ variableGroups:
       - prefix
       - enable_auth
       - demo_email
+      - admin_users
       - adb_admin_password
+      - demo_password_version
   - title: "IAM設定（実行ユーザーの権限に応じて選択）"
     variables:
       - enable_dynamic_group
@@ -108,6 +110,21 @@ variables:
     title: "デモユーザーのメール"
     description: "デモログインユーザーのメールアドレス"
     default: "demo@example.com"
+    visible: enable_auth
+
+  admin_users:
+    type: string
+    title: "管理ダッシュボードの管理者（任意）"
+    description: "/admin を開けるユーザーをカンマ区切りで指定（JWTのsubまたはemailと一致）。空欄なら、このスタックが作成する demo ユーザーが管理者になります。"
+    required: false
+    visible: enable_auth
+
+  demo_password_version:
+    type: string
+    title: "デモユーザーのパスワード世代（通常変更不要）"
+    description: "この値を変えると、次のApplyでデモユーザーのパスワードを再発行します。更新時に「パスワード履歴と衝突しました」で失敗した場合の復旧に使います。"
+    default: "1"
+    required: false
     visible: enable_auth
 
   adb_admin_password:

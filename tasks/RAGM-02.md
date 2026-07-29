@@ -5,7 +5,7 @@
 選べるようにする。**チャンク単位の出典**と**SQL の全表現力での絞り込み**を提供する。
 
 ## 仕様参照
-- `docs/decisions/ADR-0019-rag-metadata-backend.md` §2（Accepted）
+- `docs/decisions/ADR-0020-rag-metadata-backend.md` §2（Accepted）
 - 実機で成立済みの形: `docs/verification/SPIKE-M1.md` ③-a〜③-d
   （表定義・DB 内埋め込み・版フィルタ 1 本 SQL・構造化出典の実行結果）
 

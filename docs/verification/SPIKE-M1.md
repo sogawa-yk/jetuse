@@ -25,7 +25,7 @@ DB: 共有 loop ADB `jetuse-loop-adb` / **Oracle AI Database 26ai Enterprise Edi
 **当初の想定（①では属性もフィルタも持てない）は実機で覆った。** ① は属性もフィルタも動く。
 差が出るのは「属性がファイル単位か、チャンク単位か」と「業務データと結合できるか」である。
 詳細な比較は `docs/comparison/rag-metadata-backends.md`、採否の提案は
-`docs/decisions/ADR-0019-rag-metadata-backend.md`（案）。
+`docs/decisions/ADR-0020-rag-metadata-backend.md`（案）。
 
 ---
 

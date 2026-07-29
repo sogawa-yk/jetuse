@@ -1,6 +1,6 @@
-# RAG メタデータ / Agent Memory 進捗キュー（ADR-0019 承認により起票）
+# RAG メタデータ / Agent Memory 進捗キュー（ADR-0020 承認により起票）
 
-`docs/decisions/ADR-0019-rag-metadata-backend.md`（**Accepted** 2026-07-29）の実装キュー。
+`docs/decisions/ADR-0020-rag-metadata-backend.md`（**Accepted** 2026-07-29）の実装キュー。
 決定は「**性格の違う 2 バックエンドを選べるようにし、能力差をアプリから見えるようにする**」。
 **base=`main`**（共有物）。push / PR / apply / IAM は人間ゲート。
 

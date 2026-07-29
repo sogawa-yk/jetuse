@@ -68,6 +68,18 @@ resource "random_password" "demo" {
   min_numeric      = 2
   min_special      = 1
   override_special = "#_-"
+
+  # 旧実装(SCIMのUserへ直接passwordを書く方式)で作られた既存 Stack を更新すると、demo ユーザーは
+  # 「同じパスワードが履歴に入っている」状態のまま mustChange=true で残る。UserPasswordChanger は
+  # 同一パスワードの再設定を pwdpolicyViolation で拒否するため、値を変えないと更新が通らないうえ、
+  # 通っても mustChange が外れずログインできないままになる。keepers を進めて**更新時に必ず
+  # 新しいパスワードを発行**し、出力(demo_password)にも反映させる(FIX-58)。
+  # demo_password_version を変えると新しいパスワードを発行し直す。パスワード履歴と衝突して
+  # provisioner が失敗したとき、Resource Manager の変数画面から復旧できる逃げ道でもある。
+  keepers = {
+    password_setter = "user-password-changer-v1"
+    version         = var.demo_password_version
+  }
 }
 
 # IAMもアプリ本体と同じResource Manager stackで管理する。
@@ -100,6 +112,7 @@ module "object_storage" {
   source           = "../terraform/modules/object-storage"
   compartment_ocid = var.compartment_ocid
   prefix           = var.prefix
+  region           = var.region
 }
 
 module "adb" {
@@ -142,7 +155,8 @@ module "functions" {
     LOG_OCID  = module.observability.app_log_id
   })
 
-  depends_on = [module.iam]
+  # container_instance と同じ理由(destroy 時にバケット掃除より先に止める)
+  depends_on = [module.iam, module.object_storage]
 }
 
 module "container_instance" {
@@ -156,7 +170,10 @@ module "container_instance" {
   memory_gb             = 4
   shape                 = var.ci_shape
 
-  depends_on = [module.iam]
+  # destroy の順序担保: モジュール全体に依存させることで、バケットの掃除(object_storage 内の
+  # terraform_data.empty_buckets)より先にアプリが停止する。出力参照だけだとバケット resource に
+  # しか依存せず、掃除とアプリ停止が並行して走り、掃除後に書き込まれて 409 になりうる。
+  depends_on = [module.iam, module.object_storage]
 }
 
 module "opensearch" {
@@ -209,4 +226,5 @@ module "identity_domain_app" {
   redirect_uri  = "https://${module.api_gateway.endpoint}/"
   demo_email    = var.demo_email
   demo_password = random_password.demo.result
+  home_region   = local.home_region
 }

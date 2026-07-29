@@ -61,8 +61,10 @@ class Settings(BaseSettings):
 
     # 議事録(VOICE-01): 音声と文字起こし結果のバケット(空なら機能無効=503)
     speech_bucket: str = ""
-    # TTS(VOICE-03): Phoenix限定(SPIKE-06)。クロスリージョン呼び出し
-    tts_region: str = "us-phoenix-1"
+    # TTS(VOICE-03): 空=自動(デプロイリージョン → us-phoenix-1 の順に試行。FIX-58)。
+    # かつてPhoenix限定だったが提供リージョンは拡大しており、決め打ちにするとPhoenix未購読の
+    # テナンシで「デプロイ先では使えるのに落ちる」が起きる。明示指定時はそのリージョンのみ。
+    tts_region: str = ""
 
     # SEC-02: 入力モデレーション(llama自己判定ガード)と管理者(カンマ区切りsub)
     moderation_enabled: bool = False
