@@ -3,8 +3,8 @@
 - run_id: `2026-07-29T1210_PORT-03`
 - branch: `feat/PORT-03`（base = `main` / worktree 分離・**push / PR は未実施**）
 - goal: `runs/2026-07-29T1210_PORT-03/goal.txt`
-- review_verdict: `FAIL`（review-10。E2E 証跡は「十分」と判定済み。残りは CLI スクリプトの堅牢性で、
-  review-10 の指摘は修正済みだが**再レビューは未実施**。人間ゲートで停止した）
+- review_verdict: `FAIL`（review-10 の指摘は修正済み・再レビュー未実施）。
+  **実機再検証は完了**（新規スタックで apply → E2E → destroy。人間承認のうえ実施）
 - last_review_ref: `runs/2026-07-29T1210_PORT-03/reviews/review-10.json`
 - updated_at: 2026-07-29
 
@@ -68,12 +68,10 @@ review-8 は **E2E 証跡を "sufficient" と評価**したうえで、CLI ス�
 
 ## 判断が要る事項（人間ゲート）
 
-1. **方式変更の追認**: ADR-0019 は「Terraform で宣言的に組む」前提だったが、上流バグにより
-   **OCI CLI 経由の作成 + data source 参照**へ変更した。ADR への追記が要る。
-   provider が修正されたら通常の resource へ戻せる。
-2. **再検証の要否（重要度が上がった）**: E2E 成功**後**に、作成・削除の判断ロジックを
-   何度か変更した（404と権限失効の区別 / 設定指紋による再利用判定 / 所有者選択）。
-   モックによるシェル単体テストは追加して緑（CI にも組み込み済み）だが、
-   **実機での再確認はしていない**。マージ前にもう一度 apply → destroy を回すかの判断。
+1. ~~方式変更の追認~~ **承認済み（2026-07-29）**。ADR-0019 に追記し、`specs/11-agents.md` にも
+   永続化。将来 provider が修正されたら標準 resource へ戻す。追跡は **Issue #98**。
+2. ~~再検証の要否~~ **実施済み（2026-07-29）**。新規スタックで apply → 39/39 → 9/9 →
+   縮退 8/8 → destroy まで確認。apply は一発成功。課金リソースの残存なし。
+   詳細は `docs/verification/PORT-03.md` の再検証節。
 3. **スコープ拡大**: `image_tag` 統一により API / Functions ルーターの配布も commit SHA 固定になる。
-4. **push / PR**: 未実施。6コミット（実装 / 方式変更 / 検証 / レビュー修正×3）。
+4. **push / PR**: 人間承認済み。実施する。

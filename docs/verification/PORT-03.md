@@ -116,3 +116,34 @@ API とエージェントは invoke ステート（`project_ocid` 等）の契�
 - 旧 resource 型（`oci_generative_ai_hosted_application` / `_hosted_deployment`）を state に持つ
   スタックからの移行機構は入れていない。PORT-03 は未リリースで、その state を持つ利用者は
   存在しないため（本検証スタックのみ）。
+
+## 再検証（2026-07-29 夕・レビュー指摘の修正後）
+
+レビュー（review-8〜10）で作成・削除の判断ロジックを直したため、マージ前に**新しいスタックを
+作り直して**もう一度回した（人間の指示による）。証跡は `runs/<run-id>/e2e/reverify/`。
+
+| 項目 | 結果 |
+|---|---|
+| 配布 zip からのスタック作成 → apply | ✅ **一発で成功**（初回検証で必要だった再 apply が不要になった） |
+| ホスト型アプリ3本 | ✅ ACTIVE。所有者タグ `jetuse-owner` と設定指紋 `jetuse-config` の付与を確認 |
+| 既存機能の非回帰 | ✅ 39/39 PASS |
+| 3SDK のエージェント実行 | ✅ 9/9 PASS |
+| 無効化時のエージェント削除 | ✅ 残存 0 件（destroy 用スクリプト経路） |
+| 無効化構成の縮退 | ✅ 8/8 PASS |
+| destroy | ✅ 成功。Hosted 0件 / ADB TERMINATED / Container Instance DELETED |
+
+### 再検証で見つかった不一致（1件）
+
+1回目の縮退確認で `capabilities.agents` が `disabled` ではなく `unavailable` を返し、
+全体の `ok` が false になった。**原因は API イメージが health 修正より前のビルドだったこと**で、
+コードの誤りではない。API を作り直して再実行し 8/8 PASS。
+
+これは「配布物のバージョンを揃えないと片方だけ古いまま動く」という本タスクで既に踏んだ問題の
+再演でもある（だからこそ `image_tag` を統一した）。検証時も**アプリ側の変更を入れたら
+イメージを作り直す**必要がある。
+
+### 補足
+
+- 検証では `image_tag` に検証用タグ（`port03-e2e2`）を指定した。既定の `latest` は `main` の
+  ビルドを指すため、本ブランチのアプリ変更が入らない。マージ後は `release.yml` が
+  同一 commit SHA で全画像を push するので、この指定は不要になる。
