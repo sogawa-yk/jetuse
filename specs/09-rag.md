@@ -56,7 +56,7 @@
 - **per-user分離**: ユーザーごとに `JETUSE_RAG_{sha1(owner)[:8]}` のprofile+vector indexを遅延作成。索引の取り込み元は **RAG-01の原本バックアップ先 `rag/{owner}/`**（同じアップロードが両バックエンドに供給される設計）
 - 実行: `DBMS_CLOUD_AI.GENERATE(action=>'narrate')` をスレッドで実行→単発deltaで返す（非ストリーミング）。応答末尾のSourcesをcitationsイベントに変換
 - 同期の制約: select_ai側は索引の `refresh_rate`（60分に設定）間隔でバケットと同期。アップロード直後は反映されない場合がある旨をUIに注記
-- **ADMINセットアップ（1回）**: `ops/setup-select-ai.py` — JETUSE_APPへ `EXECUTE ON DBMS_CLOUD / DBMS_CLOUD_AI` 付与 + GenAI/Object StorageホストへのACL + APIキーcredential作成（Vault/リソースプリンシパル化はPhase 8）
+- **ADMINセットアップ（再実行可）**: `ops/setup-select-ai.py [--schema <SCHEMA>]` — 対象スキーマへ `EXECUTE ON DBMS_CLOUD / DBMS_CLOUD_AI` 付与 + GenAI/Object StorageホストへのACL + `DBMS_CLOUD_ADMIN.ENABLE_RESOURCE_PRINCIPAL`。DB内の資格情報は開発も配備も **`OCI$RESOURCE_PRINCIPAL`**（ADB自身の身分）に統一し、APIキーを焼き込む `JETUSE_OCI_CRED` は廃止（ADR-0021）。Vault化はPhase 8の検討事項
 - UI: /ragにバックエンドセレクタ（標準=ベクトル検索 / Select AI）。select_ai選択時は同期タイミングの注記表示
 
 ### 完了条件

@@ -1,0 +1,87 @@
+{
+  "review_n": 2,
+  "timestamp": "2026-07-29T16:57:53+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-2.input.diff",
+  "raw_output_path": "reviews/review-2.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "リソースプリンシパル化の主要機能は4本の実環境シナリオで確認できています。しかし、E2E teardown が所有権確認より先にスキーマ内オブジェクトを削除するため、再作成された既存リソースを無承認で変更し得る blocker があります。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 5,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 419,
+      "issue": "teardown は台帳のスキーマ名だけで接続し、現在のユーザーが台帳記録時と同一か確認する前に vector index・profile・credential を削除します。作成時刻の照合は line 480 以降なので、同名スキーマが再作成され、保存済みパスワードで接続できる場合、既存リソースを人間ゲートなしで変更します。",
+      "suggestion": "ADMIN 接続でスキーマの所有証跡を最初に再照合し、一致しなければスキーマ接続を含む全変更を中止してください。秒精度の作成時刻だけでなく、スキーマ内のランダムな run ID マーカー等も照合し、stale ledger の否定 E2E を追加してください。"
+    },
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 314,
+      "issue": "索引作成および teardown で call_timeout=0（無期限）にしています。CREATE_VECTOR_INDEX、GENERATE、DROP_VECTOR_INDEX が応答しない場合、後段の300秒期限や片付け処理へ到達せず永久停止します。",
+      "suggestion": "十分長い有限の call_timeout を設定し、各操作のタイムアウトを失敗として記録したうえで、独立した片付け処理を継続してください。"
+    },
+    {
+      "id": "M-002",
+      "severity": "major",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 103,
+      "issue": "ウォレット展開ディレクトリと `.pw`・スキーマパスワードファイルを既定権限で予測可能な `/tmp` 配下へ永続化しています。通常の umask ではディレクトリが0755、ファイルが0644となり、同一ホストの別ユーザーから認証資材を読まれる可能性があり、teardown でも削除されません。",
+      "suggestion": "所有者限定の一時ディレクトリ（0700）を作り、秘密ファイルを0600で原子的に作成してください。teardown/finally でウォレットとパスワードファイルも削除してください。"
+    },
+    {
+      "id": "M-003",
+      "severity": "major",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 245,
+      "issue": "スキーマの所有証跡は setup-dev-schema.py と setup-select-ai.py の両方が成功した後にしか記録されません。前者がユーザーを作成した後に後者または事後照会が失敗すると台帳は空のままで、teardown は作成済みユーザーを安全に削除できず開発リソースを残します。バケットにも作成API成功から記録まで同様の窓があります。",
+      "suggestion": "各作成操作の直後に所有証跡を記録し、例外時の finally でも事前不在だったリソースを再照会して台帳へ回収してください。作成途中失敗からの teardown をテストしてください。"
+    },
+    {
+      "id": "M-004",
+      "severity": "major",
+      "file": "ops/_adb.py",
+      "line": 102,
+      "issue": "新しい安全クリティカルな共通部に単体テストがありません。E2E は正しい接続先の成功経路だけで、ADB_OCID不一致・トークン不一致・RP権限確認失敗・既存ユーザーのパスワード不明/ORA-28007ログイン失敗を検証していません。",
+      "suggestion": "OCI SDKとoracledbをモックし、各不一致でDDLが一度も実行されず非ゼロ終了すること、および既存ユーザーの境界条件を検証するテストを追加してください。"
+    },
+    {
+      "id": "M-005",
+      "severity": "major",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/scenario-1.md",
+      "line": 9,
+      "issue": "コミット対象の証跡に、ADB_OCID末尾から導出したウォレットパス接尾辞、実ADB名、DB名、実DSNが残っています。環境依存の接続識別値を `.env` 管理・伏字化するという本タスクの禁止事項と整合しません。manifest.json にもローカル絶対パスが残っています。",
+      "suggestion": "ウォレット接尾辞・ADB名・DB名・DSN・ローカル絶対パスをプレースホルダへ置換し、redact_evidence.py にこれらのパターンと回帰テストを追加してください。"
+    },
+    {
+      "id": "m-006",
+      "severity": "minor",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/SKIPPED.md",
+      "line": 31,
+      "issue": "JETUSE_APP に OCI$RESOURCE_PRINCIPAL の EXECUTE が付与済みという根拠に post-teardown-state.log の資格情報一覧を挙げていますが、添付ログは ADMIN所有のRP資格情報と各スキーマのJETUSE_OCI_CREDしか示しておらず、DBA_TAB_PRIVSの付与結果を示していません。",
+      "suggestion": "read-only の DBA_TAB_PRIVS 照会結果を証跡へ追加するか、この未立証の記述を削除してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "insufficient",
+    "notes": "scenario-1（ops 2本の2回実行・冪等）、scenario-2（RPでObject Storage HTTP 200）、scenario-3（RPで索引作成・2文書取り込み・合言葉検索）、scenario-4（旧APIキー資格情報のORA-20404対照）はすべてPASSで、証跡は runs/2026-07-29T1605_RP-01/e2e/scenario-1..4.log および対応する.mdにあります。teardown.logも今回作成した索引・profile・bucket・ユーザーの不在を示しています。配備済みdevスタックと既存スキーマを実施しない理由はSKIPPED.mdにありますが、stale ledger時に変更しないという破壊操作の安全性が検証されておらず、実装上も所有権確認順序にblockerがあるため全体としてinsufficientです。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されておらず、ブラウザツールを使用しないよう明示されているため未実施です。"
+    }
+  }
+}

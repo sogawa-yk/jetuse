@@ -1,0 +1,55 @@
+{
+  "review_n": 11,
+  "timestamp": "2026-07-29T18:42:36+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-11.input.diff",
+  "raw_output_path": "reviews/review-11.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "Resource Principal の主要経路は実環境で成立していますが、E2E の所有権取得に、別プロセスが再作成した既存ユーザーを自分のものとして登録・削除できる TOCTOU が残っています。また、セットアップ途中失敗時のリソース回収も不十分です。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 1,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 343,
+      "issue": "`created_by_us` は setup が一度成功したことしか示さず、`capture_ownership()` はその後の現在のユーザーを `created >= not_before` だけで台帳化します。CREATE 後から capture まで、特に app の migration 中に query user が別プロセスから DROP/再作成されると、その別ユーザーを記録します。app 側では再作成先へマーカーまで追加でき、後続 teardown が既存ユーザーをこの run の所有物として DROP し得ます。",
+      "suggestion": "setup が CREATE 直後に `DBA_USERS.USER_ID` など再作成で変わる識別子を各ユーザーの receipt として永続化し、driver は capture 時と DROP 直前にその識別子を照合してください。CREATE 後・capture 前に app/query を再作成する競合テストも追加してください。"
+    },
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 448,
+      "issue": "`created_by_us` は `setup-dev-schema.py` 全体が exit 0 になった後でしか true になりません。Oracle の CREATE USER・GRANT 等は途中まで永続化され得るため、query 作成、RP 有効化、migration などの失敗時には、この run が作成したユーザーや権限が台帳へ記録されず、自動 teardown 不能な孤児として残ります。警告表示だけでは実環境の原状回復を保証できません。",
+      "suggestion": "ユーザーごとの CREATE 直後に USER_ID を含む receipt を保存し、後続処理が失敗しても driver がその receipt から安全に台帳化・teardown できるようにしてください。作成途中、RP 有効化、migration の各失敗を注入するテストも追加してください。"
+    },
+    {
+      "id": "m-001",
+      "severity": "minor",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 47,
+      "issue": "ADB 表示名、DB 名、コンパートメント名、共有バケット名が検証コードへ実値で固定されています。資格情報や OCID ではありませんが、環境依存値を `.env` で管理するリポジトリ規約と一致しません。",
+      "suggestion": "`E2E_EXPECT_ADB_NAME`、`E2E_EXPECT_DB_NAME`、`E2E_EXPECT_COMPARTMENT`、`E2E_SHARED_BUCKET` 等を必須環境変数にし、未設定時は fail-closed にしてください。認可の根拠である OCID 照合は維持してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "insufficient",
+    "notes": "`scenario-1.{log,md}` の2回実行、`scenario-2.{log,md}` のObject Storage 200、`scenario-3.{log,md}` の索引作成と2検索、`scenario-4.{log,md}` のORA-20404対照、`guard.{log,md}` の3否定ケースはいずれもPASSです。`teardown.{log,md}` と `post-teardown-state.{log,md}` も通常系の削除を裏づけ、SKIPPED.mdのdev stack apply・既存スキーマ未変更の理由も妥当です。ただし、B-001のCREATE後再作成競合とM-001の途中失敗後回収は証跡・テストとも未網羅で、既存リソース保護を含むdiff全体の裏づけとしては不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

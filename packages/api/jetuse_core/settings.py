@@ -56,8 +56,10 @@ class Settings(BaseSettings):
     # NL2SQL(SQL-02): SemanticStore + 読取専用ユーザー
     semstore_ocid: str = ""
     adb_query_password: str = ""
-    # Select AI クレデンシャル名。ORM/RP環境は OCI$RESOURCE_PRINCIPAL(INFRA-03)
-    select_ai_credential: str = "JETUSE_OCI_CRED"
+    # Select AI クレデンシャル名。配備先(ORM/dev)も開発も ADB 自身の身分に統一した(ADR-0021)。
+    # かつての既定 JETUSE_OCI_CRED は API キー焼き込み版で、これを作る経路は廃止済み
+    # (＝既定のままだと存在しない資格情報を指す)。上書きは env SELECT_AI_CREDENTIAL。
+    select_ai_credential: str = "OCI$RESOURCE_PRINCIPAL"
 
     # 議事録(VOICE-01): 音声と文字起こし結果のバケット(空なら機能無効=503)
     speech_bucket: str = ""

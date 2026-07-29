@@ -1,0 +1,47 @@
+{
+  "review_n": 9,
+  "timestamp": "2026-07-29T18:22:26+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-9.input.diff",
+  "raw_output_path": "reviews/review-9.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "Resource Principal の有効化、Object Storage、Select AI の主要機能は E2E で確認できています。ただし、E2E の所有権取得に作成競合時の既存ユーザーを取り込む経路が残り、既存スキーマを変更・削除し得るため FAIL です。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 0,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 343,
+      "issue": "`capture_ownership()` は作成時刻が `not_before` 以降なら、そのユーザーをこの run の所有物として台帳へ登録します。しかし、事前の不存在確認と `setup-dev-schema.py` 実行の間に同名ユーザーが別プロセスから作成された場合も条件を満たします。setup 側は明示パスワード指定時に既存ユーザーを `ALTER USER` するため、他者のスキーマを変更し、マーカーを追加して後続 teardown で削除できます。16-bit かつコミット済みの run tag は衝突を構造的に防ぎません。",
+      "suggestion": "E2E 初回実行には create-only モードを設け、ユーザーが既存なら ALTER せず中止してください。CREATE 成功と直結した `USER_ID`・作成時刻・run marker のみを台帳へ記録し、十分に長い実行ごとのランダム名を使用してください。不存在確認後に同名ユーザーを挿入する競合テストも追加してください。"
+    },
+    {
+      "id": "m-001",
+      "severity": "minor",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 47,
+      "issue": "ADB表示名、DB名、コンパートメント名、共有バケット名が実行コードに固定され、コミットされた証跡にも実DSNやリソース名が残っています。OCIDや完全なホスト名ではありませんが、「環境依存値は .env 管理」というリポジトリ規約と一致しません。",
+      "suggestion": "`E2E_EXPECT_ADB_NAME`、`E2E_EXPECT_DB_NAME`、`E2E_EXPECT_COMPARTMENT`、`E2E_SHARED_BUCKET` などを `.env` の必須値として fail-closed に解決し、コミットする証跡ではDSNと環境固有名もプレースホルダー化してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "insufficient",
+    "notes": "scenario-1（ops 2本の2回実行・冪等）、scenario-2（Resource PrincipalでObject Storage 200）、scenario-3（索引作成・2文書検索）、scenario-4（旧APIキー資格情報との対照）、guard（stale台帳3ケース）はすべてPASS。証跡は `runs/2026-07-29T1605_RP-01/e2e/scenario-1..4.{log,md}` と `guard.{log,md}`。`teardown.{log,md}`、`post-teardown-state.{log,md}` は作成資源の削除も裏づけています。`SKIPPED.md` のdev stack applyおよび既存スキーマ未変更には人間ゲート上の妥当な理由があります。ただし、B-001の作成時競合はguardで検証されておらず、既存リソース保護を含むdiff全体の証跡としては不十分です。`deploy.log` の `date` エラーはありますが、ADBがSTOPPEDではないという判定自体には影響していません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

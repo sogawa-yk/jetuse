@@ -1,0 +1,71 @@
+{
+  "review_n": 7,
+  "timestamp": "2026-07-29T17:59:15+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-7.input.diff",
+  "raw_output_path": "reviews/review-7.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "承認済みコンパートメントの検証を迂回できる経路と、E2E teardown が別実行者のユーザーを取得・削除し得る TOCTOU が残っています。主要4シナリオは PASS していますが、これらの安全クリティカルな否定経路を証跡が網羅していないため FAIL です。",
+  "severity_counts": {
+    "blocker": 3,
+    "major": 1,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "ops/_adb.py",
+      "line": 151,
+      "issue": "`ADB_COMPARTMENT_OCID` が設定されると、その値と ADB の compartment_id が一致することしか確認しません。既存の承認済みルート `COMPARTMENT_OCID` との親子関係やテナンシを検証しないため、ADB_OCID・wallet・OCI profile・ADB_COMPARTMENT_OCID が揃って別環境を指すとゲートを通過し、そこで CREATE/ALTER USER、GRANT、ACL 変更を実行できます。",
+      "suggestion": "ADB compartment との完全一致は維持しつつ、`ADB_COMPARTMENT_OCID` が `COMPARTMENT_OCID` 配下かを OCID で遡って検証し、ルートの tenancy も OCI 認証設定と照合してください。別テナンシの compartment を override に指定した否定テストも追加してください。"
+    },
+    {
+      "id": "B-002",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 402,
+      "issue": "事前の不存在確認と `setup-dev-schema.py` 実行の間に同名ユーザーが作られると、明示パスワード付きの `_ensure_user()` がその既存ユーザーを ALTER します。その後 `capture_ownership()` が現在のユーザーを無条件に台帳へ取り込み、マーカーを追加して teardown 対象にするため、他者の既存スキーマを変更・削除できます。4桁乱数名は衝突確率を下げるだけで、この TOCTOU を構造的には解消しません。",
+      "suggestion": "E2E 用に create-only モードを用意し、CREATE USER の競合エラーでは ALTER せず中止してください。作成成功時に得た user_id・作成時刻などを直ちに台帳へ記録し、単なる事後存在照会から所有物を取得しないでください。"
+    },
+    {
+      "id": "B-003",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 771,
+      "issue": "query user の作成時刻を確認した後、app user の `DROP USER ... CASCADE` を先に実行してから、query user を名前だけで DROP します。app user の CASCADE 中に query user が削除・再作成されると、検証後に現れた別ユーザーを削除できます。添付 guard は teardown 開始前から作成時刻が違うケースしか検証していません。",
+      "suggestion": "query user にも user_id または run 固有マーカーを持たせ、各 DROP の直前に個別に再照合してください。少なくとも app user の DROP 後に query user を再照合する競合テストを追加してください。"
+    },
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 706,
+      "issue": "vector index・profile・credential の DROP で任意の DatabaseError を握り潰し、その成否や再照会結果より先に台帳エントリを削除しています。DROP と再照会がともに失敗すると、リソースが残っているのに次回 teardown で対象を特定できません。",
+      "suggestion": "既知の not-found エラーだけを成功扱いにし、その他は failed に記録してください。台帳からの削除は再照会で不在を確認した後だけ行い、照会不能時はエントリを保持してください。"
+    },
+    {
+      "id": "m-001",
+      "severity": "minor",
+      "file": "docs/verification/RP-01.md",
+      "line": 349,
+      "issue": "片付け後の台帳が `{}` になったと記載していますが、添付された `created-resources.json` には `run_tag: rp012892` が残っています。リソース項目が空である点は確認できますが、証跡の実値と記述が一致しません。",
+      "suggestion": "「リソース項目はなく、run_tag のみ残る」と記述を修正してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "insufficient",
+    "notes": "`scenario-1.log`（2回実行の冪等性）、`scenario-2.log`（Object Storage 200）、`scenario-3.log`（索引作成・2文書検索）、`scenario-4.log`（旧資格情報 ORA-20404／RP 200）、`guard.log`（台帳不一致3ケース）はいずれも PASS。`teardown.log` と `post-teardown-state.log` も今回作成したスキーマ、索引、profile、credential、bucket の不在を示しています。`SKIPPED.md` の配備済み `/api/health` と既存スキーマ未変更には人間ゲート上の理由があります。ただし、別テナンシの ADB_COMPARTMENT_OCID override、作成時競合による既存ユーザー取得、個別 DROP 間の再作成競合は未検証で、diff の安全性を十分には裏づけていません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

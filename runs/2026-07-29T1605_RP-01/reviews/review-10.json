@@ -1,0 +1,47 @@
+{
+  "review_n": 10,
+  "timestamp": "2026-07-29T18:31:57+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-10.input.diff",
+  "raw_output_path": "reviews/review-10.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "Resource Principal 化の通常経路と実環境 E2E は概ね良好です。しかし、E2E 所有権取得に既存ユーザーを取り込んで削除できる競合経路が残るため FAIL です。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 0,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 343,
+      "issue": "初回の不存在確認後に別プロセスが同名ユーザーを作成すると、`--require-new` により setup 自体は中止しても、`finally` の `capture_ownership()` が `created >= not_before` だけでそのユーザーを台帳へ取り込みます。app user ならさらに ADMIN でマーカー表を追加でき、後続 teardown で他者のユーザーを DROP できます。秒精度の作成時刻は作成主体の証明にならず、query user にも同じ問題があります。",
+      "suggestion": "`finally` で現在存在するユーザーを推測取得せず、`CREATE USER` が実際に成功した各ユーザーについて setup スクリプトから永続的な作成receiptを返し、そのユーザーだけを台帳化してください。app/queryそれぞれが事前確認後に競合したケースをテストし、台帳追加・マーカー追加・DROPが一切起きないことも確認してください。"
+    },
+    {
+      "id": "m-001",
+      "severity": "minor",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 47,
+      "issue": "ADB表示名、DB名、コンパートメント名、共有バケット名などの環境依存値が検証コードと証跡へ固定されています。OCIDや資格情報ではありませんが、本リポジトリの「環境依存値は `.env` 管理」という規約と一致しません。",
+      "suggestion": "対象値を必須の `.env` 項目へ移し、`.env.example` にはプレースホルダーだけを追加してください。未設定時は既定値へフォールバックせず fail-closed にしてください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "insufficient",
+    "notes": "scenario-1（有効化・2回実行）、scenario-2（Object Storage 200）、scenario-3（索引作成と2検索）、scenario-4（旧資格情報のORA-20404対照）、guard（台帳不一致3ケース）はいずれもPASSで、証跡は `runs/2026-07-29T1605_RP-01/e2e/scenario-1..4.{log,md}` と `guard.{log,md}`。`teardown.{log,md}` と `post-teardown-state.{log,md}` も通常系の片付けを裏づけています。SKIPPED.mdの配備済みスタックと既存スキーマを変更しなかった理由は妥当ですが、最新の `--require-new` 修正後も残る「事前確認後に作られた同名ユーザーを finally で所有物として取得する」競合経路が未検証かつ実装上防止されていないため、diff全体の裏づけとしては不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されていないため、指示どおりブラウザ検証は実施していません。"
+    }
+  }
+}
