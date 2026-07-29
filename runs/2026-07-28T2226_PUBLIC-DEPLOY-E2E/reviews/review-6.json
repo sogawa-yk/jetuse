@@ -1,0 +1,63 @@
+{
+  "review_n": 6,
+  "timestamp": "2026-07-29T04:08:39+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-6.input.diff",
+  "raw_output_path": "reviews/review-6.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker はありませんが、destroy の未完了multipart処理、パスワード設定の曖昧な成功判定、E2E証跡と最終差分の不一致に major があります。主要機能38シナリオは成功していますが、最終版のteardown変更まで裏づける証跡としては不十分です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 3,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "major",
+      "file": "infra/terraform/modules/object-storage/main.tf",
+      "line": 81,
+      "issue": "`oci os multipart abort` は `--object-name` と `--upload-id` が必須ですが、この呼び出しはバケット名しか渡していないため必ず失敗し、さらに `|| true` で隠蔽されます。未完了multipart uploadはバケット削除を妨げるため、アップロード中断後のStack destroyは依然として失敗します（[OCI CLI仕様](https://docs.oracle.com/en-us/iaas/tools/oci-cli/latest/oci_cli_docs/cmdref/os/multipart/abort.html)、[バケット削除条件](https://docs.oracle.com/en-us/iaas/Content/Object/Tasks/managingbuckets_topic-To_delete_a_bucket.htm)）。",
+      "suggestion": "`oci os multipart list`でobject nameとupload IDを列挙し、各組について`multipart abort --object-name ... --upload-id ... --force`を実行してください。未完了multipart uploadを作成した状態からdestroyするテストも追加し、列挙・削除の失敗を無条件に握り潰さないでください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "infra/terraform/modules/identity-domain-app/main.tf",
+      "line": 127,
+      "issue": "`had_transient_failure=1`は「前回PUTがサーバーで成功した証拠」ではなく、認証失敗・接続前失敗・サーバー側未反映の5xxでも設定されます。その後、過去の別パスワードとの履歴衝突が起き、現在値も別のUserPasswordChanger由来で`mustChange=false`なら、要求したパスワードが未設定なのに成功扱いになります。逆に、PUT成功後にlocal-exec自体が中断されると、次回applyでは1回目から履歴違反となり再開不能です。",
+      "suggestion": "`mustChange=false`だけを現在値の証明に使わず、出力パスワードによる実認証など信頼できるpostconditionを確認してください。それができない場合は曖昧な失敗後に成功扱いせず、新しいランダムパスワードへ安全にローテートする再実行設計にしてください。サーバー未反映後の履歴違反と、プロセスをまたぐ応答喪失のテストも必要です。"
+    },
+    {
+      "id": "F003",
+      "severity": "major",
+      "file": "runs/2026-07-28T2226_PUBLIC-DEPLOY-E2E/e2e/source-ref.txt",
+      "line": 2,
+      "issue": "検証対象と記録されたobject `ea3f8811698f301abfa88960c53c4be179a7fa70`には、今回の`object-storage/main.tf`のcleanup追加が含まれず、`identity-domain-app/main.tf`も旧い`app patch --force`のままです。一方、`teardown.txt`は両方の最終修正を実証したと主張しており、証跡のsource provenanceが最終差分と一致していません。ORM zipのSHAだけでは、どのsource treeから生成したかを検証できません。",
+      "suggestion": "全修正後のtree objectを再生成し、そのobjectから決定的にORM zipを作成してsource-refとartifact SHAを更新してください。その同一artifactで、非空バケット、未完了multipart upload、OIDCアプリ非アクティブ化を含むdestroyを再実施し、ログを証跡へ残してください。"
+    },
+    {
+      "id": "F004",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/health.py",
+      "line": 127,
+      "issue": "同一プロセスで一度でも合成に成功すると、その結果を期限なしで信頼して`probe()`を呼びません。また後続の合成失敗時も、既存の成功probe cacheが最大300秒再利用されます。リージョン提供状況や権限が変わった後もTTS healthが古い`ok`を返し得ます。",
+      "suggestion": "合成結果にもtimestampを保持し、`PROBE_TTL_S`を超えた成功は再probeしてください。合成の成功・失敗時には関連するprobe cacheを無効化し、成功後のサービス停止と失敗直後のcache挙動をテストしてください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 38,
+    "adequacy": "insufficient",
+    "notes": "runs/2026-07-28T2226_PUBLIC-DEPLOY-E2E/e2e/e2e-results.jsonではログイン、health、複数モデル、Conversations、RAG、DBチャット、OCR、STT、TTS、管理画面、ページ描画の38/38 PASSを確認でき、アプリ主要経路の裏づけは強いです。SKIPPED.mdのTTSフォールバック未配備とIAM分割未実施には妥当な理由と代替検証があります。ただしsource-refが最終teardown差分と一致しないため、バケットcleanupとOIDCアプリdestroyの証跡は最終コードに結び付けられません。検証Stack、公開OCIR、auth tokenも意図的に残置されているため、確認後の後始末が必要です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されておらず、明示指示に従ってブラウザツールは使用していません。"
+    }
+  }
+}

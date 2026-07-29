@@ -61,6 +61,19 @@ Runtime Policyも事前作成済みなら両方`false`にする。`enable_auth=t
 
 Runtime PolicyにはGenerative AI、Vector Store、ADB、Object Storage、Speech、Document、Language、Logging、Monitoring、Secrets、API GatewayからFunctionsへの呼び出し権限が含まれる。Policy文の正本は [IAM Terraform module](../../infra/terraform/modules/iam/main.tf)。
 
+### `generative-ai-family`に含まれない個別resource-type
+
+agentic API系は`generative-ai-family`に**含まれない**独立したresource-typeで、個別に許可する必要がある。既存IAMを流用する場合は次がすべて含まれているか確認する。
+
+| resource-type | 欠けたときの症状 |
+|---|---|
+| `generative-ai-response` | `POST /openai/v1/responses`が404。既定チャットモデル（responses系）とRAGの引用付き回答が失敗する |
+| `generative-ai-conversation` | 会話メモリ（文脈保持）が毎回失敗しstatelessに縮退する |
+| `generative-ai-vector-store` / `generative-ai-vectorstore-file` / `generative-ai-file` | RAGの文書アップロード・索引化が失敗する |
+| `generative-ai-project` | `OpenAi-Project`が解決できずRAG / Responses / 会話メモリが揃って失敗する |
+
+これらはユーザープリンシパル（テナンシ管理者）では通ってしまうため、resource principalでのみ404になる。切り分けには`GET /api/health`と`GET /api/rag/health`を使う。
+
 ## 既存IAMを使う場合
 
 Dynamic Group名は`prefix`から決まるため、既存名とStackの`prefix`を一致させる。
@@ -88,6 +101,8 @@ SQL Searchを使用しない場合は`enable_semantic_store=false`にする。
 | Runtime Policy作成が403 | 対象コンパートメントのPolicy管理権限がない |
 | Identity Domain作成が403 | `enable_auth=true`だがDomain管理権限がない |
 | Apply後にChat/RAGが403 | Dynamic Group / Runtime Policy不足、prefix不一致、またはIAM反映待ち |
+| 既定モデルが「このリージョン/テナンシでは利用できません(HTTP 404)」 | Runtime Policyに`generative-ai-response`が無い（`generative-ai-family`では代替できない） |
+| 会話の文脈が保持されない | Runtime Policyに`generative-ai-conversation`が無い |
 | `false / true`でPolicyが無効 | 参照する既存Dynamic Groupが存在しない |
 
 IAM反映には数分かかることがある。Apply完了直後にresource principalが認可されない場合は、Dynamic GroupのMatching RuleとPolicyを確認してから5〜10分待つ。

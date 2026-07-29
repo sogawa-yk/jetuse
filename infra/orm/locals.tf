@@ -72,5 +72,11 @@ locals {
     METRICS_NAMESPACE = replace(var.prefix, "-", "_")
     # NL2SQL(SQL Search)。事前作成した Semantic Store の OCID(空なら NL2SQL 無効=503)。
     SEMSTORE_OCID = var.semstore_ocid
+    # 管理ダッシュボード(/admin)の閲覧者。空のままだと is_admin が常に false になり、
+    # ワンクリック配備では誰も /api/admin/usage を開けない(403)。認証有効時は
+    # スタックが作る唯一のログインユーザーを既定の管理者にする。
+    # JWT の subject は Identity Domain のユーザー名なので "demo" を渡す(email claim は空)。
+    # 空白だけの入力で「管理者0人」に落ちないよう trimspace して判定・送出する。
+    ADMIN_USERS = trimspace(var.admin_users) != "" ? trimspace(var.admin_users) : (var.enable_auth ? "demo" : "")
   }
 }

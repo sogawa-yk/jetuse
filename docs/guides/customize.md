@@ -57,7 +57,7 @@
 | `ADMIN_USERS` | 管理ダッシュボード `/admin` を見られるユーザー（sub、カンマ区切り） |
 | `rate_limit_rps` / `rate_limit_key` | API GWレート制限（送信元IP単位/全体） |
 | `LOG_OCID` | OCI Loggingカスタムログへの送信先（未設定でstdoutのみ） |
-| `TTS_REGION` | TTSのリージョン（既定 us-phoenix-1。日本語TTSはPhoenix限定） |
+| `TTS_REGION` | TTSのリージョン。**既定は空＝自動**（デプロイリージョン → us-phoenix-1 の順に試行）。特定リージョンに固定したいときだけ指定する（2026-07-28: us-chicago-1 で合成成功、ap-osaka-1 / ca-toronto-1 は未提供を実測） |
 | `auth_required` / OIDC各種 | 認証の有効化と接続先Identity Domain |
 
 ## ⑧ 新しいエンドポイント/機能の追加

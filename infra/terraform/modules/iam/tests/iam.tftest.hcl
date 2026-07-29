@@ -38,13 +38,22 @@ run "full_public_iam_contract" {
   }
 
   assert {
-    condition     = length(oci_identity_policy.runtime[0].statements) == 23
-    error_message = "Full Public runtime policy must contain the reviewed 23 statements."
+    condition     = length(oci_identity_policy.runtime[0].statements) == 25
+    error_message = "Full Public runtime policy must contain the reviewed 25 statements."
   }
 
   assert {
     condition     = contains(oci_identity_policy.runtime[0].statements, "Allow dynamic-group jetuse-spike-iam01-runtime-dg to manage generative-ai-vector-store in compartment id ocid1.compartment.oc1..publiciamtest")
     error_message = "Runtime policy must allow application-managed Vector Stores."
+  }
+
+  # FIX-58: agentic API(Responses/Conversations)は generative-ai-family に含まれない独立
+  # resource-type。欠けると既定チャットモデル・RAG回答・会話メモリが resource principal で 404 になる。
+  assert {
+    condition = alltrue([for rt in ["generative-ai-response", "generative-ai-conversation"] :
+      contains(oci_identity_policy.runtime[0].statements, "Allow dynamic-group jetuse-spike-iam01-runtime-dg to manage ${rt} in compartment id ocid1.compartment.oc1..publiciamtest")
+    ])
+    error_message = "Runtime policy must allow the agentic API resource types (response / conversation)."
   }
 
   assert {
@@ -100,7 +109,7 @@ run "minimal_without_semantic_store_or_deployer_policy" {
   }
 
   assert {
-    condition     = length(oci_identity_policy.runtime[0].statements) == 17
+    condition     = length(oci_identity_policy.runtime[0].statements) == 19
     error_message = "Minimal runtime policy must contain runtime and ADB statements only."
   }
 

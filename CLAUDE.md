@@ -34,7 +34,7 @@
 - **大阪リージョン（ap-osaka-1）はOpenAI互換 agentic API フル対応**: ベースURL `https://inference.generativeai.ap-osaka-1.oci.oraclecloud.com/openai/v1` 配下に Responses / Conversations / Files / Vector Stores / File Search / Code Interpreter。
 - 認証は IAM署名（`oci-genai-auth` パッケージでopenai-pythonに署名注入）を採用。
 - 大阪のオンデマンドモデル: gpt-oss-120b/20b, command-a-03-2025, command-a-reasoning/vision, gemini-2.5-pro/flash, llama-3.3-70b 等。**Grok系・Llama 4系は大阪不可**（ADR-0001）。
-- OCI Speech: STT（バッチ/リアルタイム）はWhisperモデルで日本語対応。**TTSはPhoenix限定**。
+- OCI Speech: STT（バッチ/リアルタイム）はWhisperモデルで日本語対応。TTSは**Phoenix限定ではない**（2026-07-28実測: us-chicago-1 可 / 大阪・トロント不可）。`TTS_REGION` 未指定ならデプロイリージョン → us-phoenix-1 の順に試行。
 - API GatewayのSSE対応は文書未保証（readTimeout最大300秒）→ SPIKE-02で実測。
 
 ## リポジトリ構成

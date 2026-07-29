@@ -1,0 +1,5 @@
+# 検証デプロイに使ったコンテナイメージ（本差分の作業ツリーからビルドし検証用OCIRへpush）
+# 公開スタックの既定は main の CI がビルドする公開OCIRイメージ。本ファイルは検証の再現用記録。
+api  tag=jetuse-api:final        digest=sha256:471b056490dc27e19e5fb32c6e6198067ef43b16ce68acbaab3121f1c8ab4491
+fn   tag=jetuse-fn-router:final  digest=sha256:221dd0cabfc5a979e834adff6edb6f88d611a11cd7e4b1627dea197262d90471
+orm  zip sha256=32068062edddf5e143a4268ef6e62bc87f41a4c2bb3b7fefb92c8f2458184902

@@ -104,7 +104,7 @@ oci raw-request --target-uri "$BASE/semanticStores/$SS/actions/enrich" --http-me
 - Vector Store: CP `completed` 後もDP可視化まで10〜30秒待つ。docxはunsupported_file
 - SQL SearchはAPIバージョン **`/20260325`**（CLIにデータプレーンコマンドなし、raw-requestで叩く）
 - Speech realtime WHISPER: `modelType=WHISPER`。`shouldIgnoreInvalidCustomizations`/`finalSilenceThresholdInMs` を送ると400。partialなし
-- TTS: Phoenix限定。`modelDetails.languageCode: "ja-JP"` を付けないと日本語ボイスが弾かれる
+- TTS: 提供リージョンは拡大中（Phoenix限定ではない。`TTS_REGION` 未指定ならデプロイリージョン → us-phoenix-1 の順に試行）。`modelDetails.languageCode: "ja-JP"` を付けないと日本語ボイスが弾かれる
 - OCIR: 大阪は `kix.ocir.io`、ユーザー名 `{namespace}/{user}`、auth tokenは**ホームリージョン(us-ashburn-1)で作成**、リポジトリ事前作成必須（無いとpush 403）
 - DBMS_CLOUD.CREATE_CREDENTIAL に渡す秘密鍵は `OCI_API_KEY` マーカー行を除去（ORA-20401の原因）
 - API GWデプロイは `readTimeoutInSeconds: 300` 明示必須（デフォルト10秒）。SSEにはkeepaliveコメント送出を実装すること

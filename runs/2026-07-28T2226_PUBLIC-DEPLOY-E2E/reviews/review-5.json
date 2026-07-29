@@ -1,0 +1,63 @@
+{
+  "review_n": 5,
+  "timestamp": "2026-07-29T02:27:36+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-5.input.diff",
+  "raw_output_path": "reviews/review-5.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "主要な正常系は実環境で広く確認され、認証情報・実OCID・実エンドポイントの混入も見当たりません。ただし、Identity Domainのパスワード再試行には無効な資格情報を成功扱いする境界条件が残り、関連証跡も不十分です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 1,
+    "minor": 3
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "major",
+      "file": "infra/terraform/modules/identity-domain-app/main.tf",
+      "line": 118,
+      "issue": "`pwdpolicyViolation`後の`mustChange=false`は、現在のパスワードが`JETUSE_DEMO_PASSWORD`と一致する証明になりません。別パスワードがUserPasswordChangerで設定済みでもfalseになるため、生成値が履歴にあるだけのケースを成功扱いし、Stack出力の`demo_password`ではログインできない状態を隠します。証跡の`upgrade-path.md`は「1回目からの履歴違反は失敗」と説明していますが、実装にはその判定もありません。",
+      "suggestion": "履歴違反を成功扱いする前に対象パスワードで実認証してください。検証できない場合はapplyを失敗させてパスワードのローテーションを要求し、この分岐をOCI CLIモックまたは実環境でテストしてください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "minor",
+      "file": "infra/terraform/modules/identity-domain-app/main.tf",
+      "line": 99,
+      "issue": "非空の`home_region`は`REGION_ARG=\"--region\" \"ca-toronto-1\"`のように展開され、shellはリージョン名をコマンドとして実行します。失敗後もスクリプトが継続するためE2Eは通り得ますが、`$REGION_ARG`は空のままで、追加したhome region指定がCLIへ渡りません。",
+      "suggestion": "文字列へ引用符込みの引数列を格納せず、条件分岐または安全なPOSIX shell引数構築で`--region \"$HOME_REGION\"`を各CLI呼び出しへ渡してください。レンダリング後のlocal-execを検査するテストも追加してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/health.py",
+      "line": 125,
+      "issue": "同一プロセスで一度TTS合成が失敗すると、`last[\"ok\"] is not None`によりその失敗を無期限に優先し、`tts.probe()`へ戻りません。FastAPI単体構成では一時障害の復旧後も、プロセス再起動または合成成功までhealthが恒久的に`unavailable`になります。",
+      "suggestion": "直近結果に時刻を持たせ、失敗結果はTTL経過後に`tts.probe()`で再評価してください。一時失敗後の回復テストも追加してください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "minor",
+      "file": "runs/2026-07-28T2226_PUBLIC-DEPLOY-E2E/e2e/README.md",
+      "line": 16,
+      "issue": "Stack、検証用OCIRリポジトリ、auth tokenの削除結果を`teardown.txt`へ残すと記載されていますが、添付証跡に同ファイルがありません。多数のIAM・テナンシ関連リソースを作成した検証について、後始末の完了を確認できません。",
+      "suggestion": "マスキング済みの`teardown.txt`と削除後確認を添付してください。未完了ならREADMEを完了表現にせず、残存リソースと担当者を明記してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 39,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-07-28T2226_PUBLIC-DEPLOY-E2E/e2e/e2e-results.json`の38件は全件PASSで、ログイン、health、Responses/Conversations、RAG初回アップロード、DB、OCR、STT、TTS、管理画面など主要経路を網羅しています。加えて`upgrade-path.md`の既存Stack更新1件を確認し、`source-ref.txt`の作業ツリーは提示差分と一致し、image/ORM digestも記録されています。`SKIPPED.md`のTTS PhoenixフォールバックとIAM分割構成の未実施理由・代替検証は妥当ですが、F-001の履歴衝突・応答喪失分岐は証跡の説明と実装が一致せず未検証であり、`teardown.txt`も欠落しているため差分全体の完了証跡としては不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されていないため、指示どおりブラウザE2Eは実施していません。"
+    }
+  }
+}

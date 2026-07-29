@@ -1,0 +1,63 @@
+{
+  "review_n": 2,
+  "timestamp": "2026-07-29T00:55:13+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-2.input.diff",
+  "raw_output_path": "reviews/review-2.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "既存 Stack の更新時に、現在と同じ demo パスワードを UserPasswordChanger へ再設定して apply が失敗する blocker があります。クリーン環境の主要フローは38件すべて成功していますが、更新・再起動・TTS fallback 経路は未検証です。実認証情報、実OCID、未マスクのエンドポイント値の追加は見当たりません。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 1,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "blocker",
+      "file": "infra/terraform/modules/identity-domain-app/main.tf",
+      "line": 92,
+      "issue": "既存 Stack では random_password.demo.result が state 上維持され、既存 demo ユーザーにも旧実装で同じ値が設定済みです。新規追加された terraform_data は更新時にその同一値を UserPasswordChanger へ再投入しますが、差分内の記録どおり Identity Domains は同一パスワードの再設定を password history violation で拒否するため、3回とも失敗して apply が完了しません。また、初回PUTがサーバー側では成功したものの応答だけ失われた場合も、同じ非冪等性により再試行不能です。",
+      "suggestion": "移行時には demo パスワードを一度ローテーションして新しい値を Output に反映してください。加えて、PUT前または失敗後に対象パスワードでの認証を検証し、既に適用済みの場合だけ成功扱いにするなど、provisionerを再実行可能にしてください。旧構成からのStack更新、応答喪失後の再applyをテストしてください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "runs/2026-07-28T2226_PUBLIC-DEPLOY-E2E/e2e/e2e-results.json",
+      "line": 1,
+      "issue": "38件はすべて新規Stackをus-chicago-1へ配備したハッピーパスです。後方互換上重要な既存Stack更新、ORA-28007を踏む既存DBユーザーでのコンテナ再起動、TTSの第1候補失敗からPhoenixへのfallbackが実環境では検証されておらず、SKIPPED.mdによる理由もありません。このため、これらの差分主張をE2E証跡が十分には裏づけていません。",
+      "suggestion": "旧リリースからのStack更新、Container Instance再作成後のDBチャット、TTS未提供リージョンからのfallbackを追加してください。実施できない経路はSKIPPED.mdへ理由、代替検証、残存リスクを記録してください。"
+    },
+    {
+      "id": "F003",
+      "severity": "minor",
+      "file": "infra/orm/locals.tf",
+      "line": 77,
+      "issue": "admin_users の空判定が生文字列に対して行われるため、Resource Managerで空白だけを入力すると既定の demo へfallbackせず、アプリ側では空白が除去されて管理者が0人になります。",
+      "suggestion": "trimspace(var.admin_users) != \"\" で判定し、渡す値もtrimspaceしてください。空文字、空白のみ、前後空白を含むカンマ区切り値のTerraformテストを追加してください。"
+    },
+    {
+      "id": "F004",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/settings.py",
+      "line": 67,
+      "issue": "TTS_REGIONの既定と提供リージョンに関する公開契約を変更していますが、docs/guides/customize.mdなど現行ガイド・アーキテクチャ文書には「既定us-phoenix-1」「Phoenix限定」が残っています。利用者が不要な明示設定や誤ったリージョン設計を行う可能性があります。",
+      "suggestion": "少なくともdocs/guides/customize.md、docs/architecture配下、docs/KNOWLEDGE.mdの現行説明を自動選択仕様へ更新してください。過去の検証レポートは当時の記録として日付付き注記を加える形で区別してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 38,
+    "adequacy": "insufficient",
+    "notes": "runs/2026-07-28T2226_PUBLIC-DEPLOY-E2E/e2e/e2e-results.json は38/38 PASSで、ログイン、IAM追加、RAG初回アップロード、health、TTS実合成、管理画面など新規配備の主要経路を広く確認しています。image-digests.txtとsource-ref.txtも対象イメージ・作業ツリーを識別しています。一方、既存Stack更新、DB再起動時のORA-28007、TTS fallbackは未実施でSKIPPED.mdもありません。またREADME.mdが参照するteardown.txtも添付されていないため、検証リソースの後始末は証跡上確認できません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されておらず、指示に従いブラウザE2Eは実施していません。"
+    }
+  }
+}
