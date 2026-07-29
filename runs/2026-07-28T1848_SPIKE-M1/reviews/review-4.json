@@ -1,0 +1,119 @@
+{
+  "review_n": 4,
+  "timestamp": "2026-07-28T20:32:31+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-4.input.diff",
+  "raw_output_path": "reviews/review-4.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "破壊操作の対象確認と dry-run の無変更保証に複数の欠陥があり、誤ったコンパートメント・ADB・既存バケットを変更または削除し得ます。E2E は4シナリオありますが、データセット汚染と未検証の安全経路があるため、完了主張の裏付けとしては不十分です。",
+  "severity_counts": {
+    "blocker": 5,
+    "major": 5,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "spikes/spike_m1/method_b_select_ai.py",
+      "line": 44,
+      "issue": "COMPARTMENT_OCID が承認済みの jetuse-dev であることを検証せず、そのままバケットを作成している。GenAIプロジェクト作成も同様で、誤った .env により未承認コンパートメントへリソースを作成できる。",
+      "suggestion": "OCI作成処理の共通入口で tenancy・compartment を問い合わせ、承認済みOCIDとの完全一致を必須にする。検証不能時は fail-closed とし、誤コンパートメントの否定E2Eも追加する。"
+    },
+    {
+      "id": "F-002",
+      "severity": "blocker",
+      "file": "spikes/spike_m1/method_b_select_ai.py",
+      "line": 56,
+      "issue": "台帳にない既存バケットでも、変更可能な purpose メタデータだけで「自分のもの」と認定して台帳へ登録する。teardown はその後バケット内の全オブジェクトとバケット自体を削除するため、既存リソースを破壊し得る。",
+      "suggestion": "既存バケットは台帳IDの完全一致時のみ再利用する。タグは補助確認に限定し、台帳にない既存バケットは必ず中止して人間ゲートへ送る。"
+    },
+    {
+      "id": "F-003",
+      "severity": "blocker",
+      "file": "spikes/spike_m1/teardown.py",
+      "line": 121,
+      "issue": "teardown が _clients() を呼び、その内部で ensure_project() がGenAIプロジェクトを新規作成する。プロジェクトだけ先に削除された部分失敗状態では、dry-run でさえ新しいリソースを作成し得る。",
+      "suggestion": "teardown専用のread-onlyクライアント生成処理を用意し、ensure/create系処理を一切呼ばない。プロジェクトが存在しない場合は記録済みIDを用いてスキップまたは失敗扱いにするテストを追加する。"
+    },
+    {
+      "id": "F-004",
+      "severity": "blocker",
+      "file": "spikes/spike_m1/guard_checks.py",
+      "line": 61,
+      "issue": "G2は同名スキーマが存在することを前提に実 setup_schema.py を実行する。teardown後などスキーマが存在しない状態では本物のスキーマ・GRANT・ACL・資格証明を作成し、一時台帳の削除後に追跡不能なリソースを残す。",
+      "suggestion": "実環境の存在状態に依存しないテストシームを追加してDDL直前の判定を検証するか、専用の一意なプローブを永続台帳へ記録し、finallyで確実に片付ける。"
+    },
+    {
+      "id": "F-005",
+      "severity": "blocker",
+      "file": "spikes/spike_m1/common.py",
+      "line": 62,
+      "issue": "接続先ガードがDB_NAMEの末尾 JETUSELOOP2 とリージョンだけを確認しており、同じdb_nameを持つ別ADBも許可する。台帳のdb_schema IDもスキーマ名だけなので、別ADB上の同名ユーザーをALTER/DROPし得る。",
+      "suggestion": "コミット済み定数ではなく .env の期待DB_UNIQUE_NAME等と完全一致させ、ADB_OCIDから取得したDB identity・region・compartmentとも照合する。台帳にもADBの不変IDを含める。"
+    },
+    {
+      "id": "F-006",
+      "severity": "major",
+      "file": "spikes/spike_m1/teardown.py",
+      "line": 106,
+      "issue": "list_objects の認証・通信・権限エラーをすべて「既に無い」とみなして正常終了するため、バケットが残っていても teardown が成功扱いになる。",
+      "suggestion": "NotFoundだけを既削除として扱い、それ以外はFAILURESへ追加する。DB接続失敗など他の参照経路も同じ基準に統一する。"
+    },
+    {
+      "id": "F-007",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_b_refresh_check.py",
+      "line": 56,
+      "issue": "STOP_PIPELINE後にRUN_PIPELINE_ONCEが失敗するとSTART_PIPELINEへ到達せず、パイプラインを停止状態のまま残す。また追加したプローブオブジェクトを削除しないため、再実行ごとに検証データが増える。",
+      "suggestion": "元のパイプライン状態を取得し、try/finallyで必ず復元する。プローブオブジェクトと索引行もfinallyで除去し、除去失敗は非ゼロ終了にする。"
+    },
+    {
+      "id": "F-008",
+      "severity": "major",
+      "file": "spikes/spike_m1/latency.py",
+      "line": 84,
+      "issue": "名前で見つけた既存Vector Storeと$VECTABを件数・内容検証なしで計測している。添付証跡では方式①が11ファイル、方式②が12行で、文書が主張する共通10チャンク条件ではない。検証レポートの7件/10→11件という引用も、添付ログの9件/12→13件と一致しない。",
+      "suggestion": "run固有のクリーンなリソースを使用し、計測直前に期待ファイル名集合、総件数10、Y=7/N=3をassertする。クリーン環境で計測・文書・E2Eを再取得する。"
+    },
+    {
+      "id": "F-009",
+      "severity": "major",
+      "file": "spikes/spike_m1/redact_evidence.py",
+      "line": 54,
+      "issue": "OCIDとnamespaceしか置換せず、禁止されているエンドポイント実値を証跡に残している。添付ログと検証文書にはap-osaka-1のObject Storage/GenAI URLがそのまま含まれる。",
+      "suggestion": "URL・ホスト・DB固有名・その他環境識別子も許可リスト方式でプレースホルダー化し、コミット前に未伏字URL/OCIDを検出して失敗する検査を追加する。"
+    },
+    {
+      "id": "F-010",
+      "severity": "major",
+      "file": "docs/tips.md",
+      "line": 138,
+      "issue": "「本文をDBの外へ出さずにRAGが組める」と記載しているが、実装と他の成果物はUTL_TO_EMBEDDINGが本文をOCI Generative AIのembedTextへ送ると説明しており、重要なデータ経路について矛盾している。",
+      "suggestion": "「アプリ層を経由しないが、埋め込み時にはOCI Generative AIへ送信される」に訂正する。"
+    },
+    {
+      "id": "F-011",
+      "severity": "minor",
+      "file": "docs/comparison/rag-metadata-backends.md",
+      "line": 55,
+      "issue": "方式①の生成込みを5.2秒としているが、同じ文書の表と添付証跡の中央値は3975.9msである。",
+      "suggestion": "3.976秒へ統一するか、5.2秒が別計測なら条件と証跡を明記する。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "insufficient",
+    "notes": "scenario-1/2（method-c-own-index.log）は版フィルタと構造化出典を支持し、scenario-3（method-a-*.log）は属性・フィルタ・ファイル単位属性の限界を支持している。scenario-4（guard-checks.log）はその時点のG1〜G3を通しているが、スキーマ不存在時のG2、誤コンパートメント、同名DB、プロジェクト不存在時のdry-runを未検証。さらに latency.log は方式①=11ファイル、method-b-select-ai.logは12行で共通10件条件を満たさず、数値比較を裏付けない。SKIPPED.mdの対象外理由は概ね妥当。証跡パス: runs/2026-07-28T1848_SPIKE-M1/e2e/。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザE2Eは未実施。"
+    }
+  }
+}

@@ -1,0 +1,135 @@
+{
+  "review_n": 3,
+  "timestamp": "2026-07-28T20:11:55+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-3.input.diff",
+  "raw_output_path": "reviews/review-3.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "機能面の主要3シナリオは実環境証跡で確認できますが、名前一致だけで既存OCIリソースを再利用・削除する経路や、接続先未検証のDDL経路があり、人間ゲート要件を満たしません。また、外部OCI GenAI呼び出しを「本文がADBから出ない」とする説明は実装と矛盾します。",
+  "severity_counts": {
+    "blocker": 5,
+    "major": 8,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "spikes/spike_m1/method_a_vector_store.py",
+      "line": 49,
+      "issue": "同名のVector Storeを所有権確認なしで再利用し、その後ファイルを追加します。同名の既存リソースを変更し得るため、「既存リソースは参照のみ」「既存変更は人間ゲート」に違反します。",
+      "suggestion": "run_id付きの一意な名前で新規作成し、作成したresource IDとownership tagを保存してください。同名が既に存在する場合はfail-closedとし、再利用は明示的な人間承認を要求してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "blocker",
+      "file": "spikes/spike_m1/method_b_select_ai.py",
+      "line": 48,
+      "issue": "create_bucketの全例外を「既存」とみなして続行し、同じキーへput_objectします。既存バケットなら内容を上書きし、認証・接続エラーも誤分類します。",
+      "suggestion": "例外をHTTP status/codeで分類してください。既存バケットの場合は変更せず中止し、run固有バケットを新規作成してownershipを記録してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "blocker",
+      "file": "spikes/spike_m1/teardown.py",
+      "line": 59,
+      "issue": "Vector Store、バケット、GenAI projectを名前だけで特定して削除します。特にPROJECT_NAMEは_client()が実際に解決・作成するprojectと結び付いておらず、同名の無関係な既存projectを削除する可能性があります。",
+      "suggestion": "作成時にresource ID・compartment OCID・run_id tagをmanifestへ保存し、teardownでは三者が一致した対象だけ削除してください。名前だけで発見した対象は人間承認なしに削除しないでください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "blocker",
+      "file": "spikes/spike_m1/common.py",
+      "line": 89,
+      "issue": "connect_spike()はassert_target()を通しません。method_b_select_ai.pyとmethod_c_own_index.pyはこの接続直後にDROP/ALTER/CREATEを実行するため、誤った.envが同名スキーマへ接続できる場合に別DBを変更します。",
+      "suggestion": "書き込み用接続の生成時に必ずtarget検証を実施してください。DB_NAMEとregionだけでなく、OCI APIでADB OCID・tenancy・compartmentが承認対象と一致することも確認してください。"
+    },
+    {
+      "id": "F-005",
+      "severity": "blocker",
+      "file": "spikes/spike_m1/setup_schema.py",
+      "line": 64,
+      "issue": "CREATE USERのORA-01920を無条件で無視した後、既存ユーザーへALTER USER、GRANT、ACL変更を実行します。同名ユーザーが別用途で存在してもパスワードと権限を変更します。",
+      "suggestion": "既存ユーザーを検出したらownership markerを確認し、確認不能なら中止してください。既存ユーザーの採用・変更には別の明示フラグと人間ゲートを設けてください。"
+    },
+    {
+      "id": "F-006",
+      "severity": "major",
+      "file": "docs/comparison/rag-metadata-backends.md",
+      "line": 25,
+      "issue": "「DB内埋め込みなら本文がADBから出ない」とありますが、実装はUTL_TO_EMBEDDINGからOCI Generative AIのembedText endpointへ本文を送信します。ADRの「ADB内で完結」という採用条件も同じ誤りです。",
+      "suggestion": "「アプリへ取り出さず、ADBからOCI Generative AIへ送信する」と訂正してください。ADB内完結を主張する場合は、外部endpointを呼ばないDB内モデル構成を別途検証してください。"
+    },
+    {
+      "id": "F-007",
+      "severity": "major",
+      "file": "spikes/spike_m1/common.py",
+      "line": 70,
+      "issue": "CALL_TIMEOUT_MSをload_env()より前のimport時に評価するため、.envのSPIKE_CALL_TIMEOUT_MSは反映されません。また0や負値を拒否せず、0なら無期限待機を再導入できます。",
+      "suggestion": "load_env()後に値を読み、正の有限範囲であることを検証してからconn.call_timeoutへ設定してください。"
+    },
+    {
+      "id": "F-008",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_a_vector_store.py",
+      "line": 112,
+      "issue": "取り込み待ちはfile_idsではなくStore内の全completed件数を数えています。既存ファイルがあれば対象ファイル未完了でも成功扱いになり、タイムアウト時も警告だけで検索へ進みます。",
+      "suggestion": "渡された各file_idを個別にretrieveし、全件completedを確認してください。failed、cancelled、timeoutはいずれも例外と非ゼロ終了にしてください。"
+    },
+    {
+      "id": "F-009",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_b_select_ai.py",
+      "line": 90,
+      "issue": "VECTABが1行でも入れば構築完了とし、0行のままタイムアウトしても警告だけです。後続処理の失敗も多くが握り潰され、mainは常にexit(0)するため、不完全な検証を成功扱いできます。",
+      "suggestion": "期待した10オブジェクトすべての取り込みとpipeline状態を検証し、未達・後続エラーは例外または非ゼロ終了にしてください。"
+    },
+    {
+      "id": "F-010",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_b_refresh_check.py",
+      "line": 41,
+      "issue": "STOP、RUN、STARTの失敗をすべて握り潰します。START失敗時はpipelineを停止したまま終了し、c11が取り込まれなかった場合もNULLが0件なので「欠損なし」と誤判定します。",
+      "suggestion": "STARTをfinallyで必ず再試行し、各操作の失敗を終了ステータスへ反映してください。c11が正確に1件到着したことを確認してからNULL耐久性を判定してください。"
+    },
+    {
+      "id": "F-011",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_c_own_index.py",
+      "line": 298,
+      "issue": "成功条件はBの旧版が0件であることしか要求せず、Bが0ヒットでもPASSします。current_versionの投入異常や検索失敗で現行版が全く返らない場合に偽陽性になります。",
+      "suggestion": "投入件数がY=7/N=3であること、Bが期待件数を返すこと、全B行がYであること、およびAに旧版と現行版の双方が含まれることをassertしてください。"
+    },
+    {
+      "id": "F-012",
+      "severity": "major",
+      "file": "spikes/spike_m1/setup_schema.py",
+      "line": 91,
+      "issue": "OCI API key fingerprintの実値をログへ出力します。redact_evidence.pyはfingerprintを除去しないため、setupログを証跡化すると認証情報をコミットする方針に抵触します。",
+      "suggestion": "fingerprintを出力しないか完全な固定プレースホルダーにしてください。証跡生成後にfingerprint、DSN、endpoint、OCID等が残っていないことを機械検査してください。"
+    },
+    {
+      "id": "F-013",
+      "severity": "major",
+      "file": "spikes/spike_m1/teardown.py",
+      "line": 97,
+      "issue": "最初にspikeスキーマへ接続するため、部分セットアップや既にDROP済みの状態ではOCIリソースの片付けまで到達できません。また個別DB削除エラーを握り潰したまま最後にdoneを表示します。",
+      "suggestion": "ADB、Object Storage、Vector Store、projectを独立したcleanup段階にし、部分状態でも全段階を試行してください。失敗を集約し、1件でも残れば非ゼロ終了と対象一覧を返してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 3,
+    "adequacy": "insufficient",
+    "notes": "scenario-1〜3、生ログ、latency.log、SKIPPED.mdがあり、①の属性・フィルタ限界、③の版フィルタ対照、構造化出典という中核機能は十分に裏付けています。大規模、Chicago、VPD/JOIN、アプリ配備の未実施理由も明記されています。一方、誤接続・既存リソース衝突・teardownの安全性を確認する否定シナリオがなく、teardown自体も未実施です。また証跡は外部embedText endpoint呼び出しを示しており、「本文がADBから出ない」というdiffの主張を裏付けません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されていないため、指示どおりブラウザE2Eは実施していません。"
+    }
+  }
+}

@@ -1,0 +1,119 @@
+{
+  "review_n": 6,
+  "timestamp": "2026-07-28T21:19:24+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-6.input.diff",
+  "raw_output_path": "reviews/review-6.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "通常系の機能検証と今回の片付け結果は証跡で確認できましたが、SQL接続先と ADB_OCID が同一ADBであることを保証できず、破壊的DDLが別ADBへ向く blocker が残っています。部分失敗時の後始末、ページング、重複データ検知、環境依存エンドポイントの扱いにも修正が必要です。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 9,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "SPIKE-M1-R6-001",
+      "severity": "blocker",
+      "file": "spikes/spike_m1/common.py",
+      "line": 125,
+      "issue": "ADB_OCID から取得したADBの表示名・コンパートメントと、SQL接続から得た DB_NAME の末尾を別々に検査しているだけで、両者が同一ADBであることを結び付けていない。ADB_DSNや再利用されたウォレットが別ADBを指していても、そのADBのDB名が *_JETUSELOOP2ならガードを通過し、CREATE USER・ALTER・DROPを実行できる。G1証跡も同一接続上で期待DB名を変えただけで、この不一致経路を検証していない。",
+      "suggestion": "SQL接続から取得できる不変のDB識別子（DB_UNIQUE_NAME、CLOUD_IDENTITY内のDatabase OCID等）を、ADB_OCIDから解決した識別子と完全一致させる。台帳のschema IDにもgitignore済み領域でADB OCIDまたは同等の不変IDを含め、ADB_OCIDとADB_DSNを意図的に食い違わせる否定E2Eを追加する。"
+    },
+    {
+      "id": "SPIKE-M1-R6-002",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_a_vector_store.py",
+      "line": 48,
+      "issue": "sdk_signer_args(region) は config_file モードでは引数のregionをconfigへ反映しないため、このGenerativeAiClientは.envのap-osaka-1ではなく ~/.oci/config のregionを使用する。設定が異なると検証用プロジェクトを想定外リージョンへ作成する。同じ問題がmethod_b_select_ai.pyのObjectStorageClientとteardown側にもある。",
+      "suggestion": "sdk_signer_args()の戻り値に対して args[\"config\"][\"region\"] = EXPECT_REGION を明示するか、リージョン固定済みの共通クライアント生成関数を使う。作成後もリソースのregionを確認してから台帳へ記録する。"
+    },
+    {
+      "id": "SPIKE-M1-R6-003",
+      "severity": "major",
+      "file": "docs/verification/SPIKE-M1.md",
+      "line": 178,
+      "issue": "Object StorageおよびGenerative AIのエンドポイント実値を成果物とE2Eログに残している。公開サービスURLであっても、tasks/SPIKE-M1.mdとCLAUDE.mdの「エンドポイント実値をコミットせず環境依存値は.env管理」という明示規約に反する。STATE.mdで対応しないとしただけでは人間ゲートによる規約変更にはならない。",
+      "suggestion": "証跡と文書では<OBJECT_STORAGE_ENDPOINT>、<GENAI_ENDPOINT>等へ置換し、リージョンやAPI名は別フィールドで示す。公開エンドポイントを例外にするなら、先に人間承認を得てリポジトリ規約を明示的に改訂する。"
+    },
+    {
+      "id": "SPIKE-M1-R6-004",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_a_vector_store.py",
+      "line": 143,
+      "issue": "Vector Store内のファイルが10件以上なら、chunk_id集合・属性・重複を確認せず全アップロードを省略する。その後のsearch()もAPI成功だけをTrueとし、結果の存在や旧版排除を検証しないため、無関係な10ファイルや属性なしファイルでも方式①が成功終了し得る。",
+      "suggestion": "全ページからファイルとattributesを取得し、chunk_idがc01〜c10と一意に一致し、期待属性も一致する場合だけ再利用する。Responses結果についても無フィルタ時の旧版ヒットとフィルタ時の旧版0件をassertする。"
+    },
+    {
+      "id": "SPIKE-M1-R6-005",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_a_limits.py",
+      "line": 158,
+      "issue": "複数チャンク用ファイルの削除は全検証が正常終了した後にしか呼ばれない。取り込みタイムアウト、検索失敗、属性更新中の想定外例外などではプローブが残留するうえ、cleanup内の削除失敗も終了コード0のままになる。STATE.mdの「プローブ削除を確実化」という主張を実装が満たしていない。",
+      "suggestion": "ファイル作成直後から外側のtry/finallyで関連付けとFiles本体を削除し、削除後の不存在を確認する。片付け失敗は記録して非ゼロ終了させる。"
+    },
+    {
+      "id": "SPIKE-M1-R6-006",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_b_refresh_check.py",
+      "line": 54,
+      "issue": "put_object後に保証されているfinallyはパイプライン再開だけで、プローブオブジェクトと$VECTAB行の削除は正常系末尾にしかない。STOP/RUN/START失敗、取り込みタイムアウト、判定SQL失敗で検証データが残り、後続計測を汚染する。",
+      "suggestion": "put_object以降の処理全体をtry/finallyで囲み、Object Storageと$VECTABの両方を必ず掃除して不存在を確認する。STARTと掃除の複数失敗は集約し、必ず非ゼロ終了する。"
+    },
+    {
+      "id": "SPIKE-M1-R6-007",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_b_refresh_check.py",
+      "line": 91,
+      "issue": "新規プローブ行のcurrent_versionを確認せず、表全体のNULL件数を「同期で入った行のNULL」として報告している。以前の失敗でNULL行が残っていれば、今回のプローブがNULLでなくても制約を再現できたと誤判定する。",
+      "suggestion": "object_nameが今回のstemに一致する行だけを問い合わせ、そのcurrent_versionがNULLであることを判定する。実行前にも同名行と既存NULLがないことをassertする。"
+    },
+    {
+      "id": "SPIKE-M1-R6-008",
+      "severity": "major",
+      "file": "spikes/spike_m1/latency.py",
+      "line": 60,
+      "issue": "各方式の結果をsetへ変換してから件数と集合を比較するため、同じchunk_idの重複行・重複ファイルを消してしまう。さらにVector Storeのfiles.listは1ページ目しか取得しない。したがって添付latency.logの「各方式10件」は実レコード数ではなくdistinct chunk_id数であり、同一10チャンク条件を十分に証明していない。",
+      "suggestion": "全ページの生リストを取得し、総レコード数=10、distinct数=10、各chunk_idの出現回数=1、Y/N内訳=7/3を方式ごとにassertしてから計測する。"
+    },
+    {
+      "id": "SPIKE-M1-R6-009",
+      "severity": "major",
+      "file": "spikes/spike_m1/teardown.py",
+      "line": 164,
+      "issue": "Vector Store配下のfiles.listと削除後確認のcp.vector_stores.listが1ページ目限定である。対象Storeが後続ページにあり削除が失敗した場合でも、1ページ目の確認では不存在と誤認して台帳からforget_createdし、残存Storeの所有情報を失い得る。",
+      "suggestion": "Files一覧も全ページ取得し、Store削除後は一覧検索ではなく対象IDのretrieveを404/DELETEDまで有界ポーリングする。全ファイルとStoreの消滅を確認した場合だけ台帳から削除する。"
+    },
+    {
+      "id": "SPIKE-M1-R6-010",
+      "severity": "major",
+      "file": "spikes/spike_m1/guard_checks.py",
+      "line": 42,
+      "issue": "否定テスト用の固定パスspikes/spike_m1/_guard_probe.pyを無条件にwrite_textで上書きし、finallyでunlinkする。同名ファイルが既に存在した場合、利用者の内容を破壊して削除する。",
+      "suggestion": "TemporaryDirectory内にプローブを作成するかpython -cで実行し、リポジトリ内の固定パスを作成・上書きしない。"
+    },
+    {
+      "id": "SPIKE-M1-R6-011",
+      "severity": "minor",
+      "file": "docs/comparison/rag-metadata-backends.md",
+      "line": 53,
+      "issue": "同じ文書の表とE2E証跡は16.6ms、59.6ms、108.4ms、140.5msだが、説明文には旧計測の24.8ms、54.1ms、168.5ms、198msが残っている。顧客向け比較資料内で数値が矛盾している。",
+      "suggestion": "説明文を現証跡の16.6 + 59.6 ≒ 76ms、DB内埋め込み140.5ms、Vector Store 108.4msへ統一する。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "insufficient",
+    "notes": "runs/2026-07-28T1848_SPIKE-M1/e2e/ のscenario-1〜4、生ログ、latency.log、guard-checks.log、teardown.log、teardown-verify.log、SKIPPED.mdを確認した。版フィルタの対照、構造化出典、Vector Storeの属性・フィルタ制約、今回の通常系teardown成功は裏付けられており、未実施の大規模・Chicago・アプリ配備には妥当な理由がある。一方、ADB_OCIDと実SQL接続の不一致、ページ境界、部分失敗時の掃除、重複レコードは未検証で、latencyの10件表示もset件数にすぎないため、差分全体の完了主張には不十分。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおり実ブラウザE2Eは未実施。"
+    }
+  }
+}

@@ -1,0 +1,135 @@
+{
+  "review_n": 5,
+  "timestamp": "2026-07-28T20:58:49+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-5.input.diff",
+  "raw_output_path": "reviews/review-5.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "実機での主要3方式の結果は概ね裏づけられていますが、所有権ガードを迂回して既存リソースを変更できる経路が複数残っています。また、同一データセットと完全な片付けの主張は添付証跡だけでは確定できません。",
+  "severity_counts": {
+    "blocker": 6,
+    "major": 6,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "SPIKE-M1-001",
+      "severity": "blocker",
+      "file": "spikes/spike_m1/common.py",
+      "line": 73,
+      "issue": "承認済みコンパートメントの判定が親子の名前とリージョンだけです。OCI config が別テナンシを向き、そこにも jetuse/dev が存在する場合に通過して未承認テナンシへリソースを作成できます。",
+      "suggestion": "承認済み tenancy/compartment OCID の非可逆ダイジェストやローカルの人間承認済み allowlist と照合し、名前は補助確認に留めてください。"
+    },
+    {
+      "id": "SPIKE-M1-002",
+      "severity": "blocker",
+      "file": "spikes/spike_m1/setup_schema.py",
+      "line": 72,
+      "issue": "DBスキーマの所有判定キーが DB_NAME:SCHEMA だけで、teardown 後も台帳から失効しません。同じDB上で別利用者が同名ユーザーを再作成すると、古い台帳により自分のものと誤認し、パスワード変更・GRANT・ACL追加や後続の DROP USER が実行されます。",
+      "suggestion": "履歴証跡と有効な所有台帳を分離し、削除成功時に有効所有権を失効させてください。USER_ID・CREATED・作成時nonceなど、再作成を識別できる値も照合してください。"
+    },
+    {
+      "id": "SPIKE-M1-003",
+      "severity": "blocker",
+      "file": "spikes/spike_m1/method_a_vector_store.py",
+      "line": 38,
+      "issue": "既存の PROJECT_OCID が設定されていると、コンパートメント・表示名・台帳・allow_create を一切確認せず再利用します。通常のJetUse用プロジェクトを指定した .env でも、そのプロジェクト配下へFilesを作成するため「既存リソースは参照のみ」に違反します。",
+      "suggestion": "一般設定の PROJECT_OCID はスパイクで再利用せず、専用プロジェクトだけを台帳とAPI実体で検証してください。外部指定を許す場合も、承認済みコンパートメントと台帳IDの一致を必須にしてください。"
+    },
+    {
+      "id": "SPIKE-M1-004",
+      "severity": "blocker",
+      "file": "spikes/spike_m1/method_a_limits.py",
+      "line": 28,
+      "issue": "Vector Storeを名前だけで選択し、所有台帳を確認せずファイル追加・属性更新・削除を行います。同名の既存ストアが台帳外でも変更されます。",
+      "suggestion": "全ページからIDを解決したうえで is_ours(\"vector_store\", vs_id) を必須にし、台帳外または同名複数の場合はfail-closedで中止してください。"
+    },
+    {
+      "id": "SPIKE-M1-005",
+      "severity": "blocker",
+      "file": "spikes/spike_m1/method_b_refresh_check.py",
+      "line": 52,
+      "issue": "BUCKETの所有確認なしで put_object/delete_object を実行し、スキーマ所有確認なしで既存パイプラインをSTOP/RUN/STARTします。upload_fixtures() にある台帳ゲートをこの単独実行スクリプトは迂回しています。",
+      "suggestion": "書き込み前に namespace/bucket ID と db_schema の有効所有台帳を検証する共通ガードを呼び、どちらかが台帳外なら中止してください。"
+    },
+    {
+      "id": "SPIKE-M1-006",
+      "severity": "blocker",
+      "file": "spikes/spike_m1/method_c_own_index.py",
+      "line": 282,
+      "issue": "connect_spike() は接続先ADBしか検証せず、スキーマ所有権を検証しないまま SPIKE_CHUNKS をDROPします。setup_schema.pyを経由せず単独実行できるため、同名スキーマ内の既存オブジェクトを変更できます。",
+      "suggestion": "すべての破壊的スパイクスクリプトで、再作成を識別可能な db_schema 所有ガードをDDL前に必須化してください。"
+    },
+    {
+      "id": "SPIKE-M1-007",
+      "severity": "major",
+      "file": "spikes/spike_m1/teardown.py",
+      "line": 35,
+      "issue": "ap-osaka-1 のサービスエンドポイント実値をコードへ直接コミットしており、検証文書と証跡にも同じ実値が残っています。公開サービスのURLでも、本リポジトリの「エンドポイント実値は .env 管理」という規約に反します。",
+      "suggestion": "GenAI/Object Storage endpointを.envから取得し、ACL hostはそのURLから導出してください。文書と証跡は <OCI_GENAI_ENDPOINT> 等へ置換してください。"
+    },
+    {
+      "id": "SPIKE-M1-008",
+      "severity": "major",
+      "file": "spikes/spike_m1/redact_evidence.py",
+      "line": 54,
+      "issue": "e2e配下を一括置換するため、teardownが制御状態として読む created-resources.json のnamespaceとproject OCIDも破壊します。添付台帳も既に伏字化されており、redact後の再片付けではbucket/project IDが一致せずスキップされます。",
+      "suggestion": "有効な制御台帳はgitignoreされた別場所に保存し、片付け完了後に読み取り専用のredacted snapshotだけを証跡へコピーしてください。少なくとも制御台帳をredact対象から除外してください。"
+    },
+    {
+      "id": "SPIKE-M1-009",
+      "severity": "major",
+      "file": "spikes/spike_m1/latency.py",
+      "line": 58,
+      "issue": "「3方式が同じ10チャンク」という確認は件数しか比較していません。vs_idが無い場合も①を検査せず成功表示し、各方式が異なる10件でも通過します。method_a_vector_store.pyも件数が10以上なら内容を確認せず再利用します。",
+      "suggestion": "Vector Store不在は失敗とし、全ページ取得したchunk ID・filename・sha256の期待集合を3方式すべてで比較してください。可能なら本文ハッシュも照合してください。"
+    },
+    {
+      "id": "SPIKE-M1-010",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_b_refresh_check.py",
+      "line": 95,
+      "issue": "追加したObject Storageプローブと$VECTAB行の削除が正常系にしかありません。RUN失敗、START失敗、取り込みタイムアウト、判定SQL失敗ではプローブが残留します。",
+      "suggestion": "put_object以降全体を外側のtry/finallyで囲み、パイプライン再開・オブジェクト削除・索引行削除を独立実行して失敗を集約してください。"
+    },
+    {
+      "id": "SPIKE-M1-011",
+      "severity": "major",
+      "file": "spikes/spike_m1/teardown.py",
+      "line": 132,
+      "issue": "Vector Store/Filesの一覧が非ページングで、記録IDが返らなくても成功扱いになります。またDELETE受付後の消滅待ちがありません。添付teardown-verify.logもVector StoreとFilesを再照会しておらず、残骸ゼロの主張を裏づけません。",
+      "suggestion": "一覧を全ページ取得し、記録IDごとにDELETE後404または終端状態まで待ってください。検証ログでもVector Store、関連付け、Files実体を再照会し、残存時は非ゼロ終了してください。"
+    },
+    {
+      "id": "SPIKE-M1-012",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_a_vector_store.py",
+      "line": 212,
+      "issue": "必須の検索やResponses呼び出しが失敗しても例外を表示してreturnするだけで、mainは終了コード0になります。同様にmethod_b_select_ai.pyのGENERATE失敗も成功終了するため、不完全な検証を自動処理が完了と誤認できます。",
+      "suggestion": "期待される成功条件を戻り値で集約し、属性検索・フィルタ対照・返却フィールド・Select AI生成の必須条件を満たさなければ非ゼロ終了してください。意図した否定試験だけを例外扱いしてください。"
+    },
+    {
+      "id": "SPIKE-M1-013",
+      "severity": "minor",
+      "file": "spikes/spike_m1/method_a_limits.py",
+      "line": 47,
+      "issue": "取り込み待ちがcompleted以外で終了しても検索と粒度判定を続けます。タイムアウトやfailed状態ではヒット0件などから誤った結論を出せます。",
+      "suggestion": "ループ後にstatus == \"completed\"を必須確認し、failedは即時例外、期限切れはタイムアウトとして終了してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "insufficient",
+    "notes": "scenario-1/2はADBの版フィルタと構造化出典、scenario-3はVector Storeの属性・フィルタ制約、scenario-4はG1〜G3の否定試験を示しており、主要な機能結果は支持しています。latency.logも5回計測値を支持します。一方、G1〜G3はPROJECT_OCID迂回、名前だけで選ぶVector Store、refresh_checkの台帳迂回、削除後に同名スキーマが再作成されるケースを未検証です。また同一データの確認は件数のみで、teardown-verify.logはVector Store/Filesを確認していません。SKIPPED.mdの大規模・Chicago・アプリ配備未実施理由は妥当ですが、これらの安全性・片付け不足は正当化していません。証跡パス: runs/2026-07-28T1848_SPIKE-M1/e2e/scenario-1.md〜scenario-4.md、latency.log、guard-checks.log、teardown.log、teardown-verify.log、SKIPPED.md。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

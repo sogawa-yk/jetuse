@@ -58,3 +58,6 @@ docs/verification/*.html
 
 # 無人 claude 実行ログ（ヘッドレス委譲・ハンドオフ ch.4）
 .agent-runs/
+
+# SPIKE-M1 の検証リソース台帳（OCID を含む運用状態。証跡ではない）
+.spike-m1-registry.json
