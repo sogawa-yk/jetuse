@@ -35,7 +35,19 @@ if (atSignin) {
   await page.locator('#idcs-signin-basic-signin-form-username').fill(USER, { timeout: 30_000 })
   await page.locator('input[type=password]').first().fill(PASS)
   await page.getByRole('button', { name: 'Sign In' }).click()
-  await page.waitForTimeout(8000)
+  // 固定待ちだとリダイレクト（IDCS → authorize → アプリ）が終わる前に判定してしまい、
+  // 以降のAPIが軒並み401になる（2026-07-29 PORT-03 のE2Eで実際に踏んだ）。
+  // アプリのホストに戻るまで待ち、届かなければ従来の固定待ちにフォールバックする。
+  await page
+    .waitForURL((u) => new URL(u).host === new URL(APP).host, { timeout: 60_000 })
+    .catch(() => page.waitForTimeout(8000))
+  // URL が戻った時点ではまだ SPA が認可コードをトークンに交換し終えていないことがあり、
+  // 直後の API 呼び出しが `invalid token: DecodeError` で落ちる。交換完了まで待つ。
+  await page
+    .waitForFunction(() => Object.keys(sessionStorage).concat(Object.keys(localStorage))
+      .some((k) => /oidc|token/i.test(k)), { timeout: 30_000 })
+    .catch(() => {})
+  await page.waitForTimeout(3000)
 }
 await shot('01-after-login')
 const forcedPwChange = /pwdmustchange|pwdexpired/.test(page.url())

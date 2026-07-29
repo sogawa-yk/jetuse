@@ -1,0 +1,79 @@
+{
+  "review_n": 10,
+  "timestamp": "2026-07-29T18:57:02+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-10.input.diff",
+  "raw_output_path": "reviews/review-10.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "OCI が認可失敗も 404 NotAuthorizedOrNotFound で返す点を考慮できておらず、実体を残したまま Terraform state を進める経路が残っています。また、管理外 Deployment のカスケード削除や複数同名リソースの誤処理があり、既存リソース変更禁止を満たしません。認証情報・OCID・エンドポイント実値の新規コミットは見当たりません。",
+  "severity_counts": {
+    "blocker": 4,
+    "major": 2,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "infra/terraform/modules/hosted-agent/scripts/delete_agent.sh",
+      "line": 24,
+      "issue": "`NotAuthorizedOrNotFound`を削除済みとして扱っていますが、OCIは権限不足もHTTP 404と同じコードで返します。DELETE後に権限が失われた場合もdestroyが成功し、Applicationを残したままterraform_dataがstateから除去されます。",
+      "suggestion": "成功したGETで`lifecycleState=DELETED`を確認できた場合だけ完了としてください。404/NotAuthorizedOrNotFoundは曖昧な失敗としてstateを保持し、次回destroyで一覧から不存在を再確認するか、DELETEのwork requestを追跡してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "blocker",
+      "file": "infra/terraform/modules/hosted-agent/scripts/ensure_agent.sh",
+      "line": 35,
+      "issue": "作り直し処理でも`NotAuthorizedOrNotFound`を削除完了と判定します。認可失敗を404として受けた場合、旧Applicationが残ったまま新規POSTへ進み、重複・衝突や収束不能を起こします。",
+      "suggestion": "404/NotAuthorizedOrNotFoundでは新規作成へ進まず非0終了してください。明示的なDELETED確認、次回applyでの一覧不存在確認、認可失敗を注入したテストを追加してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "blocker",
+      "file": "infra/terraform/modules/hosted-agent/scripts/ensure_agent.sh",
+      "line": 131,
+      "issue": "既存Deploymentのowner tagが不一致でも`reuse=no`にするだけで、続く`delete_app_and_wait`が親Applicationを削除します。その結果、管理外Deploymentもカスケード削除され、既存リソース変更には人間ゲートが必要という要件に違反します。",
+      "suggestion": "owner tag不一致は副作用なしで即時失敗させてください。全Deploymentを列挙し、所有済みが一意で管理外Deploymentが混在しない場合だけ、設定不一致によるApplication再作成を許可してください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "blocker",
+      "file": "infra/terraform/modules/hosted-agent/scripts/delete_agent.sh",
+      "line": 33,
+      "issue": "同名Applicationを全件取得しても、処理するのは`head -1`の1件だけです。先頭が管理外で後続にスタック所有Applicationがある場合、所有者不一致として成功終了し、所有Applicationを残したままTerraform stateを除去します。",
+      "suggestion": "全候補のOCID・状態・owner tagを評価してください。所有済みが一意でない、または管理外候補と混在する曖昧な状態ではdestroyを失敗させ、人間ゲートへ回してください。"
+    },
+    {
+      "id": "F-005",
+      "severity": "major",
+      "file": "infra/terraform/modules/hosted-agent/scripts/ensure_agent.sh",
+      "line": 150,
+      "issue": "`image_tag=\"__APP_OCID__\"`は現在のvalidationで許可されます。hostedApplicationIdの置換自体は成功しても、本文全体への`grep '__APP_OCID__'`がtag内の値を検出するため、正当な入力でapplyが失敗します。",
+      "suggestion": "置換後は`\"hostedApplicationId\":\"__APP_OCID__\"`が残っていないことだけを検査するか、JSONパーサーで対象フィールドを更新してください。このimage tagを使う境界テストを追加してください。"
+    },
+    {
+      "id": "F-006",
+      "severity": "major",
+      "file": "runs/2026-07-29T1210_PORT-03/e2e/scenario-4-degraded-results.json",
+      "line": 1,
+      "issue": "添付証跡は旧仕様の`status=unavailable`を6項目で検証しており、今回追加した`status=disabled`、ルート`ok=true`、全8項目を裏づけません。destroy証跡も今回の削除判定変更前で、設定指紋による再作成・認可障害・複数同名候補は未検証です。SKIPPED.mdもありません。",
+      "suggestion": "現差分で無効化構成の8項目を再実行し、設定変更後applyとdestroyを追加してください。404認可失敗、管理外Deployment、複数同名候補は障害注入テストで補い、実施不能な経路はSKIPPED.mdに理由を記録してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-07-29T1210_PORT-03/e2e/`から、非回帰39/39、3 SDK実行9/9、35分アイドル後実行9/9、無効化構成6/6、destroy成功（180 resources）の5シナリオを確認しました。ただしscenario-4は旧`unavailable`仕様、scenario-5は変更前スクリプトの証跡です。今回のfingerprint再利用判定、404と認可失敗の区別、複数候補、管理外Deployment、更新後destroyを裏づける証跡がなく、SKIPPED.mdもないため不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

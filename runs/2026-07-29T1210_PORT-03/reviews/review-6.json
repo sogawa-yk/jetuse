@@ -1,0 +1,39 @@
+{
+  "review_n": 6,
+  "timestamp": "2026-07-29T13:30:22+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-6.input.diff",
+  "raw_output_path": "reviews/review-6.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "静的な修正は概ね整っていますが、公開ZIPのapply・3SDK invoke・scale-to-zero・destroyを裏づける実環境E2E証跡がありません。新たな認証情報、実OCID、実エンドポイントのコミットは確認されませんでした。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1210_PORT-03/e2e/",
+      "line": 1,
+      "issue": "実環境E2E証跡が空で、最低2シナリオもSKIPPED.mdもありません。STATE.mdでもT8を未完としており、公開ZIPからのdefault apply、3SDK実行、コールドスタート、無効化時の縮退、完全destroyという変更の中心経路が未検証です。",
+      "suggestion": "jetuse-devで公開ZIPのdefault apply、OpenAI/LangGraph/ADK各SDKのツール付きinvoke、min_replica=0からの初回実行、無効化時の縮退、完全destroyを実施し、マスク済みログを同ディレクトリへ保存してください。実施不能な経路には具体的理由と代替検証をSKIPPED.mdへ記録してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "insufficient",
+    "notes": "証跡パス runs/2026-07-29T1210_PORT-03/e2e/ は空です。実行結果は0件で、最低2シナリオ要件を満たさず、default apply、3SDK invoke、コールドスタート、縮退、destroyはいずれも裏づけられていません。SKIPPED.mdもありません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されていないため、指示どおりブラウザE2Eは実施していません。"
+    }
+  }
+}

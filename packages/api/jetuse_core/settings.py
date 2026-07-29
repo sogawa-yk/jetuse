@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     agent_openai_app_ocid: str = ""
     agent_langgraph_app_ocid: str = ""
     agent_adk_app_ocid: str = ""
+    # PORT-03: このスタックがホスト型エージェントを配備する構成かどうか。
+    # 「意図的に配備していない」と「配備したのに壊れている」を health で区別するために使う
+    # (前者で /api/health 全体の ok を落とすと、エージェント不要のスタックが常時赤くなる)。
+    hosted_agents_enabled: bool = False
 
     # OPS-02: OCI Logging(カスタムログOCID。空なら送らない) / Monitoring名前空間
     log_ocid: str = ""

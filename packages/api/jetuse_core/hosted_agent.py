@@ -96,24 +96,66 @@ _LEGACY_SDK = {
 }
 
 
+_SDK_LABEL = {"openai_agents": "OpenAI Agents SDK", "langgraph": "LangGraph", "adk": "ADK"}
+
+_OAUTH_KEYS = ("hosted_agent_idcs_domain", "hosted_agent_client_id",
+               "hosted_agent_client_secret", "hosted_agent_scope")
+
+
 def normalize_sdk(framework: str | None) -> str:
     return _LEGACY_SDK.get(framework or "", "openai_agents")
+
+
+def availability() -> dict:
+    """ホスト型エージェントの配備状況(PORT-03)。
+
+    /api/health の capabilities.agents と、実行時の縮退メッセージが同じ判定を共有する。
+    利用者に見せるのは `agent container not configured: missing=[...]` のような内部文字列
+    ではなく、「なぜ使えないか・どうすれば使えるか」の理由にする(PORT-02 の方針)。
+    """
+    s = get_settings()
+    oauth_missing = [k for k in _OAUTH_KEYS if not getattr(s, k)]
+    # 「配備済み」と「実際に呼べる」は別物。OAuth 資格情報が欠けていれば Application OCID が
+    # あっても invoke できないので、sdks は**呼べるか**で答える(review F-011)。
+    deployed = {sdk: bool(getattr(s, attr)) for sdk, attr in _SDK_ATTR.items()}
+    sdks = {sdk: (not oauth_missing) and ok for sdk, ok in deployed.items()}
+    ready = [sdk for sdk, ok in sdks.items() if ok]
+
+    if oauth_missing or not ready:
+        # 認証が無効なスタックには OAuth(client_credentials)の発行元が存在しない。
+        # そこだけは原因が確定できるので、汎用の案内と区別して出す。
+        cause = (
+            "OIDC認証が無効なため、エージェント呼び出しに使う OAuth の発行元(Identity Domain)が"
+            "ありません。認証を有効にして再デプロイしてください"
+            if not s.auth_required else
+            "スタック変数 enable_hosted_agents と、デプロイ先リージョン"
+            "(配備対象は 大阪 ap-osaka-1 / シカゴ us-chicago-1)をご確認ください"
+        )
+        return {"ok": False, "sdks": sdks, "deployed": deployed,
+                "reason": f"このスタックにはホスト型エージェントが配備されていません。{cause}"}
+
+    if len(ready) < len(sdks):
+        missing_labels = "・".join(_SDK_LABEL[s_] for s_, ok in sdks.items() if not ok)
+        return {"ok": True, "sdks": sdks, "deployed": deployed,
+                "reason": f"一部のSDK({missing_labels})が配備されていません"}
+
+    return {"ok": True, "sdks": sdks, "deployed": deployed, "reason": None}
 
 
 def invoke_agent(sdk: str, state: dict) -> dict:
     """SDK選択に応じたホスト型ReActコンテナへステート(system_prompt/enabled_tools/
     input/history/rag_store_id/model)を送り、{output, tool_trace, sdk} を返す。"""
     s = get_settings()
-    missing = [
-        k for k in ("hosted_agent_idcs_domain", "hosted_agent_client_id",
-                    "hosted_agent_client_secret", "hosted_agent_scope")
-        if not getattr(s, k)
-    ]
+    missing = [k for k in _OAUTH_KEYS if not getattr(s, k)]
     attr = _SDK_ATTR.get(sdk)
     app_ocid = getattr(s, attr) if attr else ""
     if missing or not app_ocid:
-        raise HostedAgentNotConfigured(
-            f"agent container not configured: sdk={sdk} missing={missing or 'app_ocid'}")
+        # 内部の欠落キー名は診断用にログへ、利用者へは理由と対処を返す(PORT-03)。
+        logger.warning("hosted agent not configured: sdk=%s missing=%s app_ocid=%s",
+                       sdk, missing, bool(app_ocid))
+        label = _SDK_LABEL.get(sdk, sdk)
+        reason = availability()["reason"] or f"{label} のエージェントが配備されていません"
+        raise HostedAgentNotConfigured(f"{reason}（SDK: {label}）")
     token = _get_token(s)
     url = (
         f"https://inference.generativeai.{s.oci_region}.oci.oraclecloud.com"

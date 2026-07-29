@@ -1,5 +1,20 @@
 # マネージド・ホスト型エージェントのOAuth/認証設定（GAP-04）
 
+> **この文書は dev 環境で手作業したときの記録（2026-06-13時点）です。**
+> **公開スタック（Resource Manager ワンクリック）ではこの手順は不要**で、下記の構成を
+> Terraform が自動で作ります（PORT-03 / ADR-0019）。
+>
+> | 手順 | 公開スタックでの扱い |
+> |---|---|
+> | IDCS OAuthアプリ（client兼resource, audience/scope） | `infra/terraform/modules/hosted-agent` の `oci_identity_domains_app` が作成 |
+> | 資格情報のアプリへの受け渡し | `client_secret` は Terraform の computed 属性。`infra/orm/locals.tf` が `HOSTED_AGENT_*` として注入（tfvarsへの手書き不要） |
+> | Dynamic Group へのホスト型リソース追加 | `modules/iam` の runtime DG に `generativeaihostedapplication` / `generativeaihosteddeployment` を含めて作成 |
+> | Hosted Application / Deployment の作成 | `oci_generative_ai_hosted_application` / `_hosted_deployment` を3SDKぶん `for_each` で作成 |
+> | エージェント画像の用意 | `.github/workflows/release.yml` が `jetuse-agent-{openai,langgraph,adk}` を kix / ord の OCIR へ push |
+>
+> 公開スタックの利用者向けの説明は `docs/setup/orm.md` を参照。
+> **以下は「当時どう手作業したか」の記録**であり、現在の手順書ではありません。
+
 アプリ→OCI Hosted Application（マネージドにホスティングされたエージェント）を invoke するための
 **OAuth 2.0 client_credentials フロー**の設定解説。2026-06-13にエージェントが設定した内容を記録する。
 
