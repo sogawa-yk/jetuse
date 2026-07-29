@@ -3,8 +3,9 @@
 - run_id: `2026-07-29T1210_PORT-03`
 - branch: `feat/PORT-03`（base = `main` / worktree 分離・**push / PR は未実施**）
 - goal: `runs/2026-07-29T1210_PORT-03/goal.txt`
-- review_verdict: `FAIL`（review-8。E2E 証跡は「十分」と判定され、残りはスクリプト堅牢性の指摘）
-- last_review_ref: `runs/2026-07-29T1210_PORT-03/reviews/review-8.json`
+- review_verdict: `FAIL`（review-10。E2E 証跡は「十分」と判定済み。残りは CLI スクリプトの堅牢性で、
+  review-10 の指摘は修正済みだが**再レビューは未実施**。人間ゲートで停止した）
+- last_review_ref: `runs/2026-07-29T1210_PORT-03/reviews/review-10.json`
 - updated_at: 2026-07-29
 
 ## 実機 E2E（DEPLOYTEST / us-chicago-1）— 完了
@@ -44,8 +45,11 @@
 
 ## レビュー履歴
 
-review-1 → review-8。判定の推移:
-`b3/m4/mi1` → `b4/m6/mi1` → `b2/m4` → `b1/m3` → `b1/m0` → （E2E 実施）→ `b3/m4/mi2`。
+review-1 → review-10。判定の推移:
+`b3/m4/mi1` → `b4/m6/mi1` → `b2/m4` → `b1/m3` → `b1/m0` → （E2E 実施）→ `b3/m4/mi2` →
+`b3/m4` → `b4/m2`。E2E 後は CLI スクリプトのエラー処理を詰める往復に入ったため、
+**review-10 の修正を入れた時点で人間ゲートへ出す**ことにした（レビュー往復を無人で続けても、
+実機で再確認しない限り価値が頭打ちになるため）。
 
 review-8 は **E2E 証跡を "sufficient" と評価**したうえで、CLI スクリプトの堅牢性を指摘した。
 対応済み:
@@ -67,8 +71,9 @@ review-8 は **E2E 証跡を "sufficient" と評価**したうえで、CLI ス�
 1. **方式変更の追認**: ADR-0019 は「Terraform で宣言的に組む」前提だったが、上流バグにより
    **OCI CLI 経由の作成 + data source 参照**へ変更した。ADR への追記が要る。
    provider が修正されたら通常の resource へ戻せる。
-2. **再検証の要否**: 上表の堅牢性修正は E2E 成功**後**に入れたため、実機で再確認していない
-   （単体テスト・plan・shell 構文チェックは緑）。マージ前にもう一度 apply → destroy を回すか、
-   受け入れて後続で確認するかの判断。
+2. **再検証の要否（重要度が上がった）**: E2E 成功**後**に、作成・削除の判断ロジックを
+   何度か変更した（404と権限失効の区別 / 設定指紋による再利用判定 / 所有者選択）。
+   モックによるシェル単体テストは追加して緑（CI にも組み込み済み）だが、
+   **実機での再確認はしていない**。マージ前にもう一度 apply → destroy を回すかの判断。
 3. **スコープ拡大**: `image_tag` 統一により API / Functions ルーターの配布も commit SHA 固定になる。
-4. **push / PR**: 未実施。3コミット（実装 / 方式変更 / 検証）。
+4. **push / PR**: 未実施。6コミット（実装 / 方式変更 / 検証 / レビュー修正×3）。
