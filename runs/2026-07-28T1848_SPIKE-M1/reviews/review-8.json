@@ -1,0 +1,95 @@
+{
+  "review_n": 8,
+  "timestamp": "2026-07-28T21:57:17+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-8.input.diff",
+  "raw_output_path": "reviews/review-8.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker は0件のため規則上 PASS です。ただし、環境実値の伏字化漏れと、障害時に検証リソースを残留・誤って台帳から除外しうる major が7件あります。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 7,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "major",
+      "file": "STATE.md",
+      "line": 82,
+      "issue": "「エンドポイント実値をコミットしない」という本タスクの規約に反して、実リージョンを含む完全な Generative AI エンドポイントが記載されています。公開 URL かどうかにかかわらず、規約上は環境依存値です。",
+      "suggestion": "`https://inference.generativeai.<region>.oci.oraclecloud.com` のようなプレースホルダに置換してください。"
+    },
+    {
+      "id": "F2",
+      "severity": "major",
+      "file": "spikes/spike_m1/redact_evidence.py",
+      "line": 49,
+      "issue": "伏字化対象が呼び出し時に指定したサブツリーだけです。記載された実行例どおり `e2e/` のみに適用すると、ログや過去差分を複製する同一 run の `reviews/` が処理されません。また旧 `created-resources.json` を明示的に除外しており、残存時には OCID をそのまま残します。",
+      "suggestion": "常に `runs/<run-id>/` 全体を処理し、運用台帳は既に run 外へ移したため `created-resources.json` の除外を削除してください。処理後に OCID、Vector Store/File ID、DB token、地域ホストの残存スキャンを行い、検出時は非ゼロ終了させてください。"
+    },
+    {
+      "id": "F3",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_a_vector_store.py",
+      "line": 75,
+      "issue": "GenAI Project の作成直後に lifecycle_state が ACTIVE になるのを待たず、その ID を DP クライアントへ渡しています。作成が非同期の場合は直後の Files/Responses が404になり、再実行時には非ACTIVEの同名プロジェクトを無視して重複作成する可能性もあります。preset 経路も lifecycle_state を検証していません。",
+      "suggestion": "作成・preset・台帳再利用の全経路で ACTIVE を有界ポーリングし、FAILED/DELETING/DELETED は即時失敗にしてください。台帳にある同名の CREATING リソースは新規作成せず、待機または明示エラーにしてください。"
+    },
+    {
+      "id": "F4",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_a_limits.py",
+      "line": 164,
+      "issue": "`multi_id` は `multi_chunk_granularity()` が正常終了した後にしか設定されません。同関数内で Files 作成後、attach、取り込み待ち、検索、判定のいずれかが失敗すると finally は cleanup を呼べず、ファイルやアタッチを残します。また cleanup 内の Files 本体削除失敗は、ストアの添付件数が10なら成功終了します。",
+      "suggestion": "作成した file_id を直ちに finally の管理下へ置くよう処理を再構成してください。detach と Files 本体削除の失敗を集約し、Files の retrieve が404になることとストアが基準セットへ戻ったことの両方を確認して、失敗時は非ゼロ終了してください。"
+    },
+    {
+      "id": "F5",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_a_limits.py",
+      "line": 102,
+      "issue": "属性更新と復元を同じ try で囲み、全例外を表示するだけで正常終了します。Y→N が成功した後の N→Y が失敗すると基準データを変更したまま後続計測へ進みます。最初の更新が失敗した場合も「属性更新可」という検証が成立していないのに終了コードへ反映されません。",
+      "suggestion": "元の attributes を保存し、復元を finally で必ず試行してください。更新後と復元後を retrieve で検証し、いずれかの失敗・値不一致を非ゼロ終了にしてください。"
+    },
+    {
+      "id": "F6",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_b_refresh_check.py",
+      "line": 54,
+      "issue": "プローブの `put_object` が try/finally の外です。通信タイムアウトなどでサーバー側だけ作成済みになった場合、cleanup に到達せずオブジェクトが残り、後続の索引同期やレイテンシ条件を汚染します。",
+      "suggestion": "put_object を含めて try/finally で囲み、結果が不確定でも選定済みの object name に対して冪等に削除を試行してください。404は削除済みとして扱い、それ以外の後始末失敗は非ゼロ終了にしてください。"
+    },
+    {
+      "id": "F7",
+      "severity": "major",
+      "file": "spikes/spike_m1/teardown.py",
+      "line": 196,
+      "issue": "Vector Store の削除後確認だけが先頭ページの一覧に戻っています。対象が後続ページに残っていても「消えている」と誤判定して台帳から ID を削除し、以後の teardown で追跡不能になります。添付E2Eはストア1件なのでこの境界条件を検証していません。",
+      "suggestion": "ID指定の retrieve を404または終端状態まで有界待機するか、削除後の一覧も全ページ取得してください。確認できるまでは `forget_created()` を呼ばず、タイムアウト時は台帳を保持して非ゼロ終了してください。"
+    },
+    {
+      "id": "F8",
+      "severity": "minor",
+      "file": "docs/decisions/ADR-0019-rag-metadata-backend.md",
+      "line": 30,
+      "issue": "直前の表と添付 latency 証跡は①=121.5ms、③=約101msまたは192.7msですが、本文には旧値の①=108.4ms、③=76〜140.5msが残っています。",
+      "suggestion": "比較資料・検証レポートと同じく、①=121.5ms、③=約101ms（クライアント埋め込み）／192.7ms（DB内埋め込み）へ統一してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "sufficient",
+    "notes": "scenario-1/2 は `method-c-own-index.log` により旧版対照と構造化出典を、scenario-3 は `method-a-vector-store.log` と `method-a-limits.log` により属性・フィルタ・制限を、scenario-4 は `guard-checks.log` により誤接続・台帳不一致・空台帳 teardown の停止を裏づけています。`latency.log` は3方式が同一10チャンクで各5回計測されたことを示し、`teardown.log` と `teardown-verify.log` は通常系の片付けを確認しています。SKIPPED.md の大規模索引、Chicago、VPD/JOIN、アプリ配備などの未実施理由も妥当です。ただし、上記 findings の途中失敗、複数ページ、非同期 Project 作成は未検証です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されておらず、ブラウザツールを使わないよう明示されているため未実施です。"
+    }
+  }
+}
