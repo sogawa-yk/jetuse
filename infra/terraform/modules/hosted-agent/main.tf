@@ -68,54 +68,121 @@ resource "oci_identity_domains_app" "agent" {
   }
 }
 
-# --- SDK ごとのホスト型アプリケーション ---
-resource "oci_generative_ai_hosted_application" "agent" {
+# --- Hosted Application / Deployment は OCI CLI 経由で作る（provider を使えない） ---
+#
+# oracle/oci 8.24.0（2026-07-29 時点の最新）の `oci_generative_ai_hosted_application` は
+# **必ず失敗する**。リソース作成・削除そのものは成功し work request も SUCCEEDED になるが、
+# provider の待ち受け(`hostedApplicationWaitForWorkRequest`)が
+#   strings.Contains(strings.ToLower(res.EntityType), "hostedapplication")
+# で照合する一方、サービスが返す entityType は **"HOSTED_APPLICATION"**（アンダースコア入り）で、
+# 小文字化しても "hosted_application" にしかならず一致しない。結果 identifier が nil のまま
+# 「work request did not succeed」と誤判定され、リソースは tainted になって次の apply で
+# 削除→再作成→また誤判定、と収束しない（2026-07-29 DEPLOYTEST/us-chicago-1 実機確認）。
+#
+# よって作成・削除は CLI(`oci raw-request`)で行い、**参照はデータソース**で行う
+# （データソースは list/get だけで work request を待たないため影響を受けない）。
+# 判定ロジックのバグは create/update/delete の待ち受けに限られる。
+#
+# CLI は `raw-request` に固定する: Resource Manager 同梱の OCI CLI には
+# `generative-ai hosted-application` サブコマンドが無い版があり得るため専用サブコマンドに依存しない。
+# また `raw-request` は `--query` を無視する（2026-07-29 実測）ので、抽出は grep で行う。
+resource "terraform_data" "agent" {
   for_each = var.sdks
 
-  compartment_id = var.compartment_ocid
-  display_name   = "${var.prefix}-agent-${each.key}"
-  description    = "JetUse ReAct agent container (${each.key} SDK)"
+  # destroy 時の provisioner は self しか参照できないため、必要な値を input に持たせる。
+  input = {
+    region       = var.region
+    compartment  = var.compartment_ocid
+    display_name = "${var.prefix}-agent-${each.key}"
+  }
 
-  # inbound_auth_config は必須。type は "IDCS" ではなく "IDCS_AUTH_CONFIG"
-  # ("IDCS" は 400 Invalid InboundAuthConfigType — 2026-07-29 実機確定)。
-  # ここで突合するのは token の aud と **短いスコープ名**(fqs ではない)。
-  inbound_auth_config {
-    inbound_auth_config_type = "IDCS_AUTH_CONFIG"
-    idcs_config {
-      domain_url = var.idcs_endpoint
-      audience   = local.audience
-      scope      = local.scope_name
+  # 設定が変わったら作り直す（provider 管理ではないので、差分検出はこの指紋が担う）。
+  triggers_replace = [sha256(jsonencode({
+    display_name  = "${var.prefix}-agent-${each.key}"
+    compartment   = var.compartment_ocid
+    region        = var.region
+    idcs_endpoint = var.idcs_endpoint
+    audience      = local.audience
+    scope         = local.scope_name
+    min_replica   = var.min_replica
+    max_replica   = var.max_replica
+    concurrency   = var.target_concurrency_threshold
+    container_uri = "${var.image_registry}/${var.image_repo_prefix}-agent-${each.key}"
+    tag           = var.image_tag
+    env           = var.environment_variables
+  }))]
+
+  provisioner "local-exec" {
+    # 設定 JSON は環境変数で渡す（コマンド行に秘密を置かない）。
+    environment = {
+      JETUSE_AGENT_CONFIG = jsonencode(var.environment_variables)
     }
-  }
+    command = <<-CMD
+      set -eu
+      BASE="https://generativeai.${var.region}.oci.oraclecloud.com/20231130"
+      COMP="${var.compartment_ocid}"
+      NAME="${var.prefix}-agent-${each.key}"
+      TMP="$(mktemp -d)"
+      trap 'rm -rf "$TMP"' EXIT
+      api() { oci raw-request --region "${var.region}" "$@"; }
+      # OCID / 状態の取り出しは grep で行う（raw-request は --query を無視する）。
+      pick_ocid() { grep -oE '"id": "ocid1\.'"$1"'[^"]*"' | head -1 | sed -E 's/.*"(ocid1[^"]*)"/\1/'; }
+      pick_state() { grep -oE '"lifecycleState": "[A-Z_]+"' | head -1 | sed -E 's/.*"([A-Z_]+)"/\1/'; }
 
-  # min_replica=0 でアイドル時のレプリカが 0 になり、使わない利用者に継続課金が発生しない
-  # (ACTIVE 到達後も 0 が保持されることを 2026-07-29 に実機確認 / ADR-0019)。
-  scaling_config {
-    scaling_type                 = "CONCURRENCY"
-    min_replica                  = var.min_replica
-    max_replica                  = var.max_replica
-    target_concurrency_threshold = var.target_concurrency_threshold
-  }
+      # 1) 既存の ACTIVE なアプリがあれば再利用する（再実行を安全にする）。
+      #    削除済みも同名で列挙されるため lifecycleState=ACTIVE で絞る。
+      APP="$(api --http-method GET --target-uri "$BASE/hostedApplications?compartmentId=$COMP&displayName=$NAME&lifecycleState=ACTIVE" 2>/dev/null | pick_ocid generativeaihostedapplication || true)"
 
-  # 設定は環境変数を1本にまとめた JSON で渡し、コンテナ側(agent_env.py)が展開する。
-  #
-  # なぜ1変数ずつ渡さないか(2026-07-29 実機確定):
-  #   provider は environment_variables.value を「JSON として妥当な文字列」しか受け付けない
-  #   (ValidateFunc=StringIsJSON)が、**アンマーシャルせずそのまま** API へ送る。API も文字列を
-  #   verbatim に保存する。よって jsonencode("us-chicago-1") を渡すと、コンテナには
-  #   引用符ごと `"us-chicago-1"` が届いて壊れる。JSON **オブジェクト**なら
-  #   `{"OCI_REGION":"us-chicago-1"}` がそのまま往復することを実機で確認した。
-  # 副次効果として、sensitive な map を for_each に使えない制約(plan が停止する)も回避できる。
-  environment_variables {
-    name  = "JETUSE_AGENT_CONFIG"
-    type  = "PLAINTEXT"
-    value = jsonencode(var.environment_variables)
-  }
+      if [ -z "$APP" ]; then
+        # env の JSON を JSON 文字列として埋め込むためエスケープする（python 等に依存しない）。
+        ESCAPED="$(printf '%s' "$JETUSE_AGENT_CONFIG" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+        cat > "$TMP/app.json" <<JSON
+      {"displayName":"$NAME","compartmentId":"$COMP",
+       "description":"JetUse ReAct agent container (${each.key} SDK)",
+       "scalingConfig":{"scalingType":"CONCURRENCY","minReplica":${var.min_replica},"maxReplica":${var.max_replica},"targetConcurrencyThreshold":${var.target_concurrency_threshold}},
+       "inboundAuthConfig":{"inboundAuthConfigType":"IDCS_AUTH_CONFIG","idcsConfig":{"domainUrl":"${var.idcs_endpoint}","audience":"${local.audience}","scope":"${local.scope_name}"}},
+       "environmentVariables":[{"name":"JETUSE_AGENT_CONFIG","type":"PLAINTEXT","value":"$ESCAPED"}]}
+      JSON
+        APP="$(api --http-method POST --target-uri "$BASE/hostedApplications" --request-body "file://$TMP/app.json" | pick_ocid generativeaihostedapplication)"
+        [ -n "$APP" ] || { echo "failed to create hosted application $NAME" >&2; exit 1; }
+        i=0
+        while [ "$i" -lt 60 ]; do
+          i=$((i + 1))
+          ST="$(api --http-method GET --target-uri "$BASE/hostedApplications/$APP" | pick_state)"
+          [ "$ST" = ACTIVE ] && break
+          case "$ST" in FAILED|DELETED)
+            echo "hosted application $NAME entered $ST (inbound_auth_config の domain URL が実在するか確認してください)" >&2; exit 1 ;;
+          esac
+          sleep 10
+        done
+        [ "$ST" = ACTIVE ] || { echo "hosted application $NAME did not become ACTIVE" >&2; exit 1; }
+      fi
 
-  timeouts {
-    create = "30m"
-    update = "30m"
-    delete = "30m"
+      # 2) デプロイメント（イメージ pull + 脆弱性スキャンを伴うため時間がかかる）。
+      #    1アプリ=1デプロイメントなので、既にあれば作らない。
+      DEP="$(api --http-method GET --target-uri "$BASE/hostedDeployments?compartmentId=$COMP&applicationId=$APP" 2>/dev/null | pick_ocid generativeaihosteddeployment || true)"
+      if [ -z "$DEP" ]; then
+        cat > "$TMP/dep.json" <<JSON
+      {"displayName":"$NAME-dep","compartmentId":"$COMP","hostedApplicationId":"$APP",
+       "activeArtifact":{"artifactType":"SIMPLE_DOCKER_ARTIFACT","containerUri":"${var.image_registry}/${var.image_repo_prefix}-agent-${each.key}","tag":"${var.image_tag}"}}
+      JSON
+        DEP="$(api --http-method POST --target-uri "$BASE/hostedDeployments" --request-body "file://$TMP/dep.json" | pick_ocid generativeaihosteddeployment)"
+        [ -n "$DEP" ] || { echo "failed to create hosted deployment for $NAME" >&2; exit 1; }
+      fi
+      i=0
+      while [ "$i" -lt 120 ]; do
+        i=$((i + 1))
+        BODY="$(api --http-method GET --target-uri "$BASE/hostedDeployments/$DEP")"
+        ST="$(printf '%s' "$BODY" | pick_state)"
+        [ "$ST" = ACTIVE ] && break
+        case "$ST" in FAILED|NEEDS_ATTENTION|DELETED)
+          echo "hosted deployment for $NAME entered $ST" >&2; exit 1 ;;
+        esac
+        sleep 15
+      done
+      [ "$ST" = ACTIVE ] || { echo "hosted deployment for $NAME did not become ACTIVE within 30 minutes" >&2; exit 1; }
+      echo "hosted agent ready: $NAME ($APP)"
+    CMD
   }
 
   lifecycle {
@@ -124,75 +191,39 @@ resource "oci_generative_ai_hosted_application" "agent" {
       error_message = "hosted-agent: min_replica (${var.min_replica}) must not exceed max_replica (${var.max_replica})."
     }
   }
-}
 
-# --- コンテナの配備(イメージ pull + 脆弱性スキャンを伴うため時間がかかる) ---
-resource "oci_generative_ai_hosted_deployment" "agent" {
-  for_each = var.sdks
-
-  compartment_id        = var.compartment_ocid
-  display_name          = "${var.prefix}-agent-${each.key}-dep"
-  hosted_application_id = oci_generative_ai_hosted_application.agent[each.key].id
-
-  # 参照先は JetUse 公開ネームスペースの public OCIR リポジトリ。pull 自体は cross-tenancy で
-  # 行えるが、Dynamic Group 側には公式要件どおり read repos / read vss-family が要る
-  # (modules/iam の hosted_agent_statements — docs/setup/iam.md)。
-  active_artifact {
-    artifact_type = "SIMPLE_DOCKER_ARTIFACT"
-    container_uri = "${var.image_registry}/${var.image_repo_prefix}-agent-${each.key}"
-    tag           = var.image_tag
-  }
-
-  timeouts {
-    create = "60m"
-    update = "60m"
-    delete = "60m"
-  }
-}
-
-# --- destroy 順序の是正 ---
-# **ACTIVE な Hosted Deployment は直接削除できない**。削除できるのは Application で、
-# そのときデプロイメントがカスケード削除される(ops/recreate-agents.sh に実機確定の記録)。
-# ところが Terraform の既定の destroy 順は「依存する側から」なので、Deployment →
-# Application の順に消そうとして最初の1手で失敗する。
-#
-# この terraform_data は Deployment を参照する = Deployment より**先に**destroy される。
-# ここで Application を削除して両方をまとめて消し、後続の provider による delete は
-# 「既に無い」状態で通す。
-#
-# CLI は `oci raw-request`(汎用・古くから存在)を使う。Resource Manager 実行環境に同梱される
-# OCI CLI には `generative-ai hosted-application` サブコマンドが無い版があり得るため、
-# 専用サブコマンドには依存しない(委任トークンでの認証は raw-request でも効く)。
-resource "terraform_data" "cascade_delete" {
-  for_each = var.sdks
-
-  # destroy 時の provisioner は self しか参照できないので、必要な値を input に持たせる。
-  input = {
-    application_uri = "https://generativeai.${var.region}.oci.oraclecloud.com/20231130/hostedApplications/${oci_generative_ai_hosted_application.agent[each.key].id}"
-    sdk             = each.key
-  }
-
-  # Deployment を参照して destroy 順序(この resource が先)を作る。
-  triggers_replace = [oci_generative_ai_hosted_deployment.agent[each.key].id]
-
+  # destroy: ACTIVE なデプロイメントは直接削除できず、アプリ削除でカスケードされる
+  # (ops/recreate-agents.sh の実機記録)。self しか参照できないので名前で引き直す。
   provisioner "local-exec" {
     when    = destroy
     command = <<-CMD
-      set -u
-      oci raw-request --http-method DELETE --target-uri "${self.input.application_uri}" >/dev/null 2>&1 || true
-      # DELETED は GET が 200 を返したまま lifecycleState で示される(404 とは限らない)。
-      # 両方を終了条件にする。
+      set -eu
+      BASE="https://generativeai.${self.input.region}.oci.oraclecloud.com/20231130"
+      api() { oci raw-request --region "${self.input.region}" "$@"; }
+      APP="$(api --http-method GET --target-uri "$BASE/hostedApplications?compartmentId=${self.input.compartment}&displayName=${self.input.display_name}&lifecycleState=ACTIVE" 2>/dev/null | grep -oE '"id": "ocid1\.generativeaihostedapplication[^"]*"' | head -1 | sed -E 's/.*"(ocid1[^"]*)"/\1/' || true)"
+      [ -n "$APP" ] || { echo "hosted application ${self.input.display_name} は既に存在しません"; exit 0; }
+      api --http-method DELETE --target-uri "$BASE/hostedApplications/$APP" >/dev/null
+      # DELETED でも GET は 200 を返す（404 とは限らない）ので lifecycleState で判定する。
       i=0
       while [ "$i" -lt 60 ]; do
         i=$((i + 1))
-        if ! body="$(oci raw-request --http-method GET --target-uri "${self.input.application_uri}" 2>/dev/null)"; then
-          exit 0   # GET 自体が落ちる = 消えている
-        fi
-        case "$body" in *'"lifecycleState": "DELETED"'*|*'"lifecycleState":"DELETED"'*) exit 0 ;; esac
+        ST="$(api --http-method GET --target-uri "$BASE/hostedApplications/$APP" 2>/dev/null | grep -oE '"lifecycleState": "[A-Z_]+"' | head -1 | sed -E 's/.*"([A-Z_]+)"/\1/' || echo GONE)"
+        case "$ST" in DELETED|GONE) exit 0 ;; esac
         sleep 12
       done
-      echo "hosted application (${self.input.sdk}) did not reach DELETED within 12 minutes" >&2
+      echo "hosted application ${self.input.display_name} did not reach DELETED" >&2
       exit 1
     CMD
   }
+}
+
+# 作成済みリソースの OCID は**データソース**で取る（work request を待たないので provider バグの影響外）。
+data "oci_generative_ai_hosted_applications" "agent" {
+  for_each = var.sdks
+
+  compartment_id = var.compartment_ocid
+  display_name   = "${var.prefix}-agent-${each.key}"
+  state          = "ACTIVE"
+
+  depends_on = [terraform_data.agent]
 }

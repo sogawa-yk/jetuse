@@ -15,12 +15,12 @@ output "scope" {
 }
 
 # SDK キー -> Hosted Application OCID。呼び出し元が AGENT_<SDK>_APP_OCID へ配線する。
-# デプロイメントが ACTIVE になる前に OCID を配ると invoke が失敗するため、
-# デプロイ完了に依存させてから出す。
+# 実体は CLI で作っているため、OCID はデータソース(ACTIVE で名前一致)から引く。
+# terraform_data.agent はデプロイメントが ACTIVE になるまで待ってから完了するので、
+# ここに値が入る時点で invoke 可能な状態になっている。
 output "app_ocids" {
   value = {
-    for k, app in oci_generative_ai_hosted_application.agent :
-    k => app.id
+    for k, d in data.oci_generative_ai_hosted_applications.agent :
+    k => one([for item in d.hosted_application_collection[0].items : item.id])
   }
-  depends_on = [oci_generative_ai_hosted_deployment.agent]
 }
