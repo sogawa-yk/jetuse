@@ -43,6 +43,9 @@ cp .env.example .env        # 値は管理者/チームから受領して記入(
 
 ポイント:
 - `.env` と `~/.oci/config` の実値は**絶対にコミットしない**(CLAUDE.md)。雛形は `.env.example`。
+- `~/.oci/config` を使うのは**手元のPythonプロセスのOCI署名だけ**。DBの中で `DBMS_CLOUD` /
+  `DBMS_CLOUD_AI` が使う資格情報はADB自身の身分 `OCI$RESOURCE_PRINCIPAL` で、APIキーをDBへ
+  焼き込む手順はもう無い(ADR-0021)。有効化は `ops/setup-dev-schema.py` が行う。
 - ADBは**夜間停止**運用。作業前に起動確認: `bash ops/start-adb-if-stopped.sh`(「送信無反応/保存失敗(503)」の常連原因)。
 
 ## 3. ローカルで動かす
@@ -91,7 +94,7 @@ cd packages/web && npm run build && npm run lint
 → 手順は **[dev-environments.md](./dev-environments.md)** を参照。要約:
 
 ```bash
-.venv/bin/python ops/setup-dev-schema.py --dev <you>     # 専用スキーマ作成(初回)
+.venv/bin/python ops/setup-dev-schema.py --dev <you>     # 専用スキーマ作成(再実行可)
 cp infra/terraform/environments/app/alice.tfvars.example \
    infra/terraform/environments/app/<you>.tfvars         # 値を記入
 ops/dev-env-up.sh <you>     # build/push→plan確認→apply→SPA配信→URL表示

@@ -1,0 +1,12 @@
+{
+  "run_id": "2026-07-29T1605_RP-01",
+  "task_file": "tasks/RP-01.md",
+  "goal_condition_path": "runs/2026-07-29T1605_RP-01/goal.txt",
+  "loop_config_snapshot": { "stage": "report-only" },
+  "isolation": { "worktree": true, "working_tree": "/Users/sogawa/Documents/GitHub/jetuse-loops/RP-01" },
+  "tool_versions": { "claude_code": "2.1.220", "codex": "0.144.1" },
+  "started_at": "2026-07-29T16:05:19+09:00",
+  "ended_at": null,
+  "outcome": "in_progress",
+  "totals": { "turns": 0, "tokens": 0, "reviews": 0, "review_fail": 0 }
+}

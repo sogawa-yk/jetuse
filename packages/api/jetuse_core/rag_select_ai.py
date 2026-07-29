@@ -4,7 +4,8 @@ SPIKE-08実機確定:
 - ベクトル索引はADB 23ai+必須(19cはORA-20047)
 - 索引はバケットURL直結(RAG-01の原本バックアップ rag/{owner}/ を共用)
 - GENERATEの応答末尾に "Sources:" ブロックが自動付与される
-前提: ops/setup-select-ai.py によるADMINセットアップ(権限+JETUSE_OCI_CRED)が済んでいること。
+前提: ops/setup-select-ai.py によるADMINセットアップ(権限+リソースプリンシパル有効化)が
+済んでいること。DB内の資格情報は OCI$RESOURCE_PRINCIPAL に統一(ADR-0021)。
 """
 
 import hashlib

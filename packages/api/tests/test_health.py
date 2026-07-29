@@ -107,7 +107,8 @@ def test_dbchat_health_survives_sample_check_crash(monkeypatch):
 
 
 def test_speech_health_unavailable_without_bucket(monkeypatch):
-    monkeypatch.delenv("SPEECH_BUCKET", raising=False)
+    # delenv だけでは Settings が .env(env_file) から拾い直す(上の COMPARTMENT_OCID と同じ理由)
+    monkeypatch.setenv("SPEECH_BUCKET", "")
     get_settings.cache_clear()
     out = health.speech_health()
     assert out["status"] == "unavailable"

@@ -331,9 +331,14 @@ def require_owned_store(vs_id: str, name: str) -> None:
 def oci_api_key(profile: str = "") -> dict[str, str]:
     """~/.oci/config から**指定プロファイルだけ**を読む。
 
-    ops/setup-select-ai.py / setup-dev-schema.py の parser は全行を1つの dict に潰すため、
-    複数プロファイルがある config では最後のプロファイルの値を拾ってしまう（実機で発覚:
+    かつて ops/setup-select-ai.py / setup-dev-schema.py の parser は全行を1つの dict に潰すため、
+    複数プロファイルがある config では最後のプロファイルの値を拾ってしまった（実機で発覚:
     DBMS_CLOUD の全呼び出しが ORA-20404 = OCI の NotAuthorizedOrNotFound になる）。
+
+    **ops はこの方式を使わなくなった**（RP-01 / ADR-0021。DB 内の資格情報は
+    OCI$RESOURCE_PRINCIPAL に統一し、API キーを DB へ焼き込む経路ごと廃止した）。
+    ここに残しているのは SPIKE-M1 の実行結果を当時のまま再現するためで、
+    新しいコードでこの関数を真似ないこと。
     """
     want = (profile or os.environ.get("OCI_PROFILE") or "DEFAULT").upper()
     conf: dict[str, str] = {}

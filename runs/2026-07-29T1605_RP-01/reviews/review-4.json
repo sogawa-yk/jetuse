@@ -1,0 +1,63 @@
+{
+  "review_n": 4,
+  "timestamp": "2026-07-29T17:14:29+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-4.input.diff",
+  "raw_output_path": "reviews/review-4.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "リソースプリンシパル化の正常系は十分に検証されていますが、E2E teardown の所有権ゲートに既存スキーマを削除し得る抜けがあるため FAIL です。資格情報確認SQLと異常終了時のウォレット処理にも改善が必要です。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 2,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 640,
+      "issue": "teardown は開始時にアプリスキーマだけを検証した後、最終的に両ユーザーを台帳上の名前だけで DROP している。query_schema は作成時刻を一度も照合せず、アプリスキーマも長い索引・バケット削除後には再照合しないため、同名ユーザーが再作成された stale ledger／TOCTOU 状態で他者の既存スキーマを削除できる。",
+      "suggestion": "各 DROP USER の直前に、対象ごとの作成時刻と固有マーカーまたは USER_ID を台帳と再照合する。1件でも不一致なら全ユーザー削除を中止し、query_schema の再作成とアプリスキーマの途中差し替えを扱う否定テストを追加する。"
+    },
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "ops/_adb.py",
+      "line": 187,
+      "issue": "リソースプリンシパル付与確認が DBA_TAB_PRIVS の OWNER を限定していない。別スキーマに同名の OCI$RESOURCE_PRINCIPAL オブジェクトと EXECUTE grant があると、ADMIN 所有資格情報への付与が欠けていても成功と誤判定する。",
+      "suggestion": "条件に OWNER = 'ADMIN' を追加し、別 OWNER の同名grantだけが存在する場合に失敗する単体テストを追加する。"
+    },
+    {
+      "id": "M-002",
+      "severity": "major",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 654,
+      "issue": "ウォレットとDBパスワードファイルの削除は teardown が完全成功した場合だけ実行される。failed が非空の場合や途中で例外・SystemExitが発生した場合、生成した認証資材が /tmp に残る。",
+      "suggestion": "teardown全体を try/finally で囲み、成功・失敗を問わず purge_wallet() を実行する。必要なら再試行時に ensure_wallet() で再生成する。"
+    },
+    {
+      "id": "m-003",
+      "severity": "minor",
+      "file": "ops/setup-dev-schema.py",
+      "line": 48,
+      "issue": "明示指定されたパスワードを引用符内へ直接補間しているため、ダブルクォートや改行を含む有効なパスワードではSQLが壊れ、内容によっては意図しないDDLになる。ALTER USER側にも同じ問題がある。",
+      "suggestion": "Oracle識別子として安全にエスケープする共通関数を使用するか、受け付けない文字を明示的に拒否する。引用符・空白・改行を含む境界テストを追加する。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "insufficient",
+    "notes": "scenario-1（2回連続セットアップ）、scenario-2（Object Storage 200）、scenario-3（索引作成・2文書検索）、scenario-4（旧資格情報との対照）、guard（stale ledger否定）の全5本がPASS。証跡は runs/2026-07-29T1605_RP-01/e2e/scenario-1..4.log、guard.log、teardown.log、post-teardown-state.log。機能上の主張と複数シナリオ要件は満たし、未配備の理由もSKIPPED.mdで妥当だが、guardがquery_schemaのstale ledgerとDROP直前の再照合欠如を網羅しておらず、安全な片付けの裏付けとしては不十分。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザE2Eは未実施。"
+    }
+  }
+}
