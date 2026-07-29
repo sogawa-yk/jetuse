@@ -1,0 +1,103 @@
+{
+  "review_n": 8,
+  "timestamp": "2026-07-29T18:36:46+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-8.input.diff",
+  "raw_output_path": "reviews/review-8.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "5本の実環境E2Eは正常系・3SDK・縮退・destroyを十分に裏づけています。一方、OCI API失敗時に重複作成またはTerraform stateだけを消すライフサイクル不備があり、外部リソースの安全な管理と再収束を保証できません。",
+  "severity_counts": {
+    "blocker": 3,
+    "major": 4,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "infra/terraform/modules/hosted-agent/scripts/ensure_agent.sh",
+      "line": 37,
+      "issue": "Application/Deploymentの一覧GETを`api ... | pick_ocid || true`で処理しているため、401・5xx・通信失敗も「該当リソースなし」と区別できません。既存Applicationがある状態で一時的にGETだけ失敗すると、POSTによる重複作成へ進み、同名の既存リソースを安全に扱えません。",
+      "suggestion": "OCI CLIの終了コードとレスポンスをpipelineの外で取得し、成功した空一覧だけを「なし」と扱ってください。401/403は即失敗、429/5xx・通信失敗は再試行し、ApplicationとDeployment双方について障害注入テストを追加してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "blocker",
+      "file": "infra/terraform/modules/hosted-agent/scripts/delete_agent.sh",
+      "line": 21,
+      "issue": "destroy時の一覧GETもAPI失敗を空結果として扱い、所有権確認GETの失敗も「管理外」としてexit 0します。この場合、実リソースを残したまま`terraform_data`だけがstateから除去され、以後Terraformから回収できない孤児になります。",
+      "suggestion": "成功した404または空一覧だけを削除済みと判断してください。認証・通信・5xxエラーや所有権を確認できない場合はdestroyを失敗させ、stateを保持したまま再試行可能にしてください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "blocker",
+      "file": "infra/terraform/modules/hosted-agent/scripts/ensure_agent.sh",
+      "line": 104,
+      "issue": "既存Deploymentを状態・所有者タグ・artifact設定を検証せず再利用します。Deployment作成後にFAILED/NEEDS_ATTENTIONとなるとcreate provisioner失敗で`terraform_data`がtaintedになり、次回applyでも同じFAILED Deploymentを拾って直ちに失敗するため、コメントで主張する自己修復が成立しません。",
+      "suggestion": "既存Deploymentのowner tag、Application OCID、artifact URI/tag、状態を検証してください。所有済みのFAILED/NEEDS_ATTENTIONまたは設定不一致ではApplicationを確実にカスケード削除してから再作成し、失敗後の再applyが収束するテストを追加してください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "major",
+      "file": "docs/setup/iam.md",
+      "line": 108,
+      "issue": "既存IAM向け手順はDynamic Groupへ追加する型を`generativeaihostedapplication`と`generativeaihosteddeployment`の2つだけとしていますが、新規IAM経路と同じく`generativeaihostedapplicationiam`も必要と説明されています。この手順どおりに設定して確認フラグを有効化すると、planは通ってもresource principal取得に失敗します。",
+      "suggestion": "既存IAM用matching rule、`existing_iam_covers_hosted_agents`の説明、preconditionメッセージすべてに3つ目のresource typeを追加し、この構成を契約テストで固定してください。"
+    },
+    {
+      "id": "F-005",
+      "severity": "major",
+      "file": "infra/terraform/modules/hosted-agent/scripts/ensure_agent.sh",
+      "line": 74,
+      "issue": "API request JSONを未引用heredocと手作業のsed escapingで生成しています。`JETUSE_AGENT_CONFIG`はquoteとbackslashしかescapeせず、改行・tab等のJSON制御文字を扱えません。他の文字列フィールドもJSON escapeされないため、許可されたTerraform入力によってrequestが壊れる境界があります。",
+      "suggestion": "Terraformの`jsonencode`またはJSONエンコーダでrequest全体を生成し、shell heredocによる文字列連結を廃止してください。quote、backslash、改行、Unicodeを含む入力のテストも追加してください。"
+    },
+    {
+      "id": "F-006",
+      "severity": "major",
+      "file": "ops/e2e/agents-degraded.mjs",
+      "line": 45,
+      "issue": "エージェント作成に失敗して`id`が空の場合、実行時縮退の2検証を記録せず、そのまま残り4件だけで成功判定します。中心経路である「実行時に理由を返す」が未実施でもE2Eが4/4 PASSになり得ます。",
+      "suggestion": "作成結果とID取得を必須assertionとして記録し、IDが無い場合もFAILを追加してください。常に期待する6件が実行されたことも終了条件に含めてください。"
+    },
+    {
+      "id": "F-007",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/health.py",
+      "line": 164,
+      "issue": "ホスト型エージェントを意図的に無効化した構成や対象外リージョンでも`agents.status=unavailable`が追加され、既存の集約ロジックにより`/api/health`全体の`ok`がfalseになります。大阪・シカゴ以外の既存正常スタックが更新だけでunhealthy表示になる後方互換性問題ですが、縮退E2Eはルートの`ok`を検証していません。",
+      "suggestion": "意図的な無効化を故障と区別できる設定をAPIへ渡し、`disabled`を集約対象外にする等の仕様を定義してください。対象外リージョン、明示無効化、設定欠損故障の各ケースでルート`ok`をテストしてください。"
+    },
+    {
+      "id": "F-008",
+      "severity": "minor",
+      "file": "runs/2026-07-29T1210_PORT-03/e2e/scenario-5-destroy.log",
+      "line": 2,
+      "issue": "実テナンシ固有のObject Storage namespace `yzogactgo3xm`がマスクされずコミットされています。認証情報ではありませんが、環境依存値をコミットしない方針およびSTATE.mdの「漏れ無し」主張と一致しません。",
+      "suggestion": "`<OS-NAMESPACE>`へマスクし、E2E証跡のサニタイズ検査対象にObject Storage namespaceとローカル絶対パスも追加してください。"
+    },
+    {
+      "id": "F-009",
+      "severity": "minor",
+      "file": "STATE.md",
+      "line": 6,
+      "issue": "E2E 5シナリオとverification reportが同じ差分に追加済みなのに、review-6を最新として「E2E未実施のみ」「シナリオ3〜5未完」と記載しています。引き継ぎ状態が実際の証跡と矛盾します。",
+      "suggestion": "最新レビュー、E2E結果、未完一覧を現在の状態へ更新し、重複している「実機で確定した事実」節も整理してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "sufficient",
+    "notes": "`runs/2026-07-29T1210_PORT-03/e2e/`の5シナリオを確認。既存機能39/39、3SDKのツール付きinvoke 9/9、35分アイドル後の実行、無効化構成6/6、Resource Manager destroy成功を網羅しており、最低2本要件と中心経路を満たします。ただし同名衝突、OCI API失敗、FAILED Deploymentからの再applyは未検証です。またコールドスタート証跡は35分アイドル後の遅延を示しますが、レプリカが実際に0だったことは直接観測していません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

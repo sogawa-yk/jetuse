@@ -11,7 +11,7 @@ Issue #47 の「切り分け不能」問題のアプリ全域での根治。
 
 from typing import Any
 
-from . import nl2sql, rag, tts
+from . import hosted_agent, nl2sql, rag, tts
 from .bootstrap import resource_principal_status
 from .models import MODELS, model_status
 from .settings import get_settings
@@ -136,6 +136,27 @@ def tts_health() -> dict[str, Any]:
     }
 
 
+def agents_health() -> dict[str, Any]:
+    """ホスト型エージェント(PORT-03)。配備状況は hosted_agent.availability() が単一の判定源。
+
+    実 invoke は課金対象かつコールドスタートを起こすため health からは呼ばない
+    (他の capability と同じく設定の充足だけを見る)。
+    """
+    avail = hosted_agent.availability()
+    sdks = {sdk: _check(ok, "未配備" if not ok else None) for sdk, ok in avail["sdks"].items()}
+    if not avail["ok"]:
+        # 「配備しない構成」と「配備したのに壊れている」は別物。前者を故障として扱うと、
+        # エージェントを使わないスタック(認証無効・対象外リージョン)が常時 unhealthy になる。
+        status = "unavailable" if get_settings().hosted_agents_enabled else "disabled"
+    else:
+        status = "ok" if all(avail["sdks"].values()) else "degraded"
+    return {
+        "status": status,
+        "sdks": sdks,
+        **({"hint": avail["reason"]} if avail["reason"] else {}),
+    }
+
+
 def capability_health() -> dict[str, Any]:
     chat = chat_health()
     capabilities = {
@@ -145,6 +166,8 @@ def capability_health() -> dict[str, Any]:
         "speech": speech_health(),
         "ocr": ocr_health(),
         "tts": tts_health(),
+        "agents": agents_health(),
     }
-    ok = all(c["status"] == "ok" for c in capabilities.values())
+    # "disabled" は「このスタックでは使わない」の表明なので、全体の ok からは除外する。
+    ok = all(c["status"] in ("ok", "disabled") for c in capabilities.values())
     return {"ok": ok, "capabilities": capabilities}

@@ -100,6 +100,43 @@ OCI Enterprise AIの**ホスト型アプリケーション**: OCIRのコンテ�
 - 実機確定: inbound-auth-configは必須かつIDCS一択 / 環境変数typeはPLAINTEXT / deploymentのlifecycle-stateにCLI未知enum（NEEDS_ATTENTION）あり→raw-requestで監視 / イメージpullに `read repos` ポリシー+動的グループ追加が必要（適用済み・反映5〜10分） / **invoke URL（未文書）= `https://inference...oci.oraclecloud.com/20251112/hostedApplications/{OCID}/actions/invoke/{パス}`、IDCS Bearer認証**
 - 状態: **完了（2026-06-12 invoke E2E成功・6.3秒・リソースプリンシパルでLLM呼び出し動作）**。アプリ統合（エンドポイントをツールとして呼ぶ）は**Phase 9（エージェントFW対応）の実行基盤**として実施
 - 詳細: docs/verification/agt-04.md
+
+### [PORT-03] 公開スタックからの配備（2026-07-29 実装）
+
+公開 ORM スタックが 3SDK のホスト型エージェントを**手動作業ゼロ**で配備する。
+配備条件は `enable_hosted_agents=true` かつ **認証有効**（OAuth の発行元が要る）かつ
+**デプロイ先が大阪 / シカゴ**（エージェント画像の push 先かつ GenAI 実証済み）。
+条件を満たさない構成では作らず、`GET /api/health` の `capabilities.agents` が
+`disabled`（意図的な未配備。全体の `ok` には影響させない）を返す。
+配備したのに設定が欠けている場合だけ `unavailable`（＝故障）とする。
+
+**作成手段は暫定的に OCI CLI を使う。provider が修正されたら標準 resource へ戻す。**
+
+- 理由と戻す条件・手順は **ADR-0019 の追記節が正本**。要約すると、oracle/oci 8.24.0 の
+  `oci_generative_ai_hosted_application` は work request の完了判定を誤り（`HOSTED_APPLICATION`
+  と `hostedapplication` の照合ミスマッチ）、リソースが正常に作られても必ず失敗扱いになり、
+  tainted → 削除 → 再作成で収束しない。
+- 現行の構成: 作成・削除は `infra/terraform/modules/hosted-agent/scripts/{ensure,delete}_agent.sh`
+  （`oci raw-request`）、OCID の参照は data source `oci_generative_ai_hosted_applications`。
+  作成したリソースには所有者タグ `jetuse-owner` と設定指紋 `jetuse-config` を付け、
+  **タグが一致しないリソースには触れない**（同名の既存リソースを取り込まない・削除しない）。
+- 戻すときは state 移行（CLI で作った実体は state に無い）を必ず用意する。
+- 追跡は **Issue #98**（provider 修正後に標準 resource へ戻す）。
+
+その他の実機確定事項:
+
+- コンテナ設定は **`JETUSE_AGENT_CONFIG`（JSON オブジェクト1本）** で渡し、コンテナ側
+  `agent_env.py` が `os.environ` へ展開する。1変数ずつ渡すと**値に引用符が残る**
+  （provider が JSON 検証だけしてアンマーシャルせず送り、API も verbatim 保存するため）。
+- API / Functions ルーター / 3SDK エージェントの画像は**単一の `image_tag`** で揃える。
+  invoke ステート（`project_ocid` 等）の契約を共有するため、別リリースに割ってはいけない。
+- runtime Dynamic Group には `generativeaihostedapplication` /
+  `generativeaihostedapplicationiam` / `generativeaihosteddeployment` の3種と、
+  `read repos` / `read vss-family` が要る（公式の配備要件）。
+- ACTIVE な Deployment は直接削除できず、Application 削除でカスケードされる。
+- コールドスタート（`min_replica=0`）は 35分アイドル後で 5.5〜6.4 秒。
+  `hosted_agent.py` の httpx timeout（180秒）で足りる。
+- 検証: `docs/verification/PORT-03.md`
 ## [AGT-05] 長期メモリ統合【必須】（2026-06-11実装）
 
 SPIKE-10b（ユーザー指摘による再調査）で実機確定した方式:

@@ -38,8 +38,14 @@ Container Instanceは[Compute同一単価で課金され追加料金なし](http
 | Object Storage（SPA・wallet・RAG/音声ファイル） | $0.0255 / GB月 | 数GB規模なら$0.1前後 |
 | Logging | $0.05 / GB月 | 無料枠（10GB/月）内に収まる想定 |
 | Monitoring | $0.0025 / 100万データポイント | 無料枠内に収まる想定 |
+| ホスト型エージェント（GenAI Hosted Application × 3SDK） | アイドル時ゼロ | `min_replica = 0` のゼロスケール構成。使っていない間はレプリカが0でアイドル課金が発生しない（[Application comparison](https://docs.oracle.com/en-us/iaas/Content/generative-ai/application-comparison.htm) の "Scale to zero: Yes"。2026-07-29に実機で`min_replica=0`保持を確認） |
 
 無料枠の最新条件は [Oracle Cloud Free Tier](https://www.oracle.com/cloud/free/) を参照。
+
+ホスト型エージェントは3SDKすべてを既定で配備するが、上記のとおりアイドル課金は発生しない。
+実行中のコンピュート従量と、エージェントが呼ぶ生成AI推論（§3）だけが課金対象になる。
+費用と引き換えになるのは体験で、`min_replica = 0` では初回リクエストにコールドスタート待ちが入る。
+デモで待ちを避けたい場合のみ `hosted_agent_min_replica = 1` にする（この場合は常時課金になる）。
 
 ## 3. 従量課金（使った分だけ）
 

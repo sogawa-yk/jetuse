@@ -155,13 +155,92 @@ def test_rag_health_aggregation_disables_autocreate(monkeypatch):
     assert seen == {"allow_autocreate": False}
 
 
-def test_capability_health_endpoint_returns_all_six(monkeypatch):
+def test_capability_health_endpoint_returns_all_capabilities(monkeypatch):
     monkeypatch.setattr(rag, "health_check", lambda **kw: {"ok": True, "checks": {}})
     res = client.get("/api/health")
     assert res.status_code == 200
     body = res.json()
-    assert set(body["capabilities"]) == {"chat", "rag", "dbchat", "speech", "ocr", "tts"}
+    assert set(body["capabilities"]) == {
+        "chat", "rag", "dbchat", "speech", "ocr", "tts", "agents",
+    }
     assert isinstance(body["ok"], bool)
+
+
+# --- PORT-03: ホスト型エージェントの配備状況 ---
+
+_AGENT_ENV = {
+    "HOSTED_AGENT_IDCS_DOMAIN": "https://idcs-test.identity.oraclecloud.com",
+    "HOSTED_AGENT_CLIENT_ID": "cid",
+    "HOSTED_AGENT_CLIENT_SECRET": "secret",
+    "HOSTED_AGENT_SCOPE": "jetuse-agentinvoke",
+    "AGENT_OPENAI_APP_OCID": "ocid1.generativeaihostedapplication.oc1..openai",
+    "AGENT_LANGGRAPH_APP_OCID": "ocid1.generativeaihostedapplication.oc1..langgraph",
+    "AGENT_ADK_APP_OCID": "ocid1.generativeaihostedapplication.oc1..adk",
+}
+
+
+def _set_agent_env(monkeypatch, env: dict, auth_required: bool = True):
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("AUTH_REQUIRED", "true" if auth_required else "false")
+    # 既定は「配備する構成」。配備しない構成は各テストで上書きする。
+    monkeypatch.setenv("HOSTED_AGENTS_ENABLED", "true")
+    get_settings.cache_clear()
+
+
+def test_agents_health_ok_when_all_three_sdks_deployed(monkeypatch):
+    _set_agent_env(monkeypatch, _AGENT_ENV)
+    out = health.agents_health()
+    assert out["status"] == "ok"
+    assert "hint" not in out
+    assert all(v["ok"] for v in out["sdks"].values())
+
+
+def test_agents_health_degraded_when_one_sdk_missing(monkeypatch):
+    env = dict(_AGENT_ENV)
+    env["AGENT_ADK_APP_OCID"] = ""
+    _set_agent_env(monkeypatch, env)
+    out = health.agents_health()
+    assert out["status"] == "degraded"
+    assert out["sdks"]["adk"]["ok"] is False
+    assert "ADK" in out["hint"]
+
+
+def test_agents_health_disabled_when_stack_does_not_deploy_them(monkeypatch):
+    """配備しない構成は「故障」ではない。unavailable にすると、エージェントを使わない
+    スタック(認証無効・対象外リージョン)の /api/health が常時赤くなる。"""
+    _set_agent_env(monkeypatch, dict.fromkeys(_AGENT_ENV, ""), auth_required=True)
+    monkeypatch.setenv("HOSTED_AGENTS_ENABLED", "false")
+    get_settings.cache_clear()
+    out = health.agents_health()
+    assert out["status"] == "disabled"
+    body = health.capability_health()
+    assert body["capabilities"]["agents"]["status"] == "disabled"
+
+
+def test_agents_health_unavailable_when_deployed_but_broken(monkeypatch):
+    """配備する構成なのに設定が欠けている＝故障。こちらは全体の ok を落とす。"""
+    _set_agent_env(monkeypatch, dict.fromkeys(_AGENT_ENV, ""), auth_required=True)
+    monkeypatch.setenv("HOSTED_AGENTS_ENABLED", "true")
+    get_settings.cache_clear()
+    assert health.agents_health()["status"] == "unavailable"
+
+
+def test_agents_health_unavailable_explains_disabled_auth(monkeypatch):
+    # enable_auth=false のスタックには OAuth の発行元が無い。原因が確定できるので明示する。
+    _set_agent_env(monkeypatch, dict.fromkeys(_AGENT_ENV, ""), auth_required=False)
+    out = health.agents_health()
+    assert out["status"] == "unavailable"
+    assert "OIDC認証" in out["hint"]
+    # 内部の欠落キー名(agent container not configured: missing=[...])は出さない。
+    assert "missing=" not in out["hint"]
+
+
+def test_agents_health_unavailable_points_at_stack_variable(monkeypatch):
+    _set_agent_env(monkeypatch, dict.fromkeys(_AGENT_ENV, ""), auth_required=True)
+    out = health.agents_health()
+    assert out["status"] == "unavailable"
+    assert "enable_hosted_agents" in out["hint"]
 
 
 def test_capability_health_endpoint_degrades_instead_of_crashing_on_rag_failure(monkeypatch):

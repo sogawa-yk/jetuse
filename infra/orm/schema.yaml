@@ -19,6 +19,7 @@ variableGroups:
     variables:
       - prefix
       - enable_auth
+      - enable_hosted_agents
       - demo_email
       - admin_users
       - adb_admin_password
@@ -31,6 +32,7 @@ variableGroups:
       - enable_semantic_store
       - semstore_ocid
       - enable_project_autocreate
+      - existing_iam_covers_hosted_agents
   - title: "リージョン・サービス枠（可搬性）"
     variables:
       - allow_unvalidated_genai_region
@@ -40,9 +42,12 @@ variableGroups:
   - title: "オプション（詳細・通常変更不要）"
     variables:
       - project_ocid
+      - hosted_agent_min_replica
+      - image_tag
       - enable_opensearch
       - rate_limit_rps
       - image_repo_prefix
+      - hosted_agent_image_registry
       - api_image_url
       - fn_router_image
       - ocir_namespace
@@ -71,6 +76,13 @@ variables:
     title: "OIDC認証を有効化"
     description: "Identity Domain + OIDCアプリ + デモユーザーを作成し、ログインを必須にする"
     default: true
+
+  enable_hosted_agents:
+    type: boolean
+    title: "ホスト型エージェントを配備"
+    description: "3種類のSDK（OpenAI Agents / LangGraph / ADK）のReActエージェントをEnterprise AI Agentとして配備します。アイドル時はゼロスケール（レプリカ0）なので、使わない間の課金は発生しません。OAuthの発行元が必要なため「OIDC認証を有効化」がONのとき、かつ大阪(ap-osaka-1)・シカゴ(us-chicago-1)にデプロイするときだけ有効です（エージェント画像の配置先）。"
+    default: true
+    visible: enable_auth
 
   enable_dynamic_group:
     type: boolean
@@ -145,6 +157,22 @@ variables:
     description: "RAG・会話メモリに必須のGenerativeAiProjectが無い場合にアプリが自動作成します（IAMに manage generative-ai-project を含めます）。オフの場合は Project OCID の明示指定を推奨"
     default: true
 
+  existing_iam_covers_hosted_agents:
+    type: boolean
+    title: "既存IAMがホスト型エージェントを含むことを確認済み"
+    description: "Dynamic Group / Runtime Policy を作らない構成でホスト型エージェントを使う場合のみ ON にします。既存の Dynamic Group に generativeaihostedapplication / generativeaihostedapplicationiam / generativeaihosteddeployment が含まれ、そのグループに JetUse のランタイム権限が付与されていることを確認してください。未確認のまま進めるとエージェントは配備されても実行時に権限エラーになります。"
+    default: false
+    # Dynamic Group か Runtime Policy の**どちらか**を作らない構成で必要になる
+    # （precondition の条件と一致させる）。
+    visible:
+      and:
+        - enable_hosted_agents
+        - or:
+            - not:
+                - enable_dynamic_group
+            - not:
+                - enable_runtime_policy
+
   allow_unvalidated_genai_region:
     type: boolean
     title: "GenAI未検証リージョンへのデプロイを許可"
@@ -169,6 +197,29 @@ variables:
     title: "API コンテナ shape"
     description: "APIのContainer Instance shape。CI.Standard.E4.Flex が無いリージョンでのみ変更。通常は既定のまま。"
     default: "CI.Standard.E4.Flex"
+
+  hosted_agent_min_replica:
+    type: number
+    title: "エージェントのアイドル時レプリカ数"
+    description: "0 でゼロスケール（アイドル課金なし。初回リクエストはコールドスタート待ちが入ります）。デモで初回応答を速くしたいときだけ 1 にしてください（常時課金になります）。"
+    default: 0
+    minimum: 0
+    maximum: 2
+    multipleOf: 1
+    visible: enable_hosted_agents
+
+  image_tag:
+    type: string
+    title: "コンテナ画像のタグ（通常変更不要）"
+    description: "API・Functionsルーター・エージェントの全画像に共通のタグ。配布ZIPではそのビルドの commit SHA に固定されているため、通常は変更しません。main の最新を追いたい場合のみ latest を指定してください。"
+    default: "latest"
+
+  hosted_agent_image_registry:
+    type: string
+    title: "エージェント画像のレジストリ（通常変更不要）"
+    description: "空ならデプロイリージョンのOCIRを自動選択します。OCIRネームスペースを既定から変更した場合は、jetuse-agent-openai / -langgraph / -adk をミラーしたレジストリ（例 ord.ocir.io/<namespace>）を指定してください。"
+    default: ""
+    required: false
 
   enable_opensearch:
     type: boolean

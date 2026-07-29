@@ -1,0 +1,243 @@
+# PORT-03 / ADR-0019: 公開スタックからホスト型エージェント(Enterprise AI Agent)を配備する。
+#
+# AGT-04(docs/setup/hosted-agent-oauth.md)では OAuth アプリの作成も Hosted Application の
+# 配備も手作業だった。oracle/oci 8.x に必要な resource が揃ったため、ここで宣言的に組む。
+#
+# OAuth は「自給自足」構成: 1つの IDCS アプリを **client 兼 resource** にし、
+#   - client として client_credentials で token を取り(scope = 完全修飾スコープ fqs)
+#   - resource として Hosted Application の inbound 検証(aud / scope 突合)に使う
+# ことで、アプリが自分で発行した token で自分が守る invoke を呼べる(AGT-04 実証構成)。
+
+locals {
+  # audience は Identity Domain 内で一意でなければならないため prefix から作る。
+  audience   = "${var.prefix}-agent"
+  scope_name = "invoke"
+  # 完全修飾スコープ(fqs)は audience と scope の単純連結(セパレータ無し)。
+  # 2026-06-12 実機確認済み(docs/tips.md)。自分の scopes ブロックの computed fqs は
+  # 同一リソース内から参照できないため、allowed_scopes にはこの規則で組み立てた値を渡す。
+  fqs = "${local.audience}${local.scope_name}"
+
+  # 作成したリソースに必ず付ける所有者タグ。同名の既存リソースを誤って取り込んだり
+  # 削除したりしないための目印にする(review F-001)。prefix が既存リソースと衝突しても、
+  # このタグが無いものには一切触れない。
+  owner_tag = "jetuse:${var.prefix}"
+
+  container_uri = {
+    for sdk in var.sdks : sdk => "${var.image_registry}/${var.image_repo_prefix}-agent-${sdk}"
+  }
+
+  # 設定の指紋。作り直し判定（triggers_replace）と、実リソース側の再利用判定
+  # （freeform tag との突合）の両方で同じ値を使う。
+  config_fingerprint = {
+    for sdk in var.sdks : sdk => sha256(jsonencode({
+      display_name  = "${var.prefix}-agent-${sdk}"
+      compartment   = var.compartment_ocid
+      region        = var.region
+      idcs_endpoint = var.idcs_endpoint
+      audience      = local.audience
+      scope         = local.scope_name
+      min_replica   = var.min_replica
+      max_replica   = var.max_replica
+      concurrency   = var.target_concurrency_threshold
+      container_uri = "${var.image_registry}/${var.image_repo_prefix}-agent-${sdk}"
+      tag           = var.image_tag
+      env           = var.environment_variables
+    }))
+  }
+
+  # API へ送るリクエスト本文。jsonencode に組ませることで、値に引用符・改行・Unicode が
+  # 入っていても壊れない(review F-005)。
+  app_body = {
+    for sdk in var.sdks : sdk => {
+      displayName   = "${var.prefix}-agent-${sdk}"
+      compartmentId = var.compartment_ocid
+      description   = "JetUse ReAct agent container (${sdk} SDK)"
+      freeformTags = {
+        "jetuse-owner"  = local.owner_tag
+        "jetuse-config" = local.config_fingerprint[sdk]
+      }
+      scalingConfig = {
+        scalingType                = "CONCURRENCY"
+        minReplica                 = var.min_replica
+        maxReplica                 = var.max_replica
+        targetConcurrencyThreshold = var.target_concurrency_threshold
+      }
+      inboundAuthConfig = {
+        inboundAuthConfigType = "IDCS_AUTH_CONFIG"
+        idcsConfig = {
+          domainUrl = var.idcs_endpoint
+          audience  = local.audience
+          scope     = local.scope_name
+        }
+      }
+      # 設定は JSON オブジェクト1本で渡す（スカラーだと引用符が値に残る — 実機確定）。
+      environmentVariables = [{
+        name  = "JETUSE_AGENT_CONFIG"
+        type  = "PLAINTEXT"
+        value = jsonencode(var.environment_variables)
+      }]
+    }
+  }
+
+  deployment_body = {
+    for sdk in var.sdks : sdk => {
+      displayName   = "${var.prefix}-agent-${sdk}-dep"
+      compartmentId = var.compartment_ocid
+      # 実行時にアプリ OCID へ置換する（スクリプト側で sed）。
+      hostedApplicationId = "__APP_OCID__"
+      freeformTags        = { "jetuse-owner" = local.owner_tag }
+      activeArtifact = {
+        artifactType = "SIMPLE_DOCKER_ARTIFACT"
+        containerUri = local.container_uri[sdk]
+        tag          = var.image_tag
+      }
+    }
+  }
+}
+
+# --- OAuth クライアント兼リソース ---
+resource "oci_identity_domains_app" "agent" {
+  idcs_endpoint = var.idcs_endpoint
+  schemas       = ["urn:ietf:params:scim:schemas:oracle:idcs:App"]
+  display_name  = "${var.prefix}-agent"
+  description   = "JetUse hosted agent invocation (client_credentials, self-audience)"
+
+  based_on_template {
+    value = "CustomWebAppTemplateId"
+  }
+
+  # client 側: confidential(client_secret を持つ)で client_credentials のみ許可する。
+  is_oauth_client = true
+  client_type     = "confidential"
+  allowed_grants  = ["client_credentials"]
+
+  # resource 側: この audience 宛の token を発行し、Hosted Application が同じ値で検証する。
+  is_oauth_resource = true
+  audience          = local.audience
+  scopes {
+    value            = local.scope_name
+    description      = "Invoke JetUse hosted agent containers"
+    requires_consent = false
+  }
+
+  # 自給自足構成の要: client として**自分が定義した scope** を要求できるようにする。
+  # これが無いと client_credentials の token 要求が scope 不許可で失敗する
+  # (is_oauth_client + is_oauth_resource + allowed_scopes の3点セット — docs/tips.md 2026-06-12)。
+  allowed_scopes {
+    fqs = local.fqs
+  }
+
+  active          = true
+  is_login_target = false
+  show_in_my_apps = false
+
+  # destroy 前に非アクティブ化(active なアプリは削除できず destroy が 400 で失敗する)。
+  # `app patch` に --force は無く、複合型の置換で y/N を尋ねるので y を流し込む(FIX-58 実機確定)。
+  provisioner "local-exec" {
+    when    = destroy
+    command = <<-CMD
+      echo y | oci identity-domains app patch \
+        --endpoint "${self.idcs_endpoint}" \
+        --app-id ${self.id} \
+        --schemas '["urn:ietf:params:scim:api:messages:2.0:PatchOp"]' \
+        --operations '[{"op": "replace", "path": "active", "value": false}]'
+    CMD
+  }
+}
+
+# --- Hosted Application / Deployment は OCI CLI 経由で作る（provider を使えない） ---
+#
+# oracle/oci 8.24.0（2026-07-29 時点の最新）の `oci_generative_ai_hosted_application` は
+# **必ず失敗する**。リソース作成・削除そのものは成功し work request も SUCCEEDED になるが、
+# provider の待ち受け(`hostedApplicationWaitForWorkRequest`)が
+#   strings.Contains(strings.ToLower(res.EntityType), "hostedapplication")
+# で照合する一方、サービスが返す entityType は **"HOSTED_APPLICATION"**（アンダースコア入り）で、
+# 小文字化しても "hosted_application" にしかならず一致しない。結果 identifier が nil のまま
+# 「work request did not succeed」と誤判定され、リソースは tainted になって次の apply で
+# 削除→再作成→また誤判定、と収束しない（2026-07-29 DEPLOYTEST/us-chicago-1 実機確認）。
+#
+# **この構成は暫定。provider が修正されたら標準 resource へ戻す(ADR-0019 追記節 / Issue #98)。**
+# よって作成・削除は CLI(`oci raw-request`)で行い、**参照はデータソース**で行う
+# （データソースは list/get だけで work request を待たないため影響を受けない）。
+# 判定ロジックのバグは create/update/delete の待ち受けに限られる。
+#
+# CLI は `raw-request` に固定する: Resource Manager 同梱の OCI CLI には
+# `generative-ai hosted-application` サブコマンドが無い版があり得るため専用サブコマンドに依存しない。
+# また `raw-request` は `--query` を無視する（2026-07-29 実測）ので、抽出は grep で行う。
+resource "terraform_data" "agent" {
+  for_each = var.sdks
+
+  # destroy 時の provisioner は self しか参照できないため、必要な値を input に持たせる。
+  # あわせて「この SDK をどう配備するつもりか」を state 上に残す: CLI で作る構成では
+  # provider の属性が無く、ここが唯一の宣言的な記録になる（テストもここを見る）。
+  input = {
+    region        = var.region
+    compartment   = var.compartment_ocid
+    display_name  = "${var.prefix}-agent-${each.key}"
+    owner_tag     = local.owner_tag
+    idcs_endpoint = var.idcs_endpoint
+    audience      = local.audience
+    scope         = local.scope_name
+    min_replica   = var.min_replica
+    max_replica   = var.max_replica
+    container_uri = local.container_uri[each.key]
+    image_tag     = var.image_tag
+  }
+
+  # 設定が変わったら作り直す（provider 管理ではないので、差分検出はこの指紋が担う）。
+  # 同じ値を実リソースの freeform tag にも載せ、再利用してよいかの判定に使う(review F-005)。
+  triggers_replace = [local.config_fingerprint[each.key]]
+
+  provisioner "local-exec" {
+    # 値はすべて環境変数で渡し、シェルの本文へ内挿しない。
+    # image_tag などは Resource Manager の入力（利用者が任意の文字列を書ける）なので、
+    # コマンド本文へ埋め込むと `$(...)` が実行されうるし、引用符で JSON も壊れる(review F-003)。
+    environment = {
+      HA_REGION        = var.region
+      HA_COMPARTMENT   = var.compartment_ocid
+      HA_NAME          = "${var.prefix}-agent-${each.key}"
+      HA_CONTAINER_URI = local.container_uri[each.key]
+      HA_TAG           = var.image_tag
+      HA_OWNER_TAG     = local.owner_tag
+      # リクエスト JSON は Terraform 側で組み立てる。シェルで文字列連結すると
+      # 改行・タブ・Unicode のエスケープを取りこぼす(review F-005)。
+      HA_CONFIG_FINGERPRINT = local.config_fingerprint[each.key]
+      HA_APP_BODY           = jsonencode(local.app_body[each.key])
+      # デプロイメントはアプリ OCID が実行時にしか分からないので、そこだけ差し込む。
+      # 差し込む値は API から取り出した OCID（英数と . _ - のみ）なので安全。
+      HA_DEP_BODY = jsonencode(local.deployment_body[each.key])
+    }
+    command = "sh ${path.module}/scripts/ensure_agent.sh"
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.min_replica <= var.max_replica
+      error_message = "hosted-agent: min_replica (${var.min_replica}) must not exceed max_replica (${var.max_replica})."
+    }
+  }
+
+  # destroy: ACTIVE なデプロイメントは直接削除できず、アプリ削除でカスケードされる
+  # (ops/recreate-agents.sh の実機記録)。self しか参照できないので名前で引き直す。
+  provisioner "local-exec" {
+    when = destroy
+    environment = {
+      HA_REGION      = self.input.region
+      HA_COMPARTMENT = self.input.compartment
+      HA_NAME        = self.input.display_name
+      HA_OWNER_TAG   = self.input.owner_tag
+    }
+    command = "sh ${path.module}/scripts/delete_agent.sh"
+  }
+}
+
+# 作成済みリソースの OCID は**データソース**で取る（work request を待たないので provider バグの影響外）。
+data "oci_generative_ai_hosted_applications" "agent" {
+  for_each = var.sdks
+
+  compartment_id = var.compartment_ocid
+  display_name   = "${var.prefix}-agent-${each.key}"
+  state          = "ACTIVE"
+
+  depends_on = [terraform_data.agent]
+}
