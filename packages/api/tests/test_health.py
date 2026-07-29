@@ -180,6 +180,8 @@ def _set_agent_env(monkeypatch, env: dict, auth_required: bool = True):
     for k, v in env.items():
         monkeypatch.setenv(k, v)
     monkeypatch.setenv("AUTH_REQUIRED", "true" if auth_required else "false")
+    # 既定は「配備する構成」。配備しない構成は各テストで上書きする。
+    monkeypatch.setenv("HOSTED_AGENTS_ENABLED", "true")
     get_settings.cache_clear()
 
 
@@ -199,6 +201,26 @@ def test_agents_health_degraded_when_one_sdk_missing(monkeypatch):
     assert out["status"] == "degraded"
     assert out["sdks"]["adk"]["ok"] is False
     assert "ADK" in out["hint"]
+
+
+def test_agents_health_disabled_when_stack_does_not_deploy_them(monkeypatch):
+    """配備しない構成は「故障」ではない。unavailable にすると、エージェントを使わない
+    スタック(認証無効・対象外リージョン)の /api/health が常時赤くなる。"""
+    _set_agent_env(monkeypatch, dict.fromkeys(_AGENT_ENV, ""), auth_required=True)
+    monkeypatch.setenv("HOSTED_AGENTS_ENABLED", "false")
+    get_settings.cache_clear()
+    out = health.agents_health()
+    assert out["status"] == "disabled"
+    body = health.capability_health()
+    assert body["capabilities"]["agents"]["status"] == "disabled"
+
+
+def test_agents_health_unavailable_when_deployed_but_broken(monkeypatch):
+    """配備する構成なのに設定が欠けている＝故障。こちらは全体の ok を落とす。"""
+    _set_agent_env(monkeypatch, dict.fromkeys(_AGENT_ENV, ""), auth_required=True)
+    monkeypatch.setenv("HOSTED_AGENTS_ENABLED", "true")
+    get_settings.cache_clear()
+    assert health.agents_health()["status"] == "unavailable"
 
 
 def test_agents_health_unavailable_explains_disabled_auth(monkeypatch):

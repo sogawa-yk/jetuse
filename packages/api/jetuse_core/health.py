@@ -145,7 +145,9 @@ def agents_health() -> dict[str, Any]:
     avail = hosted_agent.availability()
     sdks = {sdk: _check(ok, "未配備" if not ok else None) for sdk, ok in avail["sdks"].items()}
     if not avail["ok"]:
-        status = "unavailable"
+        # 「配備しない構成」と「配備したのに壊れている」は別物。前者を故障として扱うと、
+        # エージェントを使わないスタック(認証無効・対象外リージョン)が常時 unhealthy になる。
+        status = "unavailable" if get_settings().hosted_agents_enabled else "disabled"
     else:
         status = "ok" if all(avail["sdks"].values()) else "degraded"
     return {
@@ -166,5 +168,6 @@ def capability_health() -> dict[str, Any]:
         "tts": tts_health(),
         "agents": agents_health(),
     }
-    ok = all(c["status"] == "ok" for c in capabilities.values())
+    # "disabled" は「このスタックでは使わない」の表明なので、全体の ok からは除外する。
+    ok = all(c["status"] in ("ok", "disabled") for c in capabilities.values())
     return {"ok": ok, "capabilities": capabilities}

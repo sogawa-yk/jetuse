@@ -26,12 +26,12 @@ resource "terraform_data" "region_guard" {
       error_message = "ocir_namespace を公開既定(${local.public_ocir_namespace})から変更する場合は、イメージを自テナンシの OCIR へミラーした上で api_image_url と fn_router_image を両方明示してください。ocir_namespace 単独の変更では jetuse-api/jetuse-fn-router の pull に失敗します(これは自テナンシの Object Storage namespace ではありません)。"
     }
     # ホスト型エージェント(PORT-03)はコンテナ自身が resource principal で GenAI / Object Storage /
-    # ADB を呼ぶため、Dynamic Group に generativeaihostedapplication / generativeaihosteddeployment が
+    # ADB を呼ぶため、Dynamic Group にホスト型3種の resource-type が
     # 含まれ、その DG にランタイム権限が付いている必要がある。スタックが IAM を作らない運用では
     # それを保証できず、配備は成功しても invoke が必ず権限エラーになる。黙って壊れるより plan で止める。
     precondition {
       condition     = !local.hosted_agents_enabled || (var.enable_dynamic_group && var.enable_runtime_policy) || var.existing_iam_covers_hosted_agents
-      error_message = "ホスト型エージェント(enable_hosted_agents=true)は、スタックが Dynamic Group と Runtime Policy を作る構成を前提にしています。既存IAMを流用する場合は、既存 Dynamic Group に generativeaihostedapplication と generativeaihosteddeployment を追加し、既存 policy が JetUse ランタイム権限(generative-ai-family / objects / autonomous-database-family 等)を与えていることを確認したうえで existing_iam_covers_hosted_agents=true を設定してください。エージェントが不要なら enable_hosted_agents=false にしてください。"
+      error_message = "ホスト型エージェント(enable_hosted_agents=true)は、スタックが Dynamic Group と Runtime Policy を作る構成を前提にしています。既存IAMを流用する場合は、既存 Dynamic Group に generativeaihostedapplication / generativeaihostedapplicationiam / generativeaihosteddeployment を追加し、既存 policy が JetUse ランタイム権限(generative-ai-family / objects / autonomous-database-family 等)を与えていることを確認したうえで existing_iam_covers_hosted_agents=true を設定してください。エージェントが不要なら enable_hosted_agents=false にしてください。"
     }
     # ocir_namespace を公開既定から変えた場合、エージェント画像 3 つも自テナンシへミラー
     # されている保証が無い。api_image_url / fn_router_image と同じく明示指定を要求する。

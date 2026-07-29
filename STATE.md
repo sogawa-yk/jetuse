@@ -1,100 +1,74 @@
 # STATE — PORT-03 公開スタックにホスト型エージェントを載せる
 
 - run_id: `2026-07-29T1210_PORT-03`
-- branch: `feat/PORT-03`（base = `main` / worktree 分離）
+- branch: `feat/PORT-03`（base = `main` / worktree 分離・**push / PR は未実施**）
 - goal: `runs/2026-07-29T1210_PORT-03/goal.txt`
-- review_verdict: `FAIL`（review-6。**コード面の指摘はゼロ**。残る blocker は実機 E2E 未実施のみ）
-- last_review_ref: `runs/2026-07-29T1210_PORT-03/reviews/review-6.json`
+- review_verdict: `FAIL`（review-8。E2E 証跡は「十分」と判定され、残りはスクリプト堅牢性の指摘）
+- last_review_ref: `runs/2026-07-29T1210_PORT-03/reviews/review-8.json`
 - updated_at: 2026-07-29
 
-## 静的チェック
-
-- `pytest packages/api/tests` 360 passed / `ruff check packages/api` clean
-- `terraform validate`（orm / environments/dev）OK・`terraform fmt -check -recursive infra` OK
-- `terraform test`: modules/iam 7 passed / modules/hosted-agent 2 passed（新設。CI にも追加済み）
-- ローカル terraform は 1.6.6 で `mock_provider` 非対応。1.15.8 をスクラッチパッドへ入れて実行した
-  （CI は `hashicorp/setup-terraform@v3` の最新なので影響なし）。
-
-## 実装済み
-
-- [x] T1 `infra/terraform/modules/hosted-agent/`（IDCS OAuth アプリ + 3SDK の Hosted Application/Deployment + カスケード削除ガード + tftest）
-- [x] T2 `modules/iam` に `include_hosted_agent_principals`（**opt-in**）を追加し、有効時のみ runtime DG にホスト型2種を含める
-- [x] T3 `infra/orm` 配線（`hosted_agents_enabled` / precondition 2本 / `time_sleep` によるIAM反映待ち / schema.yaml）
-- [x] T4 `release.yml` に 3SDK イメージの build/push（kix・ord のみ）
-- [x] T5 縮退の明確化（`capabilities.agents` + `hosted_agent.availability()` を判定の単一源に。UIへは理由文を返す）
-- [x] T6 `agent_db.py` の base64 ウォレット対応 + テスト
-- [x] T7 ドキュメント（`orm.md` / `iam.md` / `hosted-agent-oauth.md` / `cost-estimate.md` / `tips.md`）
-
-## 実機 E2E の進捗（DEPLOYTEST / us-chicago-1）
+## 実機 E2E（DEPLOYTEST / us-chicago-1）— 完了
 
 | # | シナリオ | 結果 |
 |---|---|---|
-| 1 | 既存項目の非回帰 | ✅ **39/39 PASS・4xx/5xx 0件**（38項目 + 新設 `capability: agents`） |
-| 2 | 3SDK のエージェント実行 | ✅ **9/9 PASS**。3SDK とも `get_current_time` のツール実行を伴う応答。「未設定」エラーなし |
-| 3 | コールドスタート実測 | 🔄 ウォーム時 1.8〜2.3 秒を計測済み。`min_replica=0` からの実測はアイドル35分後に再計測中 |
-| 4 | 無効化構成の縮退 | ⏸ |
-| 5 | destroy | ⏸ |
+| 1 | 既存項目の非回帰 | ✅ **39/39 PASS・4xx/5xx 0件**（従来38 + 新設 `capability: agents`） |
+| 2 | 3SDK のエージェント実行 | ✅ **9/9 PASS**（ツール実行を伴う応答・「未設定」エラー無し） |
+| 3 | コールドスタート実測 | ✅ ウォーム 1.8〜2.3s / 35分アイドル後 **5.5〜6.4s** → 180秒 timeout で足りる |
+| 4 | 無効化構成の縮退 | ✅ **6/6 PASS**（理由付き・内部識別子を出さない） |
+| 5 | destroy | ✅ 成功・ホスト型リソース残存 0件 |
 
-証跡: `runs/2026-07-29T1210_PORT-03/e2e/`（OCID / ホスト名 / パスワードはマスク済み・漏れ無しを grep で確認）
+証跡: `runs/2026-07-29T1210_PORT-03/e2e/`（OCID / ホスト名 / パスワード / OS namespace /
+ローカルパスをマスク済み）。レポート: `docs/verification/PORT-03.md`。
 
-## 実機で確定した事実（この run で判明・再検証不要）
+## 静的チェック
+
+`pytest packages/api/tests` / `ruff check packages/api` / `terraform validate`（orm・dev・配布zip） /
+`terraform fmt -check -recursive infra` / `terraform test`（iam・hosted-agent）がすべて緑。
+ローカル terraform は 1.6.6 で `mock_provider` 非対応のため 1.15.8 を別途用意して実行した
+（CI は `hashicorp/setup-terraform@v3` なので影響なし）。
+
+## 実機で確定した事実（再検証不要）
 
 - **provider 8.24.0 の `oci_generative_ai_hosted_application` は使えない**。work request は
-  SUCCEEDED でリソースも ACTIVE になるのに、provider が `HOSTED_APPLICATION` と
-  `hostedapplication` を照合して一致せず必ず失敗扱いにする。しかも tainted → 削除 → 再作成で
-  **収束しない**。→ 作成・削除は `oci raw-request`、参照は data source に切り替えた。
+  SUCCEEDED でリソースも ACTIVE なのに、provider が `HOSTED_APPLICATION` と
+  `hostedapplication` を照合して一致せず失敗扱いにする。tainted → 削除 → 再作成で**収束しない**。
+  → 作成・削除は `oci raw-request`、参照は data source に切り替えた。
 - **`oci raw-request` は `--query` / `--output table` を無視する**。抽出は grep で行う。
 - **`environment_variables.value` はスカラーだと引用符が残る**（provider が JSON 検証だけして
-  そのまま送り、API も verbatim 保存する）。設定は `JETUSE_AGENT_CONFIG`（JSON 1本）で渡し、
-  コンテナ側 `agent_env.py` が展開する。
+  そのまま送り、API も verbatim 保存）。設定は `JETUSE_AGENT_CONFIG`（JSON 1本）で渡す。
 - **画像タグを機能ごとに分けると壊れる**。エージェントだけ差し替えたら API が旧版のままで
-  `capabilities.agents` が出なかった。`image_tag` 統一が必要（実害で裏付け）。
+  `capabilities.agents` が出なかった → `image_tag` 統一。
 - `inbound_auth_config` の domain URL が実在しないと Application は CREATING → **FAILED**。
 - ACTIVE な Hosted Deployment は直接削除できず、Application 削除でカスケードされる。
-- **E2E ハーネスの穴を2件修正**: ログイン後の固定8秒待ち（トークン交換前に叩いて401）と
-  `tone.wav` の生成漏れ（音声シナリオで異常終了）。
+- E2E ハーネスの穴2件（ログイン後の固定待ち / `tone.wav` 未生成）を修正済み。
 
-## 未完
+## レビュー履歴
 
-- [ ] シナリオ3〜5（コールドスタート実測 / 縮退構成 / destroy）
-- [ ] `docs/verification/PORT-03.md` の作成
-- [ ] review-7 の指摘修正ぶんの再レビュー（証跡込み）
+review-1 → review-8。判定の推移:
+`b3/m4/mi1` → `b4/m6/mi1` → `b2/m4` → `b1/m3` → `b1/m0` → （E2E 実施）→ `b3/m4/mi2`。
 
-## 実機で確定した事実（この run で判明・再検証不要）
-
-- **`environment_variables.value` はスカラーだと引用符が残る**。provider は JSON 文字列しか
-  受け付けないのにアンマーシャルせず送り、API も verbatim 保存する（us-chicago-1 で実測）。
-  → 設定は `JETUSE_AGENT_CONFIG` という **JSON オブジェクト1本**で渡し、
-  コンテナ側 `agent_env.py` が `os.environ` へ展開する。sensitive map を `for_each` に
-  使えない制約も同時に回避できる。
-- `inbound_auth_config` の domain URL が実在しないと Application は CREATING → **FAILED**。
-- ACTIVE な Hosted Deployment は直接削除できず、Application 削除でカスケードされる。
-  Terraform の既定 destroy 順とは逆なので、`terraform_data.cascade_delete` で先に Application を消す。
-
-## レビュー履歴（review-1 → review-6）
-
-Codex 判定の推移: `blocker3/major4/minor1` → `blocker4/major6/minor1` → `blocker2/major4` →
-`blocker1/major3` → **`blocker1/major0/minor0`**。残る1件は E2E 未実施（T8）。
-
-主な指摘と対応（コード面はすべて解消済み）:
+review-8 は **E2E 証跡を "sufficient" と評価**したうえで、CLI スクリプトの堅牢性を指摘した。
+対応済み:
 
 | 指摘 | 対応 |
 |---|---|
-| sensitive な map を `for_each` に使うと plan が停止する | 環境変数を JSON 1本（`JETUSE_AGENT_CONFIG`）に変更。実機で往復一致を確認 |
-| 自給自足 OAuth に `allowed_scopes` が要る | 自分の fqs を登録（tips.md 2026-06-12 の実機記録どおり） |
-| ACTIVE な Deployment は直接消せず destroy が失敗する | `terraform_data.cascade_delete` で Application を先行削除 |
-| 公式要件の resource-type / 権限が不足 | `generativeaihostedapplicationiam` と `read repos` / `read vss-family` を追加（[公式](https://docs.oracle.com/en-us/iaas/Content/generative-ai/deploy-permissions.htm)で確認） |
-| `client_secret` が Functions ルーターにも配られる | Container Instance だけへ渡すよう分離 |
-| コンテナ側 `PROJECT_OCID` が空で RAG/LLM が失敗する | API が解決した値を invoke ステートで渡す。エージェント割当があればそれを優先（SPIKE-05） |
-| project 解決失敗を握りつぶしている | 復旧手順つきの理由を SSE で返し、invoke しない |
-| 未配備でも RAG 参照や project 自動作成の副作用が走る | dispatch 冒頭で配備状況を判定して即縮退 |
-| 既存IAM流用時に黙って壊れる | plan 時 precondition + `existing_iam_covers_hosted_agents` |
-| IAM 反映待ちが短い / 内容変更を検出しない | 600 秒 + IAM モジュールの `content_fingerprint` を trigger に |
-| `latest` タグでは更新が反映されず、API とエージェントの契約がずれる | 全画像を共通 `image_tag` に束ね、配布ZIP生成時に commit SHA で固定 |
-| iam モジュール変更が dev 等の既存呼び出し元にも及ぶ | `include_hosted_agent_principals` で opt-in 化（既定 false）+ tftest |
+| API 失敗を「リソース無し」と取り違える（作成側） | CLI の終了コードをパイプの外で判定し、想定外の失敗は即終了 |
+| 同（削除側）→ 実体を残して state だけ消える孤児化 | 一覧・所有権確認の失敗で destroy を失敗させ、state を保持する |
+| 既存 Deployment を無検証で再利用 | 所有者タグ・artifact URI/tag・状態を検証し、不一致ならアプリごと作り直す |
+| 既存IAM手順に3つ目の resource-type が抜けている | `generativeaihostedapplicationiam` を doc / precondition / schema に追加 |
+| シェルの手動エスケープでは改行・Unicode を扱えない | リクエスト JSON を Terraform の `jsonencode` で組み立てる |
+| 縮退ハーネスが中心2件を記録せず PASS しうる | 作成失敗時も必ず記録し、件数チェックを追加 |
+| 意図的な無効化で `/api/health` 全体が赤くなる | `HOSTED_AGENTS_ENABLED` を渡し、未配備は `disabled`（集約対象外）と区別 |
+| 証跡に OS namespace / ローカルパスが残る | マスクして再検査 |
+| STATE.md が実態と乖離 | 本ファイルを更新 |
 
 ## 判断が要る事項（人間ゲート）
 
-- **スコープ拡大**: `image_tag` の統一により、API / Functions ルーターの画像タグ運用も
-  `latest` 固定から「配布ZIPは commit SHA 固定」へ変わる。PORT-03 の範囲を超えるが、
-  エージェントだけ固定すると invoke ステートの契約が新旧で混在しうるため一体で変更した。
+1. **方式変更の追認**: ADR-0019 は「Terraform で宣言的に組む」前提だったが、上流バグにより
+   **OCI CLI 経由の作成 + data source 参照**へ変更した。ADR への追記が要る。
+   provider が修正されたら通常の resource へ戻せる。
+2. **再検証の要否**: 上表の堅牢性修正は E2E 成功**後**に入れたため、実機で再確認していない
+   （単体テスト・plan・shell 構文チェックは緑）。マージ前にもう一度 apply → destroy を回すか、
+   受け入れて後続で確認するかの判断。
+3. **スコープ拡大**: `image_tag` 統一により API / Functions ルーターの配布も commit SHA 固定になる。
+4. **push / PR**: 未実施。3コミット（実装 / 方式変更 / 検証）。

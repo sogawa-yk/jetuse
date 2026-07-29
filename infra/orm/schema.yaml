@@ -160,7 +160,7 @@ variables:
   existing_iam_covers_hosted_agents:
     type: boolean
     title: "既存IAMがホスト型エージェントを含むことを確認済み"
-    description: "Dynamic Group / Runtime Policy を作らない構成でホスト型エージェントを使う場合のみ ON にします。既存の Dynamic Group に generativeaihostedapplication と generativeaihosteddeployment が含まれ、そのグループに JetUse のランタイム権限が付与されていることを確認してください。未確認のまま進めるとエージェントは配備されても実行時に権限エラーになります。"
+    description: "Dynamic Group / Runtime Policy を作らない構成でホスト型エージェントを使う場合のみ ON にします。既存の Dynamic Group に generativeaihostedapplication / generativeaihostedapplicationiam / generativeaihosteddeployment が含まれ、そのグループに JetUse のランタイム権限が付与されていることを確認してください。未確認のまま進めるとエージェントは配備されても実行時に権限エラーになります。"
     default: false
     # Dynamic Group か Runtime Policy の**どちらか**を作らない構成で必要になる
     # （precondition の条件と一致させる）。

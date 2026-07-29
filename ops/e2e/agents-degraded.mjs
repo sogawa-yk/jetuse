@@ -42,10 +42,17 @@ rec('他機能は生きている（chat が ok）', h.capabilities?.chat?.status
 const mk = await call('/api/agents', { method: 'POST', body: JSON.stringify({ name: 'port03-degraded', instructions: 'x', model: 'gpt-oss-120b', framework: 'langgraph', enabled_tools: [] }) })
 let id = ''
 try { id = JSON.parse(mk.body).id } catch {}
-if (id) {
-  const run = await call('/api/chat/stream', { method: 'POST', body: JSON.stringify({ model: 'gpt-oss-120b', agent_id: id, messages: [{ role: 'user', content: 'こんにちは' }] }) })
-  rec('実行時に理由が返る', /配備されていません/.test(run.body), run.body.slice(0, 240))
-  rec('生の内部エラー文字列を返さない', !/agent container not configured|missing=/.test(run.body), run.body.slice(0, 200))
+// 作成できなかった場合も「中心経路の2件が未実施のまま PASS」にならないよう、必ず記録する。
+rec('エージェント作成（縮退構成でも作成自体はできる）', mk.status === 200 && !!id, `${mk.status} ${mk.body.slice(0, 140)}`)
+const run = id
+  ? await call('/api/chat/stream', { method: 'POST', body: JSON.stringify({ model: 'gpt-oss-120b', agent_id: id, messages: [{ role: 'user', content: 'こんにちは' }] }) })
+  : { status: 0, body: '(エージェントを作成できなかったため未実行)' }
+rec('実行時に理由が返る', /配備されていません/.test(run.body), run.body.slice(0, 240))
+rec('生の内部エラー文字列を返さない', !!id && !/agent container not configured|missing=/.test(run.body), run.body.slice(0, 200))
+
+const EXPECTED = 7
+if (results.length !== EXPECTED) {
+  rec(`検証項目が ${EXPECTED} 件そろう`, false, `実際は ${results.length} 件`)
 }
 fs.writeFileSync(`${OUT}/results.json`, JSON.stringify(results, null, 2))
 const ok = results.filter(r => r.ok).length

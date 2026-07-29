@@ -53,7 +53,7 @@ Runtime Policyも事前作成済みなら両方`false`にする。`enable_auth=t
 
 | リソース | 目的 |
 |---|---|
-| `${prefix}-runtime-dg` | Container Instances / Functions / ホスト型エージェント（`generativeaihostedapplication`・`generativeaihosteddeployment`）のresource principal |
+| `${prefix}-runtime-dg` | Container Instances / Functions / ホスト型エージェント（ホスト型3種の resource-type）のresource principal |
 | `${prefix}-adb-dg` | Autonomous Databaseのresource principal |
 | `${prefix}-semantic-store-dg` | SQL Search Semantic Store（任意） |
 | `${prefix}-runtime-policy` | JetUse実行時権限。JetUse専用コンパートメント内 |
@@ -106,13 +106,16 @@ Dynamic Group名は`prefix`から決まるため、既存名とStackの`prefix`�
 SQL Searchを使用しない場合は`enable_semantic_store=false`にする。
 
 ホスト型エージェント（`enable_hosted_agents=true`）を使う場合は、`<prefix>-runtime-dg`相当の
-既存Dynamic Groupに次の2つのresource-typeが含まれている必要がある。含まれていないと、
+既存Dynamic Groupに次の3つのresource-typeが含まれている必要がある。含まれていないと、
 配備は成功しても実行時にresource principalが得られず、生成AI呼び出しがすべて失敗する。
 
 ```text
-all {resource.type='generativeaihostedapplication', resource.compartment.id='<compartment>'},
-all {resource.type='generativeaihosteddeployment',  resource.compartment.id='<compartment>'}
+all {resource.type='generativeaihostedapplication',    resource.compartment.id='<compartment>'},
+all {resource.type='generativeaihostedapplicationiam', resource.compartment.id='<compartment>'},
+all {resource.type='generativeaihosteddeployment',     resource.compartment.id='<compartment>'}
 ```
+
+あわせて既存 policy に `read repos` と `read vss-family`（対象コンパートメント）も必要。
 
 確認済みであることを`existing_iam_covers_hosted_agents=true`で明示しない限り、
 `enable_dynamic_group=false` / `enable_runtime_policy=false` の構成ではplan時にエラーで停止する

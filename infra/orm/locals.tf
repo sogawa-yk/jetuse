@@ -117,8 +117,11 @@ locals {
     HOSTED_AGENT_CLIENT_ID     = local.hosted_agents_enabled ? module.hosted_agent[0].client_id : ""
     HOSTED_AGENT_CLIENT_SECRET = local.hosted_agents_enabled ? module.hosted_agent[0].client_secret : ""
     HOSTED_AGENT_SCOPE         = local.hosted_agents_enabled ? module.hosted_agent[0].scope : ""
-    AGENT_OPENAI_APP_OCID      = lookup(local.agent_app_ocids, "openai", "")
-    AGENT_LANGGRAPH_APP_OCID   = lookup(local.agent_app_ocids, "langgraph", "")
-    AGENT_ADK_APP_OCID         = lookup(local.agent_app_ocids, "adk", "")
+    # 「配備する構成か」をアプリへ伝える。未配備を故障扱いして /api/health 全体を
+    # 赤くしないための区別に使う(review F-007)。
+    HOSTED_AGENTS_ENABLED    = local.hosted_agents_enabled ? "true" : "false"
+    AGENT_OPENAI_APP_OCID    = lookup(local.agent_app_ocids, "openai", "")
+    AGENT_LANGGRAPH_APP_OCID = lookup(local.agent_app_ocids, "langgraph", "")
+    AGENT_ADK_APP_OCID       = lookup(local.agent_app_ocids, "adk", "")
   }
 }

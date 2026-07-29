@@ -142,7 +142,7 @@ variable "hosted_agent_min_replica" {
 # スタックはホスト型リソースを Dynamic Group / policy に載せられない。事前設定が無いまま
 # 配備すると、コンテナが resource principal を持てず invoke 時に必ず失敗する(review F-004)。
 variable "existing_iam_covers_hosted_agents" {
-  description = "既存IAM流用時に、既存 Dynamic Group が generativeaihostedapplication / generativeaihosteddeployment を含み、既存 policy が JetUse ランタイム権限を与えていることを確認済みである"
+  description = "既存IAM流用時に、既存 Dynamic Group が generativeaihostedapplication / generativeaihostedapplicationiam / generativeaihosteddeployment を含み、既存 policy が JetUse ランタイム権限を与えていることを確認済みである"
   type        = bool
   default     = false
 }

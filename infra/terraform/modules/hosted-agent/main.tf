@@ -25,6 +25,52 @@ locals {
   container_uri = {
     for sdk in var.sdks : sdk => "${var.image_registry}/${var.image_repo_prefix}-agent-${sdk}"
   }
+
+  # API へ送るリクエスト本文。jsonencode に組ませることで、値に引用符・改行・Unicode が
+  # 入っていても壊れない(review F-005)。
+  app_body = {
+    for sdk in var.sdks : sdk => {
+      displayName   = "${var.prefix}-agent-${sdk}"
+      compartmentId = var.compartment_ocid
+      description   = "JetUse ReAct agent container (${sdk} SDK)"
+      freeformTags  = { "jetuse-owner" = local.owner_tag }
+      scalingConfig = {
+        scalingType                = "CONCURRENCY"
+        minReplica                 = var.min_replica
+        maxReplica                 = var.max_replica
+        targetConcurrencyThreshold = var.target_concurrency_threshold
+      }
+      inboundAuthConfig = {
+        inboundAuthConfigType = "IDCS_AUTH_CONFIG"
+        idcsConfig = {
+          domainUrl = var.idcs_endpoint
+          audience  = local.audience
+          scope     = local.scope_name
+        }
+      }
+      # 設定は JSON オブジェクト1本で渡す（スカラーだと引用符が値に残る — 実機確定）。
+      environmentVariables = [{
+        name  = "JETUSE_AGENT_CONFIG"
+        type  = "PLAINTEXT"
+        value = jsonencode(var.environment_variables)
+      }]
+    }
+  }
+
+  deployment_body = {
+    for sdk in var.sdks : sdk => {
+      displayName   = "${var.prefix}-agent-${sdk}-dep"
+      compartmentId = var.compartment_ocid
+      # 実行時にアプリ OCID へ置換する（スクリプト側で sed）。
+      hostedApplicationId = "__APP_OCID__"
+      freeformTags        = { "jetuse-owner" = local.owner_tag }
+      activeArtifact = {
+        artifactType = "SIMPLE_DOCKER_ARTIFACT"
+        containerUri = local.container_uri[sdk]
+        tag          = var.image_tag
+      }
+    }
+  }
 }
 
 # --- OAuth クライアント兼リソース ---
@@ -136,20 +182,18 @@ resource "terraform_data" "agent" {
     # image_tag などは Resource Manager の入力（利用者が任意の文字列を書ける）なので、
     # コマンド本文へ埋め込むと `$(...)` が実行されうるし、引用符で JSON も壊れる(review F-003)。
     environment = {
-      JETUSE_AGENT_CONFIG = jsonencode(var.environment_variables)
-      HA_REGION           = var.region
-      HA_COMPARTMENT      = var.compartment_ocid
-      HA_NAME             = "${var.prefix}-agent-${each.key}"
-      HA_SDK              = each.key
-      HA_IDCS_ENDPOINT    = var.idcs_endpoint
-      HA_AUDIENCE         = local.audience
-      HA_SCOPE            = local.scope_name
-      HA_MIN_REPLICA      = tostring(var.min_replica)
-      HA_MAX_REPLICA      = tostring(var.max_replica)
-      HA_CONCURRENCY      = tostring(var.target_concurrency_threshold)
-      HA_CONTAINER_URI    = local.container_uri[each.key]
-      HA_TAG              = var.image_tag
-      HA_OWNER_TAG        = local.owner_tag
+      HA_REGION        = var.region
+      HA_COMPARTMENT   = var.compartment_ocid
+      HA_NAME          = "${var.prefix}-agent-${each.key}"
+      HA_CONTAINER_URI = local.container_uri[each.key]
+      HA_TAG           = var.image_tag
+      HA_OWNER_TAG     = local.owner_tag
+      # リクエスト JSON は Terraform 側で組み立てる。シェルで文字列連結すると
+      # 改行・タブ・Unicode のエスケープを取りこぼす(review F-005)。
+      HA_APP_BODY = jsonencode(local.app_body[each.key])
+      # デプロイメントはアプリ OCID が実行時にしか分からないので、そこだけ差し込む。
+      # 差し込む値は API から取り出した OCID（英数と . _ - のみ）なので安全。
+      HA_DEP_BODY = jsonencode(local.deployment_body[each.key])
     }
     command = "sh ${path.module}/scripts/ensure_agent.sh"
   }
