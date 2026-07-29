@@ -90,13 +90,13 @@ GenAI 実証済みリージョン（kix/ord）では API 面の障害は無い�
 
   | リージョン | `jetuse-agent-{openai,langgraph,adk}` |
   |---|---|
-  | ap-osaka-1 (kix) | ✅ 作成済み・public・イメージ0件 |
-  | us-chicago-1 (ord) | ⛔ **未作成** |
-  | ap-tokyo-1 (nrt) / us-ashburn-1 (iad) | ⛔ 未作成 |
+  | ap-osaka-1 (kix) | ✅ 作成済み・public（2026-07-29 確認） |
+  | us-chicago-1 (ord) | ✅ 作成済み・public（2026-07-29 確認） |
+  | ap-tokyo-1 (nrt) / us-ashburn-1 (iad) | 未作成（**本タスクの対象外**） |
 
-  **本タスクは push 先を GenAI 実証済みリージョン（kix / ord）に限定する**（下記「push 先の範囲」）。
-  よって **us-chicago-1 に3リポジトリ（public）の作成のみ**が着手前に必要。
-  ADR-0011 と同じ理由でリポジトリが無いと push がルートへの自動作成を試みて権限不足で失敗する。
+  **人間の事前作業は完了済み。着手をブロックするものは無い。**
+  push 先は GenAI 実証済みリージョン（kix / ord）に限定する（下記「push 先の範囲」）。
+  nrt/iad でも動かす方針に変える場合のみ、リポジトリ6個の追加作成が必要になる。
 
 ## 設計判断（ADR-0019 で決定済み）
 
