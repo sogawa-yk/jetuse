@@ -156,6 +156,7 @@ resource "oci_identity_domains_app" "agent" {
 # 「work request did not succeed」と誤判定され、リソースは tainted になって次の apply で
 # 削除→再作成→また誤判定、と収束しない（2026-07-29 DEPLOYTEST/us-chicago-1 実機確認）。
 #
+# **この構成は暫定。provider が修正されたら標準 resource へ戻す(ADR-0019 追記節 / Issue #98)。**
 # よって作成・削除は CLI(`oci raw-request`)で行い、**参照はデータソース**で行う
 # （データソースは list/get だけで work request を待たないため影響を受けない）。
 # 判定ロジックのバグは create/update/delete の待ち受けに限られる。
