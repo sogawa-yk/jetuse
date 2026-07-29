@@ -23,6 +23,11 @@ variable "sdks" {
 variable "image_registry" {
   description = "エージェント画像のレジストリ(例 ord.ocir.io/idqcucnenh88)。デプロイリージョンの OCIR を呼び出し元が渡す"
   type        = string
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$", var.image_registry))
+    error_message = "image_registry must be a registry host optionally followed by namespace path segments."
+  }
 }
 
 variable "image_repo_prefix" {
@@ -35,6 +40,13 @@ variable "image_tag" {
   description = "エージェント画像のタグ"
   type        = string
   default     = "latest"
+
+  # 値はシェルへ環境変数で渡すので実行はされないが、JSON とイメージ参照を壊さないよう
+  # コンテナタグとして妥当な文字だけに絞る(多層防御 — review F-003)。
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$", var.image_tag))
+    error_message = "image_tag must be a valid container tag (alphanumerics, '.', '_', '-')."
+  }
 }
 
 variable "environment_variables" {

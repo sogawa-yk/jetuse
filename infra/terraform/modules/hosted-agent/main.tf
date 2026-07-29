@@ -16,6 +16,15 @@ locals {
   # 2026-06-12 実機確認済み(docs/tips.md)。自分の scopes ブロックの computed fqs は
   # 同一リソース内から参照できないため、allowed_scopes にはこの規則で組み立てた値を渡す。
   fqs = "${local.audience}${local.scope_name}"
+
+  # 作成したリソースに必ず付ける所有者タグ。同名の既存リソースを誤って取り込んだり
+  # 削除したりしないための目印にする(review F-001)。prefix が既存リソースと衝突しても、
+  # このタグが無いものには一切触れない。
+  owner_tag = "jetuse:${var.prefix}"
+
+  container_uri = {
+    for sdk in var.sdks : sdk => "${var.image_registry}/${var.image_repo_prefix}-agent-${sdk}"
+  }
 }
 
 # --- OAuth クライアント兼リソース ---
@@ -90,10 +99,20 @@ resource "terraform_data" "agent" {
   for_each = var.sdks
 
   # destroy 時の provisioner は self しか参照できないため、必要な値を input に持たせる。
+  # あわせて「この SDK をどう配備するつもりか」を state 上に残す: CLI で作る構成では
+  # provider の属性が無く、ここが唯一の宣言的な記録になる（テストもここを見る）。
   input = {
-    region       = var.region
-    compartment  = var.compartment_ocid
-    display_name = "${var.prefix}-agent-${each.key}"
+    region        = var.region
+    compartment   = var.compartment_ocid
+    display_name  = "${var.prefix}-agent-${each.key}"
+    owner_tag     = local.owner_tag
+    idcs_endpoint = var.idcs_endpoint
+    audience      = local.audience
+    scope         = local.scope_name
+    min_replica   = var.min_replica
+    max_replica   = var.max_replica
+    container_uri = local.container_uri[each.key]
+    image_tag     = var.image_tag
   }
 
   # 設定が変わったら作り直す（provider 管理ではないので、差分検出はこの指紋が担う）。
@@ -107,82 +126,32 @@ resource "terraform_data" "agent" {
     min_replica   = var.min_replica
     max_replica   = var.max_replica
     concurrency   = var.target_concurrency_threshold
-    container_uri = "${var.image_registry}/${var.image_repo_prefix}-agent-${each.key}"
+    container_uri = local.container_uri[each.key]
     tag           = var.image_tag
     env           = var.environment_variables
   }))]
 
   provisioner "local-exec" {
-    # 設定 JSON は環境変数で渡す（コマンド行に秘密を置かない）。
+    # 値はすべて環境変数で渡し、シェルの本文へ内挿しない。
+    # image_tag などは Resource Manager の入力（利用者が任意の文字列を書ける）なので、
+    # コマンド本文へ埋め込むと `$(...)` が実行されうるし、引用符で JSON も壊れる(review F-003)。
     environment = {
       JETUSE_AGENT_CONFIG = jsonencode(var.environment_variables)
+      HA_REGION           = var.region
+      HA_COMPARTMENT      = var.compartment_ocid
+      HA_NAME             = "${var.prefix}-agent-${each.key}"
+      HA_SDK              = each.key
+      HA_IDCS_ENDPOINT    = var.idcs_endpoint
+      HA_AUDIENCE         = local.audience
+      HA_SCOPE            = local.scope_name
+      HA_MIN_REPLICA      = tostring(var.min_replica)
+      HA_MAX_REPLICA      = tostring(var.max_replica)
+      HA_CONCURRENCY      = tostring(var.target_concurrency_threshold)
+      HA_CONTAINER_URI    = local.container_uri[each.key]
+      HA_TAG              = var.image_tag
+      HA_OWNER_TAG        = local.owner_tag
     }
-    command = <<-CMD
-      set -eu
-      BASE="https://generativeai.${var.region}.oci.oraclecloud.com/20231130"
-      COMP="${var.compartment_ocid}"
-      NAME="${var.prefix}-agent-${each.key}"
-      TMP="$(mktemp -d)"
-      trap 'rm -rf "$TMP"' EXIT
-      api() { oci raw-request --region "${var.region}" "$@"; }
-      # OCID / 状態の取り出しは grep で行う（raw-request は --query を無視する）。
-      pick_ocid() { grep -oE '"id": "ocid1\.'"$1"'[^"]*"' | head -1 | sed -E 's/.*"(ocid1[^"]*)"/\1/'; }
-      pick_state() { grep -oE '"lifecycleState": "[A-Z_]+"' | head -1 | sed -E 's/.*"([A-Z_]+)"/\1/'; }
-
-      # 1) 既存の ACTIVE なアプリがあれば再利用する（再実行を安全にする）。
-      #    削除済みも同名で列挙されるため lifecycleState=ACTIVE で絞る。
-      APP="$(api --http-method GET --target-uri "$BASE/hostedApplications?compartmentId=$COMP&displayName=$NAME&lifecycleState=ACTIVE" 2>/dev/null | pick_ocid generativeaihostedapplication || true)"
-
-      if [ -z "$APP" ]; then
-        # env の JSON を JSON 文字列として埋め込むためエスケープする（python 等に依存しない）。
-        ESCAPED="$(printf '%s' "$JETUSE_AGENT_CONFIG" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
-        cat > "$TMP/app.json" <<JSON
-      {"displayName":"$NAME","compartmentId":"$COMP",
-       "description":"JetUse ReAct agent container (${each.key} SDK)",
-       "scalingConfig":{"scalingType":"CONCURRENCY","minReplica":${var.min_replica},"maxReplica":${var.max_replica},"targetConcurrencyThreshold":${var.target_concurrency_threshold}},
-       "inboundAuthConfig":{"inboundAuthConfigType":"IDCS_AUTH_CONFIG","idcsConfig":{"domainUrl":"${var.idcs_endpoint}","audience":"${local.audience}","scope":"${local.scope_name}"}},
-       "environmentVariables":[{"name":"JETUSE_AGENT_CONFIG","type":"PLAINTEXT","value":"$ESCAPED"}]}
-      JSON
-        APP="$(api --http-method POST --target-uri "$BASE/hostedApplications" --request-body "file://$TMP/app.json" | pick_ocid generativeaihostedapplication)"
-        [ -n "$APP" ] || { echo "failed to create hosted application $NAME" >&2; exit 1; }
-        i=0
-        while [ "$i" -lt 60 ]; do
-          i=$((i + 1))
-          ST="$(api --http-method GET --target-uri "$BASE/hostedApplications/$APP" | pick_state)"
-          [ "$ST" = ACTIVE ] && break
-          case "$ST" in FAILED|DELETED)
-            echo "hosted application $NAME entered $ST (inbound_auth_config の domain URL が実在するか確認してください)" >&2; exit 1 ;;
-          esac
-          sleep 10
-        done
-        [ "$ST" = ACTIVE ] || { echo "hosted application $NAME did not become ACTIVE" >&2; exit 1; }
-      fi
-
-      # 2) デプロイメント（イメージ pull + 脆弱性スキャンを伴うため時間がかかる）。
-      #    1アプリ=1デプロイメントなので、既にあれば作らない。
-      DEP="$(api --http-method GET --target-uri "$BASE/hostedDeployments?compartmentId=$COMP&applicationId=$APP" 2>/dev/null | pick_ocid generativeaihosteddeployment || true)"
-      if [ -z "$DEP" ]; then
-        cat > "$TMP/dep.json" <<JSON
-      {"displayName":"$NAME-dep","compartmentId":"$COMP","hostedApplicationId":"$APP",
-       "activeArtifact":{"artifactType":"SIMPLE_DOCKER_ARTIFACT","containerUri":"${var.image_registry}/${var.image_repo_prefix}-agent-${each.key}","tag":"${var.image_tag}"}}
-      JSON
-        DEP="$(api --http-method POST --target-uri "$BASE/hostedDeployments" --request-body "file://$TMP/dep.json" | pick_ocid generativeaihosteddeployment)"
-        [ -n "$DEP" ] || { echo "failed to create hosted deployment for $NAME" >&2; exit 1; }
-      fi
-      i=0
-      while [ "$i" -lt 120 ]; do
-        i=$((i + 1))
-        BODY="$(api --http-method GET --target-uri "$BASE/hostedDeployments/$DEP")"
-        ST="$(printf '%s' "$BODY" | pick_state)"
-        [ "$ST" = ACTIVE ] && break
-        case "$ST" in FAILED|NEEDS_ATTENTION|DELETED)
-          echo "hosted deployment for $NAME entered $ST" >&2; exit 1 ;;
-        esac
-        sleep 15
-      done
-      [ "$ST" = ACTIVE ] || { echo "hosted deployment for $NAME did not become ACTIVE within 30 minutes" >&2; exit 1; }
-      echo "hosted agent ready: $NAME ($APP)"
-    CMD
+    command = "sh ${path.module}/scripts/ensure_agent.sh"
   }
 
   lifecycle {
@@ -195,25 +164,14 @@ resource "terraform_data" "agent" {
   # destroy: ACTIVE なデプロイメントは直接削除できず、アプリ削除でカスケードされる
   # (ops/recreate-agents.sh の実機記録)。self しか参照できないので名前で引き直す。
   provisioner "local-exec" {
-    when    = destroy
-    command = <<-CMD
-      set -eu
-      BASE="https://generativeai.${self.input.region}.oci.oraclecloud.com/20231130"
-      api() { oci raw-request --region "${self.input.region}" "$@"; }
-      APP="$(api --http-method GET --target-uri "$BASE/hostedApplications?compartmentId=${self.input.compartment}&displayName=${self.input.display_name}&lifecycleState=ACTIVE" 2>/dev/null | grep -oE '"id": "ocid1\.generativeaihostedapplication[^"]*"' | head -1 | sed -E 's/.*"(ocid1[^"]*)"/\1/' || true)"
-      [ -n "$APP" ] || { echo "hosted application ${self.input.display_name} は既に存在しません"; exit 0; }
-      api --http-method DELETE --target-uri "$BASE/hostedApplications/$APP" >/dev/null
-      # DELETED でも GET は 200 を返す（404 とは限らない）ので lifecycleState で判定する。
-      i=0
-      while [ "$i" -lt 60 ]; do
-        i=$((i + 1))
-        ST="$(api --http-method GET --target-uri "$BASE/hostedApplications/$APP" 2>/dev/null | grep -oE '"lifecycleState": "[A-Z_]+"' | head -1 | sed -E 's/.*"([A-Z_]+)"/\1/' || echo GONE)"
-        case "$ST" in DELETED|GONE) exit 0 ;; esac
-        sleep 12
-      done
-      echo "hosted application ${self.input.display_name} did not reach DELETED" >&2
-      exit 1
-    CMD
+    when = destroy
+    environment = {
+      HA_REGION      = self.input.region
+      HA_COMPARTMENT = self.input.compartment
+      HA_NAME        = self.input.display_name
+      HA_OWNER_TAG   = self.input.owner_tag
+    }
+    command = "sh ${path.module}/scripts/delete_agent.sh"
   }
 }
 

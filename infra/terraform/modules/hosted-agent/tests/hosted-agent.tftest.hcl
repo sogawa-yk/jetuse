@@ -46,6 +46,29 @@ run "three_sdks_with_self_audience_oauth" {
     error_message = "Each SDK must have its own configuration fingerprint."
   }
 
+  # ゼロスケール・OAuth 突合・イメージ参照が意図どおりであること。
+  # CLI で作る構成では provider の属性が無いため、input が唯一の宣言的な記録になる。
+  assert {
+    condition = alltrue([
+      for k, td in terraform_data.agent : (
+        td.input.min_replica == 0 &&
+        td.input.audience == "jetuse-spike-ha01-agent" &&
+        td.input.scope == "invoke" &&
+        td.input.container_uri == "ord.ocir.io/testnamespace/jetuse-agent-${k}" &&
+        td.input.image_tag == "latest" &&
+        td.input.idcs_endpoint == "https://idcs-test.identity.oraclecloud.com"
+      )
+    ])
+    error_message = "Scale-to-zero, inbound auth matching and the container image must be configured as intended."
+  }
+
+  # 所有者タグ: 同名の既存リソースを取り込んだり削除したりしないための目印(review F-001)。
+  # ensure_agent.sh / delete_agent.sh はこのタグが一致しないリソースには触れない。
+  assert {
+    condition     = alltrue([for td in terraform_data.agent : td.input.owner_tag == "jetuse:jetuse-spike-ha01"])
+    error_message = "Created resources must carry an owner tag so foreign resources are never adopted or deleted."
+  }
+
   # client_credentials の自給自足構成: client 兼 resource + 自分の fqs を allowed_scopes に持つ。
   assert {
     condition = (

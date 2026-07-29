@@ -25,14 +25,40 @@
 - [x] T6 `agent_db.py` の base64 ウォレット対応 + テスト
 - [x] T7 ドキュメント（`orm.md` / `iam.md` / `hosted-agent-oauth.md` / `cost-estimate.md` / `tips.md`）
 
+## 実機 E2E の進捗（DEPLOYTEST / us-chicago-1）
+
+| # | シナリオ | 結果 |
+|---|---|---|
+| 1 | 既存項目の非回帰 | ✅ **39/39 PASS・4xx/5xx 0件**（38項目 + 新設 `capability: agents`） |
+| 2 | 3SDK のエージェント実行 | ✅ **9/9 PASS**。3SDK とも `get_current_time` のツール実行を伴う応答。「未設定」エラーなし |
+| 3 | コールドスタート実測 | 🔄 ウォーム時 1.8〜2.3 秒を計測済み。`min_replica=0` からの実測はアイドル35分後に再計測中 |
+| 4 | 無効化構成の縮退 | ⏸ |
+| 5 | destroy | ⏸ |
+
+証跡: `runs/2026-07-29T1210_PORT-03/e2e/`（OCID / ホスト名 / パスワードはマスク済み・漏れ無しを grep で確認）
+
+## 実機で確定した事実（この run で判明・再検証不要）
+
+- **provider 8.24.0 の `oci_generative_ai_hosted_application` は使えない**。work request は
+  SUCCEEDED でリソースも ACTIVE になるのに、provider が `HOSTED_APPLICATION` と
+  `hostedapplication` を照合して一致せず必ず失敗扱いにする。しかも tainted → 削除 → 再作成で
+  **収束しない**。→ 作成・削除は `oci raw-request`、参照は data source に切り替えた。
+- **`oci raw-request` は `--query` / `--output table` を無視する**。抽出は grep で行う。
+- **`environment_variables.value` はスカラーだと引用符が残る**（provider が JSON 検証だけして
+  そのまま送り、API も verbatim 保存する）。設定は `JETUSE_AGENT_CONFIG`（JSON 1本）で渡し、
+  コンテナ側 `agent_env.py` が展開する。
+- **画像タグを機能ごとに分けると壊れる**。エージェントだけ差し替えたら API が旧版のままで
+  `capabilities.agents` が出なかった。`image_tag` 統一が必要（実害で裏付け）。
+- `inbound_auth_config` の domain URL が実在しないと Application は CREATING → **FAILED**。
+- ACTIVE な Hosted Deployment は直接削除できず、Application 削除でカスケードされる。
+- **E2E ハーネスの穴を2件修正**: ログイン後の固定8秒待ち（トークン交換前に叩いて401）と
+  `tone.wav` の生成漏れ（音声シナリオで異常終了）。
+
 ## 未完
 
-- [ ] T8 実機 E2E（DEPLOYTEST / us-chicago-1）5シナリオ + `docs/verification/PORT-03.md`
-  - **人間ゲート待ち**: 配布 zip は `git archive HEAD` から作るため、E2E には feat/PORT-03 への
-    **コミット承認**が要る（`scripts/package-orm-stacks.sh`）。
-  - 3SDK のイメージが OCIR(ord) に未 push。`release.yml` は main への push で動くため、
-    E2E 用に手動 build/push が要る（amd64 なのでローカル macOS では1イメージ約20分。
-    `dispatch-remote` で dev インスタンスへ委譲するのが速い）。
+- [ ] シナリオ3〜5（コールドスタート実測 / 縮退構成 / destroy）
+- [ ] `docs/verification/PORT-03.md` の作成
+- [ ] review-7 の指摘修正ぶんの再レビュー（証跡込み）
 
 ## 実機で確定した事実（この run で判明・再検証不要）
 
