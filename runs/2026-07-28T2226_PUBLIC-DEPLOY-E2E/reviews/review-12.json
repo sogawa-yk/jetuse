@@ -1,0 +1,63 @@
+{
+  "review_n": 12,
+  "timestamp": "2026-07-29T07:02:00+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-12.input.diff",
+  "raw_output_path": "reviews/review-12.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker はありませんが、TTS health の実装不整合、Object Storage destroy の再実行不能、E2E と最終ソースの対応不足が残っています。主要フローの実環境証跡は広範ですが、現行差分全体の裏付けとしては不十分です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 3,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/tts.py",
+      "line": 115,
+      "issue": "OCI SDK の list_voices が返す Voice は display_name / model_name / language_code で表現されますが、コードは voice_id / supported_models を参照しています。そのため実SDKレスポンスでは usable が常に空となり、TTS合成が成功する環境でも /api/health の tts と全体healthが unavailableになります。単体テストも実在しない属性を持つ偽オブジェクトを作るため検出できません。",
+      "suggestion": "display_name が VOICES に含まれ、model_name == TTS_MODEL、language_code == TTS_LANGUAGE_CODE で判定してください。可能なら list_voices のフィルタも指定し、実際の oci.ai_speech.models.Voice を使った契約テストを追加してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "infra/terraform/modules/object-storage/main.tf",
+      "line": 73,
+      "issue": "destroy-time cleanup が on_failure=continue であり、各CLI失敗も `|| echo` で成功終了に変換されます。一時的な認証・通信障害や multipart 列挙失敗でも terraform_data はstateから削除され、その後バケット削除だけが409で失敗します。次回destroyではcleanup resourceが既に無いため自動再試行できません。",
+      "suggestion": "安全な「対象なし」以外のcleanup失敗は非ゼロ終了させ、terraform_dataをstateに残して再destroy可能にしてください。CLI一時障害後の再実行を含むdestroyテストも追加してください。"
+    },
+    {
+      "id": "F003",
+      "severity": "major",
+      "file": "runs/2026-07-28T2226_PUBLIC-DEPLOY-E2E/e2e/source-ref.txt",
+      "line": 4,
+      "issue": "証跡はbase commitだけを記録し、E2E時点の作業ツリーをimmutableなcommit/treeとして特定していません。さらにE2E後にdestroy関連実装を変更したと明記する一方、teardown.txtは「最終コード」でのdestroyと主張しています。イメージ・zipのdigestだけでは現在の差分から生成されたことを検証できず、F001の現行TTS実装と38/38 PASSのhealth結果にも不整合があります。",
+      "suggestion": "最終差分をcommitまたはGit treeに固定し、そのIDから成果物を生成してsource IDと各digestの対応を記録してください。同一成果物で少なくともTTS healthとdestroyを再検証してください。"
+    },
+    {
+      "id": "F004",
+      "severity": "minor",
+      "file": "infra/terraform/modules/object-storage/main.tf",
+      "line": 98,
+      "issue": "multipart一覧を `tr -d '[]\",'` と `|` 区切りで解析しているため、カンマ・引用符・角括弧・パイプを含む正当なObject Storageオブジェクト名が破壊されます。そのuploadを正しくabortできず、バケット削除が409になる境界条件があります。",
+      "suggestion": "JSON-awareな解析でobject名とupload-idを保持し、シェル区切り文字へ直接変換しないでください。記号を含むobject名の未完了multipart uploadを使ったテストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 38,
+    "adequacy": "insufficient",
+    "notes": "runs/2026-07-28T2226_PUBLIC-DEPLOY-E2E/e2e/e2e-results.json はログイン、health、複数モデル、Conversations、RAG、DBチャット、OCR、STT、TTS、管理画面など38/38 PASSを示しています。upgrade-path.md、teardown.txt、SKIPPED.mdには既存Stack更新、destroy、TTSフォールバック・IAM分割・デモスコープ未実施の理由と残存リスクも記録されています。実行先はDEPLOYTEST/jetuse-testですが、READMEには人間承認、新規専用コンパートメントのみの利用、既存リソース非変更、teardown完了が明記され、実パスワード・OCID・未マスクの実エンドポイントも見当たりません。ただしE2E時点のソースがimmutableに特定されず、E2E後の実装変更と現行TTS probeの不整合があるため、最終差分全体の証跡としては不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

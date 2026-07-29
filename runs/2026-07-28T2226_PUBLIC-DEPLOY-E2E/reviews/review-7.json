@@ -1,0 +1,71 @@
+{
+  "review_n": 7,
+  "timestamp": "2026-07-29T05:16:50+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-7.input.diff",
+  "raw_output_path": "reviews/review-7.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker はないため規則上 PASS ですが、RAG の別公開経路、destroy の境界条件、パスワード設定の再実行性に major が残っています。E2E は主要38シナリオを広く裏づけていますが、これらの異常系は未検証です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 4,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "major",
+      "file": "infra/terraform/modules/api-gateway/main.tf",
+      "line": 38,
+      "issue": "300秒へ延長したのは `/api/rag/...` だけです。同じ `rag.add_file` を呼ぶ公開経路 `/api/demos/{demo_id}/rag/files` は60秒のキャッチオールへ残り、デモごとの初回Vector Store作成・DP伝播時に504となり得ます。実装コメントでもデモの初回uploadは通常経路とされています。",
+      "suggestion": "デモスコープのRAG uploadにも300秒の専用ルートを追加し、新規デモへの初回アップロードが60秒を超えても成功するE2EまたはTerraformルート契約テストを追加してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "infra/terraform/modules/object-storage/main.tf",
+      "line": 84,
+      "issue": "multipart一覧を処理するPythonコードは、f-string式内で `i[\\\"object\\\"]` のようにバックスラッシュを使用しています。これはPython 3.11以前ではSyntaxErrorとなり、Resource Manager側のPythonバージョンも3.12以上に固定されていません。さらにstderr破棄とパイプラインにより失敗が隠れ、未完了multipart uploadが残ったままbucket削除が409になります。",
+      "suggestion": "f-stringを使わず `\"{}\\t{}\".format(i[\"object\"], i[\"upload-id\"])` など旧Pythonでも動く記述にし、未完了multipart uploadを実際に作成したdestroyテストを追加してください。解析失敗を無条件に握り潰さないことも推奨します。"
+    },
+    {
+      "id": "F003",
+      "severity": "major",
+      "file": "infra/terraform/modules/object-storage/main.tf",
+      "line": 65,
+      "issue": "`empty_buckets`とContainer Instance／Functionsはいずれもbucketに依存する兄弟ノードであり、destroy時の相互順序がありません。Terraformはアプリ停止とbucket cleanupを並行実行できるため、cleanup後に処理中のアプリやジョブが新しいobjectを書き込み、bucket削除が再び409になる競合があります。添付teardownはアイドル状態のdestroyのみで、この境界条件を裏づけていません。",
+      "suggestion": "呼び出し元でContainer InstanceとFunctionsをobject-storage module全体へ明示依存させるなど、destroy順を API Gateway → writers → cleanup guard → buckets に固定してください。処理中または書込み可能な状態からのdestroyも検証してください。"
+    },
+    {
+      "id": "F004",
+      "severity": "major",
+      "file": "infra/terraform/modules/identity-domain-app/main.tf",
+      "line": 118,
+      "issue": "PUTがサーバー側では成功したものの応答だけ失われた場合、次の試行は `pwdpolicyViolation`となり即失敗します。以後の同一passwordでのapplyも再開できず、Resource Manager利用者はsourceのkeepers変更なしには復旧困難です。また証跡のupgrade-path.md 35–36行は、この場合を成功扱いすると記載しており最終実装と矛盾しています。",
+      "suggestion": "要求したpasswordが現在値であることを安全に検証できるpostconditionを用意するか、利用者が次回applyで変更できるpassword rotation nonceをkeepersへ追加してください。fail-closedを維持する場合は、証跡の誤記を直し、応答喪失経路をSKIPPED.mdへ残存リスクとして記載してください。"
+    },
+    {
+      "id": "F005",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/tts.py",
+      "line": 193,
+      "issue": "実合成失敗を `_last_result`へ記録しても、以前成功した `_probe_cache`を無効化しません。その直後のhealthは失敗を受けて`probe()`を呼びますが、最大300秒間は古い成功cacheを返し、実合成が失敗した直後でもstatus=okとなり得ます。",
+      "suggestion": "合成失敗を記録する両経路で `_probe_cache`を無効化し、成功probeをcacheした後に実合成が失敗するテストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 38,
+    "adequacy": "insufficient",
+    "notes": "runs/2026-07-28T2226_PUBLIC-DEPLOY-E2E/e2e/e2e-results.json の38件は全件PASSで、ログイン、Responses/Conversations、RAG初回upload、DB、OCR/STT/TTS、管理画面を広く確認しています。source-refは最終のtracked差分と一致し、upgrade、DB再作成、teardownの補助証跡もあり、TTS fallbackとIAM分割を未実施としたSKIPPED.mdの理由は妥当です。一方、demo-scoped RAG、未完了multipart、書込みプロセスとのdestroy競合、UserPasswordChangerの応答喪失は未検証で、最後の経路はupgrade-path.mdの説明と実装も一致しないため、差分全体の裏づけとしては不十分です。実パスワード・実OCID・未マスクendpointの混入は提示証跡には見当たりません。実行先はDEPLOYTEST/jetuse-testですが、READMEには当該環境での明示承認と既存リソース非変更、teardown完了が記録されています。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURL未提供のため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

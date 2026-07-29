@@ -31,6 +31,36 @@ locals {
       function_id  = null
       read_timeout = 300
     },
+    # RAG(FIX-58): 初回アップロードは Vector Store の DP 反映待ちを含み実測 66 秒かかる。
+    # キャッチオールの 60 秒では**新規デプロイの初回アップロードが必ず 504** になるため、
+    # OCR と同様に延長する。完全一致ルートも併設({p*}は末尾セグメントなしに一致しない)。
+    {
+      path         = "/api/rag/files"
+      methods      = ["ANY"]
+      type         = "HTTP_BACKEND"
+      url          = "${var.ci_base_url}/api/rag/files"
+      function_id  = null
+      read_timeout = 300
+    },
+    {
+      path         = "/api/rag/{p*}"
+      methods      = ["ANY"]
+      type         = "HTTP_BACKEND"
+      url          = "${var.ci_base_url}/api/rag/$${request.path[p]}"
+      function_id  = null
+      read_timeout = 300
+    },
+    # デモスコープ(SP1-03)も同じ rag.add_file / SSE チャットを通るため同様に延長する。
+    # `/api/demos/{demo_id}/rag/files` と `/api/demos/{demo_id}/chat` がキャッチオール(60秒)に
+    # 残ると、デモごとの初回アップロードや長い応答で 504 になる。
+    {
+      path         = "/api/demos/{p*}"
+      methods      = ["ANY"]
+      type         = "HTTP_BACKEND"
+      url          = "${var.ci_base_url}/api/demos/$${request.path[p]}"
+      function_id  = null
+      read_timeout = 300
+    },
     # 非ストリーミングAPIのキャッチオール(会話CRUD・プリセット等)。
     # /api/chat/{p*} の方が具体的なため優先される(実機確認済み)
     {

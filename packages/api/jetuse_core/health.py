@@ -11,7 +11,7 @@ Issue #47 の「切り分け不能」問題のアプリ全域での根治。
 
 from typing import Any
 
-from . import nl2sql, rag
+from . import nl2sql, rag, tts
 from .bootstrap import resource_principal_status
 from .models import MODELS, model_status
 from .settings import get_settings
@@ -111,12 +111,32 @@ def ocr_health() -> dict[str, Any]:
 
 
 def tts_health() -> dict[str, Any]:
-    # 実合成は課金対象のため呼ばない。設定(TTS_REGION)とcompartment_ocidの有無を報告する。
-    ok = bool(get_settings().compartment_ocid)
+    # 実合成は課金対象のため health からは呼ばない。設定の充足に加えて、**直近の実合成の結果**
+    # を反映する(設定だけ見てokと言うと、実際には503で落ちているのにhealthが緑という
+    # 偽陽性になる — F-007)。まだ一度も合成していない場合は verified=false で区別する。
+    configured = bool(get_settings().compartment_ocid)
+    if not configured:
+        return {
+            "status": "unavailable",
+            "region": (tts.candidate_regions() or [""])[0],
+            "candidate_regions": tts.candidate_regions(),
+            "verified": False,
+            "hint": "COMPARTMENT_OCID 未設定",
+        }
+    # 同一プロセスで**成功した**実合成があればそれが最も確かな情報。
+    # 失敗や未実施のときは list_voices で実測し直す(過去の一時障害を無期限に引きずらない)。
+    # `/api/tts` は Functions、health は Container Instance という構成では実合成の結果自体が
+    # 届かないため、実測プローブが主経路になる。
+    last = tts.last_result()
+    checked = last if last["ok"] is True else tts.probe()
+    candidates = tts.candidate_regions()
     return {
-        "status": "ok" if ok else "unavailable",
-        "region": get_settings().tts_region,
-        **({"hint": "COMPARTMENT_OCID 未設定"} if not ok else {}),
+        "status": "ok" if checked["ok"] else "unavailable",
+        # 後方互換: region は単一値のまま(解決済み → 先頭候補)。候補一覧は別フィールド。
+        "region": checked.get("region") or (candidates[0] if candidates else ""),
+        "candidate_regions": candidates,
+        "verified": bool(checked["ok"]),
+        **({"hint": checked.get("hint")} if not checked["ok"] and checked.get("hint") else {}),
     }
 
 

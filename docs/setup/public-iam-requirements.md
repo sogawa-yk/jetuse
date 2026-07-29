@@ -59,7 +59,7 @@ SQL Searchを使用しない場合は`enable_semantic_store=false`にし、`gene
 
 JetUse専用コンパートメントの`${prefix}-runtime-policy`には次の権限が含まれる。
 
-- Runtime: Generative AI、Vector Store / File、ADB、Object Storage、Speech、Document、Language、Logging、Monitoring、Secrets
+- Runtime: Generative AI、Response / Conversation、Vector Store / File / Project、ADB、Object Storage、Speech、Document、Language、Logging、Monitoring、Secrets
 - ADB: Generative AI、Object Storage read
 - API Gateway: 同じコンパートメントのFunctions呼び出し
 - Semantic Store: DB Tools、Database metadata、Secrets、Generative AI（有効時）
@@ -71,6 +71,17 @@ Allow dynamic-group <prefix>-runtime-dg to read objectstorage-namespaces in tena
 ```
 
 完全なPolicy文の正本は [IAM Terraform module](../../infra/terraform/modules/iam/main.tf)。
+
+agentic API（Responses / Conversations / Vector Store / Files / Project）は`generative-ai-family`に**含まれない**個別resource-typeである。Runtime Policyを事前作成する場合は、次の6つを漏らさないこと（欠けると既定チャットモデル・RAG回答・会話メモリがresource principalでのみ404になる）。
+
+```text
+Allow dynamic-group <prefix>-runtime-dg to manage generative-ai-response in compartment id <compartment_ocid>
+Allow dynamic-group <prefix>-runtime-dg to manage generative-ai-conversation in compartment id <compartment_ocid>
+Allow dynamic-group <prefix>-runtime-dg to manage generative-ai-vector-store in compartment id <compartment_ocid>
+Allow dynamic-group <prefix>-runtime-dg to manage generative-ai-vectorstore-file in compartment id <compartment_ocid>
+Allow dynamic-group <prefix>-runtime-dg to manage generative-ai-file in compartment id <compartment_ocid>
+Allow dynamic-group <prefix>-runtime-dg to manage generative-ai-project in compartment id <compartment_ocid>
+```
 
 ## 管理者への依頼テンプレート
 

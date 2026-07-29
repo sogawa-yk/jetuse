@@ -17,7 +17,7 @@ OCI版 JetUse プロトタイプ「JetUse」で使われている OCI サービ�
 | AI | **GenAI Hosted Applications** | ホスト型エージェント（OpenAI Agents SDK / ADK / LangGraph） |
 | データ | **Autonomous Database 26ai** | 会話/定義/議事録/データセット・Select AI・SQL Search |
 | 検索 | **Search with OpenSearch** | RAGバックエンドの一つ（k-NNベクトル検索） |
-| 音声 | **OCI Speech** | STT（Whisper、大阪）＋ TTS（Phoenix・クロスリージョン） |
+| 音声 | **OCI Speech** | STT（Whisper、大阪）＋ TTS（リージョン自動選択。デプロイリージョン → us-phoenix-1 の順に試行） |
 | 言語 | **OCI Language** | 翻訳（任意） |
 | 文書 | **Document Understanding** | OCR / 文書認識 |
 | 認証 | **Identity Domain** | OIDCログイン（PKCE）＋ OAuth（client_credentials） |
@@ -40,7 +40,7 @@ OCI版 JetUse プロトタイプ「JetUse」で使われている OCI サービ�
 | エージェント（完全hosted化） | CI: ①Identity DomainでOAuth → ②Hosted App を invoke。ツール(LLM/query_database/web)は**Hosted App内**で実行 | [agent](./usecases/usecase-agent.png) |
 | 議事録 | CI: ①Object Storageへ音声UL → ②OCI Speech(STTバッチ, Object Storage入出力) → ④ADB保存 → ⑤Generative AIで整形 | [minutes](./usecases/usecase-minutes.png) |
 | リアルタイム翻訳 | CI: ①OCI Speech(STTリアルタイム/WebSocket)で確定字幕 → ②Generative AI または OCI Language で翻訳 | [realtime](./usecases/usecase-realtime.png) |
-| 音声チャット | ①CI→OCI Speech(STT) → ②CI→Generative AI(LLM) → ③API GW→Functions → ④Functions→OCI Speech TTS(us-phoenix-1) | [voicechat](./usecases/usecase-voicechat.png) |
+| 音声チャット | ①CI→OCI Speech(STT) → ②CI→Generative AI(LLM) → ③API GW→Functions → ④Functions→OCI Speech TTS(リージョン自動選択) | [voicechat](./usecases/usecase-voicechat.png) |
 | 映像分析 | CI: ①Generative AI(vision) に画像+プロンプトを送り分析 | [video](./usecases/usecase-video.png) |
 | OCR / 文書認識（engineで2方式切替） | CI: engine=DU→Document Understanding / engine=VLM→CIで画像化してGenerative AI(vision) | [ocr](./usecases/usecase-ocr.png) |
 

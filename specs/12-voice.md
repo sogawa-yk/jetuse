@@ -4,7 +4,7 @@ SPIKE-06（docs/verification/SPIKE-06.md）の実機確定事項を前提とす�
 
 - バッチSTT: `WHISPER_MEDIUM` + `languageCode` + 話者分離（`tokens[].speakerIndex`）が大阪で動作。**出力は分かち書きトークン**（結合・空白除去の後処理必須）
 - リアルタイムSTT: `modelType=WHISPER`（`WHISPER_MEDIUM`不可）、partialなし（finalのみ）、`finalSilenceThresholdInMs`等は送信不可
-- TTS: **Phoenix限定**（日本語ボイス: Aiko/Hana/Sakura/Yuki/Satoshi、約1.3s/文）
+- TTS: 提供リージョンは拡大中で**Phoenix限定ではない**（2026-07-28実測: us-chicago-1 可 / ap-osaka-1・ca-toronto-1 不可）。日本語ボイス: Aiko/Hana/Sakura/Yuki/Satoshi、約1.3s/文
 
 ## [VOICE-01] 議事録生成
 
@@ -118,7 +118,7 @@ SSEはSPIKE-02以降この経路で実証済み。API⇔OCIリアルタイムSTT
 |---|---|---|
 | POST | `/api/tts` | `{text(≤500字), voice}` → `audio/mpeg`（mp3バイト列） |
 
-- `jetuse_core/tts.py`: Phoenixクロスリージョン（設定 `TTS_REGION`、既定 `us-phoenix-1`）。
+- `jetuse_core/tts.py`: 設定 `TTS_REGION`。**既定は空＝自動**で、デプロイリージョン → `us-phoenix-1` の順に試し、成功したリージョンを記憶する（他候補は落とさない）。明示指定時はそのリージョンのみ。
   RP/ユーザー署名両対応。`compartment_id` 必須（無いと404 — VOICE-01のハマり）
 - `TtsOracleTts2NaturalModelDetails(voice_id, language_code="ja-JP")` 明示（SPIKE-06ハマり）
 - voiceはSPIKE-06で確認済みの日本語5種（Aiko/Hana/Sakura/Yuki/Satoshi）のallowlist。v1は日本語のみ

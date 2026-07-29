@@ -16,7 +16,7 @@ OCI版 JetUse プロトタイプの開発で**実機検証によって得た知�
   **Grok系・Llama4系は大阪不可**（ADR-0001）。
 - ADB: `jetuse-dev-adb`（**23.26.2.2.0 = 26ai**）。夜間停止に巻き込まれ自動再開しないため
   セッション開始時に起動確認（`ops/start-adb-if-stopped.sh`）。
-- OCI Speech: STTはWhisperで日本語可。**TTSはPhoenix限定**（クロスリージョン呼び出しは追加IAM不要）。
+- OCI Speech: STTはWhisperで日本語可。TTSの提供リージョンは拡大しており**Phoenix限定ではない**（2026-07-28実測: us-chicago-1 可 / ap-osaka-1・ca-toronto-1 不可）。アプリは `TTS_REGION` 未指定ならデプロイリージョン → us-phoenix-1 の順に試す（クロスリージョン呼び出しは追加IAM不要）。
 
 ---
 

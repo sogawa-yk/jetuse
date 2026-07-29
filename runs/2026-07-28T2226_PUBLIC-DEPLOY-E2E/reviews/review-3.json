@@ -1,0 +1,55 @@
+{
+  "review_n": 3,
+  "timestamp": "2026-07-29T01:14:12+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-3.input.diff",
+  "raw_output_path": "reviews/review-3.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "主要な実環境フローは成功しており、認証情報・実OCID・実エンドポイントのコミットも見当たりません。ただし、パスワード再試行の誤判定と既存Terraformテストの確定的な失敗が残っています。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 2,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "major",
+      "file": "infra/terraform/modules/identity-domain-app/main.tf",
+      "line": 110,
+      "issue": "1回目から恒久的なpwdpolicyViolationが返る場合でも、同じ処理を再試行した2回目ではattempt > 1だけを根拠に成功扱いします。このため、履歴にあるが現在値ではないパスワードや手動ドリフト時にapplyが成功し、出力されたdemo_passwordではログインできない状態を隠蔽します。upgrade-path.mdの「1回目の履歴違反は失敗」という説明とも一致しません。",
+      "suggestion": "直前の失敗が応答喪失を疑える通信エラーだった場合だけ履歴違反を特別扱いし、可能なら生成パスワードでの認証確認後に成功としてください。全試行がpwdpolicyViolationとなるケースは必ず非ゼロ終了するテストも追加してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "infra/terraform/modules/iam/tests/iam.tftest.hcl",
+      "line": 41,
+      "issue": "runtime policyへ2文追加した一方、既存テストはfull構成を23文、minimal構成を17文と固定しています。変更後はそれぞれ25文と19文になるため、CIのterraform testが確定的に失敗します。また、新しいresponse/conversation文自体のcontains検証もありません。",
+      "suggestion": "件数を25文と19文へ更新し、generative-ai-responseおよびgenerative-ai-conversationの完全一致assertを追加してください。"
+    },
+    {
+      "id": "F003",
+      "severity": "minor",
+      "file": "specs/12-voice.md",
+      "line": 7,
+      "issue": "コードと今回更新したガイドは「Phoenix限定ではない」としていますが、現行仕様書には依然として「TTS: Phoenix限定」と記載されています。docs/cost-estimate.mdにも同じ前提が残っており、利用者向け仕様が矛盾しています。",
+      "suggestion": "現行仕様書とコスト資料を「TTS_REGION未指定時はデプロイリージョンからPhoenixへフォールバック」に更新してください。過去のSPIKE結果は日付付きの当時記録として区別してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 38,
+    "adequacy": "insufficient",
+    "notes": "runs/2026-07-28T2226_PUBLIC-DEPLOY-E2E/e2e/e2e-results.jsonの38件は全件PASSで、ログイン、Responses/Conversations、RAG初回アップロード、DB bootstrap、TTS実合成、管理画面を広く確認しています。image-digests.txtとsource-ref.txt、upgrade-path.mdも対象物と旧Stack更新を補強し、SKIPPED.mdのTTSフォールバック未実施理由も妥当です。ただし、upgrade-path.mdが主張する応答喪失時の再試行分岐は実行証跡がなく、実装は恒久的な履歴違反も2回目で成功扱いします。またREADME.mdが参照するteardown.txtは添付されておらず、後片付けは確認できません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

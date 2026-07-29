@@ -5,7 +5,7 @@ ok/degraded/unavailable + hint を返すことを検証する(FIX-47の/api/rag/
 import pytest
 from fastapi.testclient import TestClient
 
-from jetuse_core import bootstrap, health, models, nl2sql, rag
+from jetuse_core import bootstrap, health, models, nl2sql, rag, tts
 from jetuse_core.settings import get_settings
 from service.main import app
 
@@ -13,7 +13,10 @@ client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
-def reset_state():
+def reset_state(tmp_path, monkeypatch):
+    # RP状態はコンテナ内でプロセスをまたぐためファイル経由で共有される。テストでは
+    # 共有/tmpを汚さないようテストごとの一時ファイルへ向ける(相互汚染も防ぐ)。
+    monkeypatch.setattr(bootstrap, "_RP_STATUS_FILE", str(tmp_path / "rp-status.json"))
     get_settings.cache_clear()
     models.clear_unavailable()
     bootstrap._set_resource_principal_status(True)
@@ -67,9 +70,27 @@ def test_dbchat_health_unavailable_when_no_generation_backend_works(monkeypatch)
     assert out["status"] == "unavailable"  # …生成経路が無いのでunavailable
 
 
-def test_dbchat_health_probes_select_ai_rp_when_bootstrap_unverified(monkeypatch):
+def test_dbchat_health_reports_unverified_select_ai_as_not_ok(tmp_path, monkeypatch):
+    # PORT-02 F-003: bootstrap未完了(未検証)をokと偽らない — ok=Noneで区別する。
+    # dev-app では未検証時に nl2sql.select_ai_rp_status で実測するため、ファイル受け渡し
+    # (FIX-58)でも実測でも判定できない状況を作って「未検証のまま」を確かめる。
+    monkeypatch.setattr(bootstrap, "_RP_STATUS_FILE", str(tmp_path / "absent.json"))
+    monkeypatch.setattr(nl2sql, "select_ai_rp_status",
+                        lambda: {"ok": None, "hint": "RP未検証"})
+    bootstrap._rp_status = {
+        "ok": None,
+        "hint": "起動時のENABLE_RESOURCE_PRINCIPAL検証が未実行です(bootstrap未完了)",
+    }
+    out = health.dbchat_health()
+    assert out["select_ai"]["ok"] is None
+    assert out["select_ai"]["hint"]
+
+
+def test_dbchat_health_probes_select_ai_rp_when_bootstrap_unverified(tmp_path, monkeypatch):
     # PORT-02 F-003 + dev-app: bootstrap(別プロセス起動)が rp を未検証(ok=None)のときは、
     # okと偽らず uvicorn プロセスで RP 経路を実測する(nl2sql.select_ai_rp_status)。
+    # FIX-58 のファイル受け渡しでも決まらない状況にするため状態ファイルは存在しない場所へ。
+    monkeypatch.setattr(bootstrap, "_RP_STATUS_FILE", str(tmp_path / "absent.json"))
     bootstrap._rp_status = {"ok": None, "hint": "bootstrap未完了"}
     # プローブ失敗 → select_ai not-ok(okと偽らない)
     monkeypatch.setattr(nl2sql, "select_ai_rp_status",
@@ -80,6 +101,19 @@ def test_dbchat_health_probes_select_ai_rp_when_bootstrap_unverified(monkeypatch
     # プローブ成功 → select_ai ok(dev-app の RP フォールバックが効く)
     bootstrap._rp_status = {"ok": None, "hint": "bootstrap未完了"}
     monkeypatch.setattr(nl2sql, "select_ai_rp_status", lambda: {"ok": True})
+    assert health.dbchat_health()["select_ai"]["ok"] is True
+
+
+def test_resource_principal_status_crosses_processes_via_file(tmp_path, monkeypatch):
+    """FIX-58: bootstrap は entrypoint から別プロセスで動くため、結果はファイル経由で
+    uvicorn 側へ渡る。プロセス内が未検証でもファイルがあればそれを採用する。"""
+    path = tmp_path / "rp-status.json"
+    monkeypatch.setattr(bootstrap, "_RP_STATUS_FILE", str(path))
+    bootstrap._set_resource_principal_status(True)  # bootstrap プロセス相当
+    monkeypatch.setattr(  # uvicorn プロセス相当(プロセス内は未検証のまま)
+        bootstrap, "_rp_status", {"ok": None, "hint": "bootstrap未完了"}
+    )
+    assert bootstrap.resource_principal_status()["ok"] is True
     assert health.dbchat_health()["select_ai"]["ok"] is True
 
 
@@ -114,6 +148,13 @@ def test_ocr_and_tts_health_unavailable_without_compartment_ocid(monkeypatch):
 
 def test_ocr_and_tts_health_ok_with_compartment_ocid(monkeypatch):
     monkeypatch.setenv("COMPARTMENT_OCID", "ocid1.compartment.oc1..x")
+    monkeypatch.setattr(tts, "_last_result", {"ok": None, "region": None, "hint": None, "at": None})
+    monkeypatch.setattr(
+        tts, "probe", lambda *a, **k: {
+            "ok": True, "region": "us-phoenix-1", "hint": None,
+            "at": None,
+        }
+    )
     get_settings.cache_clear()
     assert health.ocr_health()["status"] == "ok"
     assert health.tts_health()["status"] == "ok"
@@ -164,3 +205,112 @@ def test_capability_health_endpoint_503_on_true_crash(monkeypatch):
     monkeypatch.setattr(health, "capability_health", boom)
     res = client.get("/api/health")
     assert res.status_code == 503
+
+
+def test_tts_health_keeps_region_single_valued_and_lists_candidates(monkeypatch):
+    """F-005: region は従来どおり単一のリージョン文字列(既存クライアント互換)。
+    候補一覧は新フィールド candidate_regions で返す。"""
+    monkeypatch.setenv("OCI_REGION", "us-chicago-1")
+    monkeypatch.delenv("TTS_REGION", raising=False)
+    monkeypatch.setenv("COMPARTMENT_OCID", "ocid1.compartment.oc1..x")
+    monkeypatch.setattr(tts, "_resolved_region", None)
+    monkeypatch.setattr(tts, "_last_result", {"ok": None, "region": None, "hint": None, "at": None})
+    monkeypatch.setattr(
+        tts, "probe", lambda *a, **k: {
+            "ok": True, "region": "us-chicago-1", "hint": None,
+            "at": None,
+        }
+    )
+    get_settings.cache_clear()
+    out = health.tts_health()
+    assert out["region"] == "us-chicago-1"  # カンマ連結しない
+    assert out["candidate_regions"] == ["us-chicago-1", "us-phoenix-1"]
+    assert out["verified"] is True
+
+
+def test_tts_health_reports_unavailable_after_real_failure(monkeypatch):
+    """F-007: 設定が揃っていても実際に到達できなければ ok と言わない。"""
+    monkeypatch.setenv("COMPARTMENT_OCID", "ocid1.compartment.oc1..x")
+    monkeypatch.setattr(
+        tts, "_last_result", {"ok": False, "region": None, "hint": "古い失敗", "at": None}
+    )
+    monkeypatch.setattr(
+        tts, "probe", lambda *a, **k: {"ok": False, "region": None, "hint": "未購読の可能性"}
+    )
+    get_settings.cache_clear()
+    out = health.tts_health()
+    assert out["status"] == "unavailable"
+    assert "未購読" in out["hint"]
+
+
+def test_tts_health_recovers_after_transient_synthesis_failure(monkeypatch):
+    """一度の合成失敗を無期限に引きずらない: 実測プローブが通れば ok に戻る。"""
+    monkeypatch.setenv("COMPARTMENT_OCID", "ocid1.compartment.oc1..x")
+    monkeypatch.setattr(
+        tts, "_last_result", {"ok": False, "region": "us-chicago-1", "hint": "一時障害", "at": None}
+    )
+    monkeypatch.setattr(
+        tts, "probe", lambda *a, **k: {
+            "ok": True, "region": "us-chicago-1", "hint": None,
+            "at": None,
+        }
+    )
+    get_settings.cache_clear()
+    out = health.tts_health()
+    assert out["status"] == "ok"
+    assert out["verified"] is True
+
+
+def test_tts_health_ok_and_verified_after_successful_synthesis(monkeypatch):
+    monkeypatch.setenv("COMPARTMENT_OCID", "ocid1.compartment.oc1..x")
+    monkeypatch.setattr(
+        tts, "_last_result", {"ok": True, "region": "us-chicago-1", "hint": None, "at": None}
+    )
+    get_settings.cache_clear()
+    out = health.tts_health()
+    assert out["status"] == "ok"
+    assert out["verified"] is True
+    assert out["region"] == "us-chicago-1"
+
+
+def test_tts_health_uses_non_billable_probe_when_process_never_synthesized(monkeypatch):
+    """F-007後追い: /api/tts は Functions、/api/health は Container Instance が返すため
+    実合成の結果は health のプロセスに届かない。list_voices（合成しない=課金なし）で
+    到達性を実測し、届かなければ ok と言わない。"""
+    monkeypatch.setenv("COMPARTMENT_OCID", "ocid1.compartment.oc1..x")
+    monkeypatch.setattr(tts, "_last_result", {"ok": None, "region": None, "hint": None, "at": None})
+    monkeypatch.setattr(
+        tts, "probe", lambda *a, **k: {"ok": False, "region": None, "hint": "到達できません"}
+    )
+    get_settings.cache_clear()
+    out = health.tts_health()
+    assert out["status"] == "unavailable"
+    assert out["verified"] is False
+    assert "到達できません" in out["hint"]
+
+
+def test_tts_probe_caches_and_falls_back_across_regions(monkeypatch):
+    monkeypatch.setenv("OCI_REGION", "ap-osaka-1")
+    monkeypatch.delenv("TTS_REGION", raising=False)
+    monkeypatch.setattr(tts, "_resolved_region", None)
+    monkeypatch.setattr(tts, "_probe_cache", None)
+    get_settings.cache_clear()
+    calls: list[str] = []
+
+    def client(region, timeout=None):
+        calls.append(region)
+        c = type("C", (), {})()
+        voice = type("V", (), {"voice_id": "Yuki", "language_code": "ja-JP",
+                               "supported_models": ["TTS_2_NATURAL"]})()
+        data = type("D", (), {"items": [voice]})()
+        if region == "ap-osaka-1":
+            c.list_voices = lambda **kw: (_ for _ in ()).throw(RuntimeError("404"))
+        else:
+            c.list_voices = lambda **kw: type("R", (), {"data": data})()
+        return c
+
+    monkeypatch.setattr(tts, "_speech_client", client)
+    assert tts.probe()["region"] == "us-phoenix-1"
+    n = len(calls)
+    tts.probe()  # キャッシュが効き再問い合わせしない
+    assert len(calls) == n

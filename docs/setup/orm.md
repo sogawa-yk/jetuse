@@ -43,6 +43,7 @@ Resource Managerが自動入力する`region`はリソースの配備リージ�
 | `enable_semantic_store` | `true` | SQL Search用Semantic Store権限を含める |
 | `enable_auth` | `true` | Identity Domain、OIDCアプリ、デモユーザーを作成 |
 | `enable_opensearch` | `false` | 常設課金のOpenSearchを作成 |
+| `admin_users` | 空 | 管理ダッシュボード（`/admin`）を開けるユーザー。空欄ならStackが作る`demo`ユーザーが管理者 |
 | `adb_admin_password` | 空 | 空の場合は安全なランダム値を生成 |
 
 `enable_auth=true`はIdentity Domainを作成するため、実行ユーザーにテナンシのDomain管理権限が必要。権限がなく認証も不要な隔離検証環境では`false`にできる。
@@ -61,10 +62,16 @@ Resource Managerが自動入力する`region`はリソースの配備リージ�
 ## デプロイ後
 
 1. Outputの`app_url`を開く。
-2. `demo_username` / `demo_password`でログインする。
+2. `demo_username` / `demo_password`でログインする。パスワード変更を求められずそのまま入れる（StackがUserPasswordChanger経由で設定するため）。
 3. 初回はIAM反映、ADB作成、DB初期化に10〜15分程度かかる。反映中は一部APIが一時的に失敗することがある。
+4. `GET <app_url>/api/health` で機能ごとの可用性（chat / rag / dbchat / speech / ocr / tts）を確認できる。
+
+デモユーザーのパスワード設定にはOCI CLIを使う（Terraform providerに該当リソースが無いため）。Resource Managerの実行環境にはCLIが同梱・認証済みなのでボタン経由では追加作業は不要。ローカルで`terraform apply`する場合のみ、`oci` CLIが認証済みであること。
 
 ## Stack更新時の注意
+
+**デモユーザーのパスワードは、旧版からの初回更新時に必ずローテートされる。** 旧版はIdentity DomainのUserリソースへ直接パスワードを書いていたため、そのユーザーは「初回ログイン時にパスワード変更が必須」の状態で固定されている。同じ値では変更が拒否される（パスワード履歴）うえ、通っても必須状態が解除されないため、Stackは新しいパスワードを発行して`UserPasswordChanger`で設定し直す。**更新後は出力の`demo_password`を取り直すこと**（Plan上は`random_password.demo must be replaced`として現れる。実際のパスワード変更はTerraformの外＝`local-exec`のOCI CLI呼び出しで行われる）。既存の`demo`資格情報を配布済みの場合は、更新後に配り直す。
+
 
 同じStackで`enable_dynamic_group=true`から`false`へ変更すると、TerraformはそのStackが管理しているDynamic GroupとテナンシPolicyを削除するPlanを作る。既存IAMへ管理を移す場合は、Planを確認し、必要に応じて先にTerraform stateを移管する。
 
