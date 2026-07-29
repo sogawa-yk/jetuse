@@ -26,6 +26,25 @@ locals {
     for sdk in var.sdks : sdk => "${var.image_registry}/${var.image_repo_prefix}-agent-${sdk}"
   }
 
+  # 設定の指紋。作り直し判定（triggers_replace）と、実リソース側の再利用判定
+  # （freeform tag との突合）の両方で同じ値を使う。
+  config_fingerprint = {
+    for sdk in var.sdks : sdk => sha256(jsonencode({
+      display_name  = "${var.prefix}-agent-${sdk}"
+      compartment   = var.compartment_ocid
+      region        = var.region
+      idcs_endpoint = var.idcs_endpoint
+      audience      = local.audience
+      scope         = local.scope_name
+      min_replica   = var.min_replica
+      max_replica   = var.max_replica
+      concurrency   = var.target_concurrency_threshold
+      container_uri = "${var.image_registry}/${var.image_repo_prefix}-agent-${sdk}"
+      tag           = var.image_tag
+      env           = var.environment_variables
+    }))
+  }
+
   # API へ送るリクエスト本文。jsonencode に組ませることで、値に引用符・改行・Unicode が
   # 入っていても壊れない(review F-005)。
   app_body = {
@@ -33,7 +52,10 @@ locals {
       displayName   = "${var.prefix}-agent-${sdk}"
       compartmentId = var.compartment_ocid
       description   = "JetUse ReAct agent container (${sdk} SDK)"
-      freeformTags  = { "jetuse-owner" = local.owner_tag }
+      freeformTags = {
+        "jetuse-owner"  = local.owner_tag
+        "jetuse-config" = local.config_fingerprint[sdk]
+      }
       scalingConfig = {
         scalingType                = "CONCURRENCY"
         minReplica                 = var.min_replica
@@ -162,20 +184,8 @@ resource "terraform_data" "agent" {
   }
 
   # 設定が変わったら作り直す（provider 管理ではないので、差分検出はこの指紋が担う）。
-  triggers_replace = [sha256(jsonencode({
-    display_name  = "${var.prefix}-agent-${each.key}"
-    compartment   = var.compartment_ocid
-    region        = var.region
-    idcs_endpoint = var.idcs_endpoint
-    audience      = local.audience
-    scope         = local.scope_name
-    min_replica   = var.min_replica
-    max_replica   = var.max_replica
-    concurrency   = var.target_concurrency_threshold
-    container_uri = local.container_uri[each.key]
-    tag           = var.image_tag
-    env           = var.environment_variables
-  }))]
+  # 同じ値を実リソースの freeform tag にも載せ、再利用してよいかの判定に使う(review F-005)。
+  triggers_replace = [local.config_fingerprint[each.key]]
 
   provisioner "local-exec" {
     # 値はすべて環境変数で渡し、シェルの本文へ内挿しない。
@@ -190,7 +200,8 @@ resource "terraform_data" "agent" {
       HA_OWNER_TAG     = local.owner_tag
       # リクエスト JSON は Terraform 側で組み立てる。シェルで文字列連結すると
       # 改行・タブ・Unicode のエスケープを取りこぼす(review F-005)。
-      HA_APP_BODY = jsonencode(local.app_body[each.key])
+      HA_CONFIG_FINGERPRINT = local.config_fingerprint[each.key]
+      HA_APP_BODY           = jsonencode(local.app_body[each.key])
       # デプロイメントはアプリ OCID が実行時にしか分からないので、そこだけ差し込む。
       # 差し込む値は API から取り出した OCID（英数と . _ - のみ）なので安全。
       HA_DEP_BODY = jsonencode(local.deployment_body[each.key])

@@ -20,21 +20,23 @@ trap 'rm -rf "$TMP"' EXIT
 
 api() { oci raw-request --region "$HA_REGION" "$@" > "$TMP/resp" 2>"$TMP/err"; }
 fail() { echo "$1" >&2; [ -s "$TMP/err" ] && sed -n '1,5p' "$TMP/err" >&2; exit 1; }
-pick_ocid() { grep -oE '"id": "ocid1\.generativeaihostedapplication[^"]*"' "$TMP/resp" | head -1 | sed -E 's/.*"(ocid1[^"]*)"/\1/'; }
+# 直前の api 失敗が「存在しない(404)」かどうか。401/403/429/5xx/通信断と区別する。
+was_not_found() { grep -qiE '\b404\b|NotAuthorizedOrNotFound' "$TMP/err"; }
 pick_state() { grep -oE '"lifecycleState": "[A-Z_]+"' "$TMP/resp" | head -1 | sed -E 's/.*"([A-Z_]+)"/\1/'; }
 
-# 削除対象は ACTIVE とは限らない（作成途中や FAILED で残ることがある）ので状態で絞らない。
-APP=""
-for st in ACTIVE CREATING FAILED NEEDS_ATTENTION; do
-  api --http-method GET \
-    --target-uri "$BASE/hostedApplications?compartmentId=$HA_COMPARTMENT&displayName=$HA_NAME&lifecycleState=$st" ||
-    fail "Hosted Application の一覧取得に失敗しました（$st）。destroy を中断します（リソースを残したまま state を消さないため）"
-  found="$(pick_ocid)"
-  [ -n "$found" ] && { APP="$found"; break; }
-done
+# 削除対象は ACTIVE とは限らない（作成途中・FAILED・DELETING で残ることがある）。
+# lifecycleState を列挙して問い合わせると未列挙の状態を取りこぼすので、
+# 同名を全部引いてから DELETED 以外を選ぶ(review F-004)。
+api --http-method GET \
+  --target-uri "$BASE/hostedApplications?compartmentId=$HA_COMPARTMENT&displayName=$HA_NAME" ||
+  fail "Hosted Application の一覧取得に失敗しました。destroy を中断します（リソースを残したまま state を消さないため）"
+APP="$(tr -d ' \n' < "$TMP/resp" | sed 's/},{/}\n{/g' |
+  grep -v '"lifecycleState":"DELETED"' |
+  grep -oE '"id":"ocid1\.generativeaihostedapplication[^"]*"' | head -1 |
+  sed -E 's/.*"(ocid1[^"]*)"/\1/')"
 
 if [ -z "$APP" ]; then
-  # 一覧はすべて成功して該当なし＝本当に無い。
+  # 一覧の取得に成功したうえで該当なし＝本当に無い。
   echo "Hosted Application $HA_NAME は既に存在しません"
   exit 0
 fi
@@ -56,9 +58,12 @@ while [ "$i" -lt 60 ]; do
   i=$((i + 1))
   if api --http-method GET --target-uri "$BASE/hostedApplications/$APP"; then
     [ "$(pick_state)" = DELETED ] && exit 0
+  elif was_not_found; then
+    exit 0 # 404＝本当に消えた
   else
-    # 削除要求が受理された後に取得できなくなった＝消えたとみなす。
-    exit 0
+    # 401/403/429/5xx/通信断を「消えた」と扱うと、実体を残したまま state から
+    # terraform_data だけが消え、Terraform から回収できなくなる(review F-001)。
+    fail "Hosted Application $HA_NAME の削除確認に失敗しました。destroy を中断します"
   fi
   sleep 12
 done

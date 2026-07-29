@@ -10,6 +10,7 @@
 # 文字列連結すると改行・タブ・Unicode のエスケープを取りこぼす(review F-005)。
 #   HA_REGION HA_COMPARTMENT HA_NAME HA_OWNER_TAG HA_CONTAINER_URI HA_TAG
 #   HA_APP_BODY HA_DEP_BODY (後者は hostedApplicationId が __APP_OCID__ のプレースホルダ)
+#   HA_CONFIG_FINGERPRINT (設定の指紋。再利用してよいかの判定に使う)
 #
 # 冪等: 自分が作った(所有者タグ付きの)ACTIVE なアプリとデプロイメントがあれば再利用する。
 # 自己修復: 自分のものが FAILED 等で残っていれば、アプリごと削除してから作り直す
@@ -29,15 +30,24 @@ api() { oci raw-request --region "$HA_REGION" "$@" > "$TMP/resp" 2>"$TMP/err"; }
 
 fail() { echo "$1" >&2; [ -s "$TMP/err" ] && sed -n '1,5p' "$TMP/err" >&2; exit 1; }
 
+# 直前の api 失敗が「存在しない(404)」かどうか。401/403/429/5xx/通信断と区別する。
+# 区別せず「もう無い」と扱うと、実体が残ったまま state だけ進んでしまう(review F-001/F-002)。
+was_not_found() { grep -qiE '\b404\b|NotAuthorizedOrNotFound' "$TMP/err"; }
+
 pick_ocid() { grep -oE '"id": "ocid1\.'"$1"'[^"]*"' "$TMP/resp" | head -1 | sed -E 's/.*"(ocid1[^"]*)"/\1/'; }
 pick_state() { grep -oE '"lifecycleState": "[A-Z_]+"' "$TMP/resp" | head -1 | sed -E 's/.*"([A-Z_]+)"/\1/'; }
 is_owned() { tr -d ' \n' < "$TMP/resp" | grep -q "\"jetuse-owner\":\"$HA_OWNER_TAG\""; }
 
-# find_app <lifecycleState> -> stdout に OCID(無ければ空)。API 失敗時は終了する。
-find_app() {
-  api --http-method GET --target-uri "$BASE/hostedApplications?compartmentId=$HA_COMPARTMENT&displayName=$HA_NAME&lifecycleState=$1" ||
-    fail "Hosted Application の一覧取得に失敗しました（$1）。権限とネットワークを確認してください"
-  pick_ocid generativeaihostedapplication
+# 同名アプリのうち DELETED 以外を1件返す(無ければ空)。API 失敗時は終了する。
+# lifecycleState を列挙して問い合わせると DELETING 等を取りこぼすため、絞り込みは
+# クライアント側で行う(review F-004)。
+find_live_app() {
+  api --http-method GET --target-uri "$BASE/hostedApplications?compartmentId=$HA_COMPARTMENT&displayName=$HA_NAME" ||
+    fail "Hosted Application の一覧取得に失敗しました。権限とネットワークを確認してください"
+  tr -d ' \n' < "$TMP/resp" | sed 's/},{/}\n{/g' |
+    grep -v '"lifecycleState":"DELETED"' |
+    grep -oE '"id":"ocid1\.generativeaihostedapplication[^"]*"' | head -1 |
+    sed -E 's/.*"(ocid1[^"]*)"/\1/'
 }
 
 delete_app_and_wait() { # delete_app_and_wait <app-ocid>
@@ -46,37 +56,42 @@ delete_app_and_wait() { # delete_app_and_wait <app-ocid>
   i=0
   while [ "$i" -lt 60 ]; do
     i=$((i + 1))
-    api --http-method GET --target-uri "$BASE/hostedApplications/$1" || return 0 # 取得できない＝もう無い
-    [ "$(pick_state)" = DELETED ] && return 0
+    if api --http-method GET --target-uri "$BASE/hostedApplications/$1"; then
+      [ "$(pick_state)" = DELETED ] && return 0
+    elif was_not_found; then
+      return 0 # 404＝本当に消えた
+    else
+      fail "Hosted Application $HA_NAME の削除確認に失敗しました（404 以外の失敗を削除完了とみなしません）"
+    fi
     sleep 12
   done
   fail "Hosted Application $HA_NAME が DELETED になりませんでした"
 }
 
 # --- 1) アプリ: 自分の ACTIVE があれば再利用、無ければ（残骸を掃除して）作る ---
-APP="$(find_app ACTIVE)"
-if [ -n "$APP" ]; then
-  api --http-method GET --target-uri "$BASE/hostedApplications/$APP" ||
-    fail "Hosted Application $HA_NAME の取得に失敗しました"
+FOUND="$(find_live_app)"
+APP=""
+if [ -n "$FOUND" ]; then
+  # 所有権を確認できない障害時に新規作成へ進むと重複を作るので、ここで失敗させる(review F-003)。
+  api --http-method GET --target-uri "$BASE/hostedApplications/$FOUND" ||
+    fail "同名の Hosted Application が見つかりましたが取得に失敗し、所有権を確認できませんでした"
   if ! is_owned; then
     echo "同名の Hosted Application ($HA_NAME) がありますが、このスタックが作ったものではありません。" >&2
     echo "prefix を変更するか既存リソースを確認してください（既存リソースには触れません）。" >&2
     exit 1
   fi
+  ST="$(pick_state)"
+  # 設定が現在の Terraform 入力と一致するかは指紋タグで見る。scalingConfig や
+  # inboundAuthConfig が変わっているのに再利用すると、入力変更が実環境へ届かない(review F-005)。
+  if [ "$ST" = ACTIVE ] && tr -d ' \n' < "$TMP/resp" | grep -q "\"jetuse-config\":\"$HA_CONFIG_FINGERPRINT\""; then
+    APP="$FOUND"
+  else
+    echo "作り直し: $HA_NAME は state=$ST / 設定不一致のため削除します"
+    delete_app_and_wait "$FOUND"
+  fi
 fi
 
 if [ -z "$APP" ]; then
-  # 失敗して残った「自分の」アプリがあれば掃除する。他人のものには触れない。
-  for st in FAILED NEEDS_ATTENTION CREATING; do
-    stale="$(find_app "$st")"
-    [ -z "$stale" ] && continue
-    api --http-method GET --target-uri "$BASE/hostedApplications/$stale" || continue
-    if is_owned; then
-      echo "掃除: $HA_NAME が $st のまま残っているため削除します"
-      delete_app_and_wait "$stale"
-    fi
-  done
-
   printf '%s' "$HA_APP_BODY" > "$TMP/app.json"
   api --http-method POST --target-uri "$BASE/hostedApplications" --request-body "file://$TMP/app.json" ||
     fail "Hosted Application $HA_NAME の作成に失敗しました"
@@ -128,7 +143,13 @@ if [ -n "$DEP" ]; then
   exit 0
 fi
 
-printf '%s' "$HA_DEP_BODY" | sed "s|__APP_OCID__|$APP|" > "$TMP/dep.json"
+# 置換は hostedApplicationId フィールドに限定する。本文全体を対象にすると、
+# image_tag など別の入力が同じ文字列を含んだ場合に先に置換されうる(review F-007)。
+printf '%s' "$HA_DEP_BODY" |
+  sed "s|\"hostedApplicationId\":\"__APP_OCID__\"|\"hostedApplicationId\":\"$APP\"|" > "$TMP/dep.json"
+if grep -q '__APP_OCID__' "$TMP/dep.json"; then
+  fail "hostedApplicationId の差し込みに失敗しました"
+fi
 api --http-method POST --target-uri "$BASE/hostedDeployments" --request-body "file://$TMP/dep.json" ||
   fail "$HA_NAME の Hosted Deployment 作成に失敗しました"
 DEP="$(pick_ocid generativeaihosteddeployment)"

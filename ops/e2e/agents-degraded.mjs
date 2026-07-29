@@ -34,7 +34,9 @@ const call = (path, init) => page.evaluate(async ({ path, init }) => {
 
 const h = JSON.parse((await call('/api/health')).body)
 const ag = h.capabilities?.agents || {}
-rec('capabilities.agents が unavailable', ag.status === 'unavailable', JSON.stringify(ag).slice(0, 240))
+// 「配備しない構成」は故障ではないので disabled。unavailable は「配備したのに壊れている」側。
+rec('capabilities.agents が disabled', ag.status === 'disabled', JSON.stringify(ag).slice(0, 240))
+rec('全体の ok は true のまま（意図的な未配備で赤くしない）', h.ok === true, `ok=${h.ok}`)
 rec('理由（ヒント）が付く', typeof ag.hint === 'string' && ag.hint.length > 10, ag.hint || '(none)')
 rec('内部識別子を露出しない', !/missing=|app_ocid|HOSTED_AGENT_/.test(ag.hint || ''), ag.hint || '')
 rec('他機能は生きている（chat が ok）', h.capabilities?.chat?.status === 'ok', h.capabilities?.chat?.status)
@@ -50,7 +52,7 @@ const run = id
 rec('実行時に理由が返る', /配備されていません/.test(run.body), run.body.slice(0, 240))
 rec('生の内部エラー文字列を返さない', !!id && !/agent container not configured|missing=/.test(run.body), run.body.slice(0, 200))
 
-const EXPECTED = 7
+const EXPECTED = 8
 if (results.length !== EXPECTED) {
   rec(`検証項目が ${EXPECTED} 件そろう`, false, `実際は ${results.length} 件`)
 }
