@@ -43,6 +43,14 @@ variable "existing_dynamic_group" {
   default     = ""
 }
 
+# PORT-03: ホスト型エージェントを配備する呼び出し元だけが true にする。既定 false で
+# 既存呼び出し元(environments/dev 等)の Dynamic Group は従来どおり。
+variable "include_hosted_agent_principals" {
+  description = "Include generativeaihostedapplication / generativeaihosteddeployment in the runtime dynamic group (only when the caller deploys JetUse hosted agents)."
+  type        = bool
+  default     = false
+}
+
 variable "create_deployer_policy" {
   description = "Grant an existing group permission to deploy JetUse into the dedicated compartment with Resource Manager."
   type        = bool

@@ -60,6 +60,9 @@ def test_auth_required_rejects_missing_token(monkeypatch):
 def test_auth_required_fails_closed_without_oidc_config(monkeypatch):
     # OIDC未設定のままトークンを出されても素通りさせない(fail-closed)
     monkeypatch.setenv("AUTH_REQUIRED", "true")
+    # 空文字を明示する(delenv だと Settings が .env から拾い直し、OIDC を設定済みの開発機で落ちる)
+    monkeypatch.setenv("OIDC_ISSUER", "")
+    monkeypatch.setenv("OIDC_JWKS_URL", "")
     get_settings.cache_clear()
     res = client.get("/api/chat/ping", headers={"Authorization": "Bearer dummy"})
     assert res.status_code == 500

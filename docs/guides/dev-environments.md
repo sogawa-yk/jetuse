@@ -26,17 +26,25 @@
   分離は専用スキーマで担保する。公開GWのため `apigw_allow_cidr` で社内/VPNのIPに絞ることを推奨。
 - DBスキーマは `settings.adb_user`/`adb_query_user`(環境変数 `ADB_USER`/`ADB_QUERY_USER`)で切替。
   既定は共有 `JETUSE_APP`/`JETUSE_QUERY`。
+- DBの中で `DBMS_CLOUD`/`DBMS_CLOUD_AI` が使う資格情報は **`OCI$RESOURCE_PRINCIPAL`**(ADB自身の身分)。
+  `ops/setup-dev-schema.py` が `ENABLE_RESOURCE_PRINCIPAL` を適用し、`environments/app` が
+  `SELECT_AI_CREDENTIAL` を注入する。開発者のAPIキーをDBへ焼き込む経路は廃止(ADR-0021)。
 
 ## 前提(一度だけ・全体)
 
 1. 共有 `environments/dev` を `terraform apply`(本対応で**出力を追加**したため、リソース変更0で
    stateに新出力を反映する必要がある)。
 2. OCIRログイン済み、`.env` に `OS_NAMESPACE`/`COMPARTMENT_OCID` 等。
+   `ops/setup-dev-schema.py` / `ops/setup-select-ai.py` は **`.env` の `ADB_OCID` と `COMPARTMENT_OCID` が必須**
+   （DDL の前に「SQL の接続先がその ADB と同一か」を API で照合する fail-closed ゲートに使う。
+   未設定・不一致なら何も変更せず中止する）。接続先は `ADB_DSN` / `ADB_WALLET_DIR` /
+   `ADB_WALLET_PASSWORD` で上書きできる。
 
 ## 開発者の追加(1人につき一度)
 
 ```bash
-# 1) 専用スキーマ作成 + 権限 + 認証情報 + マイグレーション適用(パスワードが出力される)
+# 1) 専用スキーマ作成 + 権限 + リソースプリンシパル有効化 + マイグレーション適用
+#    (パスワードが出力される。再実行可: 既存ユーザーのパスワードは明示指定時のみ更新)
 .venv/bin/python ops/setup-dev-schema.py --dev alice
 
 # 2) tfvars 用意(出力されたパスワードと共有値を記入)

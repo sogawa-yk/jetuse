@@ -1,0 +1,9 @@
+{
+  "turn": 1,
+  "timestamp": "2026-07-29T18:50:31+09:00",
+  "action_summary": "(loop-protocol 側で追記可)",
+  "files_changed": [".env.example", "STATE.md", "docs/decisions/ADR-0021-dev-resource-principal.md", "docs/guides/dev-environments.md", "docs/guides/onboarding.md", "docs/tips.md", "docs/verification/RP-01.md", "infra/terraform/environments/app/alice.tfvars.example", "infra/terraform/environments/app/main.tf", "ops/_adb.py", "ops/setup-dev-schema.py", "ops/setup-select-ai.py", "ops/setup-sql-search.py", "packages/api/jetuse_core/nl2sql.py", "packages/api/jetuse_core/rag_select_ai.py", "packages/api/jetuse_core/settings.py", "packages/api/tests/test_health.py", "packages/api/tests/test_ops_adb.py", "packages/api/tests/test_service.py", "runs/2026-07-29T1605_RP-01/e2e/SKIPPED.md", "runs/2026-07-29T1605_RP-01/e2e/created-resources.json", "runs/2026-07-29T1605_RP-01/e2e/driver.py", "runs/2026-07-29T1605_RP-01/e2e/guard.md", "runs/2026-07-29T1605_RP-01/e2e/post-teardown-state.md", "runs/2026-07-29T1605_RP-01/e2e/scenario-1.md", "runs/2026-07-29T1605_RP-01/e2e/scenario-2.md", "runs/2026-07-29T1605_RP-01/e2e/scenario-3.md", "runs/2026-07-29T1605_RP-01/e2e/scenario-4.md", "runs/2026-07-29T1605_RP-01/e2e/teardown.md", "runs/2026-07-29T1605_RP-01/goal.txt", "runs/2026-07-29T1605_RP-01/manifest.json", "specs/09-rag.md", "spikes/spike_m1/common.py", "tasks/RP-01.md"],
+  "diff_path": "diffs/turn-1.diff",
+  "review_ref": "reviews/review-9.json",
+  "goal_checker": { "verdict": "(/goal 判定モデルが記録)", "reason": "" }
+}

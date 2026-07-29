@@ -117,7 +117,7 @@ def _sh_profile_for_model(model: str) -> str:
 def create_profile(cur, prof: str, model: str, object_list: list[dict]) -> None:
     """DBMS_CLOUD_AI プロファイルを(あれば作り直して)作成する共通ヘルパ。
 
-    credential JETUSE_OCI_CRED と DBMS_CLOUD_AI 権限は ops/setup-select-ai.py 済み前提。
+    資格情報(OCI$RESOURCE_PRINCIPAL)と DBMS_CLOUD_AI 権限は ops/setup-select-ai.py 済み前提。
     DROP/CREATE_PROFILE は既定の call_timeout(10s)を超えることがある(特にADB再開直後)ため、
     この接続のタイムアウトを一時的に引き上げる。
     """
@@ -149,7 +149,9 @@ def create_profile(cur, prof: str, model: str, object_list: list[dict]) -> None:
             f"Select AI プロファイル作成に失敗しました。DBMS_CLOUD_AI のクレデンシャル"
             f"({s.select_ai_credential})が未整備の可能性があります。動的グループへの"
             "generative-ai-family 権限、Object Storage バケットの read 権限、および"
-            "ENABLE_RESOURCE_PRINCIPAL の起動ログ(/api/health)を確認してください"
+            "ENABLE_RESOURCE_PRINCIPAL の起動ログ(/api/health)を確認してください。"
+            f"ローカル実行(コンテナ外)なら .venv/bin/python ops/setup-select-ai.py "
+            f"--schema {s.adb_user} で当該スキーマへ有効化できます(ADR-0021)"
         ) from e
 
 

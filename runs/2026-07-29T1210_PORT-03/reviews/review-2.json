@@ -1,0 +1,119 @@
+{
+  "review_n": 2,
+  "timestamp": "2026-07-29T12:50:54+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-2.input.diff",
+  "raw_output_path": "reviews/review-2.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "Terraform plan、OAuth token 発行、destroy に独立した blocker があります。実環境 E2E は0件で、公開スタックの完了主張を裏づけていません。新規の認証情報・テナンシ/コンパートメント OCID実値の追加は確認されませんでした。",
+  "severity_counts": {
+    "blocker": 4,
+    "major": 6,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "infra/terraform/modules/hosted-agent/main.tf",
+      "line": 90,
+      "issue": "`local.agent_environment` は `random_password` 由来の値を含むため sensitive map です。入力変数を非sensitive宣言してもtaintは消えず、dynamic blockの`for_each`に使用するとTerraform planが停止します。",
+      "suggestion": "変数をsensitiveとして扱い、`nonsensitive(keys(var.environment_variables))`からキーだけを反復し、値は元のmapから参照してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "blocker",
+      "file": "infra/terraform/modules/hosted-agent/main.tf",
+      "line": 31,
+      "issue": "OAuth resourceの`scopes`は定義していますが、clientに自己resource scopeを許可する`allowed_scopes`がありません。リポジトリ内の実機記録でもclient_credentials自給自足構成にはallowed-scopesのfqsが必要で、このままではtoken要求が失敗します。",
+      "suggestion": "`${local.audience}${local.scope_name}`相当のfqsを`allowed_scopes`へ登録し、token取得からHosted Application invokeまで実機確認してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "blocker",
+      "file": "infra/terraform/modules/hosted-agent/main.tf",
+      "line": 113,
+      "issue": "ACTIVEなHosted Deploymentは直接削除できませんが、参照依存によりTerraformはDeploymentをApplicationより先に削除します。Applicationのcascade deleteを使う処理もないため、stack destroyが失敗します。",
+      "suggestion": "Applicationを先にcascade deleteして状態を整合させるdestroy設計、またはOCIが許容する非アクティブ化手順を実装し、完全destroyを実機検証してください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1210_PORT-03/e2e/",
+      "line": 1,
+      "issue": "実環境E2E証跡が空でSKIPPED.mdもありません。差分は手動作業ゼロのapply、3SDK実行、scale-to-zero、縮退、destroyを完了形で記述していますが、最低2シナリオも裏づけられていません。",
+      "suggestion": "マスク済み証跡として、公開ZIPのdefault apply、3SDKのツール付きinvoke、コールドスタート、無効化時の縮退、destroyを記録してください。実施不能な経路にはSKIPPED.mdで具体的理由を示してください。"
+    },
+    {
+      "id": "F-005",
+      "severity": "major",
+      "file": "infra/orm/locals.tf",
+      "line": 60,
+      "issue": "`project_ocid`の既定値は空ですが、その値をHosted Agentへそのまま渡しています。Agent containerにはAPI側のProject自動解決処理がなく、`rag_search`は必須の`OpenAi-Project`ヘッダなしでVector Store検索を行うため、既定構成でRAGツールが失敗します。",
+      "suggestion": "API側で解決したProject OCIDをinvoke stateへ含めるか、Agent containerにも検索・自動作成処理と`PROJECT_AUTOCREATE`を実装してください。"
+    },
+    {
+      "id": "F-006",
+      "severity": "major",
+      "file": "infra/terraform/modules/hosted-agent/main.tf",
+      "line": 125,
+      "issue": "Agent imageは常に`ocir_namespace`から合成されますが、カスタムnamespaceの非公開OCIRに必要な`read repos`権限を作成していません。既存のnamespace/mirror上書き経路では、IAMをstackが作る場合でもartifact pullが失敗します。",
+      "suggestion": "非公開mirror用のrepository compartmentと`read repos`を明示的に配線するか、公開namespace以外ではHosted Agentを無効化して明確なpreconditionを出してください。"
+    },
+    {
+      "id": "F-007",
+      "severity": "major",
+      "file": "infra/orm/schema.yaml",
+      "line": 164,
+      "issue": "`existing_iam_covers_hosted_agents`は`enable_dynamic_group=false`時しか表示されません。一方preconditionは`enable_dynamic_group=true`かつ`enable_runtime_policy=false`でもこの確認値を要求するため、Resource Manager UIからその構成を成立させられません。",
+      "suggestion": "Dynamic GroupまたはRuntime Policyのどちらかを作らない場合に表示するOR条件へ変更し、各構成のschemaテストを追加してください。"
+    },
+    {
+      "id": "F-008",
+      "severity": "major",
+      "file": "infra/orm/main.tf",
+      "line": 240,
+      "issue": "IAM反映待ちは300秒ですが、リポジトリの実機記録では8分かかった事例があります。またtriggerがDynamic Group名とPolicy IDだけなので、matching ruleやpolicy本文の更新では待機し直しません。既存stack更新時にDeploymentが終端FAILEDへ入る可能性があります。",
+      "suggestion": "既知の上限を覆う待機時間またはartifact作成の再試行を採用し、matching rule・policy本文のfingerprintをreplacement triggerに含めてください。"
+    },
+    {
+      "id": "F-009",
+      "severity": "major",
+      "file": "infra/terraform/modules/iam/main.tf",
+      "line": 25,
+      "issue": "Hosted Agentのresource typeを共有IAM moduleへ無条件追加しています。`enable_hosted_agents=false`のORMやHosted Agentを配備しないdev呼び出し元でも既存Dynamic Groupが変更され、同一compartment内の既存Hosted ApplicationへJetUseの広いruntime権限が付与されます。",
+      "suggestion": "後方互換なopt-in変数をIAM moduleへ追加し、ORMでは`local.hosted_agents_enabled`と連動させ、devでは人間ゲート後に明示的に有効化してください。"
+    },
+    {
+      "id": "F-010",
+      "severity": "major",
+      "file": "infra/orm/variables.tf",
+      "line": 153,
+      "issue": "既定tagが常に`latest`なので、新しいreleaseで同tagのimageをpushしてもTerraformには差分がなく、既存Hosted Deploymentは新imageを再取得しません。Hosted Applicationの修正が既存stackへ反映されない更新経路になります。",
+      "suggestion": "配布ZIP生成時のcommit SHAなどimmutable tagを既定値へ埋め込み、cascade-safeなreplacementが発生する設計にしてください。"
+    },
+    {
+      "id": "F-011",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/health.py",
+      "line": 146,
+      "issue": "OAuth設定が欠落していて親statusが`unavailable`でも、Application OCIDが存在すれば各SDKは`ok=true`と表示されます。診断結果が矛盾します。",
+      "suggestion": "SDKのokをOAuth readinessとApplication OCIDの両方で判定するか、`deployed`と`ready`を別フィールドにしてください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-07-29T1210_PORT-03/e2e/`は空で、SKIPPED.mdもありません。default apply、3SDK invoke、コールドスタート、無効化時縮退、destroyはいずれも未検証です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザE2Eは実施していません。"
+    }
+  }
+}

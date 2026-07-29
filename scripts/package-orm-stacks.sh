@@ -41,6 +41,24 @@ rewrite() { # rewrite <file> <sed-expr>
 rewrite "${app_stage}/main.tf" 's#../terraform/modules/#./terraform/modules/#g'
 rewrite "${app_stage}/spa.tf" 's#${path.module}/../../packages/web/dist#${path.module}/packages/web/dist#g'
 
+# 配布ZIPの画像タグは、そのビルドの commit SHA に固定する（PORT-03）。
+# `latest` のままだと、新しい release が同じタグへ push しても Terraform には差分が出ず、
+# コンテナの修正がスタック更新で反映されない。さらに API とエージェントは invoke ステートの
+# 契約を共有するため、片方だけ動くと新旧が混在しうる。1つの image_tag で束ねて同時に上げる。
+# release.yml は latest と ${GITHUB_SHA} の両方を push しているので、SHA タグは必ず存在する。
+# ローカル検証（GITHUB_SHA 未設定）では latest のままにする。
+if [[ -n "${GITHUB_SHA:-}" ]]; then
+  rewrite "${app_stage}/variables.tf" \
+    "/^variable \"image_tag\"/,/^}/ s|^  default     = \"latest\"$|  default     = \"${GITHUB_SHA}\"|"
+  rewrite "${app_stage}/schema.yaml" \
+    "/^  image_tag:/,/^$/ s|^    default: \"latest\"$|    default: \"${GITHUB_SHA}\"|"
+  if ! grep -q "default     = \"${GITHUB_SHA}\"" "${app_stage}/variables.tf" \
+    || ! grep -q "default: \"${GITHUB_SHA}\"" "${app_stage}/schema.yaml"; then
+    echo "failed to pin image_tag to ${GITHUB_SHA}" >&2
+    exit 1
+  fi
+fi
+
 if find "${app_stage}" -type d -name .terraform -print -quit | grep -q .; then
   echo "unexpected .terraform directory in ${app_stage}" >&2
   exit 1

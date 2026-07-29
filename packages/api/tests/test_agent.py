@@ -285,6 +285,28 @@ AGENT_DEF = {
 }
 
 
+@pytest.fixture
+def agent_project(monkeypatch):
+    """PORT-03: hosted 経路は「エージェント未配備」と「project 未解決」を invoke 前に縮退させる。
+    以下のモデル選択の検証はどちらとも無関係なので、配備済み・project 確定の状態にしておく。"""
+    from jetuse_core.settings import get_settings
+
+    monkeypatch.setenv("PROJECT_OCID", "ocid1.project.oc1..agenttest")
+    for k, v in {
+        "HOSTED_AGENT_IDCS_DOMAIN": "https://idcs-test.identity.oraclecloud.com",
+        "HOSTED_AGENT_CLIENT_ID": "cid",
+        "HOSTED_AGENT_CLIENT_SECRET": "secret",
+        "HOSTED_AGENT_SCOPE": "jetuse-agentinvoke",
+        "AGENT_OPENAI_APP_OCID": "ocid1.generativeaihostedapplication.oc1..openai",
+        "AGENT_LANGGRAPH_APP_OCID": "ocid1.generativeaihostedapplication.oc1..langgraph",
+        "AGENT_ADK_APP_OCID": "ocid1.generativeaihostedapplication.oc1..adk",
+    }.items():
+        monkeypatch.setenv(k, v)
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 def test_agent_crud_and_validation(fake_agents):
     res = client.post("/api/agents", json=AGENT_DEF)
     assert res.status_code == 200
@@ -299,7 +321,7 @@ def test_agent_crud_and_validation(fake_agents):
     assert client.delete(f"/api/agents/{aid}").json() == {"deleted": True}
 
 
-def test_chat_with_agent_applies_instructions(fake_agents, monkeypatch):
+def test_chat_with_agent_applies_instructions(fake_agents, monkeypatch, agent_project):
     """ADR-0009: 保存済みagentはhostedコンテナへルーティングされ、instructionsは
     system_promptとして、モデルは定義側の値(MODELS経由のoci_id)としてstateに載る。
     呼び出し側モデル(llama-3.3-70b)は定義側(gpt-oss-120b)で上書きされる。"""
@@ -326,7 +348,7 @@ def test_chat_with_agent_applies_instructions(fake_agents, monkeypatch):
     assert "丁寧" in captured["state"]["system_prompt"]
 
 
-def test_chat_with_agent_ignores_caller_model_availability(fake_agents, monkeypatch):
+def test_chat_with_agent_ignores_caller_model_availability(fake_agents, monkeypatch, agent_project):
     """PORT-02 レビュー指摘F-002: agent_id指定時は実行時にagent_def["model"]を使うため、
     リクエスト上のmodelフィールド(呼び出し側が指定した別モデル)がたまたま利用不可マーク
     されていても、エージェント実行自体を巻き込んで弾いてはいけない。"""
@@ -353,7 +375,7 @@ def test_chat_with_agent_ignores_caller_model_availability(fake_agents, monkeypa
         models.clear_unavailable("llama-3.3-70b")
 
 
-def test_chat_with_agent_ignores_unknown_caller_model(fake_agents, monkeypatch):
+def test_chat_with_agent_ignores_unknown_caller_model(fake_agents, monkeypatch, agent_project):
     """PORT-02レビュー指摘(blocker): agent_id指定時はreq.modelを実行に使わないため、
     呼び出し側が未登録のmodel文字列を送っても「unknown model」400で弾いてはいけない。"""
     res = client.post("/api/agents", json={**AGENT_DEF, "enabled_tools": []})

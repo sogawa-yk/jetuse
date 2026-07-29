@@ -1,0 +1,63 @@
+{
+  "review_n": 5,
+  "timestamp": "2026-07-29T13:23:30+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-5.input.diff",
+  "raw_output_path": "reviews/review-5.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "主要な静的修正は反映されていますが、実環境 E2E が0件で、run goal が要求する公開ZIP apply・3SDK実行・destroy成功を確認できません。加えて、縮退経路の副作用、IAM反映待ち、コンテナのバージョン整合性に問題が残ります。認証情報や実OCID・実エンドポイントの新規コミットは確認されませんでした。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 3,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1210_PORT-03/e2e/",
+      "line": 1,
+      "issue": "実環境E2E証跡が空で、最低2シナリオもSKIPPED.mdもありません。STATE.mdもT8を未完としており、公開ZIPからのapply、3SDK invoke、scale-to-zeroからの初回実行、縮退、完全destroyというrun goalを裏づけられません。",
+      "suggestion": "jetuse-devで公開ZIPのdefault apply、3SDKのツール付きinvoke、コールドスタート、無効化時の縮退、完全destroyを実施し、マスク済みログを保存してください。実施不能な経路には理由と代替検証をSKIPPED.mdへ記録してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "packages/api/service/agent_dispatch.py",
+      "line": 109,
+      "issue": "対象SDKのHosted Agent設定を確認する前にRAG store参照とGenerativeAI Project解決を実行します。エージェント未配備の構成でもProjectを自動作成し得るうえ、Project解決に失敗すると、本来返すべき「認証無効・対象外リージョン・SDK未配備」という縮退理由が別エラーで隠れます。",
+      "suggestion": "処理冒頭で対象SDKのOAuth設定とApplication OCIDを検査し、未配備なら副作用なしで直ちに理由付きSSEを返してください。その後にRAG store参照とProject解決を行い、未配備時にProject解決を呼ばないテストを追加してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "major",
+      "file": "infra/orm/main.tf",
+      "line": 256,
+      "issue": "IAM反映待ちのfingerprintは変数入力だけをハッシュしており、Dynamic Groupのmatching_ruleやPolicy statements自体のコード変更を検出しません。将来IAM文とエージェント画像を同じリリースで更新すると、time_sleepが再作成されず、伝播前のartifact検証でHosted Deploymentが終端FAILEDになる可能性があります。",
+      "suggestion": "IAM moduleから実際のmatching ruleとpolicy statementsのハッシュを出力し、time_sleepのtriggersへ含めてください。IAM本文だけを変更した更新planで待機リソースが置換されるテストも追加してください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "major",
+      "file": "scripts/package-orm-stacks.sh",
+      "line": 49,
+      "issue": "配布ZIPではHosted Agent画像だけをcommit SHAへ固定しますが、API Container InstanceとFunctions Routerは引き続き`:latest`の同一URLです。新しいZIPへの更新でAgentだけにTerraform差分が発生し、API/Functionsは再pullされないため、invoke stateなどの契約が新Agentと旧APIの間で不整合になる更新経路があります。",
+      "suggestion": "API・Functions・3SDK Agentを同じcommit SHAまたはdigestへ一括固定し、スタック更新時に契約依存コンポーネントが同一リリースへ更新されるようにしてください。少なくとも新旧バージョン混在の更新テストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-07-29T1210_PORT-03/e2e/`は空で、SKIPPED.mdもありません。実行シナリオと結果は0件で、default apply、3SDK invoke、コールドスタート、無効化時縮退、destroyはいずれも未検証です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されていないため、指示どおりブラウザE2Eは実施していません。"
+    }
+  }
+}

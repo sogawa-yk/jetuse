@@ -25,6 +25,20 @@ resource "terraform_data" "region_guard" {
       condition     = var.ocir_namespace == local.public_ocir_namespace || (var.api_image_url != "" && var.fn_router_image != "")
       error_message = "ocir_namespace を公開既定(${local.public_ocir_namespace})から変更する場合は、イメージを自テナンシの OCIR へミラーした上で api_image_url と fn_router_image を両方明示してください。ocir_namespace 単独の変更では jetuse-api/jetuse-fn-router の pull に失敗します(これは自テナンシの Object Storage namespace ではありません)。"
     }
+    # ホスト型エージェント(PORT-03)はコンテナ自身が resource principal で GenAI / Object Storage /
+    # ADB を呼ぶため、Dynamic Group にホスト型3種の resource-type が
+    # 含まれ、その DG にランタイム権限が付いている必要がある。スタックが IAM を作らない運用では
+    # それを保証できず、配備は成功しても invoke が必ず権限エラーになる。黙って壊れるより plan で止める。
+    precondition {
+      condition     = !local.hosted_agents_enabled || (var.enable_dynamic_group && var.enable_runtime_policy) || var.existing_iam_covers_hosted_agents
+      error_message = "ホスト型エージェント(enable_hosted_agents=true)は、スタックが Dynamic Group と Runtime Policy を作る構成を前提にしています。既存IAMを流用する場合は、既存 Dynamic Group に generativeaihostedapplication / generativeaihostedapplicationiam / generativeaihosteddeployment を追加し、既存 policy が JetUse ランタイム権限(generative-ai-family / objects / autonomous-database-family 等)を与えていることを確認したうえで existing_iam_covers_hosted_agents=true を設定してください。エージェントが不要なら enable_hosted_agents=false にしてください。"
+    }
+    # ocir_namespace を公開既定から変えた場合、エージェント画像 3 つも自テナンシへミラー
+    # されている保証が無い。api_image_url / fn_router_image と同じく明示指定を要求する。
+    precondition {
+      condition     = !local.hosted_agents_enabled || var.ocir_namespace == local.public_ocir_namespace || var.hosted_agent_image_registry != ""
+      error_message = "ocir_namespace を公開既定(${local.public_ocir_namespace})から変更してホスト型エージェントを使う場合は、jetuse-agent-{openai,langgraph,adk} も自テナンシの OCIR へミラーしたうえで hosted_agent_image_registry(例 ${local.deploy_region_key}.ocir.io/<namespace>)を明示してください。エージェントが不要なら enable_hosted_agents=false にしてください。"
+    }
   }
 }
 
@@ -109,6 +123,8 @@ module "iam" {
   enable_semantic_store     = var.enable_semantic_store
   enable_project_autocreate = var.enable_project_autocreate
   create_deployer_policy    = false
+  # ホスト型エージェントを配備するときだけ runtime DG にホスト型リソースを含める(PORT-03)。
+  include_hosted_agent_principals = local.hosted_agents_enabled
 
   existing_dynamic_group = var.existing_dynamic_group
 }
@@ -173,15 +189,20 @@ module "functions" {
 }
 
 module "container_instance" {
-  source                = "../terraform/modules/container-instance"
-  compartment_ocid      = var.compartment_ocid
-  prefix                = var.prefix
-  subnet_id             = module.network.private_subnet_id
-  nsg_id                = module.network.app_nsg_id
-  image_url             = local.api_image_url
-  environment_variables = merge(local.api_environment, { LOG_OCID = module.observability.app_log_id })
-  memory_gb             = 4
-  shape                 = var.ci_shape
+  source           = "../terraform/modules/container-instance"
+  compartment_ocid = var.compartment_ocid
+  prefix           = var.prefix
+  subnet_id        = module.network.private_subnet_id
+  nsg_id           = module.network.app_nsg_id
+  image_url        = local.api_image_url
+  # エージェントの OAuth 資格情報はここだけに渡す(Functions ルーターへは配らない)。
+  environment_variables = merge(
+    local.api_environment,
+    local.hosted_agent_environment,
+    { LOG_OCID = module.observability.app_log_id },
+  )
+  memory_gb = 4
+  shape     = var.ci_shape
 
   # destroy の順序担保: モジュール全体に依存させることで、バケットの掃除(object_storage 内の
   # terraform_data.empty_buckets)より先にアプリが停止する。出力参照だけだとバケット resource に
@@ -229,6 +250,51 @@ module "identity_domain" {
   # Identity Domain はテナンシのホームリージョンにしか作れない。deployリージョンではなく
   # ホームリージョンを渡す(deployリージョン≠ホームでの作成失敗を防ぐ)。
   home_region = local.home_region
+}
+
+# IAM は作成 API が成功しても、Dynamic Group と policy の反映に実測5〜10分かかる(docs/tips.md)。
+# Hosted Deployment は artifact 検証に一度失敗すると FAILED が終端状態になり、apply の再試行で
+# しか復旧できない。そこで反映待ちを明示的に挟む(review F-005)。
+# この待ちは module.adb(作成に10分以上)と**並行**して進むため、apply 全体の実時間は伸びない。
+resource "time_sleep" "iam_propagation" {
+  count = local.hosted_agents_enabled ? 1 : 0
+  # 実機記録では反映に8分かかった事例がある(docs/tips.md)。既知の上限を覆う値にする。
+  create_duration = "600s"
+
+  # IAM の**内容**が変わったら待ち直す。DG 名や policy OCID は matching rule 本文や
+  # statement 差し替えでは変わらないので、内容を決める入力の指紋を混ぜる。
+  triggers = {
+    runtime_dynamic_group = coalesce(module.iam.runtime_dynamic_group, "none")
+    runtime_policy_id     = coalesce(module.iam.runtime_policy_id, "none")
+    # matching rule 本文と policy statements そのもののハッシュ。変数入力だけを見ていると、
+    # モジュール側のコード変更(文の追加など)で待ち直しが起きない。
+    iam_content = module.iam.content_fingerprint
+  }
+
+  depends_on = [module.iam]
+}
+
+# ホスト型エージェント(PORT-03 / ADR-0019)。3SDK の ReAct コンテナを Enterprise AI Agent として
+# 配備し、OAuth(client_credentials)の発行元兼リソースを同じスタックで作る。
+# 配備条件は locals.hosted_agents_enabled(認証有効 かつ エージェント画像のある kix/ord)。
+# min_replica=0 なので、使わない利用者にアイドル課金は発生しない。
+module "hosted_agent" {
+  count             = local.hosted_agents_enabled ? 1 : 0
+  source            = "../terraform/modules/hosted-agent"
+  compartment_ocid  = var.compartment_ocid
+  prefix            = var.prefix
+  region            = var.region
+  idcs_endpoint     = module.identity_domain[0].domain_url
+  image_registry    = local.agent_image_registry
+  image_repo_prefix = var.image_repo_prefix
+  image_tag         = var.image_tag
+  min_replica       = var.hosted_agent_min_replica
+
+  environment_variables = local.agent_environment
+
+  # コンテナは resource principal で GenAI / Object Storage(ウォレット) / ADB を呼ぶ。
+  # IAM(DG + policy)の**反映完了**とウォレット配置より後に作らないと、初回起動が権限エラーで落ちる。
+  depends_on = [time_sleep.iam_propagation, module.object_storage, module.adb]
 }
 
 module "identity_domain_app" {

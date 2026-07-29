@@ -1,0 +1,32 @@
+[
+  {
+    "name": "capabilities.agents が unavailable",
+    "ok": true,
+    "detail": "{\"status\":\"unavailable\",\"sdks\":{\"openai_agents\":{\"ok\":false,\"hint\":\"未配備\"},\"langgraph\":{\"ok\":false,\"hint\":\"未配備\"},\"adk\":{\"ok\":false,\"hint\":\"未配備\"}},\"hint\":\"このスタックにはホスト型エージェントが配備されていません。スタック変数 enable_hosted_agents と、デプロイ先リージョン(配備対象は 大阪 ap-osaka"
+  },
+  {
+    "name": "理由（ヒント）が付く",
+    "ok": true,
+    "detail": "このスタックにはホスト型エージェントが配備されていません。スタック変数 enable_hosted_agents と、デプロイ先リージョン(配備対象は 大阪 ap-osaka-1 / シカゴ us-chicago-1)をご確認ください"
+  },
+  {
+    "name": "内部識別子を露出しない",
+    "ok": true,
+    "detail": "このスタックにはホスト型エージェントが配備されていません。スタック変数 enable_hosted_agents と、デプロイ先リージョン(配備対象は 大阪 ap-osaka-1 / シカゴ us-chicago-1)をご確認ください"
+  },
+  {
+    "name": "他機能は生きている（chat が ok）",
+    "ok": true,
+    "detail": "ok"
+  },
+  {
+    "name": "実行時に理由が返る",
+    "ok": true,
+    "detail": "data: {\"error\": \"このスタックにはホスト型エージェントが配備されていません。スタック変数 enable_hosted_agents と、デプロイ先リージョン(配備対象は 大阪 ap-osaka-1 / シカゴ us-chicago-1)をご確認ください\"} data: [DONE] "
+  },
+  {
+    "name": "生の内部エラー文字列を返さない",
+    "ok": true,
+    "detail": "data: {\"error\": \"このスタックにはホスト型エージェントが配備されていません。スタック変数 enable_hosted_agents と、デプロイ先リージョン(配備対象は 大阪 ap-osaka-1 / シカゴ us-chicago-1)をご確認ください\"} data: [DONE] "
+  }
+]

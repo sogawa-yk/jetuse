@@ -1,0 +1,79 @@
+{
+  "review_n": 5,
+  "timestamp": "2026-07-29T17:29:28+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-5.input.diff",
+  "raw_output_path": "reviews/review-5.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "リソースプリンシパルの正常系と片付け結果は確認できましたが、通常の ops と E2E の対象環境ゲートが承認済みテナンシ／コンパートメントを識別しておらず、整合した誤設定では別環境を変更できます。失敗途中の資格情報・所有権台帳の回復性にも問題があります。",
+  "severity_counts": {
+    "blocker": 2,
+    "major": 3,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "ops/_adb.py",
+      "line": 143,
+      "issue": "`assert_target()` が証明するのは「SQL接続先と入力された ADB_OCID が同一」という点だけです。ADB が承認済み dev コンパートメント／テナンシに属するかは検証しないため、ADB_OCID・ウォレット・OCI profile が一貫して別環境を指すと通過し、両 setup スクリプトがそこで CREATE/ALTER USER、GRANT、ACL変更を実行します。従来の固定DSNから任意ADBへ対象範囲も広がっています。",
+      "suggestion": "承認済みテナンシと dev コンパートメントのOCIDを `.env` または共有Terraform出力から取得し、ADBの compartment_id、ルートtenancy、regionをDDL前に照合してください。非dev対象は明示的な人間ゲートなしでは拒否し、誤テナンシ／誤コンパートメントでDDLが0件となるテストを追加してください。"
+    },
+    {
+      "id": "B-002",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 168,
+      "issue": "E2Eの `assert_loop_adb()` も表示名と `jetuse:dev` というコンパートメント名だけを認可根拠にしています。OCIの表示名はテナンシをまたいで一意ではなく、ルートtenancy OCIDや承認済みcompartment OCIDを照合していないため、同名階層を持つ別テナンシでもユーザー・索引・バケットの作成／削除に進めます。添付証跡も名前だけなので、承認済みテナンシだったことを裏づけられません。",
+      "suggestion": "親をルートまでたどり、承認済みtenancy OCIDとADBの正確なcompartment OCIDを照合してください。名前一致だけの別テナンシ／別compartmentを拒否する否定テストと証跡を追加してください。"
+    },
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "ops/setup-dev-schema.py",
+      "line": 109,
+      "issue": "既存app userのパスワードが未指定でquery userだけ不存在の場合、query userをランダムパスワードで作成してコミットした後、この行で終了するため、そのパスワードは出力されず失われます。初回実行でmigrationが失敗した場合も、作成済み両ユーザーの生成パスワードを表示する前に終了し、再実行可能という主張を満たしません。",
+      "suggestion": "migrationに必要なappパスワードをDDL前にプリフライトし、不明ならquery userを作成せず中止してください。また生成済みパスワードは後続失敗時にも安全に回収できるようにし、app既存/query不存在とmigration失敗のテストを追加してください。"
+    },
+    {
+      "id": "M-002",
+      "severity": "major",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 277,
+      "issue": "ユーザーの作成時刻はメモリ上の `data` に入るだけで、台帳への書き込みはマーカー表のCREATE・INSERT・commit後です。CREATE TABLEは暗黙commitされるため、その後に失敗するとユーザーとマーカー表だけが残り、台帳は空のままです。`finally` の再試行も既存表へのCREATEで失敗し、安全なteardownができません。",
+      "suggestion": "両ユーザーの不変識別値を取得した直後にまず台帳へ永続化し、マーカートークンはINSERT成功後に追記してください。既存の空マーカー表から回復できる処理と、CREATE直後／INSERT直後の障害注入テストを追加してください。"
+    },
+    {
+      "id": "M-003",
+      "severity": "major",
+      "file": "ops/_adb.py",
+      "line": 98,
+      "issue": "`tcp_connect_timeout` は接続確立だけを制限し、接続後のGRANT、ACL、ENABLE_RESOURCE_PRINCIPALには有限の `call_timeout` がありません。E2E driverが自分の接続へ設定したtimeoutは `run_ops()` が起動する別プロセスには継承されないため、実際のsetupスクリプトは応答停止時に無期限で止まります。",
+      "suggestion": "`connect()` で正の有限値を検証して `connection.call_timeout` に設定し、環境変数で安全に上書き可能にしてください。0以下の拒否と長時間DB呼び出しのtimeout伝播をテストしてください。"
+    },
+    {
+      "id": "m-001",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/settings.py",
+      "line": 62,
+      "issue": "中心的な公開既定値を `JETUSE_OCI_CRED` から `OCI$RESOURCE_PRINCIPAL` へ変更していますが、その既定値と `SELECT_AI_CREDENTIAL` による後方互換上書きの単体テストがありません。E2E driverも定数 `RP_CRED` を直接使うため、この設定経路の誤りではE2Eが失敗しません。",
+      "suggestion": "`.env` 無効時の新既定値と、環境変数で旧資格情報名へ上書きできることをSettingsの単体テストで固定してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "insufficient",
+    "notes": "`scenario-1..4.log` で冪等セットアップ、Object Storage 200、2文書のSelect AI検索、旧APIキー資格情報との対照を確認し、`guard.log` では所有権台帳の否定3ケース、`teardown.log` と `post-teardown-state.log` では片付け後の不在を確認しました。SKIPPED.mdのアプリ配備未実施と既存スキーマ非変更の理由は妥当です。ただしE2Eの対象認可が表示名だけで、承認済みtenancy／compartment OCIDを証明していないため、安全性の裏づけとしては不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されておらず、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}
