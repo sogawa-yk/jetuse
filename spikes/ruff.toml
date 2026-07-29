@@ -1,0 +1,10 @@
+# スパイク用スクリプトの lint 設定（packages/api と同じ規則に揃える）。
+# 実行時は PYTHONPATH=spikes/spike_m1 なので common / fixtures は自前モジュール扱いにする。
+line-length = 100
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[lint.isort]
+known-first-party = ["common", "fixtures", "method_a_vector_store", "method_a_limits", "method_b_select_ai", "method_b_refresh_check", "method_c_own_index"]
