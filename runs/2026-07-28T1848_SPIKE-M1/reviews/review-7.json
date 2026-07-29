@@ -1,0 +1,127 @@
+{
+  "review_n": 7,
+  "timestamp": "2026-07-28T21:36:25+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-7.input.diff",
+  "raw_output_path": "reviews/review-7.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "主要な実機検証結果は再現性のある証跡で裏づけられていますが、再利用可能な名前を所有台帳の ID としているため、古い台帳から他者の同名リソースを変更・削除できる blocker が残っています。失敗時の後始末、判定条件、証跡の環境依存値伏字化にも複数の不備があります。",
+  "severity_counts": {
+    "blocker": 2,
+    "major": 8,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "blocker",
+      "file": "spikes/spike_m1/setup_schema.py",
+      "line": 72,
+      "issue": "DB スキーマの所有 ID は実質 `DB_NAME:SCHEMA` だけです。前回の DROP 後に台帳削除前で停止した場合や、スキーマが外部で削除・同名再作成された場合、古い台帳が一致して他者のスキーマに対して ALTER USER・GRANT・ACL を実行し、teardown では DROP USER まで実行できます。scenario-4 は空台帳しか検証しておらず、この stale registry 経路を検出しません。",
+      "suggestion": "作成時の `USER_ID` と `DBA_USERS.CREATED` など再作成後に変わる属性を台帳へ保存し、すべての変更・削除前に照合してください。より安全なのは run 固有のスキーマ名を使用することです。stale 台帳＋同名再作成ユーザーの否定テストも追加してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "blocker",
+      "file": "spikes/spike_m1/method_b_select_ai.py",
+      "line": 67,
+      "issue": "Object Storage バケットの所有 ID に再利用可能な `namespace/name` を使用しています。古い台帳が残った後に他者が同名バケットを作ると 409 経路で「自分のもの」と判定され、既存オブジェクトを上書きします。teardown はそのバケット内の全オブジェクトを列挙して削除するため、他者の既存リソースを破壊できます。",
+      "suggestion": "run 固有サフィックスを含むバケット名にするか、作成時の `time_created`・ETag 等を台帳へ保存して変更前に照合してください。404 時は台帳を失効させ、stale 台帳＋同名再作成バケットで put/delete が拒否される E2E を追加してください。"
+    },
+    {
+      "id": "F003",
+      "severity": "major",
+      "file": "spikes/spike_m1/teardown.py",
+      "line": 209,
+      "issue": "GenAI プロジェクトは delete API の受付直後に台帳から削除され、DELETED/404 を確認していません。また、台帳 ID が一覧に存在しない場合も失敗・台帳失効のどちらも行わず成功終了します。非同期削除の失敗や stale 台帳を teardown 自体では検出できません。",
+      "suggestion": "台帳 ID ごとに取得・削除・終端状態待ちを行い、404/DELETED を確認してから `forget_created` してください。`recorded - seen` が残る場合も、個別 GET で不存在を確認するか非ゼロ終了してください。"
+    },
+    {
+      "id": "F004",
+      "severity": "major",
+      "file": "spikes/spike_m1/teardown.py",
+      "line": 176,
+      "issue": "Vector Store との関連削除と Files API 本体削除を一つの tuple 内で実行しています。本体削除だけ失敗しても後続でストアが消えればストアの台帳は失効し、孤立した file ID はどこにも記録されないため再実行で回収できません。",
+      "suggestion": "関連解除と Files 本体削除を独立した追跡対象にし、各 file ID の 404 を確認してください。ファイル ID も台帳に保持し、全ファイルとストアの不存在を確認するまでストアの所有記録を失効させないでください。"
+    },
+    {
+      "id": "F005",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_a_vector_store.py",
+      "line": 261,
+      "issue": "属性付き登録が一部失敗すると属性なしでフォールバックしますが、1件でも成功すれば属性対応扱いになります。検索判定もフィルタ時に `N` だけを拒否するため、属性欠損の `?` は成功扱いです。さらに retrieval-only の `vector_stores.search` 失敗は main の終了コードに反映されず、方式①の主張を部分成功の状態で PASS にできます。",
+      "suggestion": "10件すべての chunk_id・属性値を登録後に再取得して完全一致を検証してください。フィルタ結果は全件が厳密に `Y`、対照検索は少なくとも1件が `N` であることを要求し、`try_store_search` も判定値を返して main の必須条件に含めてください。"
+    },
+    {
+      "id": "F006",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_a_limits.py",
+      "line": 61,
+      "issue": "複数チャンク検証はヒット数や属性種類数を表示するだけで、0件または複数種類でも成功終了します。また `multi_chunk_granularity()` 自体が main の try/finally 外にあるため、登録後の待機・検索失敗では検証ファイルが残ります。属性復元や cleanup の API 失敗も十分に伝播されません。",
+      "suggestion": "ヒットが複数存在し、`distinct == 1` であることを明示的に assert してください。ファイル作成直後から try/finally で囲み、関連と Files 本体の不存在を確認し、復元・cleanup の失敗を非ゼロ終了にしてください。"
+    },
+    {
+      "id": "F007",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_b_select_ai.py",
+      "line": 117,
+      "issue": "`$VECTAB` が1行でも生成されれば索引構築完了と判定します。10件の一部だけが取り込まれた場合でも後続処理と GENERATE が成功すればスクリプトは exit 0 になり、固定属性・版フィルタ・レイテンシの前提が成立しないまま完了できます。",
+      "suggestion": "行数だけでなく object_name から得た chunk_id の実レコード数・重複・集合が c01〜c10 と完全一致するまで待機してください。列追加、検索対照、Sources 応答も期待値を検証し、成立しない場合は非ゼロ終了にしてください。"
+    },
+    {
+      "id": "F008",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_b_refresh_check.py",
+      "line": 125,
+      "issue": "今回のプローブ値が期待した `['(NULL)']` でなくても「想定外」と表示するだけで exit 0 です。Object Storage または索引行の cleanup 失敗もログだけで握り潰すため、方式②の結論が成立しない場合やプローブが残った場合でも成功扱いになります。STATE.md の「後始末失敗なら非ゼロ」とも一致しません。",
+      "suggestion": "プローブ値が厳密に期待値でなければ例外にし、cleanup は両処理を試した後で失敗を集約して再送出してください。削除後にオブジェクト不存在、プローブ行0件、基準データ10件を確認してください。"
+    },
+    {
+      "id": "F009",
+      "severity": "major",
+      "file": "spikes/spike_m1/redact_evidence.py",
+      "line": 56,
+      "issue": "伏字化対象が OCID と Object Storage namespace だけです。添付証跡には地域サービスの実エンドポイント、ADB のインスタンス固有 DB token、Vector Store ID、file ID が残っており、「エンドポイント実値・環境依存値をコミットしない」という規約を満たしていません。例として `e2e/method-b-select-ai.log:17` と `e2e/method-a-vector-store.log:8` に実値があります。",
+      "suggestion": "地域エンドポイントを `<service>.<region>` 等のプレースホルダへ置換し、DB 固有 token、`vs_*`、`file-*` など環境固有 ID も一貫して伏字化してください。伏字化後に禁止パターンが0件であることを検査するテストを追加してください。"
+    },
+    {
+      "id": "F010",
+      "severity": "major",
+      "file": "docs/comparison/rag-metadata-backends.md",
+      "line": 27,
+      "issue": "VPD / Data Redaction が「そのまま効く」と確定事実として記載されていますが、SKIPPED.md では VPD を実証していないと明記されています。プリセールス転用資料で未検証事項が無印の製品能力として扱われています。",
+      "suggestion": "現時点では「SQL 表に適用可能と推定・本スパイクでは未検証」と明示してください。VPD ポリシー下でフィルタ有無・索引利用・行漏洩がないことを確認する実機シナリオを別タスクで実施後に確定表現へ変更してください。"
+    },
+    {
+      "id": "F011",
+      "severity": "minor",
+      "file": "docs/decisions/ADR-0019-rag-metadata-backend.md",
+      "line": 30,
+      "issue": "本文に旧計測値の「① 108.4 ms / ③ 76〜140.5 ms」が残っており、直前の表および添付証跡の 97.4 ms、約92 ms、196.0 ms と不一致です。",
+      "suggestion": "直前の表・比較資料・latency.log と同じ最新値へ統一してください。"
+    },
+    {
+      "id": "F012",
+      "severity": "minor",
+      "file": "spikes/spike_m1/teardown.py",
+      "line": 4,
+      "issue": "teardown の docstring は所有台帳を `runs/<run-id>/e2e/created-resources.json` と説明していますが、実装は `.spike-m1-registry.json` を使用します。運用者が誤ったファイルを確認・復旧する原因になります。",
+      "suggestion": "docstring を `.spike-m1-registry.json` に更新し、証跡側は名前だけの写しであることを明記してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "insufficient",
+    "notes": "scenario-1 は ADB 版フィルタの対照、scenario-2 は構造化出典、scenario-3 は Vector Store の属性・フィルタ・限界、scenario-4 は誤接続・空台帳ガードを実環境で確認しており、latency.log も3方式の同一 chunk_id 集合と各5回の計測を裏づけています。teardown.log / teardown-verify.log は今回の残骸ゼロを確認し、SKIPPED.md の大規模検証・Chicago・VPD・アプリ配備未実施理由も概ね妥当です。ただし安全性の中核である stale registry＋同名再作成リソース、各 cleanup API の部分失敗、非同期削除失敗を検証しておらず、添付ログにも禁止された環境依存値が残るため diff 全体の裏づけとしては不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザ E2E は実施していません。"
+    }
+  }
+}
