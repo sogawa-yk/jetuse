@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY packages/jetuse_shared ./jetuse_shared
 RUN pip install --no-cache-dir ./jetuse_shared
 COPY packages/agent-containers/agent_common.py packages/agent-containers/agent_db.py \
+     packages/agent-containers/agent_env.py \
      packages/agent-containers/server.py packages/agent-containers/run_openai.py ./
 EXPOSE 8080
 CMD ["uvicorn", "run_openai:app", "--host", "0.0.0.0", "--port", "8080"]

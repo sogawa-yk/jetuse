@@ -1,0 +1,79 @@
+{
+  "review_n": 3,
+  "timestamp": "2026-07-29T13:10:54+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-3.input.diff",
+  "raw_output_path": "reviews/review-3.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "公開スタックの既定デプロイに必要な Hosted Application IAM/Vulnerability Scanning 権限が不足し、実環境 E2E も0件のため完了を裏づけられません。認証情報・テナンシ/コンパートメント OCID・実エンドポイントの新たなコミットは確認されませんでした。",
+  "severity_counts": {
+    "blocker": 2,
+    "major": 4,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "infra/terraform/modules/iam/main.tf",
+      "line": 17,
+      "issue": "Hosted Agent の Dynamic Group に `generativeaihostedapplicationiam` がなく、runtime policy に `read vss-family` もありません。OCI公式の [Permissions for Deploying Applications](https://docs.oracle.com/en-us/iaas/Content/generative-ai/deploy-permissions.htm) は両方を必要条件としており、脆弱性スキャン結果を検証できず既定のHosted DeploymentがACTIVEへ到達しない可能性があります。",
+      "suggestion": "Dynamic Groupへ`generativeaihostedapplicationiam`を追加し、Hosted Agentを有効化した場合だけ対象コンパートメントの`read vss-family`を付与してください。IAM module testでも3種類のresource typeとVSS権限を固定してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1210_PORT-03/e2e/",
+      "line": 1,
+      "issue": "実環境E2E証跡が空でSKIPPED.mdもありません。差分とrun goalは公開ZIPからの自動apply、3SDK実行、scale-to-zero、destroy成功を完了形で主張していますが、最低2シナリオを含めいずれも裏づけられていません。",
+      "suggestion": "マスク済み証跡として、少なくともdefault apply、3SDK invoke、`min_replica=0`からの初回実行、無効化時の縮退、完全destroyを保存してください。実施できない経路には具体的理由と代替検証をSKIPPED.mdへ記録してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "major",
+      "file": "infra/orm/main.tf",
+      "line": 39,
+      "issue": "非公開OCIRミラーは`hosted_agent_image_registry`が空でないだけで許可されますが、スタックが作るpolicyには`read repos`がなく、repository compartmentを指定する入力もありません。公式要件上、非公開ミラーではartifact pullおよび脆弱性スキャンが失敗します。",
+      "suggestion": "repository compartmentを入力として受け取り、Hosted Agent principalとVulnerability Scanning serviceへ必要なrepo権限を付与してください。それを自動化しない場合は、公開repository以外を明示的に拒否するか、既存IAM確認フラグとplan時preconditionを要求してください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "major",
+      "file": "infra/orm/variables.tf",
+      "line": 153,
+      "issue": "既定のimage tagが常に`latest`なので、releaseが同tagへ新imageをpushしても既存Terraform stateには差分が生じません。Hosted Deploymentは特定image releaseとして作成されるため、既存スタックを新しい配布ZIPで更新してもコンテナ修正が反映されない経路になります。",
+      "suggestion": "配布時のcommit SHAなどimmutable tagをschema/defaultへ埋め込み、スタック更新時に新しいHosted Deploymentまたはactive artifact更新が必ず計画されるようにしてください。"
+    },
+    {
+      "id": "F-005",
+      "severity": "major",
+      "file": "packages/api/service/agent_dispatch.py",
+      "line": 108,
+      "issue": "保存済みagentの`project_ocid`を無視して常にグローバルProjectを解決しています。Agent Builderの公開契約ではagent単位のProject割当で会話・記憶を分離するため、この経路では指定Projectの分離が失われます。",
+      "suggestion": "`agent_def.get(\"project_ocid\")`を優先し、未指定の場合だけ`genai.resolve_project_ocid()`へフォールバックしてください。明示Projectと自動解決Projectの双方がinvoke stateおよび3SDKの`OpenAi-Project`ヘッダへ届くテストを追加してください。"
+    },
+    {
+      "id": "F-006",
+      "severity": "major",
+      "file": "packages/api/service/agent_dispatch.py",
+      "line": 109,
+      "issue": "Project解決失敗を握りつぶして空文字でinvokeを続行しますが、3SDKのLLM/RAGクライアントはいずれも`OpenAi-Project`を必要とします。このため必ず後段で別のHTTPエラーとなり、`ProjectResolutionError`が持つ設定・IAMの具体的な復旧案も利用者から失われます。",
+      "suggestion": "Project解決不能時はHosted Agentを呼ばず、actionableなSSE errorとして返してください。少なくとも失敗を継続可能扱いするのは、Projectを必要としないことを実証した経路だけに限定してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-07-29T1210_PORT-03/e2e/`は空で、SKIPPED.mdもありません。default apply、3SDK invoke、コールドスタート、無効化時縮退、destroyはいずれも未検証です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザE2Eは実施していません。"
+    }
+  }
+}

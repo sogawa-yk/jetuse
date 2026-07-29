@@ -44,13 +44,16 @@ def _tools(enabled, ctx, trace):
 
 
 async def run(req: ac.InvokeRequest) -> ac.InvokeResponse:
-    ctx = {"rag_store_id": req.rag_store_id}
+    ctx = {"rag_store_id": req.rag_store_id, "project_ocid": req.project_ocid}
     trace: list[ac.ToolCallTrace] = []
     agent = Agent(
         name="jetuse-agent",
         instructions=req.system_prompt.strip() or DEFAULT_INSTRUCTIONS,
         tools=_tools(req.enabled_tools, ctx, trace),
-        model=OpenAIChatCompletionsModel(model=req.model, openai_client=ac.async_chat_client()),
+        model=OpenAIChatCompletionsModel(
+            model=req.model,
+            openai_client=ac.async_chat_client(project_ocid=req.project_ocid),
+        ),
     )
     items = [{"role": m["role"], "content": m["content"]} for m in req.history]
     items.append({"role": "user", "content": req.input})

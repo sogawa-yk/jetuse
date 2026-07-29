@@ -66,6 +66,11 @@ jobs:
         run: |
           terraform init -backend=false -input=false
           terraform test
+      - name: test hosted agent module contract
+        working-directory: infra/terraform/modules/hosted-agent
+        run: |
+          terraform init -backend=false -input=false
+          terraform test
       - name: Build Deploy to OCI archive
         run: bash scripts/package-orm-stacks.sh "$RUNNER_TEMP/orm-packages"
       - name: Validate packaged JetUse stack

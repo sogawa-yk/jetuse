@@ -5,10 +5,12 @@
 - ウォレットは非公開バケットから resource principal で取得
 
 必要env: SEMSTORE_OCID / ADB_DSN / ADB_QUERY_PASSWORD / ADB_WALLET_PASSWORD /
-        ADB_WALLET_BUCKET / ADB_WALLET_OBJECT(既定 adb_wallet.zip)
+        ADB_WALLET_BUCKET / ADB_WALLET_OBJECT(既定 adb_wallet.zip) /
+        ADB_WALLET_BASE64(公開スタックは base64 テキストで置くため true)
 jetuse-dg(RP)に「対象バケットのobject read」+ generative-ai-family が必要(IAM)。
 """
 
+import base64
 import io
 import os
 import pathlib
@@ -17,6 +19,9 @@ import time
 import zipfile
 
 import httpx
+
+# os.environ を読む前に JETUSE_AGENT_CONFIG(JSON)を展開する(PORT-03)。import 順に意味がある。
+import agent_env  # noqa: F401  (import 副作用が目的)
 
 # SQLサニタイズ(SELECT/WITHガード)は jetuse_shared に一本化(P1b)。
 # jetuse_shared.sanitize_sql は SqlRejectedError(ValueError サブクラス)を送出するため、
@@ -57,7 +62,13 @@ def _wallet_dir() -> str:
     obj = client.get_object(
         ns, os.environ["ADB_WALLET_BUCKET"],
         os.environ.get("ADB_WALLET_OBJECT", "adb_wallet.zip"))
-    zipfile.ZipFile(io.BytesIO(obj.data.content)).extractall(dest)
+    content = obj.data.content
+    # 公開スタック(ORM)はウォレットを **base64 テキスト**でバケットへ置く。そのまま unzip すると
+    # BadZipFile になり query_database が丸ごと落ちるため、API 側(jetuse_core/db.py)と同じ
+    # ADB_WALLET_BASE64 でデコードする(PORT-03)。
+    if os.environ.get("ADB_WALLET_BASE64", "").lower() in ("1", "true", "yes"):
+        content = base64.b64decode(content)
+    zipfile.ZipFile(io.BytesIO(content)).extractall(dest)
     return str(dest)
 
 

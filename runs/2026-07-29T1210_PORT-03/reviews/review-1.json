@@ -1,0 +1,95 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-07-29T12:38:55+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "公開スタックを成立させる新規 Terraform module が差分に含まれておらず、既知の OCIR pull 用 IAM 権限も不足しています。さらに実環境 E2E が0件で、手動作業ゼロの apply、3SDK実行、無効化時の縮退、destroy の主張を裏づけられていません。",
+  "severity_counts": {
+    "blocker": 3,
+    "major": 4,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "infra/orm/main.tf",
+      "line": 227,
+      "issue": "新たに参照する `../terraform/modules/hosted-agent` のファイルが提示差分に含まれていません。現状の差分だけをコミットすると module directory が存在せず、`terraform init/validate` と配布ZIP生成後の初期化が失敗します。",
+      "suggestion": "`infra/terraform/modules/hosted-agent/{main.tf,variables.tf,outputs.tf,versions.tf}` を同じ変更に追加し、配布ZIPを展開した状態でも `terraform init` と `terraform validate` が通ることを確認してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "blocker",
+      "file": "infra/terraform/modules/iam/main.tf",
+      "line": 25,
+      "issue": "Hosted Application/Deployment を Dynamic Group に追加していますが、対応する `read repos` 権限が runtime policy にありません。リポジトリ内の既存実機記録では、この権限が無い場合に deployment artifact が `FAILED` になることが確認されています。公開・別テナンシ OCIR なら権限モデルが異なる可能性がありますが、その経路の証跡もありません。",
+      "suggestion": "同一テナンシの非公開OCIRを使う構成では runtime policy に `Allow dynamic-group ... to read repos ...` を追加してください。公開OCIRのcross-tenancy pullを前提とするなら、3画像すべてについて Hosted Deployment が実際にpullできることを実環境E2Eで証明し、その前提をIAMドキュメントへ明記してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1210_PORT-03/e2e/",
+      "line": 1,
+      "issue": "実環境E2E証跡が空で、SKIPPED.mdもありません。差分は公開スタックがOAuthアプリとHosted Application/Deploymentを自動作成し、3SDKを実行できると完了形で記述していますが、最低2シナリオすらなく、apply・3SDK invoke・コールドスタート・無効化時縮退・destroyのいずれも裏づけられていません。",
+      "suggestion": "jetuse-devまたは承認済み専用コンパートメントで、少なくとも公開ZIPのapply、3SDKのツール付き実行、`min_replica=0`からの初回実行、無効化構成、destroyを実施し、マスク済みログを同ディレクトリへ保存してください。実施不能な経路には具体的理由を記したSKIPPED.mdを追加してください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "major",
+      "file": "infra/orm/locals.tf",
+      "line": 46,
+      "issue": "`hosted_agents_enabled` が既存IAM利用モードを考慮していません。`enable_dynamic_group=false` の既存Dynamic Groupは従来のContainer Instance/Functions等だけを含む契約のままでも、既定値によりHosted Deploymentが作成され、ホスト型リソースがDynamic Groupに属さず失敗します。`enable_runtime_policy=false` の既存policyについても同様です。",
+      "suggestion": "既存IAM利用時はHosted Application/Deploymentの2リソースタイプと必要なOCIR権限が事前設定済みであることを明示的なopt-in変数またはpreconditionで要求してください。schema.yaml、variables.tf、orm.mdの既存IAM要件も同時に更新してください。"
+    },
+    {
+      "id": "F-005",
+      "severity": "major",
+      "file": "infra/orm/main.tf",
+      "line": 240,
+      "issue": "`depends_on` はIAMリソースのAPI作成完了しか保証せず、Dynamic Group matching ruleとpolicyの伝播完了を待ちません。既存の実機記録では反映に5〜10分必要とされているため、クリーンな一括applyでは直後のartifact検証が権限エラーになる競合があります。",
+      "suggestion": "IAMルール・policyの内容をtriggerにした待機リソース、またはartifact作成側の十分な再試行を導入し、初回applyだけで安定してACTIVEになることをE2Eで確認してください。"
+    },
+    {
+      "id": "F-006",
+      "severity": "major",
+      "file": "infra/orm/locals.tf",
+      "line": 95,
+      "issue": "OAuth `client_secret` を `api_environment` に追加したため、Container Instanceだけでなく同じmapを受け取るFunctions routerにも秘密が配布されます。Functionsの担当はpresets/dbchat/ttsでHosted Agentを呼ばないため、不要な資格情報露出です。",
+      "suggestion": "Container Instance用とFunctions用のenvironment mapを分離し、`HOSTED_AGENT_*`およびAgent Application OCIDは実際にinvokeするAPI Container Instanceだけへ渡してください。"
+    },
+    {
+      "id": "F-007",
+      "severity": "major",
+      "file": "infra/orm/variables.tf",
+      "line": 134,
+      "issue": "`hosted_agent_min_replica` は0以上しか検証していませんが、module側の `max_replica` は既定2です。3以上や小数を入力でき、無効なscaling configとしてapply時に失敗します。",
+      "suggestion": "整数であることと `0 <= min_replica <= max_replica` をTerraform validationで保証し、schema.yamlにも対応するmaximumを設定してください。利用者向け仕様が0/1だけなら、その2値に限定してください。"
+    },
+    {
+      "id": "F-008",
+      "severity": "minor",
+      "file": "packages/agent-containers/agent_db.py",
+      "line": 66,
+      "issue": "ウォレットのbase64デコード経路を追加していますが、raw ZIP、base64 ZIP、壊れたbase64/Object Storageエラーのテストがありません。今回の公開スタックで必須となる分岐のため、回帰を検出できません。",
+      "suggestion": "ObjectStorageClientをモックし、base64有効時に正しく展開できるケース、無効時のraw ZIP、破損データ時に明確な失敗となるケースを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-07-29T1210_PORT-03/e2e/` は空で、SKIPPED.mdもありません。最低2シナリオ要件を満たさず、差分の中心である公開ORM apply、3SDK invoke、コールドスタート、無効化時の縮退、destroyはすべて未検証です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されていないため、指示どおりブラウザE2Eは実施していません。"
+    }
+  }
+}

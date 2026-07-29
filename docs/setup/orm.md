@@ -42,11 +42,18 @@ Resource Managerが自動入力する`region`はリソースの配備リージ�
 | `enable_runtime_policy` | `true` | 対象コンパートメントにRuntime Policyを作成 |
 | `enable_semantic_store` | `true` | SQL Search用Semantic Store権限を含める |
 | `enable_auth` | `true` | Identity Domain、OIDCアプリ、デモユーザーを作成 |
+| `enable_hosted_agents` | `true` | ホスト型エージェント（3SDKのReActコンテナ）を配備。ゼロスケールのためアイドル課金なし |
+| `hosted_agent_min_replica` | `0` | エージェントのアイドル時レプリカ数。`1`にすると常時起動（コールドスタートなし・常時課金） |
+| `image_tag` | 配布ZIPではそのビルドの commit SHA | API・Functionsルーター・エージェントの全画像に共通のタグ。契約を共有するコンポーネントを同じリリースで揃えるため1つにまとめてある |
 | `enable_opensearch` | `false` | 常設課金のOpenSearchを作成 |
 | `admin_users` | 空 | 管理ダッシュボード（`/admin`）を開けるユーザー。空欄ならStackが作る`demo`ユーザーが管理者 |
 | `adb_admin_password` | 空 | 空の場合は安全なランダム値を生成 |
 
 `enable_auth=true`はIdentity Domainを作成するため、実行ユーザーにテナンシのDomain管理権限が必要。権限がなく認証も不要な隔離検証環境では`false`にできる。
+
+`enable_hosted_agents`が実際に効くのは **`enable_auth=true` かつ デプロイ先が大阪（ap-osaka-1）/ シカゴ（us-chicago-1）** のときだけ（PORT-03 / ADR-0019）。
+エージェント呼び出しはIdentity Domainが発行するOAuthトークン（client_credentials）で認証するため認証必須で、エージェント画像はGenAI実証済みの2リージョンにしか置いていない。
+条件を満たさない場合はエージェント関連リソースを作らず、`GET <app_url>/api/health`の`capabilities.agents`が理由付きで`unavailable`になる。
 
 ## 作成されるリソース
 
@@ -57,6 +64,7 @@ Resource Managerが自動入力する`region`はリソースの配備リージ�
 - Container Instance、OCI Functions、API Gateway
 - Logging / Monitoring
 - Identity Domain、OIDC public client、初期デモユーザー（`enable_auth=true`）
+- ホスト型エージェント：OAuth confidential app（client兼resource）とGenAI Hosted Application / Deployment × 3SDK（`enable_hosted_agents=true`）
 - OpenSearch cluster（`enable_opensearch=true`）
 
 ## デプロイ後
@@ -64,7 +72,8 @@ Resource Managerが自動入力する`region`はリソースの配備リージ�
 1. Outputの`app_url`を開く。
 2. `demo_username` / `demo_password`でログインする。パスワード変更を求められずそのまま入れる（StackがUserPasswordChanger経由で設定するため）。
 3. 初回はIAM反映、ADB作成、DB初期化に10〜15分程度かかる。反映中は一部APIが一時的に失敗することがある。
-4. `GET <app_url>/api/health` で機能ごとの可用性（chat / rag / dbchat / speech / ocr / tts）を確認できる。
+4. `GET <app_url>/api/health` で機能ごとの可用性（chat / rag / dbchat / speech / ocr / tts / agents）を確認できる。
+5. `/agents` でエージェントを作成すると、SDK（OpenAI Agents / LangGraph / ADK）を切り替えて実行できる。`hosted_agent_min_replica=0`（既定）では初回実行にコールドスタート待ちが入る。
 
 デモユーザーのパスワード設定にはOCI CLIを使う（Terraform providerに該当リソースが無いため）。Resource Managerの実行環境にはCLIが同梱・認証済みなのでボタン経由では追加作業は不要。ローカルで`terraform apply`する場合のみ、`oci` CLIが認証済みであること。
 
