@@ -1,0 +1,94 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-07-28T19:40:07+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "共有 ADB を ADMIN 権限で変更する前の対象環境検証・明示的な人間ゲートがなく、誤った .env により既存環境を変更できるため FAIL です。また、ベクタ索引作成失敗後も PASS になり得るため、添付証跡はフィルタと出典構造を裏づける一方、「索引」の成立までは証明していません。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 4,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "blocker",
+      "file": "spikes/spike_m1/setup_schema.py",
+      "line": 49,
+      "issue": "connect_admin() の接続先が jetuse-dev の承認済み ADB／コンパートメントであることを検証しないまま、CREATE/ALTER USER、権限・無制限 quota、共有 network ACL、credential の削除・再作成を実行する。誤った、または古い .env を参照すると、未承認の既存 ADB を変更でき、本リポジトリの人間ゲート要件に違反する。",
+      "suggestion": "変更前に ADB_OCID、COMPARTMENT_OCID、環境名を許可リストと照合して不一致なら停止する。さらに --apply と対象 OCID の明示指定など、人間が変更対象を確認できるゲートを必須化し、既存ユーザーを検出した場合はデフォルトで ALTER/DROP しないこと。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_c_own_index.py",
+      "line": 166,
+      "issue": "HNSW と IVF の CREATE VECTOR INDEX が両方失敗しても例外を握り潰して暗黙に戻り、main() は検索結果だけで PASS を返す。添付証跡の計画も TABLE ACCESS STORAGE FULL であり、ベクタ索引の作成または利用を証明していない。",
+      "suggestion": "全候補失敗時は例外または明示的な失敗結果を返して終了する。作成後にデータディクショナリで索引名・種別・VALID 状態を検証し、索引利用を主張するなら実行計画でも確認する。全表走査の検証を許す場合は「自前索引 PASS」と区別して報告すること。"
+    },
+    {
+      "id": "F003",
+      "severity": "major",
+      "file": "spikes/spike_m1/common.py",
+      "line": 29,
+      "issue": "既存の環境変数は setdefault() で優先される一方、戻り値 env には常に .env の値が入る。wallet_dir()/get_settings() は os.environ、connect() や setup_schema.py は戻り値を使うため、ADB_OCID・DSN・region・compartment が異なる環境から混在し、誤接続や誤ったコンパートメントへの操作につながる。",
+      "suggestion": "設定の優先順位を一つに統一し、呼び出し側は同じ effective configuration のみを使う。ADB_OCID、ADB_DSN、OCI_REGION、COMPARTMENT_OCID の組み合わせも接続前に検証すること。"
+    },
+    {
+      "id": "F004",
+      "severity": "major",
+      "file": "spikes/spike_m1/method_c_own_index.py",
+      "line": 273,
+      "issue": "call_timeout=0 により DB 呼び出しのタイムアウトを無効化している。UTL_TO_EMBEDDING は DB から外部 OCI Generative AI を呼ぶため、ネットワークやサービス障害時にスパイクが無期限に停止し得る。",
+      "suggestion": "現実的な有限の call_timeout を設定し、タイムアウトを候補失敗として記録・処理する。接続と cursor は try/finally または context manager で確実に閉じること。"
+    },
+    {
+      "id": "F005",
+      "severity": "major",
+      "file": "spikes/spike_m1/setup_schema.py",
+      "line": 8,
+      "issue": "片付けコマンドとして spikes/spike_m1/teardown.py を案内しているが、差分にそのファイルがない。作成済みユーザー、資格証明、ACL ACE を再現可能かつ対象限定で除去できず、STATE.md でも teardown が未完のままである。",
+      "suggestion": "対象 OCID と作成物を検証する冪等な teardown.py を追加し、資格証明、スキーマ、当該 principal の ACL ACE のみを安全に削除する。実行証跡も残すこと。"
+    },
+    {
+      "id": "F006",
+      "severity": "minor",
+      "file": "spikes/spike_m1/method_c_own_index.py",
+      "line": 239,
+      "issue": "docstring は「実プラン」としているが、EXPLAIN PLAN と DBMS_XPLAN.DISPLAY が返すのは推定計画であり、直前に実行した SQL の実績ではない。これだけでは WHERE の実行順序や索引利用を確定できない。",
+      "suggestion": "gather_plan_statistics を付けた SQL の実行後に DBMS_XPLAN.DISPLAY_CURSOR(..., 'ALLSTATS LAST +PREDICATE') を取得するか、表記を「推定計画」に修正すること。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 2,
+    "adequacy": "insufficient",
+    "notes": "runs/2026-07-28T1848_SPIKE-M1/e2e/method-c-own-index.log を確認。方式③の版フィルタ対照と構造化出典は十分に裏づけられている。一方、方式①の限界測定は添付されず SKIPPED.md もなく、索引作成結果も証跡範囲に含まれないうえ、掲載計画は全表走査であるため、タスク全体および「索引成立」の証跡としては不十分。STATE.md が未完を明示しているため、未実施範囲を完了済みと偽る状態ではない。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [
+        {
+          "name": "方式③：現行版フィルタの対照確認",
+          "steps": "実 ADB の SPIKE_CHUNKS に対し、フィルタなし、current_version='Y'、current_version='Y' AND kind='constraint' の検索結果を比較。",
+          "expected": "フィルタなしでは旧版が返り、現行版フィルタでは旧版が0件になる。",
+          "observed": "フィルタなしで c08/c09 が返り、現行版フィルタおよび版＋分類フィルタでは旧版0件。",
+          "passed": true
+        },
+        {
+          "name": "方式③：構造化された出典の返却",
+          "steps": "検索列と c05 の JSON_OBJECT 結果から file/version/sheet/cells/sha256/kind/current_version を確認。",
+          "expected": "出典情報が本文ではなく列またはJSONの構造化値として返る。",
+          "observed": "検索結果の独立列と、c05 の構造化 JSON に必要な出典フィールドが返った。",
+          "passed": true
+        }
+      ],
+      "notes": "指示どおり、ターゲット URL が提供されていないためブラウザツールは使用していない。"
+    }
+  }
+}

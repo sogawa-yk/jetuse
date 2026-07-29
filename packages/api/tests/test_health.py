@@ -138,7 +138,9 @@ def test_speech_health_unavailable_without_bucket(monkeypatch):
 def test_ocr_and_tts_health_unavailable_without_compartment_ocid(monkeypatch):
     # PORT-02レビュー指摘: 全OCI呼び出しに必須のCOMPARTMENT_OCIDが空なら
     # 常時okと偽らない(最低限の設定不備検出)。
-    monkeypatch.delenv("COMPARTMENT_OCID", raising=False)
+    # delenv だけだと Settings が .env(env_file) から拾い直すため、開発機のように
+    # .env に COMPARTMENT_OCID がある環境で落ちる。空文字を明示すると env が .env に優先する。
+    monkeypatch.setenv("COMPARTMENT_OCID", "")
     get_settings.cache_clear()
     assert health.ocr_health()["status"] == "unavailable"
     tts_out = health.tts_health()
