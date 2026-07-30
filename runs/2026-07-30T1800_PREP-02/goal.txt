@@ -1,0 +1,1 @@
+tasks/PREP-02.md の受け入れ条件をすべて満たし、かつ (1) pytest 全件パス (2) ruff クリーン (3) STATE.md の review_verdict が PASS (4) docs/verification/PREP-02.md に実行コマンドと実出力（索引作成の結果・VECTAB の中身・検索結果）が貼られ、一次資料の有無が明記され、判定と表示文言が実測に一致していること。推測で断定しない。未確認は未確認と書く。顧客名を書かない。未承認のコミット・PR・push を行わない。

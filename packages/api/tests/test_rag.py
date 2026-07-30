@@ -665,10 +665,10 @@ def test_long_filename_keeps_its_extension():
     """台帳へ収める切り詰めで拡張子を落とさない（形式で分岐する判定が誤らないため）。"""
     from jetuse_core import rag as rag_module
 
-    name = "あ" * 200 + ".pdf"                 # 600 バイト超
+    name = "あ" * 200 + ".xlsx"                # 600 バイト超
     fitted = rag_module._fit(name)
-    assert fitted.endswith(".pdf") and len(fitted.encode()) <= 400
-    assert rag_module._select_ai_supports(fitted)
+    assert fitted.endswith(".xlsx") and len(fitted.encode()) <= 400
+    assert rag_module.extract_xlsx.is_xlsx(fitted)
 
 
 def test_extract_rejects_broken_pdf_with_422():
@@ -676,24 +676,31 @@ def test_extract_rejects_broken_pdf_with_422():
     assert res.status_code == 422 and "PDF" in res.json()["detail"]
 
 
-def test_select_ai_badge_is_error_for_formats_it_cannot_read(monkeypatch):
-    """Select AI は原本を DB 側が読む。xlsx は索引に載らないので "pending" にしない。"""
+def test_select_ai_badge_treats_xlsx_like_any_other_format(monkeypatch):
+    """xlsx を拡張子だけで `error` にしない（PREP-02 の実測で恒久 error を撤回した）。
+
+    実測（`docs/verification/PREP-02.md`）: Select AI の索引は xlsx の原本を
+    Oracle Text 経由でテキスト化して取り込み、検索でも引ける。したがって xlsx の状態は
+    他形式と同じく「索引に在るか」だけで決まる（未反映なら同期待ちの `pending`）。
+    """
     import jetuse_core.rag_adb as radb
     import jetuse_core.rag_opensearch as ros
     import jetuse_core.rag_select_ai as rsa
     from jetuse_core import rag as rag_module
 
-    monkeypatch.setattr(rsa, "indexed_file_ids", lambda owner: set())
+    monkeypatch.setattr(rsa, "indexed_file_ids", lambda owner: {"f1"})
     monkeypatch.setattr(ros, "enabled", lambda: False)
     monkeypatch.setattr(radb, "enabled", lambda: True)
     monkeypatch.setattr(radb, "indexed_file_ids", lambda owner: {"f1"})
     monkeypatch.setattr(radb, "errored_file_ids", lambda owner: set())
     files = [{"id": "f1", "filename": "spec.xlsx", "status": "completed"},
-             {"id": "f2", "filename": "policy.md", "status": "completed"}]
+             {"id": "f2", "filename": "sheet2.xlsx", "status": "completed"},
+             {"id": "f3", "filename": "policy.md", "status": "completed"}]
     out = rag_module.attach_backend_status("u", files)
-    assert out[0]["backends"]["select_ai"] == "error"    # xlsx は載らない
-    assert out[0]["backends"]["adb"] == "indexed"        # adb には載っている
-    assert out[1]["backends"]["select_ai"] == "pending"  # md は同期待ち
+    assert out[0]["backends"]["select_ai"] == "indexed"  # 索引に在る xlsx
+    assert out[0]["backends"]["adb"] == "indexed"
+    assert out[1]["backends"]["select_ai"] == "pending"  # まだ索引に無い xlsx = 同期待ち
+    assert out[2]["backends"]["select_ai"] == "pending"  # md も同じ扱い
 
 
 def test_opensearch_extracts_xlsx_instead_of_decoding_bytes():
