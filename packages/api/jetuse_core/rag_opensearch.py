@@ -58,6 +58,12 @@ def _extract_text(filename: str, content: bytes) -> str:
 
         reader = PdfReader(io.BytesIO(content))
         return "\n".join((p.extract_text() or "") for p in reader.pages)
+    if name.endswith(".xlsx"):
+        # xlsx は zip なので、そのまま decode すると文字化けした本文が "indexed" になる
+        # (利用者には正常に見える)。抽出したテキストを渡す(PREP-01)。
+        from . import extract_xlsx
+
+        return extract_xlsx.render_text(extract_xlsx.extract(filename, content))
     return content.decode("utf-8", errors="replace")
 
 

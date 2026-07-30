@@ -23,6 +23,14 @@ ATTRIBUTE_KEYS: tuple[str, ...] = (
 
 MAX_ATTRIBUTE_KEYS = 16          # ①-d: Metadata must not contain more than 16 key-value pairs
 MAX_ATTRIBUTE_VALUE_CHARS = 512  # ①-d: exceeds max length of 512 characters
+# `kind` だけは **ADB 側の列幅**(`rag_adb_chunks.kind VARCHAR2(32)`)に合わせて短く保つ。
+# 同じ値を両バックエンドへ入れるので(PREP-01)、片方だけ入る長さを受け付けると
+# 「マネージドでは絞れるのに ADB では取り込み自体が失敗する」というズレが起きる。
+# **バイト長で見る**: 列は BYTE セマンティクスのことがあり、日本語 11 文字(33 バイト)は
+# 文字数では通っても ORA-12899 になる(`rag._fit` が同じ理由でバイト長を使っている)。
+# 型は従来どおりスカラー(文字列 / 数値 / 真偽)を許す — ここで文字列限定にすると
+# `kind=0` を送っていた既存クライアントが壊れる。
+MAX_KIND_BYTES = 32
 MAX_FILTER_DEPTH = 5             # 複合フィルタの入れ子上限(病的な入力の打ち切り)
 
 _COMPARISON_TYPES = frozenset({"eq", "ne", "gt", "gte", "lt", "lte"})
@@ -78,6 +86,11 @@ def normalize_attributes(raw: Any) -> dict[str, str | int | float | bool]:
         if value is None or (isinstance(value, str) and not value.strip()):
             continue  # 値が無いメタはキーごと省く
         out[key] = _check_scalar(value, f"attribute '{key}'")
+        if key == "kind" and len(str(out[key]).encode("utf-8")) > MAX_KIND_BYTES:
+            raise MetadataError(
+                f"attribute 'kind' must be at most {MAX_KIND_BYTES} bytes in UTF-8 "
+                "(the adb backend stores it in a VARCHAR2(32) column)"
+            )
     if len(out) > MAX_ATTRIBUTE_KEYS:
         raise MetadataError(
             f"attributes must not contain more than {MAX_ATTRIBUTE_KEYS} key-value pairs"

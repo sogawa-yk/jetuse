@@ -25,8 +25,13 @@ sys.path.insert(0, str(ROOT / "ops"))
 
 import _adb as adb  # noqa: E402  ops の接続・fail-closed ゲートを再利用する
 
-SCHEMA_PREFIX = "JETUSE_RAGM02"
-HOME = pathlib.Path(os.environ.get("RAGM02_HOME", "/tmp/jetuse-ragm02"))
+# 接頭辞と保管先は env で差し替えられる（**後続タスクがこの台帳ゲートごと再利用するため**。
+# PREP-01 は SPIKE_SCHEMA_PREFIX=JETUSE_PREP01 / SPIKE_HOME=/tmp/jetuse-prep01 で使う）。
+# 既定値は RAGM-02 のままなので、RAGM-02 の手順書はそのまま動く。
+SCHEMA_PREFIX = os.environ.get("SPIKE_SCHEMA_PREFIX", "JETUSE_RAGM02")
+HOME = pathlib.Path(
+    os.environ.get("SPIKE_HOME") or os.environ.get("RAGM02_HOME", "/tmp/jetuse-ragm02")
+)
 EMBED_MODEL = "cohere.embed-multilingual-v3.0"
 EMBED_DIM = 1024
 
@@ -37,8 +42,9 @@ def _schema_path() -> pathlib.Path:
 
 def resolve_schema() -> str:
     """この run のスキーマ名。env → `RAGM02_HOME/schema.txt` の順。未作成なら空。"""
-    if os.environ.get("RAGM02_SCHEMA"):
-        return os.environ["RAGM02_SCHEMA"].strip().upper()
+    override = os.environ.get("SPIKE_SCHEMA") or os.environ.get("RAGM02_SCHEMA")
+    if override:
+        return override.strip().upper()
     path = _schema_path()
     return path.read_text().strip().upper() if path.exists() else ""
 

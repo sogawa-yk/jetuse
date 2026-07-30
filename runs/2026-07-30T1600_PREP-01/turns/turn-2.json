@@ -1,0 +1,9 @@
+{
+  "turn": 2,
+  "timestamp": "2026-07-30T17:49:39+09:00",
+  "action_summary": "(loop-protocol 側で追記可)",
+  "files_changed": ["STATE.md", "docs/verification/PREP-01.md", "packages/api/jetuse_core/extract_xlsx.py", "packages/api/jetuse_core/rag.py", "packages/api/jetuse_core/rag_adb.py", "packages/api/jetuse_core/rag_metadata.py", "packages/api/jetuse_core/rag_opensearch.py", "packages/api/pyproject.toml", "packages/api/service/routes/rag.py", "packages/api/tests/test_extract_xlsx.py", "packages/api/tests/test_rag.py", "specs/09-rag.md", "spikes/prep01/e2e.py", "spikes/prep01/fixtures.py", "spikes/prep01/teardown.py", "spikes/ragm02/common.py"],
+  "diff_path": "diffs/turn-2.diff",
+  "review_ref": "reviews/review-7.json",
+  "goal_checker": { "verdict": "(/goal 判定モデルが記録)", "reason": "" }
+}

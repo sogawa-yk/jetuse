@@ -1,5 +1,6 @@
 """RAG(RAG-01/02)のAPIテスト。rag層はfake、citations抽出は実関数。"""
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -7,6 +8,9 @@ from fastapi.testclient import TestClient
 
 import service.main as service_main
 from jetuse_core.chat import _extract_citations
+
+# 差し替え前の実体（autouse の fake_rag が module 属性を上書きするので import 時に掴む）
+from jetuse_core.rag import add_file as real_add_file
 from service.main import app
 
 client = TestClient(app)
@@ -432,3 +436,270 @@ def test_upload_without_attributes_stays_backward_compatible(fake_rag):
     res = client.post("/api/rag/files", files={"file": ("a.md", b"x", "text/markdown")})
     assert res.status_code == 200
     assert fake_rag.last_attributes == {}
+
+
+# --- xlsx の取り込み口と抽出口(PREP-01) ---------------------------------------
+
+
+def _workbook() -> bytes:
+    """架空の仕様書ブック(複数シート)。顧客データは使わない。"""
+    from tests.test_extract_xlsx import SPEC, build
+
+    return build(SPEC)
+
+
+def test_upload_accepts_xlsx(fake_rag):
+    res = client.post(
+        "/api/rag/files",
+        files={"file": ("サンプル仕様書.xlsx", _workbook(),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert res.status_code == 200
+    assert res.json()["filename"] == "サンプル仕様書.xlsx"
+
+
+def _use_real_add_file(monkeypatch):
+    """xlsx の検証は `rag.add_file` の先頭(OCI を呼ぶ前)で走るので、本物を使って確かめる。"""
+    monkeypatch.setattr(service_main.rag, "add_file", real_add_file)
+
+
+def test_upload_rejects_broken_xlsx_with_422(monkeypatch):
+    _use_real_add_file(monkeypatch)
+    res = client.post("/api/rag/files", files={"file": ("broken.xlsx", b"not a zip", "x")})
+    assert res.status_code == 422
+    assert "xlsx" in res.json()["detail"]
+
+
+def test_unsupported_type_message_lists_xlsx():
+    res = client.post("/api/rag/files", files={"file": ("a.pptx", b"x", "x")})
+    assert res.status_code == 422 and "pdf/txt/md/xlsx" in res.json()["detail"]
+
+
+def test_extract_returns_chunks_without_ingesting(fake_rag):
+    res = client.post(
+        "/api/extract", files={"file": ("サンプル仕様書.xlsx", _workbook(), "x")}
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["filename"] == "サンプル仕様書.xlsx"
+    assert body["chunk_count"] == len(body["chunks"]) == 2
+    assert {c["cells"] for c in body["chunks"]} == {"B12:D13", "C5:E5"}
+    assert [c["sheet"] for c in body["chunks"]] == ["API一覧", "制約"]
+    # 取り込みは起きない(台帳にファイルが増えない)
+    assert fake_rag.files == {}
+
+
+def test_extract_works_for_text_files_too():
+    res = client.post("/api/extract", files={"file": ("note.md", "# 見出し\n本文".encode(), "x")})
+    assert res.status_code == 200
+    assert res.json()["chunks"][0]["sheet"] == "本文"
+
+
+def test_extract_rejects_limit_excess_with_422_naming_the_limit(monkeypatch):
+    """上限超過は**切り詰めず**に 422。どの上限かが detail から分かる。"""
+    from jetuse_core import extract_xlsx
+
+    monkeypatch.setattr(extract_xlsx, "MAX_CHUNKS", 1)
+    res = client.post("/api/extract", files={"file": ("spec.xlsx", _workbook(), "x")})
+    assert res.status_code == 422
+    assert "limit=chunks" in res.json()["detail"]
+
+
+def test_extract_requires_supported_extension():
+    assert client.post(
+        "/api/extract", files={"file": ("a.docx", b"x", "x")}
+    ).status_code == 422
+
+
+def test_upload_rejects_xlsx_over_chunk_char_limit(monkeypatch):
+    from jetuse_core import extract_xlsx
+    from tests.test_extract_xlsx import build
+
+    monkeypatch.setattr(extract_xlsx, "MAX_CHUNK_CHARS", 50)
+    _use_real_add_file(monkeypatch)
+    res = client.post(
+        "/api/rag/files",
+        files={"file": ("wide.xlsx", build({"制約": [("A1", "あ" * 100)]}), "x")},
+    )
+    assert res.status_code == 422 and "limit=chunk_chars" in res.json()["detail"]
+
+
+# --- マネージド側へ渡す形(ファイル単位の属性)。実 OCI は E2E で確認する -------
+
+
+def test_prepare_upload_converts_xlsx_to_text_with_file_level_attributes():
+    """マネージド Vector Store は Office 形式を受け付けない(SPIKE-03)ので抽出テキストを渡す。
+
+    そのとき属性は**ファイル単位**にしかできない(SPIKE-M1 ①-a)。チャンクごとの
+    セル範囲を載せて「セル単位で返る」ように見せない。
+    """
+    from jetuse_core import rag as rag_module
+
+    name, body, attrs = rag_module.prepare_upload("サンプル仕様書.xlsx", _workbook())
+    assert name == "サンプル仕様書.xlsx.txt"
+    assert "600 req/min" in body.decode()
+    assert attrs == {"sheet": "(ブック全体: 2 シート)", "cells": "(ブック全体)"}
+
+
+def test_prepare_upload_passes_through_non_xlsx():
+    from jetuse_core import rag as rag_module
+
+    assert rag_module.prepare_upload("a.md", b"# x") == ("a.md", b"# x", {})
+
+
+def test_prepare_upload_rejects_empty_workbook():
+    from jetuse_core import extract_xlsx
+    from jetuse_core import rag as rag_module
+    from tests.test_extract_xlsx import build
+
+    with pytest.raises(extract_xlsx.EmptyWorkbook):
+        rag_module.prepare_upload("empty.xlsx", build({"空": []}))
+
+
+def test_upload_rejects_user_supplied_sheet_or_cells_for_xlsx(monkeypatch):
+    """導出したファイル単位の属性を利用者指定で上書きさせない(能力差の偽装を防ぐ)。"""
+    _use_real_add_file(monkeypatch)
+    res = client.post(
+        "/api/rag/files",
+        files={"file": ("spec.xlsx", _workbook(), "x")},
+        data={"attributes": '{"sheet": "制約", "cells": "C5:E5", "version": "2.0"}'},
+    )
+    assert res.status_code == 422
+    detail = res.json()["detail"]
+    assert "cells" in detail and "sheet" in detail and "adb" in detail
+
+
+def test_upload_keeps_other_attributes_for_xlsx(monkeypatch):
+    """`sheet` / `cells` 以外(版・分類)は従来どおり利用者指定が通る。"""
+    from jetuse_core import rag as rag_module
+
+    sent: dict = {}
+    monkeypatch.setattr(rag_module, "ensure_store", lambda owner: "vs_fake")
+    monkeypatch.setattr(rag_module, "_backup_original", lambda *a: None)
+    monkeypatch.setattr(rag_module, "_insert_file", lambda *a: None)
+    monkeypatch.setattr(rag_module, "make_inference_client", lambda **kw: _FakeDp(sent))
+    _use_real_add_file(monkeypatch)
+    res = client.post(
+        "/api/rag/files",
+        files={"file": ("spec.xlsx", _workbook(), "x")},
+        data={"attributes": '{"version": "2.0", "kind": "spec"}'},
+    )
+    assert res.status_code == 200
+    assert sent["upload_name"] == "spec.xlsx.txt"
+    assert sent["attributes"]["version"] == "2.0" and sent["attributes"]["kind"] == "spec"
+    # 出典は**ファイル単位**(SPIKE-M1 ①-a)。チャンクごとのセル範囲は載らない
+    assert sent["attributes"]["sheet"] == "(ブック全体: 2 シート)"
+    assert sent["attributes"]["cells"] == "(ブック全体)"
+    assert sent["attributes"]["file"] == "spec.xlsx"          # 台帳の表示名は元の xlsx
+
+
+class _FakeDp:
+    """Files API / Vector Store の最小スタブ(実 OCI 呼び出しは E2E で確認する)。"""
+
+    def __init__(self, sent: dict):
+        self.sent = sent
+        outer = self
+
+        class Files:
+            def create(self, *, file, purpose):
+                outer.sent["upload_name"] = file[0]
+                outer.sent["upload_bytes"] = file[1]
+                return SimpleNamespace(id="file-fake")
+
+        class VsFiles:
+            def create(self, *, vector_store_id, file_id, attributes):
+                outer.sent["attributes"] = attributes
+
+        self.files = Files()
+        self.vector_stores = SimpleNamespace(files=VsFiles())
+
+
+def test_kind_is_passed_to_the_adb_backend(monkeypatch):
+    """同じ `kind` を両バックエンドへ入れる（分類の絞り込みがバックエンドで食い違わない）。"""
+    from jetuse_core import rag as rag_module
+    from jetuse_core import rag_adb
+
+    sent: dict = {}
+    seen: dict = {}
+    monkeypatch.setattr(rag_module, "ensure_store", lambda owner: "vs_fake")
+    monkeypatch.setattr(rag_module, "_backup_original", lambda *a: None)
+    monkeypatch.setattr(rag_module, "_insert_file", lambda *a: None)
+    monkeypatch.setattr(rag_module, "make_inference_client", lambda **kw: _FakeDp(sent))
+    monkeypatch.setattr(rag_adb, "availability", lambda: rag_adb.READY)
+    monkeypatch.setattr(rag_adb, "ingest",
+                        lambda owner, fid, name, body, *, kind="doc": seen.update(kind=kind))
+    _use_real_add_file(monkeypatch)
+    res = client.post(
+        "/api/rag/files",
+        files={"file": ("spec.xlsx", _workbook(), "x")},
+        data={"attributes": '{"kind": "spec"}'},
+    )
+    assert res.status_code == 200
+    assert seen["kind"] == "spec" == sent["attributes"]["kind"]
+
+
+def test_kind_longer_than_the_adb_column_is_rejected():
+    """`kind` は ADB 側が VARCHAR2(32)。**バイト長**で見る（BYTE セマンティクス想定）。"""
+    for bad in ("k" * 33, "分類" * 6):        # 33 バイト / 36 バイト
+        res = client.post(
+            "/api/rag/files",
+            files={"file": ("a.md", b"x", "text/markdown")},
+            data={"attributes": json.dumps({"kind": bad})},
+        )
+        assert res.status_code == 422 and "32" in res.json()["detail"], bad
+
+
+def test_kind_keeps_accepting_non_string_scalars(fake_rag):
+    """既存クライアント（`kind` に数値・真偽を入れていた）を壊さない。"""
+    for value in (0, False, 1.5):
+        res = client.post(
+            "/api/rag/files",
+            files={"file": ("a.md", b"x", "text/markdown")},
+            data={"attributes": json.dumps({"kind": value})},
+        )
+        assert res.status_code == 200, value
+        assert fake_rag.last_attributes == {"kind": value}
+
+
+def test_long_filename_keeps_its_extension():
+    """台帳へ収める切り詰めで拡張子を落とさない（形式で分岐する判定が誤らないため）。"""
+    from jetuse_core import rag as rag_module
+
+    name = "あ" * 200 + ".pdf"                 # 600 バイト超
+    fitted = rag_module._fit(name)
+    assert fitted.endswith(".pdf") and len(fitted.encode()) <= 400
+    assert rag_module._select_ai_supports(fitted)
+
+
+def test_extract_rejects_broken_pdf_with_422():
+    res = client.post("/api/extract", files={"file": ("broken.pdf", b"%PDF-1.7 garbage", "x")})
+    assert res.status_code == 422 and "PDF" in res.json()["detail"]
+
+
+def test_select_ai_badge_is_error_for_formats_it_cannot_read(monkeypatch):
+    """Select AI は原本を DB 側が読む。xlsx は索引に載らないので "pending" にしない。"""
+    import jetuse_core.rag_adb as radb
+    import jetuse_core.rag_opensearch as ros
+    import jetuse_core.rag_select_ai as rsa
+    from jetuse_core import rag as rag_module
+
+    monkeypatch.setattr(rsa, "indexed_file_ids", lambda owner: set())
+    monkeypatch.setattr(ros, "enabled", lambda: False)
+    monkeypatch.setattr(radb, "enabled", lambda: True)
+    monkeypatch.setattr(radb, "indexed_file_ids", lambda owner: {"f1"})
+    monkeypatch.setattr(radb, "errored_file_ids", lambda owner: set())
+    files = [{"id": "f1", "filename": "spec.xlsx", "status": "completed"},
+             {"id": "f2", "filename": "policy.md", "status": "completed"}]
+    out = rag_module.attach_backend_status("u", files)
+    assert out[0]["backends"]["select_ai"] == "error"    # xlsx は載らない
+    assert out[0]["backends"]["adb"] == "indexed"        # adb には載っている
+    assert out[1]["backends"]["select_ai"] == "pending"  # md は同期待ち
+
+
+def test_opensearch_extracts_xlsx_instead_of_decoding_bytes():
+    """xlsx をそのまま UTF-8 デコードして文字化け本文を投入しない。"""
+    from jetuse_core import rag_opensearch
+
+    text = rag_opensearch._extract_text("spec.xlsx", _workbook())
+    assert "600 req/min" in text and "[制約 C5:E5]" in text
+    assert "�" not in text

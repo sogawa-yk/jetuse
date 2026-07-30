@@ -15,14 +15,14 @@ from typing import Any
 import oracledb
 from openai import NotFoundError
 
-from . import rag_metadata
+from . import extract_xlsx, rag_metadata
 from .db import connect
 from .genai import make_cp_client, make_inference_client, resolve_project_ocid
 from .settings import get_settings
 
 logger = logging.getLogger("jetuse.rag")
 
-ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md"}
+ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md", extract_xlsx.XLSX_EXT}
 MAX_BYTES = 20 * 1024 * 1024
 
 
@@ -84,15 +84,21 @@ def list_files(owner: str) -> list[dict[str, Any]]:
 
 
 def _fit(text: str, limit: int = 400) -> str:
-    """VARCHAR2(400) へ収まる長さに**バイト境界で**切る。
+    """VARCHAR2(400) へ収まる長さに**バイト境界で**切る(拡張子は残す)。
 
     文字数で切ると、日本語ファイル名(1 文字 3 バイト)は BYTE セマンティクスの列で
     ORA-12899 になる(実運用で長い名前を上げた瞬間にアップロードが落ちる)。
+    末尾だけを落とすと**拡張子が消える**ので、形式で分岐する判定(バックエンドが
+    その形式を読めるか — `_select_ai_supports`)が長い名前で誤る。拡張子は残す。
     """
     raw = text.encode("utf-8")
     if len(raw) <= limit:
         return text
-    return raw[:limit].decode("utf-8", errors="ignore")
+    stem, dot, ext = text.rpartition(".")
+    suffix = f".{ext}" if dot and len(ext.encode("utf-8")) <= 16 else ""
+    keep = limit - len(suffix.encode("utf-8"))
+    head = (stem if dot else text).encode("utf-8")[:keep]
+    return head.decode("utf-8", errors="ignore") + suffix
 
 
 def _insert_file(owner: str, file_id: str, filename: str, oci_file_id: str, size: int) -> None:
@@ -286,6 +292,30 @@ def build_attributes(
     return rag_metadata.normalize_attributes({**base, **(attributes or {})})
 
 
+def prepare_upload(filename: str, content: bytes) -> tuple[str, bytes, dict[str, str]]:
+    """マネージド Vector Store へ渡す `(ファイル名, 本文, ファイル単位の属性)`(PREP-01)。
+
+    xlsx だけ変換する。マネージド側は Office 形式を受け付けない(SPIKE-03: docx は
+    `Unsupported file type`。xlsx も同じであることは PREP-01 の E2E で実測した)ので、
+    抽出したテキストを渡す。
+
+    **属性はファイル単位にしかできない**(SPIKE-M1 ①-a: 1 ファイルが複数チャンクに割れても
+    属性は 1 種類)。したがって返す `sheet` / `cells` は「そのファイル全体」を表す値であり、
+    チャンクごとのセル範囲ではない。セル単位の出典が要るなら `adb` バックエンドを使う
+    (この能力差が ADR-0020 の決定内容。1 チャンク = 1 ファイルに割って
+    「セル単位で返る」ように見せる細工はしない)。
+    """
+    if not extract_xlsx.is_xlsx(filename):
+        return filename, content, {}
+    chunks = extract_xlsx.extract(filename, content)
+    if not chunks:
+        raise extract_xlsx.EmptyWorkbook(
+            "シートから本文を抽出できませんでした(空のブック)"
+        )
+    return (f"{filename}.txt", extract_xlsx.render_text(chunks).encode("utf-8"),
+            extract_xlsx.file_attributes(chunks))
+
+
 def add_file(
     owner: str, filename: str, content: bytes, attributes: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -293,13 +323,26 @@ def add_file(
 
     attributes は出典の構造化と版フィルタのためのメタデータ(RAGM-01)。
     不正な属性は `rag_metadata.MetadataError`(ルート側で 422)で、OCI を呼ぶ前に弾く。
+    xlsx は抽出を通してから渡す(PREP-01)。上限超過は `extract_xlsx.ExtractionLimitError`
+    (ルート側で 422)で、こちらも OCI を呼ぶ前に弾く。
     """
-    attrs = build_attributes(filename, content, attributes)  # 送信前に検証(失敗時は未実行)
+    # 台帳・原本バックアップ・sha256 は**元のファイル**のまま(変換するのは送信する本文だけ)
+    upload_name, upload_bytes, derived = prepare_upload(filename, content)
+    conflicting = sorted(set(derived) & set(attributes or {}))
+    if conflicting:
+        # 導出値を利用者指定で上書きさせない。上書きを許すと、複数シートのブックに
+        # 特定のセル範囲を付けて「マネージドでもセル単位で返る」ように見せられてしまう
+        # (ADR-0020 が隠すなと決めた能力差そのもの)。黙って捨てずに 422 で断る
+        raise rag_metadata.MetadataError(
+            f"xlsx では {', '.join(conflicting)} は抽出結果から決まります(指定できません)。"
+            "チャンク単位のセル範囲が要るなら adb バックエンドを使ってください"
+        )
+    attrs = build_attributes(filename, content, {**(attributes or {}), **derived})
     vs_id = ensure_store(owner)
     file_id = _uid()
     _backup_original(owner, file_id, filename, content)
     dp = make_inference_client(with_project=True)
-    f = dp.files.create(file=(filename, content), purpose="assistants")
+    f = dp.files.create(file=(upload_name, upload_bytes), purpose="assistants")
     # CP completed直後はDP側にstoreが未伝播で404になる(SPIKE-03)。デモは箱ごとに新規store
     # なので初回uploadが通常経路 — 有界リトライで吸収する(SP1-03 REV-005)。
     for attempt in range(6):
@@ -340,7 +383,11 @@ def add_file(
 
         state = rag_adb.availability()
         if state == rag_adb.READY:
-            rag_adb.ingest(owner, file_id, filename, content)
+            # `kind` は**両バックエンドで同じ値**にする。ここを既定値のままにすると、
+            # 同じファイルがマネージド側では kind='spec'、ADB 側では kind='doc' になり、
+            # 分類での絞り込みがバックエンドを変えた瞬間に結果を変える(review-2 PREP01-004)
+            rag_adb.ingest(owner, file_id, filename, content,
+                           **({"kind": str(attrs["kind"])} if "kind" in attrs else {}))
         elif state == rag_adb.UNAVAILABLE:
             # 「表が無い(未導入)」と「今つながらない」を区別する。後者を黙って飛ばすと、
             # 復旧後もそのファイルだけ取り込まれないまま誰も気づけない。
@@ -380,6 +427,15 @@ def refresh_statuses(owner: str, files: list[dict[str, Any]]) -> list[dict[str, 
 # Vector Storeのファイル状態をバックエンド共通の語彙へ
 _VS_MAP = {"completed": "indexed", "processing": "pending", "failed": "error"}
 
+# Select AI が原本から読める形式(RAG-03 / SPIKE-08 の構成で索引に載る形式)。
+# xlsx は入らない — 索引はバケットの原本を DB 側が読むので、PREP-01 の抽出を通らない。
+SELECT_AI_EXTENSIONS = {".pdf", ".txt", ".md"}
+
+
+def _select_ai_supports(filename: str) -> bool:
+    name = (filename or "").lower()
+    return any(name.endswith(ext) for ext in SELECT_AI_EXTENSIONS)
+
 
 def resolve_citation_filenames(owner: str, citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """引用のファイル名を、こちらで保持する元のファイル名に置換する。
@@ -410,7 +466,10 @@ def attach_backend_status(owner: str, files: list[dict[str, Any]]) -> list[dict[
 
     backends[*] = "indexed" | "pending" | "error" | "disabled"
     - vector_store: Files API/Vector Storeの処理状態
-    - select_ai: ベクトル索引($VECTAB)に存在するか(refresh_rate間隔で同期=反映が遅い)
+    - select_ai: ベクトル索引($VECTAB)に存在するか(refresh_rate間隔で同期=反映が遅い)。
+      **原本をDB側(DBMS_CLOUD_AI)が読む方式**なので、アプリ側の抽出(PREP-01)を通らない。
+      Select AI が読めない形式(xlsx)は永久に索引へ現れないため、"pending" ではなく
+      "error" として出す(いつか入る、という嘘の期待を作らない — review-2 PREP01-002)
     - opensearch: indexに存在するか(取り込みは同期=即時)。無効時は disabled
     - adb: 自前チャンク表に存在するか(取り込みは同期=即時)。取り込みに失敗した/本文を
       取り出せなかったファイルは error。表が無い環境は disabled(RAGM-02)
@@ -449,7 +508,9 @@ def attach_backend_status(owner: str, files: list[dict[str, Any]]) -> list[dict[
         fid = f["id"]
         f["backends"] = {
             "vector_store": _VS_MAP.get(f.get("status", ""), "pending"),
-            "select_ai": "indexed" if fid in sai_ids else "pending",
+            "select_ai": ("indexed" if fid in sai_ids
+                          else "pending" if _select_ai_supports(f.get("filename", ""))
+                          else "error"),
             "opensearch": ("disabled" if not os_enabled
                            else ("indexed" if fid in os_ids else "pending")),
             "adb": ("disabled" if not adb_enabled

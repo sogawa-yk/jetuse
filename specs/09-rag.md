@@ -16,7 +16,7 @@
 
 - **ベクトルストアはユーザーごとに1つ**を遅延作成（`RAG_STORES(owner_sub PK, vector_store_id)`、migration 005）。共有ナレッジベースはPhase 4出口で要否判断
 - `RAG_FILES(id PK, owner_sub, filename, oci_file_id, status, bytes, error, created_at)` — 表示名と状態の正はADB
-- アップロードフロー: multipart受信（**20MB上限、拡張子 pdf/txt/md のみ**。docxは「未対応(SPIKE-03)」を明示エラー）→ Object Storageへ原本バックアップ（`{RAG_BUCKET}/rag/{owner}/{file_id}_{filename}`、ベストエフォート）→ Files API（purpose=assistants）→ `vector_stores.files.create`（ファイル単位）→ ADB記録（status=processing）
+- アップロードフロー: multipart受信（**20MB上限、拡張子 pdf/txt/md/xlsx のみ**。docxは「未対応(SPIKE-03)」を明示エラー）→ Object Storageへ原本バックアップ（`{RAG_BUCKET}/rag/{owner}/{file_id}_{filename}`、ベストエフォート）→ Files API（purpose=assistants）→ `vector_stores.files.create`（ファイル単位）→ ADB記録（status=processing）
 - 状態: 一覧取得時にprocessingの行だけDPへ `files.retrieve` して completed/failed を反映
 - 削除: VSから除去→Files API削除→OS原本削除（ベストエフォート）→ADB削除
 
@@ -34,7 +34,55 @@
   `0` / `False` は値として残す。
 - 上限（キー16 / 値512文字 / 入れ子不可 — SPIKE-M1 ①-d）超過と未知キーは **422 で拒否**（切り詰めない。
   値が変わるとフィルタが静かに外れ、「該当なし」と区別できなくなる）。
-- 属性は**ファイル単位**（①-a）。チャンク単位の出典が要る文書は 1 チャンク = 1 ファイルで取り込む。
+- 属性は**ファイル単位**（①-a）。チャンク単位の出典が要る文書は 1 チャンク = 1 ファイルで取り込む
+  （**xlsx ではこの回避策を採らない** — PREP-01。セル単位の出典が要るなら `adb` バックエンドを使う）。
+
+### [PREP-01] xlsx の前処理（セル位置つき抽出）2026-07-30追記
+
+対応形式と**出典の粒度**。粒度はバックエンドで違い、その差は隠さない（ADR-0020 の決定内容そのもの。
+可視化は RAGM-03 の担当）。
+
+| 形式 | `adb` の出典 | `vector_store`（マネージド）の属性 |
+|---|---|---|
+| txt / md | チャンク単位（行範囲 `L12:L20`） | **ファイル単位**（1 ファイル 1 種類） |
+| pdf | チャンク単位（`p.3` + 行範囲） | **ファイル単位** |
+| **xlsx** | **チャンク単位（シート名 + セル範囲 `C5:E5`）** | **ファイル単位**（`sheet` / `cells` は「そのファイル全体」を表す値） |
+
+- 抽出は `jetuse_core/extract_xlsx.py`。**openpyxl を `read_only=True, data_only=True`** で開く
+  （大きなブックを一度に展開しない／数式ではなく値を取る。キャッシュの無い数式セルは空扱い）。
+  シートごとに**連続する非空セルの矩形**（空行・行の飛びが区切り）を 1 チャンクにし、
+  `sheet`（シート名）と `cells`（A1 形式）を付ける。テキスト化は行ごとにタブ区切り。
+  結合セルは左上だけが値を持つ（**意味の解釈・ヘッダ推定はしない**）。
+- 上限（超過は**切り詰めずに 422**。detail に `limit=<名前>` を書く）:
+  ブック 10MB（`workbook_bytes`。xlsx は zip なので汎用 20MB より手前で止める）/
+  展開後 100MB（`uncompressed_bytes`。zip の各エントリの合計を**開く前**に見る）/
+  走査セル 5,000,000（`scanned_cells`。**空行・空セルも数える** — `read_only` の反復は
+  欠けた行を空行で埋めるので、非空行だけ数えると「中身が無いのに広いブック」が上限を抜ける）/
+  総チャンク 1,000（`chunks`）/ 1 チャンク 2,000 文字（`chunk_chars`。
+  埋め込み API の切り詰め位置に合わせる。上限に収まらない塊は**行境界で分割**し、
+  1 行だけで超える場合のみ拒否）。
+  **行もチャンクも逐次処理し、上限は 1 件作るたびに見る**（塊を丸ごとメモリに溜めない）。
+  壊れたブック（zip は正しいがシート XML が壊れている等）は、開く時だけでなく
+  **行を読んでいる最中の例外も** `UnsupportedWorkbook` に正規化して 422 にする。
+- `vector_store` への取り込みは、抽出テキストを `<原名>.xlsx.txt` として Files API へ渡す
+  （マネージド側は Office 形式を受け付けない — SPIKE-03 の docx と同じ。実測は `docs/verification/PREP-01.md`）。
+  台帳の表示名・原本バックアップ・`sha256` は**元の xlsx** のまま。
+  属性の `sheet` / `cells` は単一シートなら外接範囲、複数シートなら `(ブック全体: N シート)` / `(ブック全体)`。
+  **1 チャンク = 1 ファイルに割って「セル単位で返る」ように見せる細工はしない。**
+- `kind` は**両バックエンドに同じ値**を入れる（マネージドの属性と ADB の `kind` 列）。
+  そのため `kind` は **UTF-8 で 32 バイト以内**に限る（ADB 側が `VARCHAR2(32)`。
+  BYTE セマンティクス想定なのでバイト長で見る。超過は 422）。
+  型は従来どおりスカラー（文字列 / 数値 / 真偽）を受けるが、**ADB 側は文字列列**なので
+  非文字列は文字列化されて入る（`kind=0` → マネージド `0` / ADB `"0"`）。
+  数値・真偽での分類は避け、文字列で揃えること。
+- `sheet` のファイル単位属性 `(ブック全体: N シート)` の **N は本文があったシート数**
+  （空シートは数えない）。
+- **`select_ai` は xlsx を扱えない**。索引はバケットの**原本**を DB 側（`DBMS_CLOUD_AI`）が
+  読むので、アプリ側の抽出を通らない。取り込み状況バッジは `pending`（いつか入る）ではなく
+  **`error`** を返す（嘘の期待を作らない）。対応形式は `rag.SELECT_AI_EXTENSIONS`。
+- `POST /api/extract`（新規）: ファイルを渡すと**取り込まずに**抽出結果
+  `{filename, chunk_count, chunks:[{sheet, cells, text}]}` を返す。案件側が独自の構造化を挟むための口。
+  認証・拡張子・サイズ上限はアップロードと同じ。返るチャンクは `adb` へ投入されるものと同一。
 
 ## [RAG-02] RAGチャット
 
