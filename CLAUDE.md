@@ -68,6 +68,6 @@ ops/           # 運用スクリプト（dev-env-up/down・deploy・sync-main-to
   `LOOP_TASK` が無いセッションでは hooks は完全 no-op（通常開発に影響しない）。
 - **毎ターン**: `loop-protocol` の手順（実装→`codex-review`→履歴記録→STATE 更新）を厳守。
   完了ゲート = review_verdict=PASS かつ area の test/lint 緑 かつ実環境 E2E 通過。PASS 後は非 blocker を追わず停止（手順5.5）。
-- **単一の真実源**: 現在状態は `STATE.md`、不変の実行履歴は `runs/<run-id>/`（追記のみ）。
+- **単一の真実源**: 現在状態は `STATE.md`（**ローカル・git 追跡外**。worktree ごとに持ち、コミットしない）、不変の実行履歴は `runs/<run-id>/`（追記のみ）。完了時に `runs/<run-id>/STATE.md` へ写しを残すので、後から状態を辿れる。
 - **自己改善**: 成果物の問題は `loop-doctor` へ（コードでなく「ループの仕組み」を直す）。
 - **人間ゲート**: コミット / PR / push / リリース、および仕組み（スキル・hooks・完了条件・設定）の編集は承認なしに行わない。

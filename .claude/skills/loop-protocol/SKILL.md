@@ -110,6 +110,12 @@ HTML はリポジトリにコミットしない（`.gitignore` で `runs/**/*.ht
 > 原則: 人間の仕事は ①何を・なぜを読む ②例外だけ判断する ③挙動を E2E で確認する、の3点。
 > clean PASS の findings 全読は求めない。プレースホルダ `{{...}}` はすべて埋めてから提示する。
 
+## STATE.md の扱い（git 追跡外）
+`STATE.md` は**この worktree のローカル状態**であり、コミットしない（`.gitignore` 済み）。
+タスクごとの worktree が同じパスを全面上書きするため、追跡すると並列ループを統合するたびに
+必ず衝突する。停止（手順6）の直前に **`runs/<run-id>/STATE.md` へ写しを残す**こと。
+写しは run 配下なのでタスク間で衝突せず、後から状態を辿れる。
+
 ## goal 完了条件との関係
 完了条件は起動時の `GOAL` env（`runs/<run-id>/goal.txt` に記録）と `loop-config.yml` の
 `goal_template` で与えられる。ループを止めてよいのは、STATE.md の `review_verdict == PASS` かつ
