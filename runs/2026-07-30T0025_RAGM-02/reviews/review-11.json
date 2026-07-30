@@ -1,0 +1,71 @@
+{
+  "review_n": 11,
+  "timestamp": "2026-07-30T09:37:36+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-11.input.diff",
+  "raw_output_path": "reviews/review-11.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker はありませんが、削除と失敗状態記録の競合、および検証レポートの証跡不整合に major 指摘があります。実環境 E2E は主シナリオ7本と安全ガード6本を網羅しており、主要機能の裏付けとしては十分です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 3,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "RAGM02-001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag_adb.py",
+      "line": 365,
+      "issue": "`_mark_failed()` は `rag_files` をロック・存在確認せず、別トランザクションで ingest 状態を MERGE する。失敗記録とファイル削除が競合すると、削除の commit 後に `rag_adb_ingest` の行が再作成され、「削除成功」後も doc_key・error が孤児として残りうる。添付 E2E は成功済み取り込みの削除だけで、この経路を網羅していない。",
+      "suggestion": "失敗状態の記録前に同一トランザクションで対象 `rag_files` 行を `FOR UPDATE` し、不在なら記録を中止する。可能なら外部キーも追加し、失敗記録と削除を競合させる単体テストを追加する。"
+    },
+    {
+      "id": "RAGM02-002",
+      "severity": "major",
+      "file": "docs/verification/RAGM-02.md",
+      "line": 62,
+      "issue": "検証レポートの数値が添付された同一 run の証跡と一致しない。例えばラウンド3の owner 条件はレポートが近似/厳密 40.5/39.3 ms だが `scale/appshape.json` は 50.0/55.1 ms、TARGET ACCURACY 70 はレポートが平均0.98・最低0.80だが `scale/filters.json` は0.995・0.90である。「数値はすべてその実行結果からの抜粋」という主張を満たしていない。",
+      "suggestion": "今回添付した JSON/log を正本として、レイテンシ、recall、索引作成時間を全て再転記する。可能なら JSON から表を生成して、過去ラウンドの値が混入しないようにする。"
+    },
+    {
+      "id": "RAGM02-003",
+      "severity": "major",
+      "file": "docs/verification/RAGM-02.md",
+      "line": 193,
+      "issue": "片付け手順が現在の実装と逆になっている。ここでは固定名スキーマで `--human-approved` が必須と説明しているが、実装は run 固有名で `--yes` のみを要求し、未知の `--human-approved` も検証しない。安全ゲートが存在するという誤解を招く。",
+      "suggestion": "run 固有スキーマへ変更済みであること、実際の必須フラグが `--yes` のみであることへ更新する。固定名時代の説明は履歴へ移し、添付の固定名 `setup-schema.log` も削除または run 固有名で再取得する。"
+    },
+    {
+      "id": "RAGM02-004",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/rag.py",
+      "line": 418,
+      "issue": "`rag_adb.enabled()` は ABSENT と UNAVAILABLE の両方で False になるため、DB障害や部分 migration 中でも全ファイルの `backends.adb` が `disabled` と表示される。仕様上の `disabled=未導入` と矛盾し、運用障害を設定無効と誤認させる。",
+      "suggestion": "`availability()` を一度取得し、ABSENT のみ `disabled`、UNAVAILABLE は `error` または専用状態へ対応付ける。障害・部分適用時の status テストを追加する。"
+    },
+    {
+      "id": "RAGM02-005",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/rag_adb.py",
+      "line": 316,
+      "issue": "`error VARCHAR2(1000)` を BYTE semantics 前提で作成している一方、エラー文字列を1000文字で切っている。日本語などのマルチバイトエラーでは ORA-12899 となり、`_mark_failed()` が例外を握り潰してファイルが永久に pending になる可能性がある。",
+      "suggestion": "UTF-8の1000バイト境界で切る共通 helper を使用し、1000バイト前後の日本語エラーを記録できる境界テストを追加する。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 13,
+    "adequacy": "sufficient",
+    "notes": "主シナリオ1〜7はすべてPASSで、チャンク別出典、業務表JOIN、版フィルタ、ASGI統合、削除、旧版昇格、同時取り込みを確認した。加えて guard.md の否定シナリオG1〜G6、001〜019のクリーンmigration、50,000行のスケール証跡、teardown成功を確認した。未実施範囲はSKIPPED.mdに理由がある。ただし setup-schema.log と teardown-pre.log は旧固定名 `JETUSE_RAGM02` の証跡が混在し、スケールレポートの数値も添付JSONと不一致であるため、証跡セットの整理が必要。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブ対象URLは提供されておらず、明示指示に従いブラウザツールは使用していない。"
+    }
+  }
+}

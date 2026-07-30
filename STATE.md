@@ -1,210 +1,238 @@
-# STATE — RP-01（開発環境の DB 内資格情報をリソースプリンシパルへ統一）
+# STATE — RAGM-02（Oracle AI Database バックエンド `adb` の追加）
 
-- task: RP-01
-- run_id: 2026-07-29T1605_RP-01
-- branch: feat/RP-01（base: main。共有物のため dev ではなく main 起点）
+- task: RAGM-02
+- run_id: 2026-07-30T0025_RAGM-02
+- branch: feat/RAGM-02（base: main。共有物のため dev ではなく main 起点）
 - area: api
-- review_verdict: **PASS**（review-14。blocker 0 / major 2 / minor 2・E2E adequacy=sufficient）
-- last_review_ref: runs/2026-07-29T1605_RP-01/reviews/review-14.json
-- updated_at: 2026-07-29
+- review_verdict: **PASS**（review-11。blocker 0 / major 3 / minor 2・E2E adequacy=sufficient）
+- last_review_ref: runs/2026-07-30T0025_RAGM-02/reviews/review-11.json
+- updated_at: 2026-07-30
 
 ## やったこと
 
-`ops/setup-select-ai.py` / `ops/setup-dev-schema.py` から `~/.oci/config` の手書きパース（4 箇所）と
-`DBMS_CLOUD.CREATE_CREDENTIAL` を**削除**し、`DBMS_CLOUD_ADMIN.ENABLE_RESOURCE_PRINCIPAL` に置換。
-両スクリプトの共通部（接続解決・権限付与・ACL・RP 有効化）を `ops/_adb.py` に集約した。
+### 1. 前提のスケール検証（実装より前に実施・タスク指定）
 
-- 接続先は環境変数 → `.env` → 既定値で解決（`ADB_DSN` / `ADB_WALLET_DIR` / `ADB_WALLET_PASSWORD`）。
-  従来の `dev/terraform.tfvars` 読み出しはウォレットパスワードのフォールバックとして残す。
-  これが無いと gitignore された tfvars が無い環境（この worktree）で ops を実行できず E2E できない。
-- `setup-select-ai.py` に `--schema`（既定 `.env` の `ADB_USER`）。ADMIN 接続のみになり
-  アプリ側パスワードが不要になった。
-- 冪等化: `ENABLE_RESOURCE_PRINCIPAL` は PL/SQL 側で冪等（実機確認）。ユーザー作成は
-  「既存ならパスワードを勝手に変えない（明示指定時のみ ALTER・ORA-28007 は続行）」。
-  パスワード不明で再実行したときは migrate を理由付きでスキップし、exit 0。
-- fail-closed: DDL の前に `assert_target()` で「SQL 接続先が `ADB_OCID` と同一 ADB」かつ
-  「その ADB が `ADB_COMPARTMENT_OCID`（無ければ `COMPARTMENT_OCID`）**そのもの**」
-  （OCID の完全一致）を確認。RP 有効化の直後には
-  `DBA_TAB_PRIVS`（`owner='ADMIN'`）で EXECUTE が実際に付いたかを確認する。
-  接続後の `call_timeout` も有限値を強制（`ADB_CALL_TIMEOUT_MS`・0 以下は拒否）。
-- `settings.select_ai_credential` の既定を `OCI$RESOURCE_PRINCIPAL` へ（ADR §未解決 1 の結論）。
-- `infra/terraform/environments/app` は `merge()` の**上書き側**で `SELECT_AI_CREDENTIAL` を注入。
-- ドキュメント: `specs/09-rag.md` / `docs/guides/onboarding.md` / `docs/guides/dev-environments.md` /
-  `docs/tips.md`（解消済みへ・ListBuckets の compartmentId 必須を追記）/ `.env.example` /
-  ADR-0021 §未解決 1〜3 への結論追記（状態は Accepted のまま）/ `docs/verification/RP-01.md`。
-- `spikes/spike_m1/common.py:oci_api_key()` は再現性のため残し、「ops はこの方式を使わない」旨を明記。
+`spikes/ragm02/` を新設し、共有 loop ADB の検証用スキーマで
+**50,000 チャンク**を投入して測った（ADB は増やさず、共有 loop ADB 内の **run 固有スキーマ**
+`JETUSE_RAGM02_<乱数>` で RAGM-01 と隔離）。
+レポート `docs/verification/RAGM-02.md`、ログ `runs/2026-07-30T0025_RAGM-02/e2e/scale/`。
 
-## E2E（実 ADB・共有 loop ADB / 検証用スキーマ `JETUSE_SPIKERP01` で隔離）
+- HNSW 索引は作れた（57 秒）。SPIKE-M1 の 10 行では届かなかった「索引が実際に使われる状態」に到達。
+- **メタデータ絞り込み付きでも索引は使えるが、素の表では計画が実行ごとに揺れた**
+  （投入からやり直した 2 回の計測で全件走査と `HNSW SCAN IN-FILTER` の両方が出た）。
+  **フィルタ列に B木索引 + `owner_sub` 込みで絞ると 2 回とも `HNSW SCAN PRE-FILTER`** で安定。
+  → `rag_adb.ensure_indexes()` が B木 3 本を作る（マイグレーションには置かない = 下記）。
+  ラウンド3 は**実装の `search_sql()` が返す SQL そのもの**で測っている。
+- ベクタ索引が無いときは同じ SQL が厳密検索へ落ちて結果が一致する（実測）。索引作成の失敗で
+  取り込みを止めない設計の根拠。
+- `TARGET ACCURACY` 80 以上で recall@10 = 1.00（70 では最低 0.80）。索引の既定 95 は据え置き。
+- レイテンシは厳密 18〜91 ms / 近似 18〜86 ms。この規模では速度は方式選択の決め手にならない。
 
-検証が作る資源の名前は **run 固有**（この run は `rp01d389` → `JETUSE_RP01D389` /
-`jetuse-spike-rp01d389-rag` 等）。固定名による所有権の取り違え（TOCTOU）を構造的に潰した。
+### 2. 実装（新規モジュール。既存 3 バックエンドは未変更）
+
+- `packages/api/jetuse_core/rag_adb.py`: チャンク化（行を跨がず、チャンクごとに `sheet` と
+  行範囲 `L{開始}:L{終了}` を出典として持つ）→ クライアント側埋め込み → 投入、
+  「メタデータ絞り込み + ベクタ類似検索」を 1 本の SQL、構造化出典つき citations、`generate()`。
+- `migrations/017_rag_adb.sql`: 本文 + メタ列 + `JSON` + `VECTOR(1024, FLOAT32)`（**CREATE TABLE 1 文だけ**。
+  索引は `ensure_indexes()` が冪等に作る）。
+- `rag_backend='adb'` を `ChatRequest` とチャットの RAG ディスパッチに追加。
+  ディスパッチは `NON_RESPONSES_RAG_BACKENDS`（モジュール表）へ整理し、`generate` は呼び出し時に引く。
+- `rag.attach_backend_status()` に `adb` 欄（`indexed` / `pending` / `disabled`）、
+  `add_file` から best-effort で取り込み。削除は台帳行と同一トランザクション（`_delete_row`）。
+- 単体テスト `packages/api/tests/test_rag_adb.py`（55 件）。
+
+### 3. 決めたこと（根拠つき）
+
+**埋め込みはクライアント側**。DB 内埋め込み（`UTL_TO_EMBEDDING`）は `OCI$RESOURCE_PRINCIPAL` では
+ORA-24247 で通らず（ACL に connect/resolve/http を付けても不可・実測）、`DBMS_VECTOR_CHAIN.CREATE_CREDENTIAL`
+による **API キーの DB 内資格証明**が要る＝ADR-0021 が廃止した経路のため、**実装に入れなかった**
+（使えない選択肢を設定で残さない）。ADR-0020 の未解決事項に結論を追記。
+
+## E2E（実 ADB・run 固有スキーマで隔離）
 
 | # | シナリオ | 結果 | 証跡 |
 |---|---|---|---|
-| 1 | ops 2 本を同じスキーマへ 2 回連続実行（冪等） | PASS | `e2e/scenario-1.md` |
-| 2 | RP で `DBMS_CLOUD.SEND_REQUEST` → Object Storage 200 | PASS | `e2e/scenario-2.md` |
-| 3 | RP でベクトル索引の作成・取り込み・検索（合言葉で照合） | PASS | `e2e/scenario-3.md` |
-| 4 | 対照: 旧パーサ由来の API キー資格情報で ORA-20404 | PASS | `e2e/scenario-4.md` |
-| 否定 | 台帳が一致しないと片付けが何も消さずに止まる（5 ケース。うち 2 件は USER_ID による同秒作り直しの検出） | PASS | `e2e/guard.md` |
+| 1 | 同一ファイル由来の 3 チャンクが**別々の** cells（`L1:L4` / `L4:L6` / `L6:L7`）を返す | PASS | `e2e/scenario-1.md` |
+| 2 | 業務表（文書管理台帳）と JOIN したベクタ検索が 1 クエリで成立・機密文書は除外 | PASS | `e2e/scenario-2.md` |
+| 3 | 版フィルタの対照（無し: 旧版 6 件 / `current_version='Y'`: 0 件） | PASS | `e2e/scenario-3.md` |
+| 4 | アプリ経路（`POST /api/chat/stream` の ASGI 統合テスト・相手は実 ADB / 実 LLM）で回答（v2 の 600 を返し旧版 300 を含まない）+ citations 後方互換 + バッジ | PASS | `e2e/scenario-4.md` |
+| 5 | 削除の原子性（台帳行とチャンクが同一トランザクションで消える） | PASS | `e2e/scenario-5.md` |
+| 6 | 現行版を削除すると**旧版が現行へ戻る**（2.0 削除 → 1.0 が現行に） | PASS | `e2e/scenario-6.md` |
+| 7 | **同名ファイルの同時取り込み**（2 接続・実行区間が重なったことも確認）で版 1.0/2.0 に分かれ、現行版は 1 つ | PASS | `e2e/scenario-7.md` |
+| 否定 | 安全ガード 6 件（作り直し / **同秒作り直し** / 台帳空 / **最終照合前の差し替え** / **既存再利用時に権限を変えずに中止**）で非ゼロ終了 | PASS | `e2e/guard.md` |
 
-1→guard→2→3→4→teardown を通しで 1 回実行した証跡。検証用リソースは `teardown.md` のとおり
-削除し、削除後の再照会でも不在を確認済み（`post-teardown-state.md` で共有 ADB が検証前と
-同じ状態に戻っていることも確認）。実施しなかった範囲は `e2e/SKIPPED.md`。
-証跡の OCID・ネームスペースは `spikes/spike_m1/redact_evidence.py` で伏字化。
+マイグレーションの**クリーン適用**（001〜019。空スキーマへ順に適用し 3 表の存在を確認）も証跡に残した（`e2e/migrate.md`）。
 
-- `.venv/bin/pytest packages/api/tests` 381 passed
-  （新規 `packages/api/tests/test_ops_adb.py` 38 件＝ゲートの否定側の単体テスト）
-- `.venv/bin/ruff check packages/api ops spikes` クリーン
-- `terraform init -backend=false && fmt -check && validate`（environments/app）成功
+- 実施しなかった範囲と理由: `e2e/SKIPPED.md`
+- 検証用リソースは削除済み（`e2e/teardown.md`。50,000 行の検証表を含むスキーマごと）。
+  本タスクのスクリプトが打つ `DROP USER` は `JETUSE_RAGM02` の 1 か所だけであることを証跡に併記
+- `.venv/bin/pytest packages/api/tests` **460 passed** / `.venv/bin/ruff check packages/api spikes` クリーン
 
-## IAM
+## 実機で踏んだ落とし穴（`docs/tips.md` に追記済み）
 
-**変更していない**（タスクの禁止事項）。既存の動的グループ／ポリシーのままで
-シナリオ 2・3 が通ったため、権限不足による blocked は発生していない。
+- `:file` をバインド名にすると `ORA-01745`（予約語衝突）。接頭辞 `flt_` を付ける実装に変更し、単体テストで固定。
+- 同一セッションで DDL を打った直後の最初の `EXPLAIN PLAN` は `ORA-00900` になる。1 回引き直せば通る。
+  握り潰すと「計画取得不可」で証跡が空になり、測っていないのに測ったように見える（実際に一度そうなった）。
+- メタデータ絞り込みとベクタ索引の関係（上記 1）。
 
-## review-1（FAIL: blocker 4 / major 3）への対応
-
-| 指摘 | 対応 |
-|---|---|
-| B-001: 新規 `ops/_adb.py` が差分に含まれず、clean checkout では `ModuleNotFoundError` | 新規ファイルを `git add -N` して差分に載せた（コミットはしない） |
-| B-002: `show_target()` は表示のみで、DDL 前に接続先を検証していない | `_adb.assert_target()` を新設。`.env` の `ADB_OCID` を API で解決し、`DB_NAME` のインスタンス固有トークンが当該 ADB の接続文字列に現れることまで照合。未設定・不一致は SystemExit（両スクリプトの DDL 前に必ず通す） |
-| B-003: E2E 台帳が名前だけで所有権を判断し、teardown 後も失効しない | 台帳に「作った証拠」（ユーザーの作成時刻 / バケットの etag・作成時刻）を記録し、再照合できたものだけ再利用・削除。削除できたら台帳から落とす。シナリオ1は対象スキーマが**既存なら中止** |
-| B-004: E2E の SQL 接続先が API 確認した ADB と同一とは限らない | ドライバも `ops/_adb` 経由で接続し `assert_target()` を通す。ウォレット展開先を `ADB_OCID` ごとに分離 |
-| M-001: ORA-28007 を「現行値と同じ」と断定 | 実ログインで裏取りし、入れなければ中止（推測でパスワードを案内しない） |
-| M-002: パスワード不明時に migrate を飛ばして exit 0 | 非ゼロ終了に変更。意図的に飛ばすなら `--skip-migrate` の明示を要求 |
-| M-003: 片付け証跡が主張と不整合（bucket/profile/index の削除が無い） | シナリオ1→4→teardown を**通しで 1 回**流し直し、teardown は削除後に再照会して不在を確認・失敗があれば非ゼロ終了。台帳は完了後 `{}` |
-
-## review-2（FAIL: blocker 1 / major 5 / minor 1）への対応
+## review-1（FAIL: blocker 1 / major 5 / minor 1）への対応
 
 | 指摘 | 対応 |
 |---|---|
-| B-001: teardown が所有権照合より先にスキーマ内オブジェクトを削除する | 所有権照合を **最初に ADMIN 接続で**行い、一致しなければスキーマへ接続すらしない。照合は作成時刻に加えて**この run 固有の乱数マーカー表**（`RP01_RUN_MARKER`）。否定 E2E（`driver.py guard`）で「台帳が壊れていると exit 1・リソース無傷」を実機確認 |
-| M-001: `call_timeout=0`（無期限）で片付けに到達できなくなる | 有限値へ（通常 600s・索引構築 900s） |
-| M-002: `/tmp` の認証資材が既定権限で残る | ディレクトリ 0700・秘密ファイル 0600 で作成し、teardown で削除 |
-| M-003: 所有証跡の記録が遅く、途中失敗で孤児が残る | 作成直後に記録し、シナリオの `finally` でも「存在するのに台帳に無いユーザー」を回収。バケット・索引も作成前後で記録 |
-| M-004: 安全クリティカルな共通部に単体テストが無い | `packages/api/tests/test_ops_adb.py`（17 件）。ADB_OCID 未設定 / トークン不一致 / DB_NAME 形式不正 / RP 未付与 / ORA-28007 のログイン失敗 など**通ってはいけない経路**を網羅 |
-| M-005: 証跡にウォレットパス（ADB_OCID 由来）が残る | パスの接尾辞を ADB_OCID の**ハッシュ**に変更し、ログ出力自体も `<WALLET_DIR>` に伏字化 |
-| m-006: `JETUSE_APP` の RP 付与に証跡が無い | `post-teardown-state.md` に `DBA_TAB_PRIVS` の read-only 照会結果を追加 |
+| B-001: 所有台帳が `DB_NAME:SCHEMA:作成時刻(秒)` だけで、同秒の作り直しを見分けられない。DROP 直前の再照合も無い | 台帳を **USER_ID + 作成時刻 + run 固有のマーカー表**の 3 点に変更し、**開始時と `DROP USER` 直前の 2 回**照合する。否定 E2E を 5 件に拡張（同秒作り直し相当・**実際に race を起こす TOCTOU** を含む。いずれも exit≠0 でリソース無傷） |
+| M-001: 実装は `FETCH FIRST`（厳密）なのに検証は `FETCH APPROX FIRST` で測っており、索引利用の主張を裏づけない | 実装を `FETCH APPROX FIRST` に統一し、`search_sql()` を公開。**検証スクリプトが同じ関数から SQL を得る**ようにして、50,000 行で計画と recall を取り直した（ラウンド3） |
+| M-002: 取り込み・削除の best-effort で、削除は API 成功なのにチャンクが残りうる | 削除を**台帳行と同一トランザクション**に（`rag.py:_delete_row`）。失敗すれば commit しない＝削除は失敗として返る。実 DB のシナリオ 5 と単体テスト 2 件で固定。取り込みの自動リトライは未実装で残課題として明記 |
+| M-003: 1 migration に CREATE TABLE + 索引 3 本。途中失敗で再実行不能になる | 017 を **CREATE TABLE 1 文だけ**にし、索引は `ensure_indexes()` が冪等に作る。クリーン適用（001〜017）を証跡に追加 |
+| M-004: 上限超えの 1 行が分割されず、埋め込みの 2000 文字切り詰めと食い違う／生成の文脈が破裂する | 長い行を**文字オフセット付き**（`L12c1-800`）で分割。生成へ渡す文脈も 1 ヒット 1,200 文字で上限。境界テストを追加 |
+| M-005: 版採番に競合対策が無い | 既存行を `FOR UPDATE` でロックしてから採番。初回同時取り込みだけは直列化できない旨を docstring と限界に明記 |
+| m-001: シナリオ4 が回答内容を検証していない | HTTP 経路に変更し、**現行版の 600 を含み旧版の 300 を含まない**ことと citations が全件現行版であることを判定条件に |
 
-## review-4（FAIL: blocker 1 / major 2 / minor 1）への対応
-
-review-3 は codex が異常終了（ERROR）。原因は E2E 証跡ディレクトリに `__pycache__/*.pyc`（バイナリ）が
-できていて、レビュー入力が UTF-8 として壊れたこと。`__pycache__` を削除して再実行した。
+## review-2（FAIL: blocker 2 / major 3 / minor 3）への対応
 
 | 指摘 | 対応 |
 |---|---|
-| B-001: `DROP USER` は台帳の名前だけで実行しており、読取専用ユーザーは作成時刻を一度も照合していない（TOCTOU） | `DROP USER` の直前に**両ユーザー分**作成時刻を、アプリスキーマはマーカーも再照合する。1 件でも不一致なら 1 件も DROP しない。否定 E2E に「読取専用ユーザーだけズレている」ケースを追加（開始時のゲートは通過するので、この再照合でしか止まらない） |
-| M-001: RP 付与の確認が `OWNER` を限定しておらず、別スキーマの同名 grant を誤認しうる | 照合条件に `owner = 'ADMIN'` を追加＋単体テスト |
-| M-002: teardown が失敗すると `/tmp` に認証資材が残る | `try/finally` で必ず片付け。ただし**作り直せない**検証スキーマのパスワードだけは残作業があるとき保持する（消すと残ったスキーマを片付けられなくなるため）。ウォレットは常に削除 |
-| m-003: パスワードを `IDENTIFIED BY "..."` へ直接補間している | `_adb.assert_password()` で引用符・空白・改行・長さを拒否（拒否時は DDL を 1 本も出さない）＋境界テスト |
+| B-001: `setup_schema` の既存再利用が USER_ID・作成時刻しか見ずに GRANT / ACL / RP 付与を打つ | **最初の DDL の前に**マーカーを含む 3 点照合。否定 E2E に G6（既存再利用でマーカー不一致 → 権限が 1 つも変わらず中止）を追加 |
+| B-002: 削除時の `enabled()` が接続失敗を False に丸め、チャンク削除だけ飛ばして台帳行を commit しうる | 可用性チェックを外し、**同じ cursor で必ず** `delete_chunks` を実行。許すのは表が無い場合（ORA-00942）だけ。単体テスト 2 件を追加 |
+| M-001: 台帳の記録が全 GRANT 成功後で、途中失敗すると所有不明のスキーマが残る | **CREATE USER の直後**に receipt を記録し、マーカーは後から追記する（空マーカー同士の一致は許容） |
+| M-002: HTTP E2E がアップロード API 経路（`add_file` → `rag_adb.ingest`）を通っていない | 配線を単体テストで固定（有効時に呼ぶ / 無効時は呼ばない / 取り込み失敗でもアップロードは成功）。実アップロード API を実行しない理由は `SKIPPED.md` に明記 |
+| M-003: teardown の ACL 削除がホスト・権限の指定違いで ORA-01927、かつ ACL 残存でも成功終了 | 残っているときだけ**付与と同じホスト・権限**で削除し、**ユーザー 0 件かつ ACL 0 件**でのみ成功終了。実測では `DROP USER` で同時に消える |
+| m-001: 400 文字超のファイル名で採番・旧版化・INSERT の値がずれる | `doc_file` を 1 か所で正規化して全処理で共有。境界テストを追加 |
+| m-002: ADR / spec の「B木索引が無い限り使われない」が証跡と矛盾 | 「素の表では計画が不安定 / B木 + owner で PRE-FILTER が安定」に修正。反映先も `ensure_indexes()` と明記 |
+| m-003: `AdbBackendUnavailable` は 503 と書いてあるが実際は SSE の error フレーム | docstring を実装どおりに修正し、表が無いときに型付き例外が上がることを単体テストで固定 |
 
-## review-5（FAIL: blocker 2 / major 3 / minor 1）への対応
-
-| 指摘 | 対応 |
-|---|---|
-| B-001: `assert_target()` は「SQL 接続先＝ADB_OCID」しか見ておらず、承認済みテナンシ/コンパートメントかを見ていない | ADB のコンパートメントをルートまで辿り、`.env` の `COMPARTMENT_OCID` を経由することを **OCID で**確認する（名前は根拠にしない）。未設定・不一致は DDL 0 件で中止。同名の `jetuse/dev` 階層を持つ別テナンシを拒否する単体テストを追加 |
-| B-002: E2E 側の認可も表示名とコンパートメント名だけ | ドライバは `_adb.assert_target()`（OCID 照合）を必ず通す。`assert_loop_adb()` の名前照合はその上乗せに位置づけ直した |
-| M-001: app 既存＋パスワード未指定のとき、読取専用ユーザーを作った後に落ちて生成パスワードが失われる | **DDL 前にプリフライトで中止**（何も作らない）。生成パスワードの出力も migrate より前に移し、migrate 失敗でも失われないようにした |
-| M-002: 台帳へ書く前にマーカー表を CREATE（暗黙コミット）しており、途中失敗で孤児になる | ユーザーの識別値を**先に**永続化 → マーカーは INSERT 成功後に追記。既存の空マーカー表からの回収も実装（ORA-00955 を許容） |
-| M-003: 接続後の SQL 往復に有限タイムアウトが無く、別プロセスの ops へは driver の設定が伝わらない | `_adb.connect()` が `call_timeout` を設定（既定 600s・`ADB_CALL_TIMEOUT_MS` で上書き・0 以下は拒否）＝ops 本体にも効く |
-| m-001: `settings.select_ai_credential` の既定変更に単体テストが無い | 既定が `OCI$RESOURCE_PRINCIPAL` であることと、env で旧名へ戻せることをテストで固定 |
-
-## review-6（FAIL: blocker 4 / major 1）への対応
+## review-3（FAIL: blocker 2 / major 5）への対応
 
 | 指摘 | 対応 |
 |---|---|
-| B-001: 承認済み `COMPARTMENT_OCID` の**子孫**まで許すため、dev 以外の ADB でも通る | **完全一致**に変更。ADB が子コンパートメントにある環境は `.env` の `ADB_COMPARTMENT_OCID` で明示する（`.env.example` に追加）。承認済みの子を拒否する単体テストを追加 |
-| B-002: E2E 側も表示名とコンパートメント名だけを認可根拠にしている | 承認済みの根の直下から `dev` の OCID を引き、ADB のコンパートメントと**OCID 完全一致**を要求。その OCID を `ADB_COMPARTMENT_OCID` として ops サブプロセスへ渡し、両者を同じ値で照合 |
-| B-003/B-004/B-002 の TOCTOU 系: 固定名の資源を事後照会で所有物として取り込みうる | **資源名を run 固有にした**（`rp01<乱数4>`）。衝突自体が起こらず、既存なら中止。バケット作成の 409（競合）・結果不確定は台帳へ入れない＝自動削除しない |
-| M-001: query ユーザーだけ作って落ちると生成パスワードが失われる | 両パスワードを**全 DDL の前に**検証し、生成値も DDL 前に出力する。app 既存＋パスワード未指定＋migrate 要求はプリフライトで（何も作らずに）中止 |
+| B-001 / B-002: 固定名スキーマに対する自動 `DROP USER` / `CREATE USER` は、最終照合と実行の間に作り直されると別主体を触りうる。run 固有名にせよ | **スキーマ名はタスク指定の固定名**（`JETUSE_RAGM02` で隔離せよ）なので変更しない。Codex が示した代替（「固定名なら原子性を主張しない」）を採り、G5 の記述を「**最終照合より前**の差し替えを検出する」に修正し、残る窓を `SKIPPED.md` と報告書の「判断が要る事項」へ**受容した残リスク**として明示。`setup_schema` 側は最初の DDL 前に 3 点照合（G6）で塞いだ |
+| M-001: 現行版を削除しても旧版が `N` のままで検索不能になる | 削除と同一トランザクションで**最新の残存版を現行へ昇格**。単体テスト 3 件 + 実 DB のシナリオ 6 |
+| M-002: 同名ファイルの初回同時取り込みが両方 1.0 / 現行版になる | 文書レジストリ `rag_adb_docs`（018・PK=(owner,doc_file)）の行を作ってからロックして採番。初回競合も直列化される |
+| M-003: 0 チャンク・取り込み失敗が永久に `pending` で区別できない | レジストリに `status` / `error` を持たせ、バッジに **`error`** を追加。0 チャンク（本文を取り出せない PDF 等）と例外の両方を記録。単体テスト 4 件 |
+| M-004: チャンク長判定が改行と overlap を数えず上限を超える | 保存する本文（改行込み）で判定し、overlap も上限内に縮退。空行大量・上限近傍のテストを追加 |
+| M-005: 「TOCTOU 検証済み」は言い過ぎ | STATE・`guard.md`・`SKIPPED.md`・検証レポートの記述を実際に検証した内容へ修正（上記 B-001 と同じ） |
 
-## review-7（FAIL: blocker 3 / major 1 / minor 1）への対応
-
-| 指摘 | 対応 |
-|---|---|
-| B-001: `ADB_COMPARTMENT_OCID` の上書きが承認済みの根と無関係でも通る | 上書き値が `COMPARTMENT_OCID` の配下にあることを OCID で遡って確認。別テナンシの値を上書きに指定した否定テストを追加 |
-| B-002: 事前確認〜ops 実行の間に作られた同名ユーザーを所有物として取り込みうる | ops 実行の**直前に DB の現在時刻**を取り、それより前からあるユーザーは所有物にせず中止する（作成時刻の下限で「この run が作った」を担保） |
-| B-003: app の `DROP ... CASCADE` の後、query は名前だけで DROP していた | **1 件ごとに DROP の直前**で作成時刻を再照合（アプリスキーマはマーカーも）。合わなければその 1 件を DROP しない |
-| M-001: DROP の任意のエラーを握り潰し、再照会前に台帳から落としていた | 「既に無い」を表す ORA コードだけ成功扱いにし、それ以外は失敗として数える。台帳から落とすのは**不在を再照会で確認できたときだけ**（照会不能なら残す） |
-| m-001: 片付け後の台帳が `{}` という記述が実物と違う | 「資源の項目はゼロで `run_tag` だけ残る」に修正 |
-
-## review-8（FAIL: blocker 1 / major 2 / minor 1）への対応
+## review-4（FAIL: blocker 1 / major 6 / minor 1）への対応
 
 | 指摘 | 対応 |
 |---|---|
-| B-001: 所有権取得を拒否した後、`finally` の再取得が下限なしで同じユーザーを取り込む | `finally` も 1 回目の ops 実行直前の DB 時刻を下限として渡す（拒否したものを後から拾わない） |
-| M-001: DROP の任意のエラーを「既に無い」として握り潰し、再照会前に台帳から落としていた | **前ラウンドで書いたつもりの修正が当たっていなかった**（引用符の正規化でパターンが一致せず無音で失敗）。今回は編集の適用を確認済み。既知の not-found（ORA-20004 / ORA-00942）だけ成功扱いにし、他は失敗として数える。台帳から落とすのは不在を再照会できたときだけ |
-| M-002: 生成パスワードをプリフライトより前に出しており、中止時に「設定していない値」を案内する | 出力をプリフライト後・DDL 前へ移した |
-| m-001: ADB 表示名・DB 名・共有バケット名が検証コードに固定 | **未対応（residual）**。`spikes/spike_m1/common.py` と同じ「承認済み対象を名前で固定する fail-closed ガード」の踏襲で、.env 化すると「.env を差し替えれば別環境を触れる」ことになり弱くなる。判断は人間ゲートへ |
+| B-001: 固定名スキーマの自動 CREATE/DROP に閉じられない競合窓がある | Codex の代替案（「固定名なら自動 DROP を人間ゲートへ移す」）を採用。**`teardown.py` は `--yes` に加えて `--human-approved` が必須**になり、ループからは呼ばない。`setup_schema` は最初の DDL 前に 3 点照合。**run 固有名にするかはタスク指定（`JETUSE_RAGM02` で隔離）の変更**なので人間の判断事項として報告 |
+| M-001: PDF 以外を全部 UTF-8 で読むので DOCX / 画像が文字化け本文として indexed になる | 対応形式を `.txt` / `.md` / `.pdf` に明示。未対応・UTF-8 で読めない入力は取り込まず `error` として記録。単体テスト 2 件 |
+| M-002: `filename[:400]` を文書キーにしており、先頭が同じ別ファイルが統合される / BYTE セマンティクスで溢れる | `doc_key()` を新設。**バイト長**で切り、切ったときは原名のハッシュを付ける（衝突しない）。境界テスト追加 |
+| M-003: 取り込み状態が文書単位で、後続の取り込みが前の失敗を上書きする | 状態表を **`file_id` 単位**（`rag_adb_ingest` / 019）へ分離。文書レジストリ（018）は版のロック専用に |
+| M-004: 否定シナリオが `RAGM02_HOME` ごと複製してウォレット・パスワードを増やし、消していない | `RAGM02_LEDGER_PATH` で**台帳だけ**差し替える方式に変更（秘密を複製しない）。一時台帳は実行後に必ず削除 |
+| M-005: ユーザー不在時に早期 return するので、ACL の消し残しを再実行で回収できない | ユーザーの有無に関わらず ACL 残存を点検し、残っていれば削除。**ユーザー 0 件かつ ACL 0 件**でのみ成功終了 |
+| M-006: 初回同時取り込みの直列化が SQL 文字列の確認だけで実証されていない | **実 ADB の 2 接続で同時取り込み**（E2E シナリオ 7）。版 1.0 / 2.0 に分かれ、現行版は 1 つ、レジストリは 1 行 |
+| m-001: `backends.adb` の状態一覧に `error` が無い | 仕様（`specs/09-rag.md`）・コード内コメント・`SKIPPED.md`・検証レポートを `indexed` / `pending` / `error` / `disabled` に統一 |
 
-## review-9（FAIL: blocker 1 / minor 1）への対応
-
-| 指摘 | 対応 |
-|---|---|
-| B-001: 事前確認〜ops 実行の間に同名ユーザーが作られると、明示パスワード指定の ops が既存ユーザーを ALTER しうる | `ops/setup-dev-schema.py` に **`--require-new`** を追加（既存があれば ALTER も CREATE もせず中止）。E2E の 1 回目はこれを付けて実行し、競合時に他人のスキーマへ触れない。2 回目は付けない（＝冪等性の確認そのもの）。単体テストを 2 件追加 |
-| m-001: ADB 表示名・DB 名・共有バケット名が検証コードに固定 | **未対応（residual・人間ゲートへ）**。承認済み対象を名前で固定するのは `spikes/spike_m1/common.py` と同じ fail-closed ガードの踏襲で、.env 化すると「.env を差し替えれば別環境を触れる」ことになりゲートとして弱くなる |
-
-## review-10（FAIL: blocker 1 / minor 1）への対応
+## review-5（FAIL: blocker 1 / major 3 / minor 1）への対応
 
 | 指摘 | 対応 |
 |---|---|
-| B-001: `--require-new` で setup が中止しても、`finally` の所有権回収が「作成時刻が下限以降」だけで取り込んでしまう | 所有権を取るのは **setup が exit 0 のときだけ**に限定（`created_by_us`）。1 回目は `--require-new` が通っている＝「実行前に存在せず、この実行が作った」が確定する。失敗時は台帳へ入れず「残っていないか人間が確認すること」と警告を出す |
-| m-001: 環境依存値（ADB 表示名等）が検証コードに固定 | 前回と同じく **未対応（residual・人間ゲートへ）** |
+| B-001: `CREATE USER` と所有証拠の記録が別 SQL で、間に作り直されると別主体を台帳へ採用しうる | ① **`setup_schema.py` も人間ゲート**（`--human-approved` 必須）にし、自動実行の経路から外した ② `CREATE USER` の直後に**自分が生成したパスワードでログインできること**を確かめてから権限を付ける（別主体が作り直していれば必ず失敗する）③ ログイン確認の直後に台帳へ記録（途中失敗からの復旧可能性）。run 固有名にするかは**タスク指定の変更**なので人間の判断事項として報告 |
+| M-001: `enabled()` が接続瞬断も「無効」に丸め、その間のアップロードが記録も残らず消える | 可用性を **`ready` / `absent` / `unavailable` の三値**に。`unavailable` はそのファイルを `error` として記録する（復旧後に気づける）。単体テスト 3 件 |
+| M-002: 20MB のアップロードで全チャンクのベクタを一括保持する | 埋め込みと INSERT を **200 チャンクずつの有界バッチ**に。バッチ境界を跨ぐ規模の単体テストを追加 |
+| M-003: `migrate.md` が「up to date」でクリーン適用を示していない | **空スキーマへ 001〜019 を適用**した証跡に差し替え、`RAG_ADB_CHUNKS` / `RAG_ADB_DOCS` / `RAG_ADB_INGEST` の 3 表の存在確認も記録 |
+| m-001: レジストリ INSERT が全 `IntegrityError` を握り潰す | **ORA-00001 だけ**を競合として許し、他は再送出。ロック後に行が無ければ明示的に失敗。単体テスト 2 件 |
 
-## review-11 への対応（人間ゲートの判断: override せず修正）
-
-**停止理由として書いた「blocker と major が互いに反対の要求」は誤りだった。** review-11 の
-suggestion は両方とも同じ機構を提示していた:「`CREATE USER` の直後に、作り直しで変わる識別子
-（`DBA_USERS.USER_ID`）を receipt として永続化し、台帳化のときと DROP 直前に照合する」。
-＝「作った瞬間に、作り直しを検出できる形で記録する」1 つの機構で両方が閉じる。
+## review-6（FAIL: blocker 1 / major 2）への対応
 
 | 指摘 | 対応 |
 |---|---|
-| B-001: 作成を証明できないユーザーを取り込みうる | `ops/setup-dev-schema.py` に `--receipt <path>` を追加し、**CREATE 直後に** `USER_ID` / 作成時刻 / この実行が作ったかを書き出す。ドライバは「いま在るユーザー」を推測で取り込まず receipt だけを根拠にし、台帳化時・DROP 直前・各 DROP の直前に `USER_ID` を照合する |
-| M-001: setup が途中失敗すると作成物が孤児になる | receipt は CREATE 直後にあるので、権限付与・RP 有効化・migration のどこで失敗しても台帳化でき、teardown で消せる。`created_by_us` のようなプロセス全体の成否ゲートは廃止 |
-| m-001: 環境依存値の直書き | **人間ゲートで「意図的な residual として受容」と決定**（`.env` 化すると差し替えで別環境を触れることになり、安全装置として弱くなるため）。理由を `docs/verification/RP-01.md` に明記 |
+| B-001: 取り込みと削除が別トランザクションで、取り込み中に削除すると「削除成功なのに後からチャンクが commit される」 | 取り込みは**台帳行（`rag_files`）を `FOR UPDATE` で押さえてから**チャンクを作り、行が無ければ 1 行も作らず中止（`IngestAborted`）。削除側も同じ行を `FOR UPDATE` で取る＝両者が直列化される。単体テスト追加。E2E も実運用と同じ順序（台帳行 → 取り込み）に統一 |
+| M-001: 可用性を一度 READY で覚えるため、その後の障害を検出できない | **キャッシュを廃止**（毎回問い合わせる）。「一度 READY を見た後に接続断 → UNAVAILABLE になる」テストを追加 |
+| M-002: G6 の setup 実行に `--human-approved` が無く、人間ゲートで止まっただけの証跡だった | フラグを渡して所有権照合まで到達させ、**停止理由が「マーカーが不一致」であること**も判定条件に加えた（証跡: `停止理由=所有権照合:True`） |
 
-追加した競合テスト:
-- 実機（`guard.md`）: `USER_ID` を食い違わせた 2 ケース＝「同じ秒内に DROP → 同名で再作成」相当。
-  作成時刻では区別できないが `USER_ID` で検出し、**ユーザーもマーカーも無傷のまま非ゼロ終了**する。
-- 単体（`test_ops_adb.py`）: CREATE 直後に receipt が出る / **CREATE 後の GRANT 失敗を注入しても
-  receipt は残る** / 実行前から在ったユーザーは `created_by_this_run=false` になる / `--receipt` 無しでも動く。
-
-## review-12（FAIL: blocker 2 / major 2）への対応
-
-**成果物（`ops/`）への指摘が 3 件出たため、人間が定めた停止条件に従って修正した。**
+## review-7（FAIL: blocker 1 / major 5 / minor 2）への対応
 
 | 指摘 | 対応 |
 |---|---|
-| B-001 `ops/setup-dev-schema.py`: receipt の `USER_ID` が CREATE の結果と結び付かず、作成後に名前で引き直している | `CREATE USER` と識別子取得を **1 本の PL/SQL ブロック**（`EXECUTE IMMEDIATE` + `SELECT ... INTO`）にまとめ、OUT バインドで受け取る。クライアント側の「作ってから読む」窓を無くした |
-| B-002 `e2e/driver.py`: バケットの所有証跡を作成後の再照会で取っている | `create_bucket` の**応答そのもの**（`etag` / `time_created`）を記録。応答に etag が無ければ台帳へ入れず中止 |
-| M-001 `ops/setup-dev-schema.py`: receipt の出力先を検証せず、CREATE の後で書き込むため証跡が残らない場合がある | `_assert_receipt_writable()` を **DDL の前**に実行（親ディレクトリの有無・書き込み可否・既存ファイルが JSON 配列か）。単体テスト 3 件追加 |
-| M-002 `ops/setup-dev-schema.py`: `--require-new` が 2 ユーザーを一組で事前確認しておらず、部分作成を残しうる | `--require-new` 時は **app と query をまとめて先に照会**し、どちらかが在れば何も作らずに中止（CLI の契約どおり） |
+| B-001: ログイン確認の前に `GRANT CREATE SESSION` を打っており「他人のスキーマに権限を付けない」が成立していない | **権限を 1 つも付けずに**パスワード一致だけで同一性を判定する（`ORA-01045`= 権限不足＝資格情報は正しい / `ORA-01017`= 別主体、を区別）。`CREATE USER` 直後に receipt を永続化してから判定する |
+| M-001: DB 接続とロックを保持したまま外部の埋め込み API を待ち、プール（最大 4）が枯渇しうる | **埋め込みはトランザクションの外**で完了させ、そのあと短いトランザクションで台帳行ロック → INSERT。1 ファイル 2,000 チャンクの上限も追加（ベクタ保持量と時間の上限）。順序を固定する単体テスト追加 |
+| M-002: 障害中の `mark_unavailable()` は同じ落ちた DB へ書くので握り潰される | 記録は best-effort のままだが、`SKIPPED.md` / レポートに「全断中のアップロードは `pending` のまま残り、再アップロードで取り込まれる」と明記（恒久対策の outbox は後続） |
+| M-003: agent と rag の排他検査が RAG ディスパッチより後で、`agent + adb` が素通りする | 排他検査を**ディスパッチより前**に移動（`agent` / `agent_id` の双方）。非Responses系 3 経路すべてに効く |
+| M-004: 所有台帳を `write_text` で直接切り詰めており、途中で壊れると回収不能 | 同ディレクトリの 0600 一時ファイルへ書いて fsync → `os.replace` の**原子的更新**に（秘密ファイルも同じ） |
+| M-005: シナリオ4 を「実 HTTP 経路」と書いているが実体はプロセス内 ASGI | 表記を**「ASGI 統合テスト」**に修正し、配備環境での実ネットワーク検証は未実施として `SKIPPED.md` に残した |
+| m-001: 片付け後もローカルにウォレット・パスワードが残る | DB 側が完全に片付いたときだけ、ウォレット・秘密・台帳を削除する（失敗が残るときは回収のため保持） |
+| m-002: バッジのテストが実 DB へ接続しうる | `errored_file_ids` / `enabled` を monkeypatch し、DB に触れないよう固定 |
 
-## review-13（FAIL: blocker 2 / major 1）への対応
+## review-8（FAIL: blocker 1 / major 3 / minor 2）への対応
 
 | 指摘 | 対応 |
 |---|---|
-| B-001 `ops/`: `CREATE USER` の暗黙コミット〜`SELECT` の窓は PL/SQL にまとめても残る | **原理的に閉じない**（識別子はオブジェクトができた後にしか読めず、DBA 権限の別セッションがその窓で作り直せば、クライアント側のどんな receipt 方式でも同じ）。クライアント側の窓は PL/SQL 化で除去済み。緩和 3 点（run 固有名 / `--require-new` / 破壊操作ごとの再照合）とあわせて `docs/verification/RP-01.md`「既知の限界」とコード docstring に明記した |
-| B-002 `e2e/driver.py`: 作成応答を台帳化した後、書き込み前に再確認していない | `put_object` の直前にバケットの同一性（etag / 作成時刻）を再照合し、違えば**書き込まずに中止** |
-| M-001 `ops/`: receipt の事前検証が配列であることしか見ていない / open 成功は write 成功を保証しない | 各要素が dict であることまで検証し、事前に**実際の書き込みを試す**（新規なら書いて消す）。`_write_receipt` 側も dict 以外の要素を無視する |
+| B-001: パスワード確認前に台帳へ receipt を書くので、確認に失敗しても次回「空マーカー同士が一致」で再利用されうる | 台帳に **`verified` 状態**を持たせ、作成直後は `verified=false`。**未検証の receipt は所有証明として再利用しない**（照合が必ず落ちる）。既存再利用の経路でも**毎回パスワード一致を取り直す**。中断からの復旧用に `--reverify --human-approved`（DDL を打たずに再検証するだけ）を追加 |
+| M-001: `availability()` が 017 だけ見るので、部分適用中も READY になる | **3 表そろって初めて READY**。部分適用は `unavailable`（= そのファイルを error として残す）、未導入は `absent`。3 状態のテスト追加 |
+| M-002: 削除・昇格が文書レジストリをロックせず、同時削除で「全部 N」が残りうる | 削除も**取り込みと同じロック順序**（文書レジストリ行 → チャンク）に乗せた。順序を固定する単体テスト追加 |
+| M-003: `MAX_CHUNKS` 判定の前に PDF 全頁を展開するので上限が効かない | 抽出を**逐次（ジェネレータ）**にし、頁ごとに累計文字数を見て `MAX_EXTRACT_CHARS` で打ち切る。チャンク数も生成しながら打ち切る |
+| m-001: `rag_files.filename` を文字数で切っており、長い日本語名で ORA-12899 になりうる | 台帳側も**バイト境界**で切る（`_fit()`） |
+| m-002: DROP 済み・ACL 0 件の再実行経路でローカル資材が残る | その経路でも `purge_local_secrets()` を呼ぶ |
 
-## review-14: PASS（完了ゲート到達）
+## review-9（FAIL: blocker 1 / major 1 / minor 1）への対応
 
-blocker 0 / E2E adequacy=sufficient。loop-protocol の停止規律に従い、PASS の下に残る
-非 blocker は**修正せず residual として列挙**する（磨き込みの反復に入らない）。
+| 指摘 | 対応 |
+|---|---|
+| B-001: 削除時の `ORA-00942` 握り潰しが広すぎ、017 のみ適用の**部分適用**でも台帳行だけ commit されてチャンクが残る | 「チャンク表が無い（＝未導入）」だけを**同じ接続で明示的に判定**して 0 件返し、それ以外の表欠落（部分適用）は**失敗させる**。単体テスト 2 件（未導入は許容 / 部分適用は commit しない） |
+| M-001: シナリオ7 が「実際に競合した」ことを示していない（逐次実行でも同じ結果） | 台帳行を**競争の前に**用意し、`threading.Barrier` で 2 スレッドを同時に突入させ、**実行区間が時間的に重なったこと**（`overlapped=True`）も判定条件にした |
+| m-001: 「実装どおりの構成で 2 回とも PRE-FILTER」は証跡と食い違う（その形の計測は 1 回） | 検証レポートを実測どおりに修正（「メタデータ列に索引がある構成では 2 回とも索引が使われた。実装どおりの形（PRE-FILTER）の計測は 1 回」） |
 
-| sev | file:line | 指摘 | 扱い |
-|---|---|---|---|
-| major | `ops/setup-dev-schema.py:119` | receipt を `write_text` で切り詰めるため、ENOSPC やプロセス停止で既存 receipt が壊れうる | residual（原子的書き込み＝一時ファイル + rename にすべき。後続トリアージ） |
-| major | `runs/<run-id>/e2e/driver.py:284` | 所有権台帳も直接上書き。更新中に停止すると JSON が壊れ teardown 不能になりうる | residual（同上。検証スクリプト側） |
-| minor | `ops/_adb.py:230` | `verify_login()` が全 `DatabaseError` を「パスワード違い」と診断する（通信障害等も同じ扱い） | residual |
-| minor | `runs/<run-id>/e2e/driver.py:311` | `read_marker()` が全 `DatabaseError` を「マーカー無し」と扱う | residual |
+## review-10（FAIL: blocker 1 / major 4）への対応と、停止の理由
 
-受容済み residual（人間ゲートで決定・2026-07-29）: `review-11 m-001` 検証コードへの環境依存値の直書き。
-既知の限界（原理的に閉じない）: `CREATE USER` の暗黙コミット〜識別子取得の窓（`docs/verification/RP-01.md`）。
+| 指摘 | 対応 |
+|---|---|
+| B-001: 否定テストが `--yes --human-approved` を自動付与しており、人間ゲートを迂回している | 破壊を伴うケース（G5）は **`RAGM02_GUARD_DESTRUCTIVE=1` の明示 opt-in でだけ**実行するようにし、既定は dry-run（所有権照合までは同じ経路）。**ただしこれは review-4 の指摘（「否定シナリオなのだから実削除を試させよ」）と逆向き**で、両立させるにはスキーマ名を run 固有にするしかない（= タスク指定の変更） |
+| M-001: 原本バックアップのキーだけ正規化前の名前を使い、長い名前で消し残る | バックアップ / 削除の両方を台帳と同じ正規化名（`_fit()`）に統一 |
+| M-002: 部分マイグレーション中は失敗の記録先（019）自体が無く、記録できない | 恒久対策（永続 outbox と再開ジョブ）は範囲外。`SKIPPED.md` に残課題として明記 |
+| M-003: DDL 成功 → 履歴 INSERT 前に停止すると再実行が ORA-00955 になる | **マイグレーションランナー（`jetuse_core/migrate.py`）の既存設計**に由来（001〜016 も同じ）。1 ファイル 1 DDL で影響を最小化したうえで、ランナーの回復設計はリポジトリ全体の後続課題として `SKIPPED.md` に記載 |
+| M-004: シナリオ7 の同期点が `ingest()` 入口で、版採番の critical section の重なりを直接示していない | 実測は「2 スレッドの実行区間が重なったうえで版が 1.0/2.0 に分かれ現行版が 1 つ」まで。直接示すには製品コードにテスト用フックが要るため、限界として `SKIPPED.md` に明記 |
 
-## 人間ゲート（未実施）
+**停止の理由**: 10 ラウンドで製品コードの指摘（版の昇格・削除の原子性・部分適用・
+チャンク境界・競合・形式ゲート等）はすべて解消した。残る blocker は
+**検証用ハーネスが固定名スキーマ `JETUSE_RAGM02` を自動で作成・削除すること**に集約され、
+Codex の構造的な解決案（run 固有のスキーマ名）は**タスク指定（「タスク専用スキーマ
+JETUSE_RAGM02 で隔離すること」）の変更**にあたる。さらに review-4 と review-10 の指摘は
+互いに逆向き（実削除を試せ / 実削除のフラグをテストから立てるな）で、固定名のままでは
+両立しない。よって **FAIL override の判断を人間に仰いで停止**する（loop-protocol 手順7）。
 
-- コミット / PR / push（未承認のため未実施）
-- 配備済み dev アプリスタックへの `terraform apply` と `/api/health` の `dbchat` 確認（SKIPPED.md）
+## review-10 への追加対応（オーケストレータ承認 2026-07-30 を受けて）
+
+判断1・2 の回答: **override はしない / 指示を「共有 loop ADB 内の run 固有スキーマ名で隔離」へ変更**。
+これを受けて正攻法で解消した。
+
+| 指摘 | 対応 |
+|---|---|
+| B-001（review-3〜10 で繰り返し出ていた固定名スキーマの TOCTOU） | **スキーマ名を run 固有（`JETUSE_RAGM02_<乱数>`）にした**。同名を作る他主体がいないので窓が構造的に消える。ADB は増やしていない（隔離はスキーマのみ）。既存があれば中止する形・3 点照合・DROP 直前の再照合は維持 |
+| review-4 と review-10 の相反（実削除を試させよ / テストが人間ゲートのフラグを立てるな） | **両立した**。否定シナリオは `teardown.py --yes` の**実削除を実際に試させる**（review-4）。run 固有名なので人間ゲート自体が不要になり、テストがフラグを立てる問題も消えた（review-10）。`RAGM02_GUARD_DESTRUCTIVE` の opt-in は撤去 |
+| setup / teardown の人間ゲート | 固定名に起因する措置だったので撤回。破壊操作の明示フラグ `--yes` は CLAUDE.md の規約どおり維持 |
+| M-001（正規化名の統一） | 対応済みを維持 |
+| M-002 / M-003 / M-004 | 範囲外・限界として `SKIPPED.md` に明記（部分適用中の再送キュー / マイグレーションランナー全体の回復設計 / 同期点の粒度） |
+
+証跡はスケール検証（3 ラウンド）・E2E（7 シナリオ）・ガード（6 件）とも **run 固有スキーマで
+最初から通しで再取得**した。片付け後、共有 ADB に `JETUSE_RAGM02%` は 1 つも残っていない。
+
+## review-11: **PASS**（blocker 0 / major 3 / minor 2・E2E adequacy=sufficient）
+
+固定名スキーマを run 固有名にしたことで、review-3〜10 で繰り返し出ていた B-001 系の指摘が解消し、
+11 ラウンド目で PASS。停止規律（loop-protocol 手順6）に従い、PASS 後は非 blocker を追わない。
+
+### PASS 後に行った修正（**コードは変更していない。文書と証跡のみ**）
+
+Codex の major 2 件は「引き渡す文書そのものの正確さ」だったので直した:
+
+- RAGM02-002: 検証レポートの数値が添付証跡と不一致 → **証跡（`scale/*.json`・ログ）と一致する数値へ全面的に直した**
+- RAGM02-003: 片付け手順の記述が実装と逆（`--human-approved` 必須と書いてあった）→ 実装どおり（`--yes` のみ）へ
+- 証跡の混在（旧固定名の setup / teardown ログ）→ **setup → スケール 3 ラウンド → E2E → ガード → 片付けを
+  単一の run 固有スキーマで通しで取り直し**、証跡セットを 1 本化
+
+### residual（未対応・後続トリアージ）
+
+| id | 位置 | 内容 |
+|---|---|---|
+| RAGM02-001 (major) | `jetuse_core/rag_adb.py:365` | `_mark_failed()` が `rag_files` をロックせず別トランザクションで状態を書くため、失敗記録と削除が競合すると取り込み状態の行が孤児として残りうる |
+| RAGM02-004 (minor) | `jetuse_core/rag.py:418` | `enabled()` が `absent` と `unavailable` の両方で False になり、DB 障害中もバッジが `disabled`（=未導入）に見える |
+| RAGM02-005 (minor) | `jetuse_core/rag_adb.py:316` | `error VARCHAR2(1000)` に対しエラー文を 1000 **文字**で切っており、日本語だと ORA-12899 になりうる |
+
+（M-002 部分適用中の再送キュー / M-003 マイグレーションランナー全体の回復設計 /
+M-004 同時取り込みの同期点の粒度は `e2e/SKIPPED.md` に限界として記載済み）
+
+## 残タスク
+
+- 人間ゲート: コミット / PR / push（未実施）

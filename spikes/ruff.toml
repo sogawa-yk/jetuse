@@ -7,4 +7,4 @@ target-version = "py312"
 select = ["E", "F", "I", "UP", "B"]
 
 [lint.isort]
-known-first-party = ["common", "fixtures", "method_a_vector_store", "method_a_limits", "method_b_select_ai", "method_b_refresh_check", "method_c_own_index"]
+known-first-party = ["common", "fixtures", "scale_check", "scale_filters", "scale_appshape", "e2e", "teardown", "setup_schema", "guard_checks", "method_a_vector_store", "method_a_limits", "method_b_select_ai", "method_b_refresh_check", "method_c_own_index"]

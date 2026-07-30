@@ -165,7 +165,7 @@ def test_extract_citations():
 
 
 def test_attach_backend_status(monkeypatch):
-    """3バックエンドの取り込み状況が各ファイルに付与される(ENH-05)。"""
+    """各バックエンドの取り込み状況が各ファイルに付与される(ENH-05 / RAGM-02でadb追加)。"""
     from jetuse_core import rag
 
     files = [
@@ -173,19 +173,23 @@ def test_attach_backend_status(monkeypatch):
         {"id": "f2", "filename": "b.pdf", "status": "processing"},
         {"id": "f3", "filename": "c.pdf", "status": "failed"},
     ]
+    import jetuse_core.rag_adb as radb
     import jetuse_core.rag_opensearch as ros
     import jetuse_core.rag_select_ai as rsa
     monkeypatch.setattr(rsa, "indexed_file_ids", lambda owner: {"f1"})
     monkeypatch.setattr(ros, "enabled", lambda: True)
     monkeypatch.setattr(ros, "indexed_file_ids", lambda owner: {"f1", "f2"})
+    monkeypatch.setattr(radb, "enabled", lambda: True)
+    monkeypatch.setattr(radb, "indexed_file_ids", lambda owner: {"f1"})
+    monkeypatch.setattr(radb, "errored_file_ids", lambda owner: set())  # DB へ触らせない
 
     out = rag.attach_backend_status("u", files)
     assert out[0]["backends"] == {"vector_store": "indexed", "select_ai": "indexed",
-                                  "opensearch": "indexed"}
+                                  "opensearch": "indexed", "adb": "indexed"}
     assert out[1]["backends"] == {"vector_store": "pending", "select_ai": "pending",
-                                  "opensearch": "indexed"}
+                                  "opensearch": "indexed", "adb": "pending"}
     assert out[2]["backends"] == {"vector_store": "error", "select_ai": "pending",
-                                  "opensearch": "pending"}
+                                  "opensearch": "pending", "adb": "pending"}
 
 
 def test_resolve_citation_filenames(monkeypatch):
@@ -208,10 +212,12 @@ def test_resolve_citation_filenames(monkeypatch):
 
 
 def test_attach_backend_status_opensearch_disabled(monkeypatch):
+    import jetuse_core.rag_adb as radb
     import jetuse_core.rag_opensearch as ros
     import jetuse_core.rag_select_ai as rsa
     from jetuse_core import rag
     monkeypatch.setattr(rsa, "indexed_file_ids", lambda owner: set())
     monkeypatch.setattr(ros, "enabled", lambda: False)
+    monkeypatch.setattr(radb, "enabled", lambda: False)  # DB へ触らせない
     out = rag.attach_backend_status("u", [{"id": "f1", "filename": "a", "status": "completed"}])
     assert out[0]["backends"]["opensearch"] == "disabled"

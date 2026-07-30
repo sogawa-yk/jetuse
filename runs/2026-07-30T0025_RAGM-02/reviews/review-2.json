@@ -1,0 +1,95 @@
+{
+  "review_n": 2,
+  "timestamp": "2026-07-30T01:37:17+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-2.input.diff",
+  "raw_output_path": "reviews/review-2.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "主要機能は実 ADB で広く検証されていますが、既存スキーマの所有権確認と文書削除の整合性に blocker があります。認証情報・OCID・実エンドポイントのコミットは差分内に見当たりませんでした。",
+  "severity_counts": {
+    "blocker": 2,
+    "major": 3,
+    "minor": 3
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "spikes/ragm02/setup_schema.py",
+      "line": 60,
+      "issue": "既存スキーマ再利用時は USER_ID・作成時刻しか照合せず、run 固有マーカーを確認しないまま GRANT、ALTER USER、ACL、Resource Principal 付与を実行します。同秒作り直し等で所有権を完全確認できない既存リソースを変更する可能性があり、人間ゲート要件に違反します。",
+      "suggestion": "最初の DDL より前に read_marker(admin) を含む3点照合を必須化し、不一致なら一切変更せず終了してください。既存再利用経路の否定テストも追加してください。"
+    },
+    {
+      "id": "B-002",
+      "severity": "blocker",
+      "file": "packages/api/jetuse_core/rag.py",
+      "line": 129,
+      "issue": "削除時の enabled() は別DB接続の例外を False に丸めます。一時的な接続失敗やプール枯渇でチャンク削除だけがスキップされ、rag_files の削除が commit されるため、API上は削除済みでも文書が回答に残り得ます。",
+      "suggestion": "現在の cursor で delete_chunks を必ず実行し、後方互換のため表未適用を許容する場合は ORA-00942 だけを明示的に処理してください。可用性確認の失敗を削除成功として扱わないテストも追加してください。"
+    },
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "spikes/ragm02/setup_schema.py",
+      "line": 70,
+      "issue": "CREATE USER は暗黙 commit されますが、所有台帳の記録は全 GRANT・ACL・Resource Principal 設定の成功後です。途中で失敗すると台帳のないスキーマが残り、次回実行も teardown も所有権不明として停止します。",
+      "suggestion": "CREATE USER 直後に復旧可能な receipt を永続化し、後続失敗時はその識別子を照合して安全に回収できるようにしてください。各設定処理への失敗注入テストを追加してください。"
+    },
+    {
+      "id": "M-002",
+      "severity": "major",
+      "file": "spikes/ragm02/e2e.py",
+      "line": 240,
+      "issue": "HTTP E2E は取り込みを rag_adb.ingest で直接行っており、新たに追加した POST /api/rag/files → rag.add_file → rag_adb.ingest の統合経路を通していません。この配線が壊れていてもシナリオ4は PASS します。",
+      "suggestion": "実際のアップロードAPIから取り込み、backends.adb=indexed を確認してからチャットするシナリオを追加してください。少なくとも add_file の有効・無効・取り込み失敗経路を単体テストで固定してください。"
+    },
+    {
+      "id": "M-003",
+      "severity": "major",
+      "file": "spikes/ragm02/teardown.py",
+      "line": 54,
+      "issue": "ACLは個別ホストへ http ACEとして追加される一方、削除は host='*' かつ http/connect/resolve の別ACEを指定しており、実証跡でも ORA-01927 になっています。さらに終了判定はユーザー残数だけなので、acl_left が非ゼロでも成功終了します。",
+      "suggestion": "追加時と同じ各ホスト・権限でACEを削除し、ユーザーとACLの両方がゼロの場合だけ成功させてください。ACL残存時の否定テストも追加してください。"
+    },
+    {
+      "id": "m-001",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/rag_adb.py",
+      "line": 201,
+      "issue": "版検索と旧版更新には元の filename を使いますが、保存時だけ filename[:400] に切り詰めています。400文字を超えるファイル名を再投入すると既存行に一致せず、複数版が1.0かつcurrent_version='Y'になり得ます。",
+      "suggestion": "保存用に正規化した doc_file を先に作り、採番・UPDATE・INSERTの全処理で同じ値を使用してください。上限境界のテストも追加してください。"
+    },
+    {
+      "id": "m-002",
+      "severity": "minor",
+      "file": "docs/decisions/ADR-0020-rag-metadata-backend.md",
+      "line": 122,
+      "issue": "「B木索引が無い限りベクタ索引は使われない」は、添付証跡のB木なしHNSW IN-FILTERと矛盾します。また索引はmigration 017ではなくensure_indexes()へ実装されています。",
+      "suggestion": "「B木なしでは計画が不安定、B木追加でPRE-FILTERが安定」と修正し、反映先をensure_indexes()と記載してください。specs/09-rag.mdの同様の記述も合わせて修正してください。"
+    },
+    {
+      "id": "m-003",
+      "severity": "minor",
+      "file": "packages/api/service/routes/chat.py",
+      "line": 228,
+      "issue": "AdbBackendUnavailable は503へ正規化すると定義されていますが、実際はStreamingResponse開始後に汎用例外として捕捉され、HTTP 200のSSEエラーになります。表未適用時のテストもありません。",
+      "suggestion": "ストリーム開始前にADB可用性を確認して503を返すか、SSEエラーが正式契約なら例外クラスの説明を修正し、その契約をテストしてください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 10,
+    "adequacy": "insufficient",
+    "notes": "正方向5本、片付けガード5本に加え、001〜017のクリーンmigrationと50,000チャンクの計画・recall証跡を確認しました。検索、版フィルタ、JOIN、回答、citations、通常時の原子的削除は十分裏づけられています。一方、実アップロードAPI経路、enabled()失敗時の削除、setup_schemaの既存再利用・途中失敗は未検証です。またG5は実際のDROP/再作成ではなくマーカーUPDATEによる模擬raceです。SKIPPED.mdの範囲理由は記載されていますが、これら差分固有の未検証経路が残るため全体としてinsufficientです。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURL未提供かつユーザー指定により、実ブラウザE2Eは実施していません。"
+    }
+  }
+}

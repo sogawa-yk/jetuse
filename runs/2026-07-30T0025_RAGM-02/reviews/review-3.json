@@ -1,0 +1,87 @@
+{
+  "review_n": 3,
+  "timestamp": "2026-07-30T01:49:34+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-3.input.diff",
+  "raw_output_path": "reviews/review-3.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "固定名スキーマの作成・削除に所有権照合後の差し替え競合が残り、別主体の既存リソースを変更・削除し得るため FAIL です。機密情報や OCID 実値の混入は確認できませんでしたが、版管理と取り込み失敗時の状態管理にも未解決の正確性問題があります。",
+  "severity_counts": {
+    "blocker": 2,
+    "major": 5,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "spikes/ragm02/teardown.py",
+      "line": 51,
+      "issue": "所有権の最終照合と `DROP USER JETUSE_RAGM02 CASCADE` が別 SQL です。line 48 の照合後、line 51 の実行前に同名ユーザーが再作成されると、その別ユーザーを削除します。G5 証跡は差し替えを最終照合より前に行っており、この check-to-use 窓を検証していません。",
+      "suggestion": "固定名に対する自動 DROP をやめ、推測困難な run 固有スキーマ名を使用してください。固定名が必須なら、この破壊操作は人間ゲート下の排他メンテナンスに限定し、最終照合だけで原子性を保証したと主張しないでください。"
+    },
+    {
+      "id": "B-002",
+      "severity": "blocker",
+      "file": "spikes/ragm02/setup_schema.py",
+      "line": 74,
+      "issue": "`CREATE USER` の完了後に名前で `USER_ID` と作成時刻を引き直して receipt にしています。この間に固定名ユーザーが削除・再作成されると、別主体のユーザーを所有物として台帳化し、後続の GRANT・ACL・Resource Principal 付与や teardown の対象にします。既存再利用を事前に拒否する G6 ではこの作成直後の競合を検出できません。",
+      "suggestion": "run 固有で衝突しないスキーマ名を採用してください。固定名を維持する場合は作成・再利用を人間ゲート付きの排他操作にし、作成後の名前による再照会だけを所有証明にしないでください。"
+    },
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag_adb.py",
+      "line": 297,
+      "issue": "現行版の file_id を削除しても、残っている旧版を `current_version='Y'` に戻しません。v1→v2 と取り込んで v2 を削除すると、v1 のチャンクは残るのに全件 `N` のままとなり、`generate()` から検索不能です。",
+      "suggestion": "同一トランザクション内で削除対象の `doc_file` と現行状態を取得し、現行版を削除した場合は残存する最新バージョンを `Y` に昇格してください。再取り込み後に最新版を削除して旧版が再び検索できる E2E を追加してください。"
+    },
+    {
+      "id": "M-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag_adb.py",
+      "line": 176,
+      "issue": "同名ファイルの初回同時取り込みではロック対象行が存在しないため、両トランザクションが version 1.0かつ `current_version='Y'` で確定します。既知の限界として文書化されていますが、現行版が一意という検索契約を破る実データ競合です。",
+      "suggestion": "`(owner_sub, doc_file)` を一意キーにした文書レジストリ行を先に作成し、競合時は ORA-00001 を再試行してその行を `FOR UPDATE` ロックしてから採番してください。同時初回取り込みテストも追加してください。"
+    },
+    {
+      "id": "M-003",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag_adb.py",
+      "line": 196,
+      "issue": "空白テキストや文字抽出できない PDF はチャンク数 0 で正常終了します。また取り込み例外も `rag.add_file()` が握り潰すため、`backends.adb` は原因を示さず永続的に `pending` になります。再試行予定もなく、成功・処理中・失敗を区別できません。",
+      "suggestion": "ADB バックエンド固有の status/error を永続化し、0 チャンクや抽出失敗は `error` として表示してください。アップロード全体を best-effort のまま成功させる場合でも、再試行可能な状態と恒久失敗を区別してください。"
+    },
+    {
+      "id": "M-004",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag_adb.py",
+      "line": 141,
+      "issue": "チャンク上限の判定が改行文字を数えず、flush 後に保持した overlap の長さも再判定しません。多数の空行や上限近い行の組み合わせでは `CHUNK_CHARS` を超え、2,000文字を超えれば埋め込みだけが切り詰められて保存本文との対応が崩れます。",
+      "suggestion": "`len(\"\\n\".join(buf + [line]))` で実際の本文長を判定し、overlap を含めても必ず上限内になるよう縮退させてください。多数の空行、800文字の連続行、overlap 境界のテストを追加してください。"
+    },
+    {
+      "id": "M-005",
+      "severity": "major",
+      "file": "STATE.md",
+      "line": 59,
+      "issue": "安全ガードの「TOCTOU」を PASS としていますが、証跡 G5 は待機中にマーカーを変更し、その後の最終照合で止まることしか示していません。最終照合と `DROP USER` の間の差し替えは未検証で、B-001 の安全性主張を裏づけません。実アップロード APIと配備済み Container Instance 経路も SKIPPED です。",
+      "suggestion": "G5 を「最終照合前の差し替え検出」と正確に記載し、自動 DROP の残存競合を解消するまで安全性の完了を主張しないでください。修正後は実アップロード経路と配備環境の Resource Principal 経路も追加検証してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 12,
+    "adequacy": "insufficient",
+    "notes": "機能シナリオ5本はすべて PASS（`scenario-1.md`〜`scenario-5.md`）。安全否定シナリオ6本も記録上 PASS（`guard.md`）、50,000行のスケール検証も索引利用・recall・索引なしフォールバックを裏づけています。ただし G5 は最終照合前のマーカー差し替えのみで、照合と DROP の間の競合を検証していません。さらに `POST /api/rag/files`、配備済み Container Instance、初回同時取り込みは `SKIPPED.md` のとおり未実施であり、変更経路全体の完了証跡としては不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲット URL が提供されていないため、指示どおりブラウザ E2E は実施していません。"
+    }
+  }
+}

@@ -30,8 +30,8 @@ class ChatRequest(BaseModel):
     conversation_id: str | None = None  # 指定時はADBへ永続化(CHAT-02)
     persist_user: bool = True  # 再生成時はfalse(ユーザー発話の二重保存防止)
     rag: bool = False  # file_searchツール接続(RAG-02。Responses系のみ)
-    # RAG-03/ENH-05
-    rag_backend: Literal["vector_store", "select_ai", "opensearch"] = "vector_store"
+    # RAG-03/ENH-05/RAGM-02(adb=Oracle AI Database 自前索引・チャンク単位の出典)
+    rag_backend: Literal["vector_store", "select_ai", "opensearch", "adb"] = "vector_store"
     # エージェントモード(AGT-01)。tool_resultsは承認フローの継続時に使用
     agent: bool = False
     auto_tools: bool = False
