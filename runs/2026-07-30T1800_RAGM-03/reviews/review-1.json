@@ -1,0 +1,63 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-07-30T18:17:16+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "提出差分だけでは新規 frontend module が欠落して build できず、必須の実環境 E2E 証跡もありません。認証情報・OCID・実エンドポイントの混入や既存 OCI リソース変更は差分内に見当たりません。",
+  "severity_counts": {
+    "blocker": 2,
+    "major": 2,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "packages/web/src/pages/rag.tsx",
+      "line": 8,
+      "issue": "追加した `BackendCapabilities` と `capabilityCatalog` は HEAD に存在せず、提示差分にも新規ファイルが含まれていません。この差分だけを適用・コミットすると module resolution error で web build が失敗します。関連する frontend test も提出差分に含まれていません。",
+      "suggestion": "`packages/web/src/pages/rag/BackendCapabilities.tsx`、`capabilityCatalog.ts` および対応テストを差分へ追加し、test・lint・build が通る状態で再提出してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "blocker",
+      "file": "runs/2026-07-30T1800_RAGM-03/e2e/SKIPPED.md",
+      "line": 1,
+      "issue": "`runs/2026-07-30T1800_RAGM-03/e2e/` は空で、理由を記した SKIPPED.md もありません。RAGM-03 の完了ゲートが要求する最低2本の実環境シナリオについて、配備済み API の能力カタログと画面切替の双方が未検証です。",
+      "suggestion": "最終差分を jetuse-dev に配備し、(1) `/api/capabilities` の応答、(2) backend 切替前後の能力表示スクリーンショットを同パスへ保存してください。実施不能なら正当な理由を SKIPPED.md に記載し、`docs/verification/RAGM-03.md` も作成してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "major",
+      "file": "packages/web/src/pages/rag.tsx",
+      "line": 342,
+      "issue": "ADB を選択肢へ追加した一方、`RagFile.backends` と `BACKEND_LABELS` は ADB を含まず、`ready` も選択 backend の取り込み状態を見ていません。そのため ADB が disabled/error/pending でも入力・送信でき、利用者には ADB の取り込み失敗が表示されません。",
+      "suggestion": "`backends.adb` と ADB badge/i18n を追加し、送信可否を選択中 backend の `indexed` 状態に連動させてください。ADB の indexed・pending・error・disabled を frontend test で網羅してください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "major",
+      "file": "packages/api/tests/test_capabilities.py",
+      "line": 116,
+      "issue": "未実証能力を守るテストは `_axis()` が自動生成した `verified` と `support` の整合性しか確認しておらず、ADB の business-data JOIN を `yes` に変えても通ります。また行レベル制御は `limited` に変えても `!= \"yes\"` を満たし、UIでは「条件付きで使える」と表示されます。核となる未実証事項の回帰を検出できません。",
+      "suggestion": "少なくとも `adb.business_data_join`、`adb.row_level_security`、`select_ai.row_level_security` の期待値を `unverified` に固定し、未実証対象では `yes` と `limited` の双方を拒否するテストにしてください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "insufficient",
+    "notes": "指定された証跡パス `runs/2026-07-30T1800_RAGM-03/e2e/` は空です。必須の API シナリオ、画面切替シナリオ、スクリーンショット、未実施理由のいずれも確認できません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されておらず、指示によりブラウザツールは使用していません。"
+    }
+  }
+}

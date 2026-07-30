@@ -1,0 +1,9 @@
+{
+  "turn": 3,
+  "timestamp": "2026-07-31T01:28:27+09:00",
+  "action_summary": "(loop-protocol 側で追記可)",
+  "files_changed": ["docs/verification/RAGM-03.md", "docs/verification/e2e-screenshots/RAGM-03-adb.png", "docs/verification/e2e-screenshots/RAGM-03-select_ai.png", "docs/verification/e2e-screenshots/RAGM-03-vector_store.png", "packages/api/jetuse_core/capabilities.py", "packages/api/tests/test_capabilities.py", "packages/web/src/i18n/dict.en.ts", "packages/web/src/i18n/dict.ja.ts", "packages/web/src/pages/rag.tsx", "packages/web/src/pages/rag/BackendCapabilities.test.tsx", "packages/web/src/pages/rag/BackendCapabilities.tsx", "packages/web/src/pages/rag/BackendStatusBadges.test.tsx", "packages/web/src/pages/rag/BackendStatusBadges.tsx", "packages/web/src/pages/rag/capabilityCatalog.ts", "packages/web/src/pages/rag/uploadFormats.test.ts", "packages/web/src/pages/rag/uploadFormats.ts"],
+  "diff_path": "diffs/turn-3.diff",
+  "review_ref": "reviews/review-4.json",
+  "goal_checker": { "verdict": "(/goal 判定モデルが記録)", "reason": "" }
+}
