@@ -1,0 +1,175 @@
+diff --git a/docs/verification/PREP-01.md b/docs/verification/PREP-01.md
+index 15b4dd0..2224c38 100644
+--- a/docs/verification/PREP-01.md
++++ b/docs/verification/PREP-01.md
+@@ -104,7 +104,12 @@ detail に `limit=<名前>` を書く（実測: `チャンク数が上限を超
+ **ADB 側は文字列列**なので非文字列は文字列化されて入る（`kind=0` → マネージド `0` / ADB `"0"`）。
+ 分類は文字列で揃えるのが前提（残課題に記載）。
+ 
+-### 決めたこと 5: `select_ai` の xlsx は `pending` ではなく `error`
++### 決めたこと 5: `select_ai` の xlsx は `pending` ではなく `error` — **PREP-02 で撤回**
++
++> **この判断は誤りだった。** 「xlsx は索引に載らない」は実機の裏付けが無い推測で
++> （当時 `SKIPPED.md` §2 に「実機確認は未実施」と明記）、PREP-02 の実測では **Select AI は
++> xlsx を正常に取り込む**。恒久 `error` は撤回し、他形式と同じ「索引に在れば `indexed` /
++> 無ければ `pending`」に戻した。根拠は `docs/verification/PREP-02.md`。以下は当時の記録。
+ 
+ Select AI の索引はバケットの**原本**を DB 側が読むので、アプリ側の抽出を通らない。
+ xlsx は索引に載らないため、取り込み状況バッジを `pending`（= いつか入る）のままにすると
+diff --git a/packages/api/jetuse_core/rag.py b/packages/api/jetuse_core/rag.py
+index daadc40..4bb3d7b 100644
+--- a/packages/api/jetuse_core/rag.py
++++ b/packages/api/jetuse_core/rag.py
+@@ -88,8 +88,8 @@ def _fit(text: str, limit: int = 400) -> str:
+ 
+     文字数で切ると、日本語ファイル名(1 文字 3 バイト)は BYTE セマンティクスの列で
+     ORA-12899 になる(実運用で長い名前を上げた瞬間にアップロードが落ちる)。
+-    末尾だけを落とすと**拡張子が消える**ので、形式で分岐する判定(バックエンドが
+-    その形式を読めるか — `_select_ai_supports`)が長い名前で誤る。拡張子は残す。
++    末尾だけを落とすと**拡張子が消える**ので、形式で分岐する判定(xlsx を抽出へ回すか —
++    `extract_xlsx.is_xlsx`)が長い名前で誤る。拡張子は残す。
+     """
+     raw = text.encode("utf-8")
+     if len(raw) <= limit:
+@@ -427,16 +427,6 @@ def refresh_statuses(owner: str, files: list[dict[str, Any]]) -> list[dict[str,
+ # Vector Storeのファイル状態をバックエンド共通の語彙へ
+ _VS_MAP = {"completed": "indexed", "processing": "pending", "failed": "error"}
+ 
+-# Select AI が原本から読める形式(RAG-03 / SPIKE-08 の構成で索引に載る形式)。
+-# xlsx は入らない — 索引はバケットの原本を DB 側が読むので、PREP-01 の抽出を通らない。
+-SELECT_AI_EXTENSIONS = {".pdf", ".txt", ".md"}
+-
+-
+-def _select_ai_supports(filename: str) -> bool:
+-    name = (filename or "").lower()
+-    return any(name.endswith(ext) for ext in SELECT_AI_EXTENSIONS)
+-
+-
+ def resolve_citation_filenames(owner: str, citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+     """引用のファイル名を、こちらで保持する元のファイル名に置換する。
+ 
+@@ -468,8 +458,9 @@ def attach_backend_status(owner: str, files: list[dict[str, Any]]) -> list[dict[
+     - vector_store: Files API/Vector Storeの処理状態
+     - select_ai: ベクトル索引($VECTAB)に存在するか(refresh_rate間隔で同期=反映が遅い)。
+       **原本をDB側(DBMS_CLOUD_AI)が読む方式**なので、アプリ側の抽出(PREP-01)を通らない。
+-      Select AI が読めない形式(xlsx)は永久に索引へ現れないため、"pending" ではなく
+-      "error" として出す(いつか入る、という嘘の期待を作らない — review-2 PREP01-002)
++      それでも xlsx は DB 側パイプライン(Oracle Text)がテキスト化して取り込む
++      (PREP-02 で実測。docs/verification/PREP-02.md)。よって形式では分岐せず、
++      **索引に在るかどうかだけ**で決める。未反映は同期待ちの "pending"
+     - opensearch: indexに存在するか(取り込みは同期=即時)。無効時は disabled
+     - adb: 自前チャンク表に存在するか(取り込みは同期=即時)。取り込みに失敗した/本文を
+       取り出せなかったファイルは error。表が無い環境は disabled(RAGM-02)
+@@ -508,9 +499,7 @@ def attach_backend_status(owner: str, files: list[dict[str, Any]]) -> list[dict[
+         fid = f["id"]
+         f["backends"] = {
+             "vector_store": _VS_MAP.get(f.get("status", ""), "pending"),
+-            "select_ai": ("indexed" if fid in sai_ids
+-                          else "pending" if _select_ai_supports(f.get("filename", ""))
+-                          else "error"),
++            "select_ai": "indexed" if fid in sai_ids else "pending",
+             "opensearch": ("disabled" if not os_enabled
+                            else ("indexed" if fid in os_ids else "pending")),
+             "adb": ("disabled" if not adb_enabled
+diff --git a/packages/api/tests/test_rag.py b/packages/api/tests/test_rag.py
+index ce93c85..9d907a5 100644
+--- a/packages/api/tests/test_rag.py
++++ b/packages/api/tests/test_rag.py
+@@ -665,10 +665,10 @@ def test_long_filename_keeps_its_extension():
+     """台帳へ収める切り詰めで拡張子を落とさない（形式で分岐する判定が誤らないため）。"""
+     from jetuse_core import rag as rag_module
+ 
+-    name = "あ" * 200 + ".pdf"                 # 600 バイト超
++    name = "あ" * 200 + ".xlsx"                # 600 バイト超
+     fitted = rag_module._fit(name)
+-    assert fitted.endswith(".pdf") and len(fitted.encode()) <= 400
+-    assert rag_module._select_ai_supports(fitted)
++    assert fitted.endswith(".xlsx") and len(fitted.encode()) <= 400
++    assert rag_module.extract_xlsx.is_xlsx(fitted)
+ 
+ 
+ def test_extract_rejects_broken_pdf_with_422():
+@@ -676,24 +676,31 @@ def test_extract_rejects_broken_pdf_with_422():
+     assert res.status_code == 422 and "PDF" in res.json()["detail"]
+ 
+ 
+-def test_select_ai_badge_is_error_for_formats_it_cannot_read(monkeypatch):
+-    """Select AI は原本を DB 側が読む。xlsx は索引に載らないので "pending" にしない。"""
++def test_select_ai_badge_treats_xlsx_like_any_other_format(monkeypatch):
++    """xlsx を拡張子だけで `error` にしない（PREP-02 の実測で恒久 error を撤回した）。
++
++    実測（`docs/verification/PREP-02.md`）: Select AI の索引は xlsx の原本を
++    Oracle Text 経由でテキスト化して取り込み、検索でも引ける。したがって xlsx の状態は
++    他形式と同じく「索引に在るか」だけで決まる（未反映なら同期待ちの `pending`）。
++    """
+     import jetuse_core.rag_adb as radb
+     import jetuse_core.rag_opensearch as ros
+     import jetuse_core.rag_select_ai as rsa
+     from jetuse_core import rag as rag_module
+ 
+-    monkeypatch.setattr(rsa, "indexed_file_ids", lambda owner: set())
++    monkeypatch.setattr(rsa, "indexed_file_ids", lambda owner: {"f1"})
+     monkeypatch.setattr(ros, "enabled", lambda: False)
+     monkeypatch.setattr(radb, "enabled", lambda: True)
+     monkeypatch.setattr(radb, "indexed_file_ids", lambda owner: {"f1"})
+     monkeypatch.setattr(radb, "errored_file_ids", lambda owner: set())
+     files = [{"id": "f1", "filename": "spec.xlsx", "status": "completed"},
+-             {"id": "f2", "filename": "policy.md", "status": "completed"}]
++             {"id": "f2", "filename": "sheet2.xlsx", "status": "completed"},
++             {"id": "f3", "filename": "policy.md", "status": "completed"}]
+     out = rag_module.attach_backend_status("u", files)
+-    assert out[0]["backends"]["select_ai"] == "error"    # xlsx は載らない
+-    assert out[0]["backends"]["adb"] == "indexed"        # adb には載っている
+-    assert out[1]["backends"]["select_ai"] == "pending"  # md は同期待ち
++    assert out[0]["backends"]["select_ai"] == "indexed"  # 索引に在る xlsx
++    assert out[0]["backends"]["adb"] == "indexed"
++    assert out[1]["backends"]["select_ai"] == "pending"  # まだ索引に無い xlsx = 同期待ち
++    assert out[2]["backends"]["select_ai"] == "pending"  # md も同じ扱い
+ 
+ 
+ def test_opensearch_extracts_xlsx_instead_of_decoding_bytes():
+diff --git a/specs/09-rag.md b/specs/09-rag.md
+index 98009ed..0a90d22 100644
+--- a/specs/09-rag.md
++++ b/specs/09-rag.md
+@@ -77,13 +77,37 @@
+   数値・真偽での分類は避け、文字列で揃えること。
+ - `sheet` のファイル単位属性 `(ブック全体: N シート)` の **N は本文があったシート数**
+   （空シートは数えない）。
+-- **`select_ai` は xlsx を扱えない**。索引はバケットの**原本**を DB 側（`DBMS_CLOUD_AI`）が
+-  読むので、アプリ側の抽出を通らない。取り込み状況バッジは `pending`（いつか入る）ではなく
+-  **`error`** を返す（嘘の期待を作らない）。対応形式は `rag.SELECT_AI_EXTENSIONS`。
++- **`select_ai` の xlsx は「取り込める」**（[PREP-02] で実測。下記）。
+ - `POST /api/extract`（新規）: ファイルを渡すと**取り込まずに**抽出結果
+   `{filename, chunk_count, chunks:[{sheet, cells, text}]}` を返す。案件側が独自の構造化を挟むための口。
+   認証・拡張子・サイズ上限はアップロードと同じ。返るチャンクは `adb` へ投入されるものと同一。
+ 
++### [PREP-02] バックエンドごとの xlsx の扱い（実測）2026-07-30追記
++
++実測の正本は `docs/verification/PREP-02.md`（実行コマンドと実出力つき）。
++**一次資料に xlsx 可否の明記は無い**（Select AI の資料は「PDF, DOC, JSON, XML, HTML など」と
++例示し、完全な一覧を Oracle Text の対応形式へ委ねている。そこには Excel for Windows 3.0–2019 が
++載るが、`.xlsx` という語での明示は無い）。したがって下表は**実測に基づく**。
++
++| バックエンド | xlsx の取り込み経路 | 実測の結果 |
++|---|---|---|
++| `vector_store`（マネージド） | アプリが抽出したテキストを `<原名>.xlsx.txt` で渡す | 素の xlsx は 400（PREP-01） |
++| `adb` | アプリが抽出（`extract_xlsx`） | チャンク単位でセル範囲つき（PREP-01） |
++| `opensearch` | アプリが抽出（`extract_xlsx`） | 単体テストのみ。実機**未確認** |
++| **`select_ai`** | **バケットの原本を DB 側（`DBMS_CLOUD_AI`）が読む** | **取り込める**。索引作成は成功し、`$VECTAB` の本文は**読めるテキスト**（日本語も化けない）。検索でも xlsx 内のセル値が引ける |
++
++- Select AI の索引に入る xlsx の本文は、DB 側（Oracle Text）が起こしたテキストで、
++  **シート名と A1 形式の行・列見出しを含む**（例: `制約` → `A B C` → `2 最大同時接続数 100 …`）。
++  ただしチャンクの粒度は**ファイル単位**（本タスクの架空ブックでは 1 ファイル = 1 チャンク）であり、
++  `adb` のようなチャンクごとのセル範囲メタデータは付かない。出典は
++  `attributes.object_name` / `location_uri`（＝ファイル）まで。
++- したがって **取り込み状況バッジは形式で分岐しない**。`select_ai` は
++  「索引（`$VECTAB`）に在れば `indexed` / まだ無ければ `pending`（`refresh_rate` 間隔の同期待ち）」。
++  PREP-01 が置いた「xlsx は恒久 `error`」は**実測により撤回した**（`rag.SELECT_AI_EXTENSIONS` は削除）。
++- **抽出テキスト（`.xlsx.txt`）を Select AI 用にバケットへ置くことはしない。** 原本が問題なく
++  読めている以上、置けば同じ内容が二重に索引され（原本 + `.xlsx.txt`）、削除時の整合も
++  2 オブジェクト分に増える。得るものが無く、壊すものがある。
++
+ ## [RAG-02] RAGチャット
+ 
+ ### 設計

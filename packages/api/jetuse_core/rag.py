@@ -88,8 +88,8 @@ def _fit(text: str, limit: int = 400) -> str:
 
     文字数で切ると、日本語ファイル名(1 文字 3 バイト)は BYTE セマンティクスの列で
     ORA-12899 になる(実運用で長い名前を上げた瞬間にアップロードが落ちる)。
-    末尾だけを落とすと**拡張子が消える**ので、形式で分岐する判定(バックエンドが
-    その形式を読めるか — `_select_ai_supports`)が長い名前で誤る。拡張子は残す。
+    末尾だけを落とすと**拡張子が消える**ので、形式で分岐する判定(xlsx を抽出へ回すか —
+    `extract_xlsx.is_xlsx`)が長い名前で誤る。拡張子は残す。
     """
     raw = text.encode("utf-8")
     if len(raw) <= limit:
@@ -427,16 +427,6 @@ def refresh_statuses(owner: str, files: list[dict[str, Any]]) -> list[dict[str, 
 # Vector Storeのファイル状態をバックエンド共通の語彙へ
 _VS_MAP = {"completed": "indexed", "processing": "pending", "failed": "error"}
 
-# Select AI が原本から読める形式(RAG-03 / SPIKE-08 の構成で索引に載る形式)。
-# xlsx は入らない — 索引はバケットの原本を DB 側が読むので、PREP-01 の抽出を通らない。
-SELECT_AI_EXTENSIONS = {".pdf", ".txt", ".md"}
-
-
-def _select_ai_supports(filename: str) -> bool:
-    name = (filename or "").lower()
-    return any(name.endswith(ext) for ext in SELECT_AI_EXTENSIONS)
-
-
 def resolve_citation_filenames(owner: str, citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """引用のファイル名を、こちらで保持する元のファイル名に置換する。
 
@@ -468,8 +458,9 @@ def attach_backend_status(owner: str, files: list[dict[str, Any]]) -> list[dict[
     - vector_store: Files API/Vector Storeの処理状態
     - select_ai: ベクトル索引($VECTAB)に存在するか(refresh_rate間隔で同期=反映が遅い)。
       **原本をDB側(DBMS_CLOUD_AI)が読む方式**なので、アプリ側の抽出(PREP-01)を通らない。
-      Select AI が読めない形式(xlsx)は永久に索引へ現れないため、"pending" ではなく
-      "error" として出す(いつか入る、という嘘の期待を作らない — review-2 PREP01-002)
+      それでも xlsx は DB 側パイプライン(Oracle Text)がテキスト化して取り込む
+      (PREP-02 で実測。docs/verification/PREP-02.md)。よって形式では分岐せず、
+      **索引に在るかどうかだけ**で決める。未反映は同期待ちの "pending"
     - opensearch: indexに存在するか(取り込みは同期=即時)。無効時は disabled
     - adb: 自前チャンク表に存在するか(取り込みは同期=即時)。取り込みに失敗した/本文を
       取り出せなかったファイルは error。表が無い環境は disabled(RAGM-02)
@@ -508,9 +499,7 @@ def attach_backend_status(owner: str, files: list[dict[str, Any]]) -> list[dict[
         fid = f["id"]
         f["backends"] = {
             "vector_store": _VS_MAP.get(f.get("status", ""), "pending"),
-            "select_ai": ("indexed" if fid in sai_ids
-                          else "pending" if _select_ai_supports(f.get("filename", ""))
-                          else "error"),
+            "select_ai": "indexed" if fid in sai_ids else "pending",
             "opensearch": ("disabled" if not os_enabled
                            else ("indexed" if fid in os_ids else "pending")),
             "adb": ("disabled" if not adb_enabled
