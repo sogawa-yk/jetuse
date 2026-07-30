@@ -1,0 +1,55 @@
+{
+  "review_n": 6,
+  "timestamp": "2026-07-30T02:27:34+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-6.input.diff",
+  "raw_output_path": "reviews/review-6.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "削除と取り込みの競合で、削除済み文書のチャンクが後からコミットされ検索対象に残る blocker があります。E2E は多数の正常系を網羅していますが、この競合を未検証で、G6 の安全ガード証跡も実際の対象分岐を通っていません。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 2,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "packages/api/jetuse_core/rag.py",
+      "line": 288,
+      "issue": "`rag_files` 行をコミットしてから別トランザクションで ADB 取り込みを行い、両処理に共通のロックがありません。取り込み中に削除すると、削除側は未コミットのチャンクを認識せず台帳行だけ削除して成功し、その後取り込み側がチャンクをコミットできます。結果として、削除済み文書が検索・回答に残ります。",
+      "suggestion": "取り込みと削除を `rag_files` 行の `SELECT ... FOR UPDATE` または外部キーで同期してください。取り込み側はコミット直前にも台帳行の存在を保証し、削除が先行した場合はチャンクを作らず中止するテストと、取り込み途中の実 DB 削除 E2E を追加してください。"
+    },
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag_adb.py",
+      "line": 86,
+      "issue": "一度表を確認すると `_table_seen` により `availability()` が永久に `READY` を返すため、その後の DB 障害を `UNAVAILABLE` として検出できません。取り込み失敗後の `_mark_failed()` も同じ停止中の DB への記録を握り潰すため、復旧後は当該ファイルが `error` ではなく永久に `pending` となり、三値化の目的を満たしません。",
+      "suggestion": "永久キャッシュを廃止または期限付きにし、障害中でも失敗を後から確定できる outbox／再試行処理を用意してください。少なくとも「一度 READY を確認した後の接続障害→復旧」で `error` または再取り込み対象になるテストを追加してください。"
+    },
+    {
+      "id": "M-002",
+      "severity": "major",
+      "file": "spikes/ragm02/guard_checks.py",
+      "line": 35,
+      "issue": "`--human-approved` を付けるのは `teardown.py` だけなので、G6 の `setup_schema.py` は所有権照合へ到達する前に人間ゲートで終了します。添付ログの停止理由も人間ゲートであり、「マーカー不一致を検出し、権限を変えずに停止した」という証跡になっていません。",
+      "suggestion": "G6 の setup 実行にも `--human-approved` を付け、終了コードだけでなく stderr がマーカー不一致を示すことを必須判定にしてください。その状態で権限集合が不変であることを実環境で再取得してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 13,
+    "adequacy": "insufficient",
+    "notes": "正常系7本、否定系6本に加え、クリーン migration と50,000チャンクのスケール証跡を確認しました。正常系・検索計画・同時取り込みは充実していますが、実アップロード経路は SKIPPED で、取り込み途中の削除競合が未検証です。また否定系G6は人間ゲートで止まっただけで対象分岐を通っていません。teardown.md も最終コードが要求する `--human-approved` を含まない記載であり、最終差分との一致確認が必要です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されておらず、指示に従いブラウザツールは使用していません。"
+    }
+  }
+}

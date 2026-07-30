@@ -44,6 +44,55 @@ _EXPECTED_POST: dict[str, dict] = {
             ]
         },
     },
+    # RAGM-02 の 017〜019(main 由来)。dev と番号が衝突しているが version は stem なので
+    # 別行として共存する(SYNC-01)。ここに登録しないと、この 3 件だけ再実行耐性が効かない
+    # (DDL 成功 → version 記録前クラッシュ → 再実行が ORA-00955 で停止・人間対応)。
+    "017_rag_adb": {
+        "columns": {
+            ("RAG_ADB_CHUNKS", "CHUNK_ID"): ("VARCHAR2", 128, "B", "N", None),
+            ("RAG_ADB_CHUNKS", "OWNER_SUB"): ("VARCHAR2", 255, "B", "N", None),
+            ("RAG_ADB_CHUNKS", "FILE_ID"): ("VARCHAR2", 36, "B", "N", None),
+            ("RAG_ADB_CHUNKS", "CHUNK_NO"): ("NUMBER", None, None, "N", "0"),
+            ("RAG_ADB_CHUNKS", "DOC_FILE"): ("VARCHAR2", 400, "B", "N", None),
+            ("RAG_ADB_CHUNKS", "DOC_VERSION"): ("VARCHAR2", 32, "B", "N", "'1.0'"),
+            ("RAG_ADB_CHUNKS", "SHEET_NAME"): ("VARCHAR2", 128, "B", "Y", None),
+            ("RAG_ADB_CHUNKS", "CELLS"): ("VARCHAR2", 64, "B", "Y", None),
+            ("RAG_ADB_CHUNKS", "SHA256"): ("VARCHAR2", 64, "B", "N", None),
+            ("RAG_ADB_CHUNKS", "KIND"): ("VARCHAR2", 32, "B", "N", "'doc'"),
+            ("RAG_ADB_CHUNKS", "CURRENT_VERSION"): ("CHAR", 1, "B", "N", "'Y'"),
+            ("RAG_ADB_CHUNKS", "BODY"): ("CLOB", None, None, "N", None),
+            ("RAG_ADB_CHUNKS", "CREATED_AT"): (
+                "TIMESTAMP(6)", None, None, "N", "SYSTIMESTAMP"
+            ),
+        },
+        "checks": {"RAG_ADB_CHUNKS": ["current_version IN ('Y', 'N')"]},
+        "primary_keys": {"RAG_ADB_CHUNKS": ["CHUNK_ID"]},
+    },
+    "018_rag_adb_docs": {
+        "columns": {
+            ("RAG_ADB_DOCS", "OWNER_SUB"): ("VARCHAR2", 255, "B", "N", None),
+            ("RAG_ADB_DOCS", "DOC_FILE"): ("VARCHAR2", 400, "B", "N", None),
+            ("RAG_ADB_DOCS", "DOC_VERSION"): ("VARCHAR2", 32, "B", "N", "'0.0'"),
+            ("RAG_ADB_DOCS", "UPDATED_AT"): (
+                "TIMESTAMP(6)", None, None, "N", "SYSTIMESTAMP"
+            ),
+        },
+        "primary_keys": {"RAG_ADB_DOCS": ["OWNER_SUB", "DOC_FILE"]},
+    },
+    "019_rag_adb_ingest": {
+        "columns": {
+            ("RAG_ADB_INGEST", "OWNER_SUB"): ("VARCHAR2", 255, "B", "N", None),
+            ("RAG_ADB_INGEST", "FILE_ID"): ("VARCHAR2", 36, "B", "N", None),
+            ("RAG_ADB_INGEST", "DOC_KEY"): ("VARCHAR2", 400, "B", "N", None),
+            ("RAG_ADB_INGEST", "STATUS"): ("VARCHAR2", 20, "B", "N", "'pending'"),
+            ("RAG_ADB_INGEST", "CHUNKS"): ("NUMBER", None, None, "N", "0"),
+            ("RAG_ADB_INGEST", "ERROR"): ("VARCHAR2", 1000, "B", "Y", None),
+            ("RAG_ADB_INGEST", "UPDATED_AT"): (
+                "TIMESTAMP(6)", None, None, "N", "SYSTIMESTAMP"
+            ),
+        },
+        "primary_keys": {"RAG_ADB_INGEST": ["OWNER_SUB", "FILE_ID"]},
+    },
     "018_demos_idx_owner": {
         "indexes": {"IDX_DEMOS_OWNER": ("DEMOS", ["OWNER_SUB", "UPDATED_AT"])}
     },

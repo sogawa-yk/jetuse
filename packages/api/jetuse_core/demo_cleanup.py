@@ -15,7 +15,17 @@ from collections.abc import Callable
 
 from openai import NotFoundError
 
-from . import bundles, conversations, datasets, demo_lease, demo_targets, demos, rag, rag_ledger
+from . import (
+    bundles,
+    conversations,
+    datasets,
+    demo_lease,
+    demo_targets,
+    demos,
+    rag,
+    rag_adb,
+    rag_ledger,
+)
 from .db import connect
 from .genai import (
     make_cp_client,
@@ -135,7 +145,18 @@ def _cleanup_rag(ns: str) -> None:
                     pass
             rag.delete_external_file(row["oci_file_id"], dp)
             with connect() as conn:
-                conn.cursor().execute(
+                cur = conn.cursor()
+                # ADB自前索引(RAGM-02)のチャンクは台帳行と**同一トランザクション**で消す
+                # (個別 DELETE の rag.delete_file と同じ契約。箱ごと消したときだけチャンクが
+                # 残ると、名前空間を再利用した以後の回答に旧デモの本文が混ざる)。
+                # FOR UPDATE で取り込み中(rag_adb._ingest が同じ行をロック)の完了を待つ。
+                cur.execute(
+                    "SELECT id FROM rag_files WHERE id = :id AND owner_sub = :o FOR UPDATE",
+                    id=row["id"], o=ns,
+                )
+                cur.fetchone()
+                rag_adb.delete_chunks(cur, ns, row["id"])
+                cur.execute(
                     "DELETE FROM rag_files WHERE id = :id AND owner_sub = :o",
                     id=row["id"], o=ns,
                 )

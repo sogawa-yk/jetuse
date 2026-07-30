@@ -16,6 +16,7 @@ class FakeRag:
     def __init__(self):
         self.files: dict[str, dict] = {}
         self.store_id: str | None = None
+        self.last_attributes: dict | None = None
 
     def list_files(self, owner):
         return [dict(v) for v in self.files.values()]
@@ -23,7 +24,8 @@ class FakeRag:
     def refresh_statuses(self, owner, files):
         return files
 
-    def add_file(self, owner, filename, content):
+    def add_file(self, owner, filename, content, attributes=None):
+        self.last_attributes = attributes
         fid = f"f{len(self.files) + 1}"
         self.files[fid] = {
             "id": fid, "filename": filename, "status": "processing",
@@ -184,7 +186,7 @@ def test_upload_rejects_bad_files():
 
 
 def test_upload_returns_503_when_store_not_ready(monkeypatch):
-    def not_ready(owner, filename, content):
+    def not_ready(owner, filename, content, attributes=None):
         raise service_main.rag.StoreNotReadyError("dp propagation timeout")
 
     monkeypatch.setattr(service_main.rag, "add_file", not_ready)
@@ -276,7 +278,7 @@ def test_extract_citations():
 
 
 def test_attach_backend_status(monkeypatch):
-    """3バックエンドの取り込み状況が各ファイルに付与される(ENH-05)。"""
+    """各バックエンドの取り込み状況が各ファイルに付与される(ENH-05 / RAGM-02でadb追加)。"""
     from jetuse_core import rag
 
     files = [
@@ -284,19 +286,23 @@ def test_attach_backend_status(monkeypatch):
         {"id": "f2", "filename": "b.pdf", "status": "processing"},
         {"id": "f3", "filename": "c.pdf", "status": "failed"},
     ]
+    import jetuse_core.rag_adb as radb
     import jetuse_core.rag_opensearch as ros
     import jetuse_core.rag_select_ai as rsa
     monkeypatch.setattr(rsa, "indexed_file_ids", lambda owner: {"f1"})
     monkeypatch.setattr(ros, "enabled", lambda: True)
     monkeypatch.setattr(ros, "indexed_file_ids", lambda owner: {"f1", "f2"})
+    monkeypatch.setattr(radb, "enabled", lambda: True)
+    monkeypatch.setattr(radb, "indexed_file_ids", lambda owner: {"f1"})
+    monkeypatch.setattr(radb, "errored_file_ids", lambda owner: set())  # DB へ触らせない
 
     out = rag.attach_backend_status("u", files)
     assert out[0]["backends"] == {"vector_store": "indexed", "select_ai": "indexed",
-                                  "opensearch": "indexed"}
+                                  "opensearch": "indexed", "adb": "indexed"}
     assert out[1]["backends"] == {"vector_store": "pending", "select_ai": "pending",
-                                  "opensearch": "indexed"}
+                                  "opensearch": "indexed", "adb": "pending"}
     assert out[2]["backends"] == {"vector_store": "error", "select_ai": "pending",
-                                  "opensearch": "pending"}
+                                  "opensearch": "pending", "adb": "pending"}
 
 
 def test_resolve_citation_filenames(monkeypatch):
@@ -319,11 +325,13 @@ def test_resolve_citation_filenames(monkeypatch):
 
 
 def test_attach_backend_status_opensearch_disabled(monkeypatch):
+    import jetuse_core.rag_adb as radb
     import jetuse_core.rag_opensearch as ros
     import jetuse_core.rag_select_ai as rsa
     from jetuse_core import rag
     monkeypatch.setattr(rsa, "indexed_file_ids", lambda owner: set())
     monkeypatch.setattr(ros, "enabled", lambda: False)
+    monkeypatch.setattr(radb, "enabled", lambda: False)  # DB へ触らせない
     out = rag.attach_backend_status("u", [{"id": "f1", "filename": "a", "status": "completed"}])
     assert out[0]["backends"]["opensearch"] == "disabled"
 
@@ -530,3 +538,235 @@ def test_current_locator_persists_opensearch_endpoint(monkeypatch):
         oci_region="r", compartment_ocid="c", project_ocid="p",
         os_namespace="ns", rag_bucket="b", opensearch_endpoint=""))
     assert "opensearch_endpoint" not in L.current_locator()
+# --- RAGM-01: 構造化引用 / 版フィルタ / 属性付き取り込み ---
+
+
+def _hit(**kw):
+    """file_search_call.results の 1 件(SPIKE-M1 ①-c の実レスポンス形)。"""
+    base = {
+        "file_id": "f1", "filename": "c01__v2.0__current__spec.txt", "score": 0.85,
+        "attributes": {
+            "file": "在庫連携API仕様書.xlsx", "version": "2.0", "sheet": "API一覧",
+            "cells": "B12:F12", "kind": "spec", "current_version": "Y",
+        },
+        "text": "在庫照会API GET /v1/inventory は最大200件まで返却する。",
+        "additional_properties": {"vector_store_id": "vs_x", "chunk_id": "0_ad585b8f"},
+    }
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_extract_citations_returns_structured_source():
+    """完了条件: file/version/sheet/cells が構造化された値として載る(本文埋め込みでない)。"""
+    response = SimpleNamespace(
+        output=[SimpleNamespace(type="file_search_call", results=[_hit()])]
+    )
+    (c,) = _extract_citations(response)
+    assert c["source"] == {
+        "file": "在庫連携API仕様書.xlsx", "version": "2.0", "sheet": "API一覧",
+        "cells": "B12:F12", "kind": "spec", "current_version": "Y",
+    }
+    assert c["text"].startswith("在庫照会API")
+    assert c["chunk_id"] == "0_ad585b8f"
+
+
+def test_extract_citations_backward_compatible_shape():
+    """既存フロントは {file_id, filename, score} を読む。拡張は追加のみで壊さない。"""
+    response = SimpleNamespace(
+        output=[
+            SimpleNamespace(type="file_search_call", results=[
+                _hit(),
+                # 属性なしの旧データ(拡張フィールドは付かない)
+                _hit(file_id="f2", filename="old.txt", score=0.4,
+                     attributes=None, text=None, additional_properties=None),
+            ]),
+            SimpleNamespace(type="message", content=[
+                SimpleNamespace(annotations=[
+                    SimpleNamespace(file_id="f3", filename="extra.txt")
+                ])
+            ]),
+        ]
+    )
+    cites = _extract_citations(response)
+    assert [c["file_id"] for c in cites] == ["f1", "f2", "f3"]
+    for c in cites:
+        assert set(c) >= {"file_id", "filename", "score"}
+    assert "source" not in cites[1] and "text" not in cites[1]
+    assert cites[0]["score"] == 0.85
+
+
+def test_extract_citations_keeps_top_scoring_chunk_of_a_file():
+    """属性はファイル単位(①-a)。同一ファイルの複数ヒットは最上位スコアのものを採る。"""
+    response = SimpleNamespace(output=[SimpleNamespace(type="file_search_call", results=[
+        _hit(score=0.3, text="低スコアのチャンク",
+             additional_properties={"chunk_id": "9_low"}),
+        _hit(score=0.9, text="高スコアのチャンク",
+             additional_properties={"chunk_id": "1_high"}),
+    ])])
+    (c,) = _extract_citations(response)
+    assert c["score"] == 0.9 and c["chunk_id"] == "1_high"
+
+
+def test_citation_text_is_truncated():
+    from jetuse_core.chat import CITATION_TEXT_CHARS
+
+    response = SimpleNamespace(output=[SimpleNamespace(
+        type="file_search_call", results=[_hit(text="あ" * (CITATION_TEXT_CHARS + 50))]
+    )])
+    (c,) = _extract_citations(response)
+    assert len(c["text"]) == CITATION_TEXT_CHARS
+
+
+def test_file_search_tool_carries_filters():
+    from jetuse_core.chat import GenParams, _extra_responses_params
+    from jetuse_core.models import MODELS
+
+    f = {"type": "eq", "key": "current_version", "value": "Y"}
+    extra = _extra_responses_params(
+        MODELS["gpt-oss-120b"],
+        GenParams(file_search_store="vs_x", file_search_filters=f),
+    )
+    assert extra["tools"] == [
+        {"type": "file_search", "vector_store_ids": ["vs_x"], "filters": f}
+    ]
+    # 未指定なら filters キー自体を送らない(既存挙動の維持)
+    extra2 = _extra_responses_params(
+        MODELS["gpt-oss-120b"], GenParams(file_search_store="vs_x")
+    )
+    assert extra2["tools"] == [{"type": "file_search", "vector_store_ids": ["vs_x"]}]
+
+
+def test_chat_stream_rejects_filters_in_agent_mode(fake_rag):
+    """エージェント経路は別ディスパッチでフィルタを渡す口が無い。
+    素通しすると黙って無視されるので 400 で断る(レビュー F-001)。"""
+    fake_rag.store_id = "vs_fake"
+    f = {"type": "eq", "key": "current_version", "value": "Y"}
+    res = client.post("/api/chat/stream", json={
+        "model": "gpt-oss-120b", "messages": [{"role": "user", "content": "q"}],
+        "rag": True, "agent": True, "rag_filters": f,
+    })
+    assert res.status_code == 400 and "agent mode" in res.json()["detail"]
+    res2 = client.post("/api/chat/stream", json={
+        "model": "gpt-oss-120b", "messages": [{"role": "user", "content": "q"}],
+        "rag": True, "agent_id": "a1", "rag_filters": f,
+    })
+    assert res2.status_code == 400 and "agent mode" in res2.json()["detail"]
+
+
+def test_upload_rejects_overlong_filename_with_422(monkeypatch):
+    """長すぎるファイル名は 500 にせず 422(レビュー F-002)。
+
+    SYNC-01: dev(SP2-02)のルート側ガードが 400 文字で先に弾くため、RAGM-01 が想定した
+    属性側の 512 文字上限(自動補完する file)には到達しなくなった。**契約(422 であって
+    500 でない・OCI を呼ばない)は保たれている**ので、より厳しい方の 400 を正とする。
+    `_rag_call` の MetadataError→422 正規化そのものは次のテストで直接固定する。
+    """
+    calls = {"n": 0}
+
+    def add_file(owner, filename, content, attributes=None, lease=None):
+        calls["n"] += 1
+        raise AssertionError("検証を通ってはいけない")
+
+    monkeypatch.setattr(service_main.rag, "add_file", add_file)
+    res = client.post(
+        "/api/rag/files", files={"file": ("a" * 520 + ".md", b"x", "text/markdown")}
+    )
+    assert res.status_code == 422 and "400" in res.json()["detail"]
+    assert calls["n"] == 0  # OCI どころか add_file にも入らない
+
+
+def test_rag_call_normalizes_metadata_error_to_422():
+    """RAGM-01 レビュー F-002: 取り込み側が投げる MetadataError を 500 のまま漏らさない。
+
+    ルート前段のガードが厚くなっても、この正規化が消えると「不正な属性は 422」の
+    API 契約が破れる(防御的だが契約なので固定する)。
+    """
+    import asyncio
+
+    from fastapi import HTTPException
+
+    from jetuse_core import rag_metadata
+    from service.routes import rag as rag_routes
+
+    def boom():
+        raise rag_metadata.MetadataError("attributes.cells が長すぎます(最大512文字)")
+
+    try:
+        asyncio.run(rag_routes._rag_call(boom))
+        raise AssertionError("expected HTTPException")
+    except HTTPException as e:
+        assert e.status_code == 422 and "512" in e.detail
+
+
+def test_chat_stream_passes_rag_filters(fake_rag, monkeypatch):
+    fake_rag.store_id = "vs_fake"
+    captured = {}
+
+    def fake_stream(model_key, messages, temperature=None, user="",
+                    oci_conversation_id=None, params=None):
+        captured["filters"] = params.file_search_filters
+        yield {"delta": "ok"}
+
+    monkeypatch.setattr(service_main, "stream_chat", fake_stream)
+    res = client.post("/api/chat/stream", json={
+        "model": "gpt-oss-120b", "messages": [{"role": "user", "content": "q"}],
+        "rag": True,
+        "rag_filters": {"type": "eq", "key": "current_version", "value": "Y"},
+    })
+    assert res.status_code == 200
+    assert captured["filters"] == {"type": "eq", "key": "current_version", "value": "Y"}
+
+
+def test_chat_stream_rejects_unknown_filter_key(fake_rag):
+    """SPIKE-M1 ①-b: 未知キーは上流では 0 件になるだけ。アプリが 422 で弾く。"""
+    fake_rag.store_id = "vs_fake"
+    res = client.post("/api/chat/stream", json={
+        "model": "gpt-oss-120b", "messages": [{"role": "user", "content": "q"}],
+        "rag": True,
+        "rag_filters": {"type": "eq", "key": "current_verison", "value": "Y"},
+    })
+    assert res.status_code == 422
+    assert "current_verison" in res.text
+
+
+def test_chat_stream_rejects_filters_without_vector_store_backend(fake_rag):
+    """効かない組み合わせを黙って無視しない(旧版が混ざる事故を防ぐ)。"""
+    fake_rag.store_id = "vs_fake"
+    f = {"type": "eq", "key": "current_version", "value": "Y"}
+    res = client.post("/api/chat/stream", json={
+        "model": "gpt-oss-120b", "messages": [{"role": "user", "content": "q"}],
+        "rag": True, "rag_backend": "select_ai", "rag_filters": f,
+    })
+    assert res.status_code == 400 and "select_ai" in res.json()["detail"]
+    res2 = client.post("/api/chat/stream", json={
+        "model": "gpt-oss-120b", "messages": [{"role": "user", "content": "q"}],
+        "rag_filters": f,
+    })
+    assert res2.status_code == 400 and "rag=true" in res2.json()["detail"]
+
+
+def test_upload_accepts_attributes_form_field(fake_rag):
+    res = client.post(
+        "/api/rag/files",
+        files={"file": ("spec.md", b"# spec", "text/markdown")},
+        data={"attributes": '{"version": "2.0", "cells": "B12:F12", "sheet": ""}'},
+    )
+    assert res.status_code == 200
+    # 空値はキーごと落ちる。file/sha256 は rag.add_file 側で補う
+    assert fake_rag.last_attributes == {"version": "2.0", "cells": "B12:F12"}
+
+
+def test_upload_rejects_bad_attributes():
+    for bad in ('{"versoin": "2.0"}', "not json", '["file"]', '{"cells": "' + "x" * 513 + '"}'):
+        res = client.post(
+            "/api/rag/files",
+            files={"file": ("spec.md", b"# spec", "text/markdown")},
+            data={"attributes": bad},
+        )
+        assert res.status_code == 422, bad
+
+
+def test_upload_without_attributes_stays_backward_compatible(fake_rag):
+    res = client.post("/api/rag/files", files={"file": ("a.md", b"x", "text/markdown")})
+    assert res.status_code == 200
+    assert fake_rag.last_attributes == {}

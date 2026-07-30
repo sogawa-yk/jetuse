@@ -27,10 +27,20 @@ SCOPE="${DIFF_SCOPE:-uncommitted}"
 # codex 入力 1,048,576 字上限超過＋空判定ハングの主因になる。生成物はソースでないため除外する
 # （deploy/CI が使う tracked dist は不変・untrack はしない）。
 EXCL=(':(exclude)packages/web/dist')
+# 対象パスの明示指定（env REVIEW_PATHSPEC・空白区切り）。未指定なら従来どおり全体（'.'）。
+# マージタスク向け: `git diff HEAD` は取り込み側の全内容を含むため（SYNC-01 で実測 10MB >
+# codex 上限 1,048,576 字）、スコープ 3 値だけでは採点にかけられない。**人が解決した
+# ファイルだけ**に絞れる口を用意する。既定の挙動は不変（後方互換）。
+if [ -n "${REVIEW_PATHSPEC:-}" ]; then
+  # shellcheck disable=SC2206
+  PATHS=(${REVIEW_PATHSPEC})
+else
+  PATHS=('.')
+fi
 case "$SCOPE" in
-  staged)      DIFF="$(git diff --staged -- . "${EXCL[@]}")" ;;
-  worktree)    DIFF="$(git diff -- . "${EXCL[@]}")" ;;
-  uncommitted|*) DIFF="$(git diff HEAD -- . "${EXCL[@]}")" ;;
+  staged)      DIFF="$(git diff --staged -- "${PATHS[@]}" "${EXCL[@]}")" ;;
+  worktree)    DIFF="$(git diff -- "${PATHS[@]}" "${EXCL[@]}")" ;;
+  uncommitted|*) DIFF="$(git diff HEAD -- "${PATHS[@]}" "${EXCL[@]}")" ;;
 esac
 
 INPUT_DIFF="${REV_DIR}/review-${N}.input.diff"

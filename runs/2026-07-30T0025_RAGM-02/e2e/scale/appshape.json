@@ -1,0 +1,46 @@
+{
+  "rows": 50000,
+  "owner": "scale-owner",
+  "queries": 20,
+  "top_k": 10,
+  "sql_source": "jetuse_core.rag_adb.search_sql()",
+  "by_filter": [
+    {
+      "filter": "G0 owner のみ",
+      "vector_index_used": true,
+      "recall_at_10_mean": 1.0,
+      "recall_at_10_min": 1.0,
+      "approx_ms_median": 68.4,
+      "exact_ms_median": 55.5
+    },
+    {
+      "filter": "G1 owner + 版フィルタ",
+      "vector_index_used": true,
+      "recall_at_10_mean": 1.0,
+      "recall_at_10_min": 1.0,
+      "approx_ms_median": 52.1,
+      "exact_ms_median": 66.7
+    },
+    {
+      "filter": "G2 owner + 版 + 分類",
+      "vector_index_used": true,
+      "recall_at_10_mean": 1.0,
+      "recall_at_10_min": 1.0,
+      "approx_ms_median": 33.7,
+      "exact_ms_median": 41.5
+    },
+    {
+      "filter": "G3 owner + 版 + ファイル指定",
+      "vector_index_used": false,
+      "recall_at_10_mean": 1.0,
+      "recall_at_10_min": 1.0,
+      "approx_ms_median": 18.0,
+      "exact_ms_median": 17.9
+    }
+  ],
+  "without_vector_index": {
+    "vector_index_used": false,
+    "identical_to_exact": true,
+    "queries": 5
+  }
+}

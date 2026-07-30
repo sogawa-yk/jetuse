@@ -1,0 +1,308 @@
+{
+  "rows": 50000,
+  "queries": 20,
+  "after_stats": [
+    {
+      "label": "統計後 F0 フィルタ無し",
+      "vector_index_used": true,
+      "plan": [
+        "Plan hash value: 1327186178",
+        " ",
+        "------------------------------------------------------------",
+        "| Id  | Operation                      | Name              |",
+        "------------------------------------------------------------",
+        "|   0 | SELECT STATEMENT               |                   |",
+        "|*  1 |  COUNT STOPKEY                 |                   |",
+        "|   2 |   VIEW                         |                   |",
+        "|*  3 |    SORT ORDER BY STOPKEY       |                   |",
+        "|   4 |     TABLE ACCESS BY INDEX ROWID| SCALE_CHUNKS      |",
+        "|   5 |      VECTOR INDEX HNSW SCAN    | SCALE_CHUNKS_VIDX |",
+        "------------------------------------------------------------",
+        " ",
+        "Predicate Information (identified by operation id):",
+        "---------------------------------------------------",
+        " ",
+        "   1 - filter(ROWNUM<=10)",
+        "   3 - filter(ROWNUM<=10)"
+      ]
+    },
+    {
+      "label": "統計後 F1 版フィルタ current_version='Y'",
+      "vector_index_used": true,
+      "plan": [
+        "Plan hash value: 1798640729",
+        " ",
+        "------------------------------------------------------------------",
+        "| Id  | Operation                            | Name              |",
+        "------------------------------------------------------------------",
+        "|   0 | SELECT STATEMENT                     |                   |",
+        "|*  1 |  COUNT STOPKEY                       |                   |",
+        "|   2 |   VIEW                               |                   |",
+        "|*  3 |    SORT ORDER BY STOPKEY             |                   |",
+        "|*  4 |     TABLE ACCESS BY INDEX ROWID      | SCALE_CHUNKS      |",
+        "|   5 |      VECTOR INDEX HNSW SCAN IN-FILTER| SCALE_CHUNKS_VIDX |",
+        "|   6 |       VIEW                           | VW_HIJ_267780A5   |",
+        "|*  7 |        TABLE ACCESS BY USER ROWID    | SCALE_CHUNKS      |",
+        "------------------------------------------------------------------",
+        " ",
+        "Predicate Information (identified by operation id):",
+        "---------------------------------------------------",
+        " ",
+        "   1 - filter(ROWNUM<=10)",
+        "   3 - filter(ROWNUM<=10)",
+        "   4 - filter(\"SCALE_CHUNKS\".\"CURRENT_VERSION\"='Y')",
+        "   7 - filter(\"SCALE_CHUNKS\".\"CURRENT_VERSION\"='Y')"
+      ]
+    },
+    {
+      "label": "統計後 F2 版+分類 current_version='Y' AND kind='constraint'",
+      "vector_index_used": true,
+      "plan": [
+        "Plan hash value: 1798640729",
+        " ",
+        "------------------------------------------------------------------",
+        "| Id  | Operation                            | Name              |",
+        "------------------------------------------------------------------",
+        "|   0 | SELECT STATEMENT                     |                   |",
+        "|*  1 |  COUNT STOPKEY                       |                   |",
+        "|   2 |   VIEW                               |                   |",
+        "|*  3 |    SORT ORDER BY STOPKEY             |                   |",
+        "|*  4 |     TABLE ACCESS BY INDEX ROWID      | SCALE_CHUNKS      |",
+        "|   5 |      VECTOR INDEX HNSW SCAN IN-FILTER| SCALE_CHUNKS_VIDX |",
+        "|   6 |       VIEW                           | VW_HIJ_267780A5   |",
+        "|*  7 |        TABLE ACCESS BY USER ROWID    | SCALE_CHUNKS      |",
+        "------------------------------------------------------------------",
+        " ",
+        "Predicate Information (identified by operation id):",
+        "---------------------------------------------------",
+        " ",
+        "   1 - filter(ROWNUM<=10)",
+        "   3 - filter(ROWNUM<=10)",
+        "   4 - filter(\"SCALE_CHUNKS\".\"KIND\"='constraint' AND ",
+        "              \"SCALE_CHUNKS\".\"CURRENT_VERSION\"='Y')",
+        "   7 - filter(\"SCALE_CHUNKS\".\"KIND\"='constraint' AND ",
+        "              \"SCALE_CHUNKS\".\"CURRENT_VERSION\"='Y')"
+      ]
+    },
+    {
+      "label": "統計後 F3 高選択度 doc_file 指定 + 版フィルタ",
+      "vector_index_used": false,
+      "plan": [
+        "Plan hash value: 2441918091",
+        " ",
+        "-----------------------------------------------------",
+        "| Id  | Operation                    | Name         |",
+        "-----------------------------------------------------",
+        "|   0 | SELECT STATEMENT             |              |",
+        "|*  1 |  COUNT STOPKEY               |              |",
+        "|   2 |   VIEW                       |              |",
+        "|*  3 |    SORT ORDER BY STOPKEY     |              |",
+        "|*  4 |     TABLE ACCESS STORAGE FULL| SCALE_CHUNKS |",
+        "-----------------------------------------------------",
+        " ",
+        "Predicate Information (identified by operation id):",
+        "---------------------------------------------------",
+        " ",
+        "   1 - filter(ROWNUM<=10)",
+        "   3 - filter(ROWNUM<=10)",
+        "   4 - storage(\"DOC_FILE\"=:F AND \"CURRENT_VERSION\"='Y')",
+        "       filter(\"DOC_FILE\"=:F AND \"CURRENT_VERSION\"='Y')"
+      ]
+    }
+  ],
+  "after_btree": [
+    {
+      "label": "B木索引後 F0 フィルタ無し",
+      "vector_index_used": true,
+      "plan": [
+        "Plan hash value: 1327186178",
+        " ",
+        "------------------------------------------------------------",
+        "| Id  | Operation                      | Name              |",
+        "------------------------------------------------------------",
+        "|   0 | SELECT STATEMENT               |                   |",
+        "|*  1 |  COUNT STOPKEY                 |                   |",
+        "|   2 |   VIEW                         |                   |",
+        "|*  3 |    SORT ORDER BY STOPKEY       |                   |",
+        "|   4 |     TABLE ACCESS BY INDEX ROWID| SCALE_CHUNKS      |",
+        "|   5 |      VECTOR INDEX HNSW SCAN    | SCALE_CHUNKS_VIDX |",
+        "------------------------------------------------------------",
+        " ",
+        "Predicate Information (identified by operation id):",
+        "---------------------------------------------------",
+        " ",
+        "   1 - filter(ROWNUM<=10)",
+        "   3 - filter(ROWNUM<=10)"
+      ]
+    },
+    {
+      "label": "B木索引後 F1 版フィルタ current_version='Y'",
+      "vector_index_used": true,
+      "plan": [
+        "Plan hash value: 1440468073",
+        " ",
+        "-------------------------------------------------------------------------------------------------------------",
+        "| Id  | Operation                             | Name                                                        |",
+        "-------------------------------------------------------------------------------------------------------------",
+        "|   0 | SELECT STATEMENT                      |                                                             |",
+        "|*  1 |  COUNT STOPKEY                        |                                                             |",
+        "|   2 |   VIEW                                |                                                             |",
+        "|*  3 |    SORT ORDER BY STOPKEY              |                                                             |",
+        "|*  4 |     TABLE ACCESS BY INDEX ROWID       | SCALE_CHUNKS                                                |",
+        "|   5 |      VECTOR INDEX HNSW SCAN PRE-FILTER| SCALE_CHUNKS_VIDX                                           |",
+        "|   6 |       VIEW                            | VW_HPJ_82BFE9C0                                             |",
+        "|*  7 |        HASH JOIN OUTER                |                                                             |",
+        "|*  8 |         INDEX STORAGE FAST FULL SCAN  | SCALE_CHUNKS_META_IDX                                       |",
+        "|   9 |         TABLE ACCESS STORAGE FULL     | VECTOR$SCALE_CHUNKS_VIDX$149268_149277_0$HNSW_ROWID_VID_MAP |",
+        "-------------------------------------------------------------------------------------------------------------",
+        " ",
+        "Predicate Information (identified by operation id):",
+        "---------------------------------------------------",
+        " ",
+        "   1 - filter(ROWNUM<=10)",
+        "   3 - filter(ROWNUM<=10)",
+        "   4 - filter(\"SCALE_CHUNKS\".\"CURRENT_VERSION\"='Y')",
+        "   7 - access(\"SCALE_CHUNKS\".ROWID=\"VTIX_RIDVID\".\"BASE_TABLE_ROWID\"(+))",
+        "   8 - storage(\"SCALE_CHUNKS\".\"CURRENT_VERSION\"='Y')",
+        "       filter(\"SCALE_CHUNKS\".\"CURRENT_VERSION\"='Y')"
+      ]
+    },
+    {
+      "label": "B木索引後 F2 版+分類 current_version='Y' AND kind='constraint'",
+      "vector_index_used": true,
+      "plan": [
+        "Plan hash value: 140623795",
+        " ",
+        "-------------------------------------------------------------------------------------------------------------",
+        "| Id  | Operation                             | Name                                                        |",
+        "-------------------------------------------------------------------------------------------------------------",
+        "|   0 | SELECT STATEMENT                      |                                                             |",
+        "|*  1 |  COUNT STOPKEY                        |                                                             |",
+        "|   2 |   VIEW                                |                                                             |",
+        "|*  3 |    SORT ORDER BY STOPKEY              |                                                             |",
+        "|*  4 |     TABLE ACCESS BY INDEX ROWID       | SCALE_CHUNKS                                                |",
+        "|   5 |      VECTOR INDEX HNSW SCAN PRE-FILTER| SCALE_CHUNKS_VIDX                                           |",
+        "|   6 |       VIEW                            | VW_HPJ_82BFE9C0                                             |",
+        "|*  7 |        HASH JOIN OUTER                |                                                             |",
+        "|   8 |         JOIN FILTER CREATE            | :BF0000                                                     |",
+        "|*  9 |          INDEX RANGE SCAN             | SCALE_CHUNKS_META_IDX                                       |",
+        "|  10 |         JOIN FILTER USE               | :BF0000                                                     |",
+        "|* 11 |          TABLE ACCESS STORAGE FULL    | VECTOR$SCALE_CHUNKS_VIDX$149268_149277_0$HNSW_ROWID_VID_MAP |",
+        "-------------------------------------------------------------------------------------------------------------",
+        " ",
+        "Predicate Information (identified by operation id):",
+        "---------------------------------------------------",
+        " ",
+        "   1 - filter(ROWNUM<=10)",
+        "   3 - filter(ROWNUM<=10)",
+        "   4 - filter(\"SCALE_CHUNKS\".\"KIND\"='constraint' AND \"SCALE_CHUNKS\".\"CURRENT_VERSION\"='Y')",
+        "   7 - access(\"SCALE_CHUNKS\".ROWID=\"VTIX_RIDVID\".\"BASE_TABLE_ROWID\"(+))",
+        "   9 - access(\"SCALE_CHUNKS\".\"CURRENT_VERSION\"='Y' AND \"SCALE_CHUNKS\".\"KIND\"='constraint')",
+        "  11 - filter(SYS_OP_BLOOM_FILTER(:BF0000,\"VTIX_RIDVID\".\"BASE_TABLE_ROWID\"(+)))"
+      ]
+    },
+    {
+      "label": "B木索引後 F3 高選択度 doc_file 指定 + 版フィルタ",
+      "vector_index_used": false,
+      "plan": [
+        "Plan hash value: 4124320179",
+        " ",
+        "------------------------------------------------------------------------",
+        "| Id  | Operation                              | Name                  |",
+        "------------------------------------------------------------------------",
+        "|   0 | SELECT STATEMENT                       |                       |",
+        "|*  1 |  COUNT STOPKEY                         |                       |",
+        "|   2 |   VIEW                                 |                       |",
+        "|*  3 |    SORT ORDER BY STOPKEY               |                       |",
+        "|*  4 |     TABLE ACCESS BY INDEX ROWID BATCHED| SCALE_CHUNKS          |",
+        "|*  5 |      INDEX RANGE SCAN                  | SCALE_CHUNKS_FILE_IDX |",
+        "------------------------------------------------------------------------",
+        " ",
+        "Predicate Information (identified by operation id):",
+        "---------------------------------------------------",
+        " ",
+        "   1 - filter(ROWNUM<=10)",
+        "   3 - filter(ROWNUM<=10)",
+        "   4 - filter(\"CURRENT_VERSION\"='Y')",
+        "   5 - access(\"DOC_FILE\"=:F)"
+      ]
+    }
+  ],
+  "after_btree_recall": {
+    "recall_at_10_mean": 1.0,
+    "recall_at_10_min": 1.0,
+    "approx_ms_median": 89.6,
+    "exact_ms_median": 83.9
+  },
+  "hinted": [
+    {
+      "filter": "F0 フィルタ無し",
+      "vector_index_used": true,
+      "recall_at_10_mean": 1.0,
+      "recall_at_10_min": 1.0,
+      "approx_ms_median": 38.2,
+      "exact_ms_median": 58.0
+    },
+    {
+      "filter": "F1 版フィルタ current_version='Y'",
+      "vector_index_used": true,
+      "recall_at_10_mean": 1.0,
+      "recall_at_10_min": 1.0,
+      "approx_ms_median": 67.3,
+      "exact_ms_median": 57.7
+    },
+    {
+      "filter": "F2 版+分類 current_version='Y' AND kind='constraint'",
+      "vector_index_used": true,
+      "recall_at_10_mean": 1.0,
+      "recall_at_10_min": 1.0,
+      "approx_ms_median": 54.3,
+      "exact_ms_median": 47.1
+    },
+    {
+      "filter": "F3 高選択度 doc_file 指定 + 版フィルタ",
+      "vector_index_used": false,
+      "recall_at_10_mean": 1.0,
+      "recall_at_10_min": 1.0,
+      "approx_ms_median": 45.6,
+      "exact_ms_median": 41.5
+    }
+  ],
+  "accuracy_sweep_unfiltered": [
+    {
+      "target_accuracy": 70,
+      "recall_at_10_mean": 0.99,
+      "recall_at_10_min": 0.8,
+      "approx_ms_median": 34.7,
+      "exact_ms_median": 33.2
+    },
+    {
+      "target_accuracy": 80,
+      "recall_at_10_mean": 1.0,
+      "recall_at_10_min": 1.0,
+      "approx_ms_median": 35.8,
+      "exact_ms_median": 39.5
+    },
+    {
+      "target_accuracy": 90,
+      "recall_at_10_mean": 1.0,
+      "recall_at_10_min": 1.0,
+      "approx_ms_median": 38.2,
+      "exact_ms_median": 39.3
+    },
+    {
+      "target_accuracy": 95,
+      "recall_at_10_mean": 1.0,
+      "recall_at_10_min": 1.0,
+      "approx_ms_median": 35.3,
+      "exact_ms_median": 36.5
+    },
+    {
+      "target_accuracy": 100,
+      "recall_at_10_mean": 1.0,
+      "recall_at_10_min": 1.0,
+      "approx_ms_median": 41.9,
+      "exact_ms_median": 42.9
+    }
+  ]
+}

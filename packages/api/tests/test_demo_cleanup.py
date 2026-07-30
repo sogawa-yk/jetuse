@@ -45,7 +45,7 @@ class World:
         self.bundle_objects = [f"demo-bundles/{TAG}/b1/index.html",
                                f"demo-bundles/{TAG}/b1/assets/index.js"]
         self.deleted = {"stores": [], "files": [], "objects": [], "ledger": [],
-                        "rag_rows": [], "targets": 0}
+                        "rag_rows": [], "adb_chunks": [], "targets": 0}
         self.versioning = "Disabled"
         self.fail_store_delete = False
 
@@ -163,6 +163,8 @@ def world(monkeypatch):
     monkeypatch.setattr(demo_cleanup.rag, "_dp_for", lambda loc=None: FakeDp)
 
     # --- rag_files 行削除(connect 経由) ---
+    # SYNC-01: 箱の後始末も ADB 自前索引(RAGM-02)のチャンクを同一 Tx で消す。
+    # 行ロック用の SELECT ... FOR UPDATE が入ったので fetchone を持たせる。
     class Cur:
         def execute(self, sql, **binds):
             if "DELETE FROM rag_files" in sql:
@@ -171,6 +173,12 @@ def world(monkeypatch):
             elif "DELETE FROM rag_stores" in sql:
                 w.order.append("rag-stores-row-delete")
                 w.store_id = None
+
+        def fetchone(self):
+            return None
+
+    monkeypatch.setattr(demo_cleanup.rag_adb, "delete_chunks",
+                        lambda cur, owner, fid: w.deleted["adb_chunks"].append(fid))
 
     class Conn:
         def cursor(self):
@@ -213,6 +221,11 @@ def test_happy_path_order_and_convergence(world):
     assert f"rag/{TAG}/r1.md" in world.deleted["objects"]  # 3f
     assert f"demo-bundles/{TAG}/b1/index.html" in world.deleted["objects"]  # 3g
     # usage_log は会話層で触れない(delete_demo_conversations の契約 — 別テスト)
+    # SYNC-01: ADB 自前索引(RAGM-02)のチャンクも箱の後始末で消えている。
+    # 個別 DELETE(rag.delete_file)と同じ契約 — 箱ごと消したときだけチャンクが残ると、
+    # 以後その名前空間の回答に旧デモの本文が混ざる。
+    assert world.deleted["adb_chunks"] == world.deleted["rag_rows"]
+    assert world.deleted["adb_chunks"]  # 空振りで通らないこと
 
 
 def test_nonowner_and_missing_are_same_404(world):

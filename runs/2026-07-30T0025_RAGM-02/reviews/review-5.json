@@ -1,0 +1,71 @@
+{
+  "review_n": 5,
+  "timestamp": "2026-07-30T02:17:26+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-5.input.diff",
+  "raw_output_path": "reviews/review-5.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "固定名スキーマの新規作成経路に、別主体の同名スキーマを所有物として取り込み、権限変更し得る競合窓が残るため FAIL です。機能 E2E は広範ですが、クリーンマイグレーションと実アップロード経路の証跡は不足しています。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 3,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "spikes/ragm02/setup_schema.py",
+      "line": 71,
+      "issue": "固定名ユーザーの CREATE USER と user_receipt() は別 SQL です。この間に別セッションが DROP・同名再作成すると、その別ユーザーの USER_ID/作成時刻を台帳へ記録した後、GRANT・ACL・Resource Principal 付与を実行します。マーカーが空の台帳も一致扱いなので、再実行時にも別主体を所有物として扱い得ます。既存リソース変更の人間ゲート要件に反します。",
+      "suggestion": "スキーマ名を run 固有にして競合を構造的に除去してください。固定名が必須なら setup 自体も人間ゲートへ移し、作成後の別主体を自動的に所有台帳へ採用しないでください。"
+    },
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag.py",
+      "line": 304,
+      "issue": "enabled() は表不存在だけでなく接続瞬断やプール枯渇も False に丸めます。その瞬間にアップロードすると ingest を完全にスキップし、失敗状態も記録されません。接続回復後は backend が enabled へ戻るため、そのファイルは自動リトライされず永久に pending と表示されます。",
+      "suggestion": "可用性判定を「表なし」と「運用エラー」の三値に分けてください。アップロード経路では表不存在だけを disabled とし、接続エラー等は file_id 単位の error として記録するか再試行対象へ入れてください。"
+    },
+    {
+      "id": "M-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag_adb.py",
+      "line": 317,
+      "issue": "公開 API が許す最大20MBの本文を全チャンク化した後、全1024次元ベクトルを Python の list[float] として一括保持します。800文字チャンクなら約25,000チャンク・2,560万floatとなり、大量メモリ消費や長時間の同期アップロードを招きます。現行テストと E2E は最大3チャンクで、この境界を検証していません。",
+      "suggestion": "埋め込みと INSERT を有界バッチで処理し、公開アップロード要求からはバックグラウンド処理へ分離してください。併せて最大サイズ相当のチャンク数・メモリ境界テストを追加してください。"
+    },
+    {
+      "id": "M-003",
+      "severity": "major",
+      "file": "runs/2026-07-30T0025_RAGM-02/e2e/migrate.md",
+      "line": 5,
+      "issue": "証跡は applied: up to date であり、STATE/SKIPPED.md が主張するクリーン適用を示していません。さらに差分には017〜019があるのに証跡説明は017だけです。新規環境で三表が順番に作成される経路と途中失敗時の挙動を裏づけられていません。",
+      "suggestion": "空の run 固有スキーマへ001〜019を適用し、少なくとも017・018・019の適用結果と三表の存在確認を記録してください。実施しない場合はクリーン適用済みという完了主張を外してください。"
+    },
+    {
+      "id": "m-001",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/rag_adb.py",
+      "line": 224,
+      "issue": "文書レジストリの INSERT で全 IntegrityError を既存行競合として握り潰しています。ORA-00001以外の制約違反やスキーマ異常でも処理を続け、レジストリ行を取得できないまま版処理へ進み得ます。",
+      "suggestion": "競合として許容するのは ORA-00001 のみとし、それ以外の IntegrityError は再送出してください。SELECT FOR UPDATE 後に行が無い場合も明示的に失敗させてください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 13,
+    "adequacy": "insufficient",
+    "notes": "機能シナリオ1〜7はすべてPASSで、チャンク出典、JOIN検索、版フィルタ、POST /api/chat/stream、削除、旧版昇格、2接続同時取り込みを scenario-1.md〜scenario-7.md が裏づけています。guard.md の否定6ケース、50,000行のスケール証跡、teardown後のユーザー/ACLゼロも確認できました。一方、migrate.md は既存スキーマで up to date、setup-schema.log も既存再利用であり、クリーン適用と新規作成経路は未検証です。POST /api/rag/files は理由付きでスキップされていますが、可用性失敗時と最大20MB入力の実経路も未検証です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されていないため、指示どおりブラウザE2Eは実施していません。"
+    }
+  }
+}
