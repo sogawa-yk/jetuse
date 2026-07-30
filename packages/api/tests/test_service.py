@@ -26,7 +26,12 @@ def test_api_health():
     # (ops/deploy-dev-app.sh も 200|401 判定)。body は機能別 readiness を返す。
     res = client.get("/api/health")
     assert res.status_code == 200
-    assert set(res.json()["capabilities"]) == {"chat", "rag", "dbchat", "speech", "ocr", "tts"}
+    # NOTE(SYNC-01): "agents" は本同期の前から capability_health() に在ったが期待集合に
+    # 反映漏れしていた(dev 側の既存不整合。main は health まわりを一切変えていない)。
+    # 同期とは無関係の 1 行修正。
+    assert set(res.json()["capabilities"]) == {
+        "chat", "rag", "dbchat", "speech", "ocr", "tts", "agents",
+    }
 
 
 def test_gen_proxy_mounted_with_allowlist():

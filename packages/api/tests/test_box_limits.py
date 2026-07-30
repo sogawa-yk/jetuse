@@ -29,7 +29,7 @@ def fakes(monkeypatch):
 def test_demo_box_file_limit_422(monkeypatch):
     monkeypatch.setattr(
         rag, "add_file",
-        lambda ns, name, content, lease=None: (_ for _ in ()).throw(
+        lambda ns, name, content, attributes=None, lease=None: (_ for _ in ()).throw(
             rag.BoxLimitExceededError("RAGファイル数の上限(20)に達しています")),
     )
     res = client.post("/api/demos/d1/rag/files",
@@ -42,7 +42,7 @@ def test_global_quota_422_via_handler(monkeypatch):
     """予約 ledger の QuotaExceededError は 422 に統一(specs/18 §3.1)。user 経路にも適用。"""
     monkeypatch.setattr(
         rag, "add_file",
-        lambda ns, name, content, lease=None: (_ for _ in ()).throw(
+        lambda ns, name, content, attributes=None, lease=None: (_ for _ in ()).throw(
             rag_ledger.QuotaExceededError("limit 2000")),
     )
     res = client.post("/api/rag/files", files={"file": ("a.md", b"x", "text/markdown")})

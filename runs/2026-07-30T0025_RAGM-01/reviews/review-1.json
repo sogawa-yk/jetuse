@@ -1,0 +1,79 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-07-30T00:57:00+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "通常の Vector Store 取り込み・版フィルタ・構造化引用は実環境証跡で確認できています。ただしエージェント経路ではフィルタが利用不能または黙って無視され、入力境界と E2E 片付け証明にも不足があります。blocker は0件のため規則に従い PASS です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 3,
+    "minor": 3
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "major",
+      "file": "packages/api/service/routes/chat.py",
+      "line": 188,
+      "issue": "エージェントの rag_search に rag_filters を渡す経路が公開 API 上成立しません。アドホックエージェントでは rag=false だとこの行で拒否され、rag=true にすると234行目で agent/rag 併用として拒否されます。保存済み agent_id では rag=true により検査を通過できますが、271〜276行目で agent_dispatch に早期 return し、rag_filters は渡されず黙って無視されます。したがって「エージェント経路でも絞り込みを落とさない」という完了主張を private helper の単体テストだけでは満たしていません。",
+      "suggestion": "rag_search の有効性を基準にフィルタを許可し、アドホックエージェントへ rag_filters と store を渡してください。保存済みエージェントにも state 経由で実装するか、未対応なら400で明示的に拒否してください。両経路のルートテストと実環境 E2E を追加してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "packages/api/service/routes/rag.py",
+      "line": 92,
+      "issue": "attributes に問題がなくても、自動補完する file 値＝アップロードファイル名が512文字を超えると rag.add_file 内の build_attributes が MetadataError を送出します。_rag_call は MetadataError を422へ変換しないため、API契約に反して未処理の500になります。",
+      "suggestion": "build_attributes を OCI 呼び出し前のルート境界で実行して MetadataError を422へ変換するか、_rag_call で MetadataError を明示的に422へ正規化してください。長い multipart filename のルートテストも追加してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/rag_metadata.py",
+      "line": 109,
+      "issue": "複合フィルタの子要素に null を指定すると、再帰した validate_filters(None) が None を返すため、filters 配列内の null が検証を通過します。その結果、不正入力を422で拒否せず上流へ送信します。",
+      "suggestion": "None を許可するのは最上位だけに限定し、複合フィルタの各子が dict を返したことを確認してください。filters:[null] の否定テストを追加してください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/rag_metadata.py",
+      "line": 50,
+      "issue": "Python の任意精度 int に math.isfinite を直接適用しているため、非常に大きい有効な JSON 整数では OverflowError が発生し、MetadataError/422ではなく500になり得ます。",
+      "suggestion": "bool の次に int をそのまま処理し、math.isfinite は float にだけ適用してください。OCI側の数値範囲があるなら明示的な上下限を設けて MetadataError に正規化し、巨大整数のテストを追加してください。"
+    },
+    {
+      "id": "F-005",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/chat.py",
+      "line": 162,
+      "issue": "重複ファイルのスコア比較で、現在値には3桁へ丸めた公開用 score を使い、新しい値には未丸めの score を使っています。例えば先頭0.8504、次点0.8501では次点が高いと誤判定され、最上位ではないチャンクの text/chunk_id が引用されます。",
+      "suggestion": "比較用の未丸めスコアを別に保持し、出力を作る段階だけ round してください。丸め後に同値となる近接スコアの回帰テストを追加してください。"
+    },
+    {
+      "id": "F-006",
+      "severity": "major",
+      "file": "runs/2026-07-30T0025_RAGM-01/e2e/driver.py",
+      "line": 351,
+      "issue": "Vector Store の再照会で認証失敗・一時的な5xx・通信障害を含む全例外を「削除済み」と扱い、gone 自体も assert していません。またファイル削除は HTTP 200 とDB残件数だけで、OCI Files API 上の不在を確認していません。この証跡だけでは「ファイル・Vector Store を削除し不在を確認した」という完了主張を裏づけられません。",
+      "suggestion": "NotFoundError のみを不在として扱い、それ以外は失敗させ、期限内に gone=true にならなければ teardown を非ゼロ終了してください。各 OCI file_id も Files API で NotFound を確認し、すべて確認できるまで台帳を削除しないでください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 3,
+    "adequacy": "insufficient",
+    "notes": "scenario-1 は属性付き取り込みとフィルタ有無の対照、scenario-2 は構造化引用、guard.md は5つの否定入力を実 API で確認しており、通常の Vector Store 経路は十分に裏づけています。SKIPPED.md の配備省略・16キー超過・in再実測・非ゴールの理由も概ね妥当です。一方、変更が完了を主張するエージェント rag_search 経路は未実施で、実際に公開 API から到達できません。また teardown.md の不在確認は全例外を成功扱いする実装に依存し、OCI File の不在も未確認です。認証情報・OCID・実エンドポイント値や IAM 変更は差分・証跡から確認されませんでした。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲット URL が提供されていないため、指定どおりブラウザ E2E は実施していません。"
+    }
+  }
+}

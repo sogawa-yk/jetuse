@@ -5,14 +5,15 @@
 """
 
 import asyncio
+import json
 import logging
 import pathlib
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from openai import APIStatusError
 
-from jetuse_core import demo_lease, rag
+from jetuse_core import demo_lease, rag, rag_metadata
 from jetuse_core.auth import AuthContext, require_user
 from jetuse_core.genai import ProjectResolutionError
 from jetuse_core.owner_keys import owner_key_gate, user_owner_key
@@ -32,6 +33,10 @@ _GENAI_HINT = (
 async def _rag_call(fn, *args):
     try:
         return await asyncio.to_thread(fn, *args)
+    except rag_metadata.MetadataError as e:
+        # 取り込み側で補完する属性(長すぎるファイル名由来の file 等)も 422 に正規化する。
+        # 500 のまま漏らすと API 契約(不正な属性は 422)が破れる — レビュー F-002
+        raise HTTPException(status_code=422, detail=str(e)) from e
     except rag.StoreNotReadyError as e:
         raise HTTPException(
             status_code=503, detail="vector store not ready, retry later"
@@ -59,10 +64,33 @@ async def list_files_response(ns: str) -> dict:
     return {"files": files}
 
 
+def _parse_attributes(raw: str | None) -> dict:
+    """multipart の attributes フィールド(JSON文字列)を検証して返す(RAGM-01)。
+
+    未知キー・上限超過・入れ子は 422。切り詰めない(値が変わるとフィルタが静かに外れる)。
+    """
+    if raw is None or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise HTTPException(
+            status_code=422, detail=f"attributes must be a JSON object: {e}"
+        ) from e
+    try:
+        return rag_metadata.normalize_attributes(parsed)
+    except rag_metadata.MetadataError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+
 async def upload_file_response(ns: str, file: UploadFile,
-                               demo_id: str | None = None) -> dict:
+                               demo_id: str | None = None,
+                               attributes: str | None = None) -> dict:
     """アップロード本体(user/デモスコープ共有)。demo_id 指定時は demo 単位の排他リースを
-    操作の開始から完了まで保持する(specs/18 §3.2.1 — lazy 生成と DELETE の競合防止)。"""
+    操作の開始から完了まで保持する(specs/18 §3.2.1 — lazy 生成と DELETE の競合防止)。
+
+    attributes は multipart の JSON 文字列(RAGM-01)。読み込み前に検証して 422 で弾く。
+    """
     name = pathlib.Path(file.filename or "untitled").name
     ext = pathlib.Path(name).suffix.lower()
     if ext not in rag.ALLOWED_EXTENSIONS:
@@ -75,6 +103,7 @@ async def upload_file_response(ns: str, file: UploadFile,
             status_code=422,
             detail=f"filename too long (max {rag.MAX_FILENAME_CHARS} chars)",
         )
+    attrs = _parse_attributes(attributes)  # 読み込み前に弾く(不正なら OCI を呼ばない)
     content = await file.read()
     if len(content) > rag.MAX_BYTES:
         raise HTTPException(status_code=413, detail="file too large (max 20MB)")
@@ -83,9 +112,9 @@ async def upload_file_response(ns: str, file: UploadFile,
 
     def work():
         if demo_id is None:
-            return rag.add_file(ns, name, content)
+            return rag.add_file(ns, name, content, attrs)
         with demo_lease.mutation(demo_id) as lease:  # 行なし/deleting は 404(2契約)
-            return rag.add_file(ns, name, content, lease=lease)
+            return rag.add_file(ns, name, content, attrs, lease=lease)
 
     try:
         # _rag_call が CP/DP 由来 4xx→503/502・project 未解決→503 の変換を担う(FIX-47/PORT-02)
@@ -137,9 +166,14 @@ async def list_rag_files(user: Annotated[AuthContext, Depends(require_user)]):
 
 @router.post("/api/rag/files")
 async def upload_rag_file(
-    file: UploadFile, user: Annotated[AuthContext, Depends(require_user)]
+    file: UploadFile,
+    user: Annotated[AuthContext, Depends(require_user)],
+    # RAGM-01: 出典メタデータ(JSONオブジェクト文字列)。省略可 — 既存クライアントは無変更で動く
+    attributes: Annotated[str | None, Form()] = None,
 ):
-    return await upload_file_response(user_owner_key(user.subject), file)
+    return await upload_file_response(
+        user_owner_key(user.subject), file, attributes=attributes
+    )
 
 
 @router.delete("/api/rag/files/{file_id}")

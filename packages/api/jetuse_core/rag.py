@@ -16,8 +16,14 @@ SP2-02(specs/18 §3.1・§3.2):
 - delete_file は外部先行(NotFound=成功、他失敗は行とカウンタを保持して 503)。
   Select AI $VECTAB への反映は同期(削除後に不存在確認)。
 - demo namespace への書き込みは demo 単位リース保持が前提(specs/18 §3.2.1)。
+
+RAGM-01 / RAGM-02(ADR-0020):
+- add_file は Vector Store へ属性(attributes)を付けて登録する。外部 filename は SP2-02 の
+  不透明キーなので、**原名が外部に残るのは attributes["file"] だけ**(両者は補完関係)。
+- ADB 自前索引(rag_adb)へも取り込み、削除は台帳行と**同一トランザクション**で消す。
 """
 
+import hashlib
 import logging
 import time
 import uuid
@@ -26,7 +32,7 @@ from typing import Any
 import oracledb
 from openai import NotFoundError
 
-from . import demo_targets, rag_ledger
+from . import demo_targets, rag_ledger, rag_metadata
 from .db import connect
 from .demo_lease import DemoLease, require_lease_for
 from .genai import make_cp_client, make_inference_client, resolve_project_ocid
@@ -128,6 +134,18 @@ def list_files(owner: str) -> list[dict[str, Any]]:
         ]
 
 
+def _fit(text: str, limit: int = 400) -> str:
+    """VARCHAR2(400) へ収まる長さに**バイト境界で**切る。
+
+    文字数で切ると、日本語ファイル名(1 文字 3 バイト)は BYTE セマンティクスの列で
+    ORA-12899 になる(実運用で長い名前を上げた瞬間にアップロードが落ちる)。
+    """
+    raw = text.encode("utf-8")
+    if len(raw) <= limit:
+        return text
+    return raw[:limit].decode("utf-8", errors="ignore")
+
+
 def _insert_file_confirmed(owner: str, file_id: str, filename: str,
                            oci_file_id: str, size: int) -> None:
     """rag_files INSERT + ledger confirmed を同一 DB トランザクションで確定する
@@ -139,7 +157,9 @@ def _insert_file_confirmed(owner: str, file_id: str, filename: str,
             INSERT INTO rag_files(id, owner_sub, filename, oci_file_id, status, bytes)
             VALUES (:id, :o, :f, :ofi, 'processing', :b)
             """,
-            id=file_id, o=owner, f=filename[:MAX_FILENAME_CHARS], ofi=oci_file_id, b=size,
+            # 切り詰めはバイト境界(_fit)。文字数切りだと BYTE セマンティクスの列で
+            # ORA-12899 になる(RAGM-01)。長さの入口検証は add_file の MAX_FILENAME_CHARS。
+            id=file_id, o=owner, f=_fit(filename), ofi=oci_file_id, b=size,
         )
         rag_ledger.confirm_in_tx(cur, file_id)
         conn.commit()
@@ -158,6 +178,10 @@ def _update_status(owner: str, file_id: str, status: str, error: str | None = No
 
 
 # --- Object Storage原本(Select AI 有効構成では vector index の唯一のデータ源) ---
+#
+# 注: RAGM-02 の `_delete_row()` はここにあったが、SP2-02 が台帳行の削除を delete_file の
+# 締めのトランザクション(rag_files + rag_file_ledger を同一 Tx で確定)へ移したため統合した。
+# ADB チャンクの同一トランザクション削除は delete_file / demo_cleanup 側に引き継いである。
 
 
 def _os_client(region: str | None = None):
@@ -404,15 +428,6 @@ def delete_external_file(oci_file_id: str, dp=None) -> None:
         pass
 
 
-def _ledger_locator(file_id: str) -> dict | None:
-    """rag_file_ledger の write-ahead locator(reservation_id = rag_files.id で照合)。
-
-    ledger 導入前の legacy 行には対応する ledger 行が無い(→ None = 現在設定)。
-    """
-    rows = rag_ledger.rows_for_owner_by_id(file_id)
-    return rows.get("locator") if rows else None
-
-
 def _dp_for(locator: dict | None):
     """locator(あれば)で DP クライアントを構成する。無ければ現在設定。"""
     if locator and locator.get("region") and locator.get("compartment") \
@@ -512,18 +527,44 @@ def ensure_store(owner: str, lease: DemoLease | None = None) -> str:
     return winner
 
 
+def build_attributes(
+    filename: str, content: bytes, attributes: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Vector Store へ渡すメタデータ属性を組み立てる(RAGM-01 / ADR-0020 §1)。
+
+    `file`(元のファイル名)と `sha256`(本文のハッシュ)は指定が無ければこちらで補う。
+    呼び出し側が明示した値が優先。検証(未知キー・上限・空値の除去)は rag_metadata が担う。
+
+    SP2-02 で OCI Files 側の filename は不透明キー(file_key)になったため、**原名が外部に
+    残るのはここで積む `file` 属性だけ**になる(出典表示はこの値を使う)。
+    """
+    base = {"file": filename, "sha256": hashlib.sha256(content).hexdigest()}
+    return rag_metadata.normalize_attributes({**base, **(attributes or {})})
+
+
 def add_file(owner: str, filename: str, content: bytes,
-             lease: DemoLease | None = None) -> dict[str, Any]:
+             attributes: dict[str, Any] | None = None,
+             *, lease: DemoLease | None = None) -> dict[str, Any]:
     """Files APIへアップロードしVector Storeへ登録(status=processingで返す)。
 
     順序(specs/18 §3.1): 予約(pending) → 原本 put(必須) → files.create →
     attach → rag_files INSERT + confirmed(同一Tx)。途中失敗は収束削除して失敗応答。
+
+    attributes は出典の構造化と版フィルタのためのメタデータ(RAGM-01)。
+    不正な属性は `rag_metadata.MetadataError`(ルート側で 422)で、OCI を呼ぶ前に弾く。
+
+    第4位置引数は RAGM-01 の `attributes`(main 側が位置で渡す)。SP2-02 の `lease` は
+    **キーワード専用**にしてある — 位置引数のまま両方を並べると
+    `add_file(o, n, c, lease)` が DemoLease を attributes として展開して壊れる(review-1 F-002)。
     """
     owner_key_gate()
     rag_ledger.upload_gate()
     require_lease_for(owner, lease)
     if len(filename) > MAX_FILENAME_CHARS:
         raise ValueError(f"ファイル名が長すぎます(最大{MAX_FILENAME_CHARS}文字)")
+    # 属性の検証は**あらゆる副作用より前**(予約・demo_targets の記録・OCI 呼び出しの前)。
+    # 不正な属性で 422 になるときに、外部資産も台帳行も作らないため(RAGM-01)。
+    attrs = build_attributes(filename, content, attributes)
     if is_demo_namespace(owner):
         limit = get_settings().demo_max_rag_files
         # 箱上限は予約 ledger 行数で測る(rag_files 登録行だけだと外部削除失敗で残した
@@ -576,7 +617,9 @@ def add_file(owner: str, filename: str, content: bytes,
     # なので初回uploadが通常経路 — 有界リトライで吸収する(SP1-03 REV-005)。
     for attempt in range(6):
         try:
-            dp.vector_stores.files.create(vector_store_id=vs_id, file_id=f.id)
+            dp.vector_stores.files.create(
+                vector_store_id=vs_id, file_id=f.id, attributes=attrs
+            )
             break
         except NotFoundError:
             if attempt == 5:
@@ -619,6 +662,23 @@ def add_file(owner: str, filename: str, content: bytes,
             rag_opensearch.ingest(owner, rid, filename, content, lease=lease)
     except Exception:
         logger.exception("opensearch ingest failed (ignored)")
+    # ADB自前索引(RAGM-02)にも取り込む(表がある環境のみ)。
+    # 失敗しても他バックエンドの取り込みは成立しているのでアップロード自体は失敗させない。
+    # 取り込めなかったファイルは backends.adb が "error" になるので画面から分かる
+    # (再取り込みは同じファイルを上げ直す = 版が上がる。自動リトライは未実装 — RAGM-02 の残課題)。
+    # id は SP2-02 の予約 ID(rid)。ledger・rag_files・外部名・チャンクを単一 ID で突合する。
+    try:
+        from . import rag_adb
+
+        state = rag_adb.availability()
+        if state == rag_adb.READY:
+            rag_adb.ingest(owner, rid, filename, content)
+        elif state == rag_adb.UNAVAILABLE:
+            # 「表が無い(未導入)」と「今つながらない」を区別する。後者を黙って飛ばすと、
+            # 復旧後もそのファイルだけ取り込まれないまま誰も気づけない。
+            rag_adb.mark_unavailable(owner, rid, filename)
+    except Exception:
+        logger.exception("adb ingest failed (ignored)")
     return {"id": rid, "filename": filename, "status": "processing", "bytes": len(content)}
 
 
@@ -678,16 +738,21 @@ def resolve_citation_filenames(owner: str, citations: list[dict[str, Any]]) -> l
 
 
 def attach_backend_status(owner: str, files: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """各ファイルに3バックエンドの取り込み状況を付与する(ENH-05 可視化)。
+    """各ファイルにバックエンドの取り込み状況を付与する(ENH-05 可視化)。
 
     backends[*] = "indexed" | "pending" | "error" | "disabled"
     - vector_store: Files API/Vector Storeの処理状態
     - select_ai: ベクトル索引($VECTAB)に存在するか(refresh_rate間隔で同期=反映が遅い)
     - opensearch: indexに存在するか(取り込みは同期=即時)。無効時は disabled
+    - adb: 自前チャンク表に存在するか(取り込みは同期=即時)。取り込みに失敗した/本文を
+      取り出せなかったファイルは error。表が無い環境は disabled(RAGM-02)
     """
     sai_ids: set[str] = set()
     os_ids: set[str] = set()
+    adb_ids: set[str] = set()
+    adb_errors: set[str] = set()
     os_enabled = False
+    adb_enabled = False
     try:
         from . import rag_select_ai
 
@@ -702,6 +767,15 @@ def attach_backend_status(owner: str, files: list[dict[str, Any]]) -> list[dict[
             os_ids = rag_opensearch.indexed_file_ids(owner)
     except Exception:
         logger.exception("opensearch status failed (ignored)")
+    try:
+        from . import rag_adb
+
+        adb_enabled = rag_adb.enabled()
+        if adb_enabled:
+            adb_ids = rag_adb.indexed_file_ids(owner)
+            adb_errors = rag_adb.errored_file_ids(owner)
+    except Exception:
+        logger.exception("adb status failed (ignored)")
 
     for f in files:
         fid = f["id"]
@@ -710,6 +784,9 @@ def attach_backend_status(owner: str, files: list[dict[str, Any]]) -> list[dict[
             "select_ai": "indexed" if fid in sai_ids else "pending",
             "opensearch": ("disabled" if not os_enabled
                            else ("indexed" if fid in os_ids else "pending")),
+            "adb": ("disabled" if not adb_enabled
+                    else "indexed" if fid in adb_ids
+                    else "error" if fid in adb_errors else "pending"),
         }
     return files
 
@@ -736,7 +813,8 @@ def delete_file(owner: str, file_id: str) -> bool:
     # user 経路は demo_backend_targets を持たないため、region/project 変更後は現在設定でなく
     # 保存 locator で旧 File/原本を辿る。codex review-2 blocker)。ledger 前の legacy 行は
     # locator 無し = 現在設定にフォールバック。
-    locator = _ledger_locator(file_id)
+    led = rag_ledger.rows_for_owner_by_id(file_id)
+    locator = (led or {}).get("locator") or None
     vs_id = get_store_id(owner)
     dp = _dp_for(locator)
     try:
@@ -752,8 +830,13 @@ def delete_file(owner: str, file_id: str) -> bool:
         pass
     except Exception as e:
         raise ExternalDeleteError(f"external file delete failed: {e}") from e
-    # 原本: 新旧両命名を冪等に削除(旧 = 既存 user 資産の互換。どちらも 404 成功)
-    ext = normalize_ext(filename)
+    # 原本: 新旧両命名を冪等に削除(旧 = 既存 user 資産の互換。どちらも 404 成功)。
+    # ext は **予約時に ledger へ記録した値が正本**(rag_ledger.reconcile と同じ)。
+    # rag_files.filename は _fit() でバイト境界に切られており、400 文字のマルチバイト名では
+    # 拡張子まで落ちる(`あ*397 + .md` → 拡張子なし)。そこから導くと upload が put した
+    # `<rid>.md` ではなく `<rid>.bin` を消しにいき、404=成功と見なして原本を残したまま
+    # 台帳行を消す(追跡不能な残存 — review-1 F-001)。ledger 前の legacy 行のみ filename から。
+    ext = (led or {}).get("ext") or normalize_ext(filename)
     delete_original_exact(owner, file_id, ext, locator=locator)
     _delete_original_legacy(owner, file_id, filename)
     # OpenSearch。取り込み時の endpoint を台帳 locator から取り出し、その endpoint で消す
@@ -778,9 +861,28 @@ def delete_file(owner: str, file_id: str) -> bool:
     except Exception as e:  # noqa: BLE001
         raise ExternalDeleteError(f"select_ai index remove failed: {e}") from e
     # ここまで全て成功 → 行 DELETE と予約解放を同一 Tx で確定する(M001 — 別 Tx にすると
-    # rag_files だけ消えて ledger 行が残り、再 DELETE は 404 で終わって枠が恒久漏れする)
+    # rag_files だけ消えて ledger 行が残り、再 DELETE は 404 で終わって枠が恒久漏れする)。
+    # ADB自前索引(RAGM-02)のチャンクも**この同一 Tx**で消す。チャンクは台帳と同じ ADB に
+    # あるので、ここで一緒に消せば「API は削除成功なのにチャンクだけ残って以後の回答に
+    # 混ざる」が構造的に起きない(外部サービスの Vector Store/OpenSearch は別サービスなので
+    # 上の外部先行削除が担う)。
+    from . import rag_adb
+
     with connect() as conn:
         cur = conn.cursor()
+        # FOR UPDATE: 取り込み中(rag_adb._ingest が同じ行をロックする)なら、そちらの完了を
+        # 待つ。待たないと「削除は成功したのに、あとから取り込みがチャンクを commit する」。
+        cur.execute(
+            "SELECT id FROM rag_files WHERE id = :id AND owner_sub = :o FOR UPDATE",
+            id=file_id, o=owner,
+        )
+        cur.fetchone()
+        # **可用性チェックを挟まない**。enabled() は別接続で、瞬断やプール枯渇を False に
+        # 丸めるため、それを削除のスキップ条件にすると「API は削除成功なのにチャンクが残る」
+        # を再現してしまう。ここは同じ cursor で必ず実行する。
+        # 「チャンク表が無い(未導入)」の判定は delete_chunks 側が同じ接続で行う。
+        # 例外は握り潰さない(commit しない = 台帳行も残る = 削除は失敗として返る)。
+        rag_adb.delete_chunks(cur, owner, file_id)
         cur.execute(
             "DELETE FROM rag_files WHERE id = :id AND owner_sub = :o", id=file_id, o=owner
         )

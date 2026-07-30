@@ -7,9 +7,9 @@ import される。`validated()` は service/validators.py 側の純粋関数へ
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from jetuse_core import tts
+from jetuse_core import rag_metadata, tts
 
 from .validators import validate_agent_definition, validate_usecase_definition
 
@@ -30,8 +30,11 @@ class ChatRequest(BaseModel):
     conversation_id: str | None = None  # 指定時はADBへ永続化(CHAT-02)
     persist_user: bool = True  # 再生成時はfalse(ユーザー発話の二重保存防止)
     rag: bool = False  # file_searchツール接続(RAG-02。Responses系のみ)
-    # RAG-03/ENH-05
-    rag_backend: Literal["vector_store", "select_ai", "opensearch"] = "vector_store"
+    # RAG-03/ENH-05/RAGM-02(adb=Oracle AI Database 自前索引・チャンク単位の出典)
+    rag_backend: Literal["vector_store", "select_ai", "opensearch", "adb"] = "vector_store"
+    # RAGM-01: file_searchのメタデータ絞り込み(例 {"type":"eq","key":"current_version",
+    # "value":"Y"} で旧版を検索から外す)。vector_storeバックエンドのみ。
+    rag_filters: dict | None = None
     # エージェントモード(AGT-01)。tool_resultsは承認フローの継続時に使用
     agent: bool = False
     auto_tools: bool = False
@@ -47,6 +50,16 @@ class ChatRequest(BaseModel):
     # Agents SDK承認往復(FW-01b): 中断時のsdk_stateを返送し、call_id→可否を添える
     sdk_state: str | None = Field(default=None, max_length=2_000_000)
     sdk_approvals: dict[str, bool] | None = None
+
+    @field_validator("rag_filters")
+    @classmethod
+    def _check_rag_filters(cls, v: dict | None) -> dict | None:
+        """RAGM-01: 未知キーは上流でエラーにならず0件になる(SPIKE-M1 ①-b)ため
+        ここで弾く(422)。既知フィールドだけに正規化して通す。"""
+        try:
+            return rag_metadata.validate_filters(v)
+        except rag_metadata.MetadataError as e:
+            raise ValueError(str(e)) from e
 
 
 class ConversationCreate(BaseModel):

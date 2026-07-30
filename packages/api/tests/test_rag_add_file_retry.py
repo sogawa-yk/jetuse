@@ -5,13 +5,14 @@ test_rag.py は autouse fixture が rag.add_file 自体を fake に差し替え�
 実関数を検証する本テストは別モジュールに置く。
 """
 
+import hashlib
 from types import SimpleNamespace
 
 import httpx
 import pytest
 from openai import NotFoundError
 
-from jetuse_core import rag
+from jetuse_core import rag, rag_metadata
 
 
 def _not_found() -> NotFoundError:
@@ -25,6 +26,7 @@ class FakeLedger:
     """rag_ledger の呼び出し面だけを再現(予約/確定/解放の記録)。"""
 
     def __init__(self):
+        self.reserved: list[tuple] = []
         self.released: list[str] = []
         self.external: dict[str, str] = {}
         self.confirmed: list[str] = []
@@ -34,6 +36,7 @@ class FakeLedger:
         pass
 
     def reserve(self, owner_key, filename, ext):
+        self.reserved.append((owner_key, filename, ext))
         return self.rid
 
     def set_external(self, rid, ext_id):
@@ -57,6 +60,7 @@ def ledger(monkeypatch):
 
 def test_add_file_retries_dp_propagation_404(monkeypatch, ledger):
     calls = {"n": 0}
+    captured: dict = {}
 
     class FakeDp:
         class files:
@@ -67,8 +71,9 @@ def test_add_file_retries_dp_propagation_404(monkeypatch, ledger):
         class vector_stores:
             class files:
                 @staticmethod
-                def create(vector_store_id, file_id):
+                def create(vector_store_id, file_id, attributes=None):
                     calls["n"] += 1
+                    captured["attributes"] = attributes
                     if calls["n"] < 3:
                         raise _not_found()
 
@@ -103,7 +108,7 @@ def test_add_file_gives_up_after_bounded_retries(monkeypatch, ledger):
         class vector_stores:
             class files:
                 @staticmethod
-                def create(vector_store_id, file_id):
+                def create(vector_store_id, file_id, attributes=None):
                     calls["n"] += 1
                     raise _not_found()
 
@@ -251,8 +256,17 @@ def test_ensure_store_adopts_oldest_usable_orphan(monkeypatch):
 
 
 class _DCur:
-    def execute(self, *a, **kw): pass
-    def fetchone(self): return ("file-x", "doc.md")  # oci_file_id, filename
+    # SYNC-01: 締めの Tx で rag_adb.delete_chunks(RAGM-02)が同じ cursor を使う。
+    # この単体は OpenSearch の endpoint 解決が主題なので、チャンク表は「無い」= 0 を返して
+    # 消すものが無い扱いにする(チャンク削除の原子性は test_rag_adb.py が担保)。
+    last = ""
+
+    def execute(self, sql="", **kw): self.last = sql
+
+    def fetchone(self):
+        if "FROM user_tables" in self.last:
+            return (0,)
+        return ("file-x", "doc.md")  # oci_file_id, filename
 
 
 class _DConn:
@@ -270,8 +284,11 @@ def test_delete_file_uses_saved_opensearch_endpoint(monkeypatch):
 
     monkeypatch.setattr(rag, "owner_key_gate", lambda: None)
     monkeypatch.setattr(rag, "connect", lambda: _DConn())
-    monkeypatch.setattr(rag, "_ledger_locator",
-                        lambda fid: {"opensearch_endpoint": "http://saved:9200"})
+    monkeypatch.setattr(rag, "rag_ledger", type("L", (), {
+        "rows_for_owner_by_id": staticmethod(lambda fid: {
+            "id": fid, "ext": "md", "external_file_id": "file-x",
+            "locator": {"opensearch_endpoint": "http://saved:9200"}}),
+    })())
     monkeypatch.setattr(rag, "get_store_id", lambda owner: None)
     monkeypatch.setattr(rag, "_dp_for", lambda loc: SimpleNamespace())
     monkeypatch.setattr(rag, "delete_external_file", lambda oci_id, dp: None)
@@ -304,3 +321,139 @@ def test_save_store_id_conflict_only_on_unique_violation(monkeypatch):
 
     monkeypatch.setattr(rag, "connect", lambda: boom("ORA-00001"))
     assert rag._save_store_id("o", "v") is False
+
+    monkeypatch.setattr(rag, "connect", lambda: boom("ORA-02291"))
+    try:
+        rag._save_store_id("o", "v")
+        raise AssertionError("expected IntegrityError")
+    except oracledb.IntegrityError:
+        pass
+
+
+# --- RAGM-01: 取り込み時のメタデータ属性(SP2-02 の予約 ledger 経路に載せた形) ---
+
+
+def test_add_file_passes_attributes_and_autofills_file_and_sha256(monkeypatch, ledger):
+    """ADR-0020 §1: vector_stores.files.create に属性を付ける。
+    file/sha256 は未指定なら補い、呼び出し側の明示値が優先する。
+
+    SP2-02 で外部 filename は不透明キー(file_key)になったため、原名が外部に残るのは
+    この `file` 属性だけ。ここが落ちると出典表示が不透明キーになる。"""
+    captured: dict = {}
+
+    class FakeDp:
+        class files:
+            @staticmethod
+            def create(file, purpose):
+                captured["external_filename"] = file[0]
+                return SimpleNamespace(id="file-x")
+
+        class vector_stores:
+            class files:
+                @staticmethod
+                def create(vector_store_id, file_id, attributes=None):
+                    captured["attributes"] = attributes
+
+    monkeypatch.setattr(rag, "ensure_store", lambda owner, lease=None: "vs_x")
+    monkeypatch.setattr(rag, "make_inference_client", lambda **kw: FakeDp)
+    monkeypatch.setattr(rag, "_insert_file_confirmed", lambda *a: None)
+
+    rag.add_file("ns", "spec.md", b"body", {
+        "version": "2.0", "sheet": "API一覧", "cells": "B12:F12",
+        "current_version": "Y", "kind": "",  # 空値はキーごと落ちる
+    })
+    attrs = captured["attributes"]
+    assert attrs["file"] == "spec.md"
+    assert attrs["sha256"] == hashlib.sha256(b"body").hexdigest()
+    assert attrs["cells"] == "B12:F12" and attrs["current_version"] == "Y"
+    assert "kind" not in attrs
+    # 外部 filename は原名でない(SP2-02)。原名は attributes["file"] にだけ残る
+    assert captured["external_filename"] != "spec.md"
+
+    rag.add_file("ns", "spec.md", b"body", {"file": "元の仕様書.xlsx"})
+    assert captured["attributes"]["file"] == "元の仕様書.xlsx"
+
+
+def test_add_file_rejects_bad_attributes_before_calling_oci(monkeypatch, ledger):
+    """検証は OCI 呼び出しより前。未知キーで Files API を汚さない。
+
+    統合後は**予約(reserve)よりも前**であること = 不正な属性で 422 になるときに
+    箱のファイル数枠を消費しない(SP2-02 の quota gate と両立させるための順序)。"""
+    called = {"n": 0}
+
+    class FakeDp:
+        class files:
+            @staticmethod
+            def create(file, purpose):
+                called["n"] += 1
+                return SimpleNamespace(id="file-x")
+
+    monkeypatch.setattr(rag, "ensure_store", lambda owner, lease=None: "vs_x")
+    monkeypatch.setattr(rag, "make_inference_client", lambda **kw: FakeDp)
+
+    for bad in ({"versoin": "2.0"}, {"cells": "x" * 513}, {"sheet": {"a": 1}}):
+        try:
+            rag.add_file("ns", "spec.md", b"body", bad)
+            raise AssertionError("expected MetadataError")
+        except rag_metadata.MetadataError:
+            pass
+    assert called["n"] == 0
+    assert ledger.reserved == []  # 予約も消費しない(枠が漏れない)
+
+
+# --- SYNC-01 review-1 F-001: 原本の拡張子は台帳(ledger)の ext が正 ---
+
+
+def test_delete_uses_ledger_ext_not_truncated_filename(monkeypatch):
+    """400 文字のマルチバイト名で、原本キーの拡張子が upload 時と一致すること。
+
+    `_fit()` は 400 **バイト**で切るので、ルートが受理する 400 **文字**の日本語名では
+    拡張子まで落ちる(`あ*397 + .md` → 133 文字・拡張子なし)。切り詰め後の
+    `rag_files.filename` から ext を導出すると upload は `.md`・delete は `.bin` になり、
+    原本を消し残したまま台帳行だけ消えて「削除成功」を返す(追跡不能な残存)。
+    ext は予約時に ledger へ記録済み(`rag_ledger.reconcile` も ext を正本として使う)。
+    """
+    from jetuse_core import rag_opensearch, rag_select_ai
+
+    name = "あ" * 397 + ".md"
+    assert len(name) <= rag.MAX_FILENAME_CHARS  # ルートは受理する
+    assert rag.normalize_ext(rag._fit(name)) != "md"  # 切り詰め後からは導けない
+
+    stored = rag._fit(name)  # 実際に rag_files.filename へ入る値
+
+    class _Cur:
+        last = ""
+
+        def execute(self, sql="", **kw):
+            self.last = sql
+
+        def fetchone(self):
+            if "FROM user_tables" in self.last:
+                return (0,)
+            return ("file-x", stored)  # 台帳が持つのは**切り詰め後**の名前
+
+    class _Conn:
+        def cursor(self): return _Cur()
+        def commit(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    seen: dict = {}
+    monkeypatch.setattr(rag, "owner_key_gate", lambda: None)
+    monkeypatch.setattr(rag, "connect", lambda: _Conn())
+    monkeypatch.setattr(rag, "rag_ledger", type("L", (), {
+        "rows_for_owner_by_id": staticmethod(
+            lambda fid: {"id": fid, "ext": "md", "external_file_id": "file-x",
+                         "locator": None}),
+    })())
+    monkeypatch.setattr(rag, "get_store_id", lambda owner: None)
+    monkeypatch.setattr(rag, "_dp_for", lambda loc=None: SimpleNamespace())
+    monkeypatch.setattr(rag, "delete_external_file", lambda oid, dp=None: None)
+    monkeypatch.setattr(rag, "delete_original_exact",
+                        lambda o, rid, ext, locator=None: seen.update(ext=ext))
+    monkeypatch.setattr(rag, "_delete_original_legacy", lambda *a, **kw: None)
+    monkeypatch.setattr(rag_opensearch, "enabled", lambda: False)
+    monkeypatch.setattr(rag_select_ai, "sync_remove_file", lambda o, f: None)
+
+    assert rag.delete_file("ns", "f1") is True
+    assert seen["ext"] == "md"  # upload が put したキーと一致する

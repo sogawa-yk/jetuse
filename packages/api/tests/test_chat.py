@@ -98,3 +98,20 @@ def test_chat_stream_requires_auth(monkeypatch):
         json={"model": DEFAULT_MODEL, "messages": [{"role": "user", "content": "hi"}]},
     )
     assert res.status_code == 401
+
+
+def test_extract_citations_compares_unrounded_scores():
+    """丸め後に同値になる僅差でも、最上位チャンクの text/chunk_id を採る(レビュー F-005)。"""
+    from types import SimpleNamespace
+
+    from jetuse_core.chat import _extract_citations
+
+    def hit(score, cid):
+        return SimpleNamespace(file_id="f1", filename="a.md", score=score, attributes=None,
+                               text=f"chunk {cid}", additional_properties={"chunk_id": cid})
+
+    response = SimpleNamespace(output=[SimpleNamespace(
+        type="file_search_call", results=[hit(0.8504, "top"), hit(0.8501, "second")]
+    )])
+    (c,) = _extract_citations(response)
+    assert c["chunk_id"] == "top" and c["score"] == 0.85

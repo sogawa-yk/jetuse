@@ -10,7 +10,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from jetuse_core import agents as agents_repo
-from jetuse_core import audit, guardrails, moderation, rag, rag_opensearch, rag_select_ai
+from jetuse_core import (
+    audit,
+    guardrails,
+    moderation,
+    rag,
+    rag_adb,
+    rag_opensearch,
+    rag_select_ai,
+)
 from jetuse_core import conversations as conv_repo
 from jetuse_core import mcp_servers as mcp_repo
 from jetuse_core.auth import AuthContext, require_user
@@ -26,6 +34,14 @@ from ..sse import KEEPALIVE_FRAME, KEEPALIVE_SECONDS, SSE_HEADERS
 
 logger = logging.getLogger("jetuse.service")
 router = APIRouter()
+
+# Responses API を使わない RAG バックエンド(自前検索 → 単発生成)。値は (モジュール, 表示名)。
+# generate は呼び出し時にモジュールから引く(差し替えを効かせるため参照を束縛しない)。
+NON_RESPONSES_RAG_BACKENDS = {
+    "select_ai": (rag_select_ai, "Select AI"),
+    "opensearch": (rag_opensearch, "OpenSearch"),
+    "adb": (rag_adb, "Oracle AI Database"),
+}
 
 # stream_chat / stream_agent は tests が `service.main` 上で monkeypatch するため、
 # 呼び出し時に service.main 経由で解決する(lazy import で循環を回避)。
@@ -86,9 +102,9 @@ async def stream_chat_response(  # noqa: ANN202
     # agent_def["model"] を使う(既存test_chat_with_agent_applies_instructionsが示すとおり
     # 呼び出し側モデルは定義側で上書きされる仕様)ため、req.modelがMODELS未登録でも
     # 正当なエージェント実行を拒否してはいけない(レビュー指摘: unknown-model 400の回帰)。
-    # 同様にselect_ai・opensearchバックエンドのRAG(下の分岐がreq.modelを一切使わず終端)も対象外。
+    # 同様に非Responses系バックエンドのRAG(下の分岐がreq.modelを一切使わず終端)も対象外。
     bypasses_model_check = bool(req.agent_id) or (
-        req.rag and req.rag_backend in ("select_ai", "opensearch")
+        req.rag and req.rag_backend in NON_RESPONSES_RAG_BACKENDS
     )
     if not bypasses_model_check and req.model not in MODELS:
         raise HTTPException(status_code=400, detail=f"unknown model: {req.model}")
@@ -207,21 +223,42 @@ async def stream_chat_response(  # noqa: ANN202
                 pi_blocked_gen(), media_type="text/event-stream", headers=SSE_HEADERS
             )
 
-    # Select AI / OpenSearch バックエンド: 非ストリーミングGENERATEを単発deltaで返す
-    if req.rag and req.rag_backend in ("select_ai", "opensearch"):
+    # RAGM-01: 絞り込みは vector_store バックエンドの file_search でしか効かない。
+    # 黙って無視すると「版フィルタを掛けたのに旧版が混ざる」ため、明示的に断る。
+    if req.rag_filters is not None:
+        if not req.rag:
+            raise HTTPException(status_code=400, detail="rag_filters requires rag=true")
+        if req.rag_backend != "vector_store":
+            raise HTTPException(
+                status_code=400,
+                detail=f"rag_filters is not supported on the {req.rag_backend} backend",
+            )
+        if req.agent or req.agent_id:
+            # エージェント経路(AGT-01/03)は別ディスパッチで、絞り込みを渡す口が無い。
+            # 素通しすると黙って無視される(レビュー F-001)ので、ここで断る。
+            raise HTTPException(
+                status_code=400, detail="rag_filters is not supported in agent mode"
+            )
+
+    # agent と rag は併用できない。**RAG ディスパッチより前に**弾く（後ろに置くと
+    # 非Responses系バックエンドでは agent 指定が黙って無視されたまま RAG が走る）。
+    if (req.agent or req.agent_id) and req.rag:
+        raise HTTPException(status_code=400, detail="agent and rag cannot be combined")
+
+    # Select AI / OpenSearch / ADB自前索引: 非ストリーミングGENERATEを単発deltaで返す
+    if req.rag and req.rag_backend in NON_RESPONSES_RAG_BACKENDS:
         # RAG 読取も owner_key 移行ゲートを通す(store 解決と同じ fail-closed 一貫性 — M007)。特に
         # Select AI generate は ensure_profile で永続 profile/index を作るため、未分類 owner が
         # escaped 側へ新規資産を作るのをストリーム開始前に塞ぐ(raise は 503 に正規化)。
         await asyncio.to_thread(owner_key_gate)
         prompt = req.messages[-1].content
-        _rag_gen = (rag_opensearch.generate if req.rag_backend == "opensearch"
-                    else rag_select_ai.generate)
-        _rag_label = "OpenSearch" if req.rag_backend == "opensearch" else "Select AI"
+        _rag_mod, _rag_label = NON_RESPONSES_RAG_BACKENDS[req.rag_backend]
 
         async def sa_gen():
             yield KEEPALIVE_FRAME
+            # generate はモジュール属性として毎回引く(テスト/差し替えが効くように)
             task = asyncio.create_task(
-                asyncio.to_thread(_rag_gen, rag_ns, prompt)
+                asyncio.to_thread(_rag_mod.generate, rag_ns, prompt)
             )
             try:
                 while True:
@@ -399,6 +436,7 @@ async def stream_chat_response(  # noqa: ANN202
                 max_tokens=req.max_tokens,
                 reasoning_effort=req.reasoning_effort,
                 file_search_store=rag_store,
+                file_search_filters=req.rag_filters,  # RAGM-01(検証済み構造のみ)
             )
             eff_model = agent_def["model"] if agent_def else req.model
             use_agent_loop = req.agent or bool(
