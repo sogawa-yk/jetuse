@@ -26,6 +26,7 @@ from typing import Any
 
 import oracledb
 
+from . import extract_xlsx
 from .db import connect
 from .embeddings import embed
 from .genai import make_inference_client
@@ -130,8 +131,9 @@ class TooLarge(ValueError):
 def _segments(filename: str, content: bytes):
     """(出典の見出し, 本文) を**逐次**返す。PDF は頁ごと、テキストは 1 本。
 
-    **対応拡張子を明示する**。何でも UTF-8 として読むと、DOCX / XLSX / 画像が
+    **対応拡張子を明示する**。何でも UTF-8 として読むと、DOCX / 画像が
     文字化けした本文として "indexed" になり、利用者には正常に見えてしまう。
+    xlsx はここへ来ない(`chunk_units` が `extract_xlsx` へ振り分ける)。
     PDF は頁を 1 つずつ読み、抽出済みの総文字数が上限を超えたらそこで打ち切る
     （圧縮 PDF は 20MB でも展開後に桁違いに膨らみうるため、全頁を先に展開しない）。
     """
@@ -139,11 +141,25 @@ def _segments(filename: str, content: bytes):
     ext = "." + name.rsplit(".", 1)[-1] if "." in name else ""
     if ext == ".pdf":
         from pypdf import PdfReader
+        from pypdf.errors import PyPdfError
 
-        reader = PdfReader(io.BytesIO(content))
+        # 壊れた PDF(xref 破損・別形式)は pypdf から複数の型で上がる。500 として漏らすと、
+        # 抽出口(POST /api/extract)が利用者入力で 500 を返してしまう
+        broken = (PyPdfError, ValueError, KeyError, TypeError, OSError, RecursionError)
+        try:
+            reader = PdfReader(io.BytesIO(content))
+            count = len(reader.pages)
+        except broken as e:
+            raise UnsupportedDocument(f"PDF として読めませんでした: {type(e).__name__}") from e
         total = 0
-        for i, page in enumerate(reader.pages):
-            text = page.extract_text() or ""
+        # **頁は 1 つずつ読む**（全頁を先に展開しない = 頁数の多い PDF でメモリを食わない）
+        for i in range(count):
+            try:
+                text = reader.pages[i].extract_text() or ""
+            except broken as e:
+                raise UnsupportedDocument(
+                    f"PDF の {i + 1} ページ目を読めませんでした: {type(e).__name__}"
+                ) from e
             total += len(text)
             if total > MAX_EXTRACT_CHARS:
                 raise TooLarge(f"抽出後の文字数が上限を超えました(> {MAX_EXTRACT_CHARS} 文字)")
@@ -181,7 +197,18 @@ def chunk_units(filename: str, content: bytes) -> list[dict[str, Any]]:
 
     通常は行を跨いで切らない(行番号で出典を示すため)。1 行が上限を超えるときだけ
     その行を文字オフセットで分割する(`L12c1-800`)。本文は切り詰めない。
+    xlsx は `extract_xlsx` が担当し、出典は行番号ではなく**シート名 + セル範囲**になる
+    (PREP-01)。返す形は同じ `{sheet, cells, text}`。
     """
+    if extract_xlsx.is_xlsx(filename):
+        # xlsx はシート名 + セル範囲つきで抽出する(PREP-01)。行番号ではなく実際の
+        # セル範囲が `cells` に入るので、引用は「制約シート C5:E5」まで返せる。
+        try:
+            return extract_xlsx.extract(filename, content)
+        except extract_xlsx.ExtractionLimitError as e:
+            raise TooLarge(str(e)) from e
+        except extract_xlsx.XlsxExtractError as e:
+            raise UnsupportedDocument(str(e)) from e
     units: list[dict[str, Any]] = []
     for sheet, text in _segments(filename, content):
         if len(units) > MAX_CHUNKS:

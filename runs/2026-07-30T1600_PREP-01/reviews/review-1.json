@@ -1,0 +1,55 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-07-30T16:17:34+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "新規 XLSX 抽出モジュールが差分に含まれず、現状の変更だけでは API が起動できません。また、マネージド Vector Store 経路の実環境 E2E 完了を主張している一方で証跡がなく、派生した出典属性を利用者入力で上書きできる問題もあります。",
+  "severity_counts": {
+    "blocker": 2,
+    "major": 1,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "packages/api/jetuse_core/rag.py",
+      "line": 18,
+      "issue": "新たに `extract_xlsx` を import していますが、与えられた差分に `packages/api/jetuse_core/extract_xlsx.py` が含まれていません。テストも未収録の `tests.test_extract_xlsx` を参照しており、この差分単体ではアプリケーションの import またはテスト実行が失敗します。",
+      "suggestion": "`extract_xlsx.py` と `tests/test_extract_xlsx.py` を変更セットへ追加し、公開されている定数・例外・関数（`XLSX_EXT`、`extract`、`render_text`、`file_attributes` など）が呼び出し側の契約を満たすことを確認してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "blocker",
+      "file": "packages/api/jetuse_core/rag.py",
+      "line": 293,
+      "issue": "コメントと仕様は「xlsx も PREP-01 の E2E で実測した」と完了を主張していますが、指定された `runs/2026-07-30T1600_PREP-01/e2e/` は空で、未実施理由を示す `SKIPPED.md` もありません。特に `.xlsx.txt` の Files API 受付、Vector Store の処理完了、属性保持は単体テストでは裏づけられません。",
+      "suggestion": "jetuse-dev で最低2シナリオを実行し、リクエスト、HTTP応答、OCI file/vector-store IDをマスクした処理状態、検索結果・属性、台帳状態を証跡として保存してください。未実施なら `SKIPPED.md` に理由を記載し、実測済みという記述と完了主張を外してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag.py",
+      "line": 330,
+      "issue": "`{**derived, **(attributes or {})}` の順序により、利用者指定の `sheet` / `cells` が XLSX から導出したファイル単位属性を上書きできます。たとえば複数シートのブックを特定セル範囲として登録でき、仕様で禁止している「セル単位で返るように見せる」誤った出典表示になります。",
+      "suggestion": "XLSXでは派生属性を後勝ちにするか、利用者が `sheet` / `cells` を指定した場合は422で拒否してください。複数シートおよび単一シートで上書きできないことをテストしてください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "insufficient",
+    "notes": "指定された証跡ディレクトリは空で、最低2本の実行シナリオも未実施範囲を正当化する SKIPPED.md もありません。マネージド Vector Store への変換後アップロード、処理完了、属性保持、検索可能性は未検証です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲット URL が提供されておらず、指示どおりブラウザ検証は実施していません。"
+    }
+  }
+}

@@ -1,0 +1,4 @@
+Reading additional input from stdin...
+2026-07-30T08:43:01.349177Z ERROR codex_models_manager::cache: failed to load models cache: missing field `supports_reasoning_summaries` at line 87 column 5
+{"type":"thread.started","thread_id":"019fb230-fb45-7951-8ddb-9f08273b73b6"}
+Error: turn/start: turn/start failed: Input exceeds the maximum length of 1048576 characters. (code -32602), data: {"input_error_code":"input_too_large","max_chars":1048576,"actual_chars":1602079}

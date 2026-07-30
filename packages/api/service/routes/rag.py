@@ -13,7 +13,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from openai import APIStatusError
 
-from jetuse_core import rag, rag_metadata
+from jetuse_core import extract_xlsx, rag, rag_adb, rag_metadata
 from jetuse_core.auth import AuthContext, require_user
 from jetuse_core.genai import ProjectResolutionError
 
@@ -35,6 +35,14 @@ async def _rag_call(fn, *args):
     except rag_metadata.MetadataError as e:
         # 取り込み側で補完する属性(長すぎるファイル名由来の file 等)も 422 に正規化する。
         # 500 のまま漏らすと API 契約(不正な属性は 422)が破れる — レビュー F-002
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except (rag_adb.TooLarge, rag_adb.UnsupportedDocument) as e:
+        # 抽出口(POST /api/extract)で本文を取り出せない・上限を超えた場合。
+        # 取り込み経路(add_file)はこれらを内部で握って best-effort にしているので影響しない
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except extract_xlsx.XlsxExtractError as e:
+        # xlsx の上限超過・壊れたブック(PREP-01)。**切り詰めて一部だけ取り込まない**ので、
+        # どの上限に当たったかを detail に載せて 422 で返す
         raise HTTPException(status_code=422, detail=str(e)) from e
     except rag.StoreNotReadyError as e:
         raise HTTPException(
@@ -77,23 +85,44 @@ def _parse_attributes(raw: str | None) -> dict:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
 
-async def upload_file_response(
-    ns: str, file: UploadFile, attributes: str | None = None
-) -> dict:
+async def _read_upload(file: UploadFile) -> tuple[str, bytes]:
+    """アップロード共通の入口(拡張子・サイズ・空)。取り込みと抽出で同じ条件にする。"""
     name = pathlib.Path(file.filename or "untitled").name
     ext = pathlib.Path(name).suffix.lower()
     if ext not in rag.ALLOWED_EXTENSIONS:
-        detail = f"unsupported file type '{ext}'. allowed: pdf/txt/md"
+        detail = f"unsupported file type '{ext}'. allowed: pdf/txt/md/xlsx"
         if ext == ".docx":
             detail += " (docxはVector Store非対応 — SPIKE-03)"
         raise HTTPException(status_code=422, detail=detail)
-    attrs = _parse_attributes(attributes)  # 読み込み前に弾く(不正なら OCI を呼ばない)
     content = await file.read()
     if len(content) > rag.MAX_BYTES:
         raise HTTPException(status_code=413, detail="file too large (max 20MB)")
     if not content:
         raise HTTPException(status_code=422, detail="empty file")
+    return name, content
+
+
+async def upload_file_response(
+    ns: str, file: UploadFile, attributes: str | None = None
+) -> dict:
+    attrs = _parse_attributes(attributes)  # 読み込み前に弾く(不正なら OCI を呼ばない)
+    name, content = await _read_upload(file)
     return await _rag_call(rag.add_file, ns, name, content, attrs)
+
+
+async def extract_response(file: UploadFile) -> dict:
+    """取り込まずに抽出結果だけ返す(PREP-01 層1 の公開)。
+
+    投入されるチャンクそのもの(`adb` バックエンドが作るのと同じ `{sheet, cells, text}`)を
+    返す。案件側が独自の構造化を挟みたいときの口で、**このエンドポイントは何も保存しない**。
+    """
+    name, content = await _read_upload(file)
+    return await _rag_call(_extract, name, content)
+
+
+def _extract(name: str, content: bytes) -> dict:
+    chunks = rag_adb.chunk_units(name, content)
+    return {"filename": name, "chunk_count": len(chunks), "chunks": chunks}
 
 
 async def delete_file_response(ns: str, file_id: str) -> dict:
@@ -127,6 +156,14 @@ async def upload_rag_file(
     attributes: Annotated[str | None, Form()] = None,
 ):
     return await upload_file_response(user.subject, file, attributes)
+
+
+@router.post("/api/extract")
+async def extract_document(
+    file: UploadFile, user: Annotated[AuthContext, Depends(require_user)]
+):
+    """抽出だけ行い、取り込みはしない(PREP-01)。認証・サイズ上限はアップロードと同じ。"""
+    return await extract_response(file)
 
 
 @router.delete("/api/rag/files/{file_id}")
