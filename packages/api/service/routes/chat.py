@@ -199,6 +199,23 @@ async def stream_chat_response(  # noqa: ANN202
                 pi_blocked_gen(), media_type="text/event-stream", headers=SSE_HEADERS
             )
 
+    # RAGM-01: 絞り込みは vector_store バックエンドの file_search でしか効かない。
+    # 黙って無視すると「版フィルタを掛けたのに旧版が混ざる」ため、明示的に断る。
+    if req.rag_filters is not None:
+        if not req.rag:
+            raise HTTPException(status_code=400, detail="rag_filters requires rag=true")
+        if req.rag_backend != "vector_store":
+            raise HTTPException(
+                status_code=400,
+                detail=f"rag_filters is not supported on the {req.rag_backend} backend",
+            )
+        if req.agent or req.agent_id:
+            # エージェント経路(AGT-01/03)は別ディスパッチで、絞り込みを渡す口が無い。
+            # 素通しすると黙って無視される(レビュー F-001)ので、ここで断る。
+            raise HTTPException(
+                status_code=400, detail="rag_filters is not supported in agent mode"
+            )
+
     # agent と rag は併用できない。**RAG ディスパッチより前に**弾く（後ろに置くと
     # 非Responses系バックエンドでは agent 指定が黙って無視されたまま RAG が走る）。
     if (req.agent or req.agent_id) and req.rag:
@@ -380,6 +397,7 @@ async def stream_chat_response(  # noqa: ANN202
                 max_tokens=req.max_tokens,
                 reasoning_effort=req.reasoning_effort,
                 file_search_store=rag_store,
+                file_search_filters=req.rag_filters,  # RAGM-01(検証済み構造のみ)
             )
             eff_model = agent_def["model"] if agent_def else req.model
             use_agent_loop = req.agent or bool(

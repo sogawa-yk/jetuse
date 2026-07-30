@@ -1,0 +1,63 @@
+{
+  "review_n": 2,
+  "timestamp": "2026-07-30T01:09:39+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-2.input.diff",
+  "raw_output_path": "reviews/review-2.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "主要な属性付き取り込み・版フィルタ・構造化引用は実装と実環境証跡が整合しており、blocker はありません。一方、プロバイダ境界の数値検証、登録失敗時の孤児リソース、400 応答の検証順序に major の問題があります。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 3,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag_metadata.py",
+      "line": 49,
+      "issue": "任意精度の int を無条件で許可しており、`10 ** 400` まで正常値として扱います。しかし SDK の attributes 型は `str | float | bool` であり、この値はプロバイダが扱える通常の数値範囲を超えます。不正入力を OCI 呼び出し前に 422 にする契約を破り、アップロードでは上流 4xx、検索では HTTP 200 の SSE error になり得ます。",
+      "suggestion": "プロバイダが保証する数値範囲（少なくとも有限な IEEE-754 値、必要なら安全整数範囲）を明示し、範囲外の int は MetadataError にしてください。巨大 int を受理するテストは、属性とフィルタの双方で 422 を確認するテストへ変更してください。"
+    },
+    {
+      "id": "M-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag.py",
+      "line": 276,
+      "issue": "Files API へのアップロードとローカルバックアップの作成後、`vector_stores.files.create()` が BadRequestError など NotFoundError 以外で失敗すると、OCI File とバックアップが残ります。DB 行はまだ無いため通常の一覧・削除 API から辿れず、今回追加された attributes のプロバイダ拒否が孤児リソースを作る経路になります。",
+      "suggestion": "Vector Store への関連付け全体を例外処理で囲み、失敗時は作成済み OCI File とバックアップを best-effort で削除してから再送出してください。BadRequestError を注入し、OCI File・バックアップ・DB 行が残らないことをテストしてください。"
+    },
+    {
+      "id": "M-003",
+      "severity": "major",
+      "file": "packages/api/service/routes/chat.py",
+      "line": 188,
+      "issue": "`rag_filters` の組み合わせ検証がモデル可用性判定、moderation、prompt-injection guard より後にあります。そのため、同じ無効な要求でもモデルが unavailable なら HTTP 200 の SSE error、入力が guard で拒否されれば HTTP 200 のブロック応答となり、仕様に記載した 400 が保証されません。また、本来拒否すべき要求で外部 guard API を呼びます。",
+      "suggestion": "`rag_filters` の `rag`・`rag_backend`・agent との組み合わせ検証を `stream_chat_response()` 冒頭へ移し、モデル状態や guard 設定にかかわらず常に 400 になる回帰テストを追加してください。"
+    },
+    {
+      "id": "m-004",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/rag_metadata.py",
+      "line": 129,
+      "issue": "比較フィルタの文字列値では空文字・空白だけの文字列が許可されます。一方、取り込み側はそのような属性を必ず省くため、このフィルタはアプリ経由で登録した文書には一致せず、エラーにならない静かな 0 件を作ります。",
+      "suggestion": "フィルタ値については空文字と空白のみの文字列を MetadataError で拒否し、単純フィルタと複合フィルタの双方に否定テストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 9,
+    "adequacy": "sufficient",
+    "notes": "正系2本（属性付き2版の取り込みとフィルタ有無の対照: `e2e/scenario-1.md`、構造化 citations: `e2e/scenario-2.md`）と否定系7本（`e2e/guard.md`）を確認しました。SSE 生証跡はフィルタなしで v1/v2、フィルタありで v2 のみを示し、teardown は Files API と Vector Store の NotFound、登録簿0行、検証スキーマ不在を記録しています。未配備スタック等は `e2e/SKIPPED.md` に妥当な理由があります。ただし、巨大整数、Vector Store 関連付け時の上流拒否と孤児回収、モデル unavailable／guard 有効時の400契約は未検証で、各 finding に反映しました。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されておらず、指示に従いブラウザツールは使用していません。"
+    }
+  }
+}

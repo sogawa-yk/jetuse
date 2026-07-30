@@ -459,7 +459,7 @@ def _stub_upload(monkeypatch):
         class vector_stores:
             class files:
                 @staticmethod
-                def create(vector_store_id=None, file_id=None):
+                def create(vector_store_id=None, file_id=None, attributes=None):
                     return None
 
     monkeypatch.setattr(rag, "make_inference_client", lambda **kw: DP())

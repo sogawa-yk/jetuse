@@ -1,0 +1,200 @@
+data: {"ka": 1}
+
+data: {"delta": "在"}
+
+data: {"delta": "庫"}
+
+data: {"delta": "照"}
+
+data: {"delta": "会"}
+
+data: {"delta": "API"}
+
+data: {"delta": "（"}
+
+data: {"delta": "GET"}
+
+data: {"delta": " "}
+
+data: {"delta": "/v"}
+
+data: {"delta": "1"}
+
+data: {"delta": "/in"}
+
+data: {"delta": "ventory"}
+
+data: {"delta": "）は"}
+
+data: {"delta": "、"}
+
+data: {"delta": "1"}
+
+data: {"delta": "回"}
+
+data: {"delta": "の"}
+
+data: {"delta": "呼"}
+
+data: {"delta": "び"}
+
+data: {"delta": "出"}
+
+data: {"delta": "し"}
+
+data: {"delta": "で"}
+
+data: {"delta": " **"}
+
+data: {"delta": "最大"}
+
+data: {"delta": "200"}
+
+data: {"delta": "件"}
+
+data: {"delta": "**"}
+
+data: {"delta": " "}
+
+data: {"delta": "まで"}
+
+data: {"delta": "の"}
+
+data: {"delta": "在"}
+
+data: {"delta": "庫"}
+
+data: {"delta": "情報"}
+
+data: {"delta": "を"}
+
+data: {"delta": "返"}
+
+data: {"delta": "却"}
+
+data: {"delta": "します"}
+
+data: {"delta": "。"}
+
+data: {"delta": "  \n\n"}
+
+data: {"delta": "**"}
+
+data: {"delta": "根"}
+
+data: {"delta": "拠"}
+
+data: {"delta": "**"}
+
+data: {"delta": ":"}
+
+data: {"delta": " 「"}
+
+data: {"delta": "inventory"}
+
+data: {"delta": "-api"}
+
+data: {"delta": "-spec"}
+
+data: {"delta": "-v"}
+
+data: {"delta": "2"}
+
+data: {"delta": ".md"}
+
+data: {"delta": "」"}
+
+data: {"delta": "―"}
+
+data: {"delta": "「"}
+
+data: {"delta": "在"}
+
+data: {"delta": "庫"}
+
+data: {"delta": "照"}
+
+data: {"delta": "会"}
+
+data: {"delta": "API"}
+
+data: {"delta": " GET"}
+
+data: {"delta": " /"}
+
+data: {"delta": "v"}
+
+data: {"delta": "1"}
+
+data: {"delta": "/in"}
+
+data: {"delta": "ventory"}
+
+data: {"delta": " は"}
+
+data: {"delta": "一"}
+
+data: {"delta": "度"}
+
+data: {"delta": "に"}
+
+data: {"delta": "最大"}
+
+data: {"delta": "200"}
+
+data: {"delta": "件"}
+
+data: {"delta": "まで"}
+
+data: {"delta": "返"}
+
+data: {"delta": "却"}
+
+data: {"delta": "する"}
+
+data: {"delta": "。」"}
+
+data: {"delta": "という"}
+
+data: {"delta": "記"}
+
+data: {"delta": "述"}
+
+data: {"delta": "（"}
+
+data: {"delta": "同"}
+
+data: {"delta": "ファ"}
+
+data: {"delta": "イル"}
+
+data: {"delta": "の"}
+
+data: {"delta": "API"}
+
+data: {"delta": "一覧"}
+
+data: {"delta": "シ"}
+
+data: {"delta": "ート"}
+
+data: {"delta": "、"}
+
+data: {"delta": "セル"}
+
+data: {"delta": " B"}
+
+data: {"delta": "18"}
+
+data: {"delta": ":F"}
+
+data: {"delta": "18"}
+
+data: {"delta": "）。"}
+
+data: {"citations": [{"file_id": "file-<REDACTED>", "filename": "inventory-api-spec-v2.md", "score": 0.941, "source": {"file": "架空サンプル_在庫連携API仕様書.xlsx", "sha256": "2f56fb6b9a24732c13c8937f63006c63881da6fbbcfa3e9d47b4811a28e3a3f8", "version": "2.0", "sheet": "API一覧", "cells": "B18:F18", "kind": "spec", "current_version": "Y"}, "text": "inventory-api-spec-v2.md\n\n架空サンプル 在庫連携API仕様書 v2.0（最新版）\n在庫照会API GET /v1/inventory は一度に最大200件まで返却する。\nv1.0 の100件という上限は本版で廃止された。", "chunk_id": "0_008ff292-2aca-4d9e-be03-b5e14cc1d714"}]}
+
+data: {"usage": {"input_tokens": 1070, "output_tokens": 155}}
+
+data: [DONE]
+
