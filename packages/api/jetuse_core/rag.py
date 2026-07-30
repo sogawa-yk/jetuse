@@ -83,6 +83,18 @@ def list_files(owner: str) -> list[dict[str, Any]]:
         ]
 
 
+def _fit(text: str, limit: int = 400) -> str:
+    """VARCHAR2(400) へ収まる長さに**バイト境界で**切る。
+
+    文字数で切ると、日本語ファイル名(1 文字 3 バイト)は BYTE セマンティクスの列で
+    ORA-12899 になる(実運用で長い名前を上げた瞬間にアップロードが落ちる)。
+    """
+    raw = text.encode("utf-8")
+    if len(raw) <= limit:
+        return text
+    return raw[:limit].decode("utf-8", errors="ignore")
+
+
 def _insert_file(owner: str, file_id: str, filename: str, oci_file_id: str, size: int) -> None:
     with connect() as conn:
         conn.cursor().execute(
@@ -90,7 +102,7 @@ def _insert_file(owner: str, file_id: str, filename: str, oci_file_id: str, size
             INSERT INTO rag_files(id, owner_sub, filename, oci_file_id, status, bytes)
             VALUES (:id, :o, :f, :ofi, 'processing', :b)
             """,
-            id=file_id, o=owner, f=filename[:400], ofi=oci_file_id, b=size,
+            id=file_id, o=owner, f=_fit(filename), ofi=oci_file_id, b=size,
         )
         conn.commit()
 
@@ -108,10 +120,19 @@ def _update_status(owner: str, file_id: str, status: str, error: str | None = No
 
 
 def _delete_row(owner: str, file_id: str) -> dict | None:
+    """台帳行を削除する。ADB自前索引(RAGM-02)のチャンクは**同一トランザクション**で消す。
+
+    チャンクは台帳と同じADBにあるので、ここで一緒に消せば「APIは削除成功なのに
+    チャンクだけ残って以後の回答に混ざる」が構造的に起きない(外部サービス側の
+    Vector Store/OpenSearchは別サービスなのでbest-effortのまま)。
+    """
     with connect() as conn:
         cur = conn.cursor()
+        # FOR UPDATE: 取り込み中(rag_adb 側が同じ行をロックする)なら、そちらの完了を待つ。
+        # 待たないと「削除は成功したのに、あとから取り込みがチャンクを commit する」が起きる。
         cur.execute(
-            "SELECT oci_file_id, filename FROM rag_files WHERE id = :id AND owner_sub = :o",
+            "SELECT oci_file_id, filename FROM rag_files WHERE id = :id AND owner_sub = :o"
+            " FOR UPDATE",
             id=file_id, o=owner,
         )
         row = cur.fetchone()
@@ -120,6 +141,14 @@ def _delete_row(owner: str, file_id: str) -> dict | None:
         cur.execute(
             "DELETE FROM rag_files WHERE id = :id AND owner_sub = :o", id=file_id, o=owner
         )
+        from . import rag_adb
+
+        # **可用性チェックを挟まない**。enabled() は別接続で、瞬断やプール枯渇を False に
+        # 丸めるため、それを削除のスキップ条件にすると「APIは削除成功なのにチャンクが残る」
+        # を再現してしまう。ここは同じcursorで必ず実行する。
+        # 「チャンク表が無い(未導入)」の判定は delete_chunks 側が同じ接続で行う。
+        # 例外は握り潰さない(commitしない=台帳行も残る=削除は失敗として返る)。
+        rag_adb.delete_chunks(cur, owner, file_id)
         conn.commit()
         return {"oci_file_id": row[0], "filename": row[1]}
 
@@ -142,7 +171,9 @@ def _backup_original(owner: str, file_id: str, filename: str, content: bytes) ->
     try:
         client = _os_client()
         ns = client.get_namespace().data
-        client.put_object(ns, bucket, f"rag/{owner}/{file_id}_{filename}", content)
+        # 台帳(rag_files.filename)と**同じ正規化名**をキーに使う。ここだけ原名にすると、
+        # 400 バイト超のファイル名で削除時にキーが一致せず、原本が消し残る。
+        client.put_object(ns, bucket, f"rag/{owner}/{file_id}_{_fit(filename)}", content)
     except Exception:
         logger.exception("rag original backup failed (ignored)")
 
@@ -154,7 +185,7 @@ def _delete_original(owner: str, file_id: str, filename: str) -> None:
     try:
         client = _os_client()
         ns = client.get_namespace().data
-        client.delete_object(ns, bucket, f"rag/{owner}/{file_id}_{filename}")
+        client.delete_object(ns, bucket, f"rag/{owner}/{file_id}_{_fit(filename)}")
     except Exception:
         logger.exception("rag original delete failed (ignored)")
 
@@ -300,6 +331,22 @@ def add_file(
             rag_opensearch.ingest(owner, file_id, filename, content)
     except Exception:
         logger.exception("opensearch ingest failed (ignored)")
+    # ADB自前索引(RAGM-02)にも取り込む(表がある環境のみ)。
+    # 失敗しても他バックエンドの取り込みは成立しているのでアップロード自体は失敗させない。
+    # 取り込めなかったファイルは backends.adb が "error" になるので画面から分かる
+    # (再取り込みは同じファイルを上げ直す = 版が上がる。自動リトライは未実装 — RAGM-02 の残課題)。
+    try:
+        from . import rag_adb
+
+        state = rag_adb.availability()
+        if state == rag_adb.READY:
+            rag_adb.ingest(owner, file_id, filename, content)
+        elif state == rag_adb.UNAVAILABLE:
+            # 「表が無い(未導入)」と「今つながらない」を区別する。後者を黙って飛ばすと、
+            # 復旧後もそのファイルだけ取り込まれないまま誰も気づけない。
+            rag_adb.mark_unavailable(owner, file_id, filename)
+    except Exception:
+        logger.exception("adb ingest failed (ignored)")
     return {"id": file_id, "filename": filename, "status": "processing", "bytes": len(content)}
 
 
@@ -359,16 +406,21 @@ def resolve_citation_filenames(owner: str, citations: list[dict[str, Any]]) -> l
 
 
 def attach_backend_status(owner: str, files: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """各ファイルに3バックエンドの取り込み状況を付与する(ENH-05 可視化)。
+    """各ファイルにバックエンドの取り込み状況を付与する(ENH-05 可視化)。
 
     backends[*] = "indexed" | "pending" | "error" | "disabled"
     - vector_store: Files API/Vector Storeの処理状態
     - select_ai: ベクトル索引($VECTAB)に存在するか(refresh_rate間隔で同期=反映が遅い)
     - opensearch: indexに存在するか(取り込みは同期=即時)。無効時は disabled
+    - adb: 自前チャンク表に存在するか(取り込みは同期=即時)。取り込みに失敗した/本文を
+      取り出せなかったファイルは error。表が無い環境は disabled(RAGM-02)
     """
     sai_ids: set[str] = set()
     os_ids: set[str] = set()
+    adb_ids: set[str] = set()
+    adb_errors: set[str] = set()
     os_enabled = False
+    adb_enabled = False
     try:
         from . import rag_select_ai
 
@@ -383,6 +435,15 @@ def attach_backend_status(owner: str, files: list[dict[str, Any]]) -> list[dict[
             os_ids = rag_opensearch.indexed_file_ids(owner)
     except Exception:
         logger.exception("opensearch status failed (ignored)")
+    try:
+        from . import rag_adb
+
+        adb_enabled = rag_adb.enabled()
+        if adb_enabled:
+            adb_ids = rag_adb.indexed_file_ids(owner)
+            adb_errors = rag_adb.errored_file_ids(owner)
+    except Exception:
+        logger.exception("adb status failed (ignored)")
 
     for f in files:
         fid = f["id"]
@@ -391,6 +452,9 @@ def attach_backend_status(owner: str, files: list[dict[str, Any]]) -> list[dict[
             "select_ai": "indexed" if fid in sai_ids else "pending",
             "opensearch": ("disabled" if not os_enabled
                            else ("indexed" if fid in os_ids else "pending")),
+            "adb": ("disabled" if not adb_enabled
+                    else "indexed" if fid in adb_ids
+                    else "error" if fid in adb_errors else "pending"),
         }
     return files
 

@@ -1,96 +1,238 @@
-# STATE — RAGM-01（マネージド Vector Store に属性付与・構造化出典・版フィルタ）
+# STATE — RAGM-02（Oracle AI Database バックエンド `adb` の追加）
 
-- task: RAGM-01
-- run_id: 2026-07-30T0025_RAGM-01
-- branch: feat/RAGM-01（base: main。共有物のため main 起点）
+- task: RAGM-02
+- run_id: 2026-07-30T0025_RAGM-02
+- branch: feat/RAGM-02（base: main。共有物のため dev ではなく main 起点）
 - area: api
-- review_verdict: **PASS**（review-2。blocker 0 / major 3 / minor 1・E2E adequacy=**sufficient**）
-- last_review_ref: runs/2026-07-30T0025_RAGM-01/reviews/review-2.json
+- review_verdict: **PASS**（review-11。blocker 0 / major 3 / minor 2・E2E adequacy=sufficient）
+- last_review_ref: runs/2026-07-30T0025_RAGM-02/reviews/review-11.json
 - updated_at: 2026-07-30
 
 ## やったこと
 
-ADR-0020 §1 の `vector_store` バックエンド（既定）に、属性付き取り込み・構造化出典・版フィルタを実装した。
-SPIKE-M1 で「OCI 側は対応済み・不足はアプリ側」と確定していた穴を塞ぐ作業。
+### 1. 前提のスケール検証（実装より前に実施・タスク指定）
 
-- `jetuse_core/rag_metadata.py`（新規・唯一の門番）: 許可キー 8 種（`file` / `version` / `sheet` /
-  `cells` / `sha256` / `kind` / `current_version` / `chunk_id`）を定数化。`normalize_attributes()` は
-  **値の無いメタをキーごと省き**（`0`/`False` は残す）、未知キー・512 文字超・入れ子・非有限数を拒否。
-  `validate_filters()` は `eq/ne/gt/gte/lt/lte` と `and/or` を許可し、**未知キーを深い位置でも拒否**、
-  `in`/`nin` は上流未対応として拒否、既知フィールドだけに正規化する。
-- `jetuse_core/rag.py`: `add_file(..., attributes=)` → `vector_stores.files.create(attributes=)`。
-  `file` / `sha256` は未指定なら補完。検証は **OCI 呼び出しより前**（不正なら Files API を汚さない）。
-- `jetuse_core/chat.py`: `_extract_citations()` に `source`（attributes）/ `text`（500 字）/ `chunk_id` を追加。
-  既存 `{file_id, filename, score}` は温存。代表チャンクの選択は**丸め前スコア**で比較する。
-  `file_search_tool()` で `tools[].filters` を載せる。
-- ルート: `POST /api/rag/files` に `attributes`（JSON 文字列・省略可）、`/api/chat/stream` に `rag_filters`。
-  未知キー等は 422（属性の自動補完値が長すぎる場合も 422 に正規化）。`vector_store` 以外の
-  バックエンドおよびエージェントモードとの併用は 400（渡す口が無い経路で黙って無視しない）。
-- ドキュメント: `specs/09-rag.md`（API 契約）/ `docs/verification/RAGM-01.md`。
+`spikes/ragm02/` を新設し、共有 loop ADB の検証用スキーマで
+**50,000 チャンク**を投入して測った（ADB は増やさず、共有 loop ADB 内の **run 固有スキーマ**
+`JETUSE_RAGM02_<乱数>` で RAGM-01 と隔離）。
+レポート `docs/verification/RAGM-02.md`、ログ `runs/2026-07-30T0025_RAGM-02/e2e/scale/`。
 
-### 実装判断（タスクの「切り詰めるか拒否するか」）
+- HNSW 索引は作れた（57 秒）。SPIKE-M1 の 10 行では届かなかった「索引が実際に使われる状態」に到達。
+- **メタデータ絞り込み付きでも索引は使えるが、素の表では計画が実行ごとに揺れた**
+  （投入からやり直した 2 回の計測で全件走査と `HNSW SCAN IN-FILTER` の両方が出た）。
+  **フィルタ列に B木索引 + `owner_sub` 込みで絞ると 2 回とも `HNSW SCAN PRE-FILTER`** で安定。
+  → `rag_adb.ensure_indexes()` が B木 3 本を作る（マイグレーションには置かない = 下記）。
+  ラウンド3 は**実装の `search_sql()` が返す SQL そのもの**で測っている。
+- ベクタ索引が無いときは同じ SQL が厳密検索へ落ちて結果が一致する（実測）。索引作成の失敗で
+  取り込みを止めない設計の根拠。
+- `TARGET ACCURACY` 80 以上で recall@10 = 1.00（70 では最低 0.80）。索引の既定 95 は据え置き。
+- レイテンシは厳密 18〜91 ms / 近似 18〜86 ms。この規模では速度は方式選択の決め手にならない。
 
-**拒否（422）を選んだ。** 切り詰めると `sha256`/`version` が別物になり、フィルタが静かに外れる。
-それは SPIKE-M1 ①-b の「未知キーで 0 件」と同じ失敗の形（利用者が気付けない）なので入口で弾く。
+### 2. 実装（新規モジュール。既存 3 バックエンドは未変更）
 
-## E2E（実 ADB + 実 OCI / 共有 loop ADB のタスク専用スキーマ `JETUSE_RAGM01` で隔離）
+- `packages/api/jetuse_core/rag_adb.py`: チャンク化（行を跨がず、チャンクごとに `sheet` と
+  行範囲 `L{開始}:L{終了}` を出典として持つ）→ クライアント側埋め込み → 投入、
+  「メタデータ絞り込み + ベクタ類似検索」を 1 本の SQL、構造化出典つき citations、`generate()`。
+- `migrations/017_rag_adb.sql`: 本文 + メタ列 + `JSON` + `VECTOR(1024, FLOAT32)`（**CREATE TABLE 1 文だけ**。
+  索引は `ensure_indexes()` が冪等に作る）。
+- `rag_backend='adb'` を `ChatRequest` とチャットの RAG ディスパッチに追加。
+  ディスパッチは `NON_RESPONSES_RAG_BACKENDS`（モジュール表）へ整理し、`generate` は呼び出し時に引く。
+- `rag.attach_backend_status()` に `adb` 欄（`indexed` / `pending` / `disabled`）、
+  `add_file` から best-effort で取り込み。削除は台帳行と同一トランザクション（`_delete_row`）。
+- 単体テスト `packages/api/tests/test_rag_adb.py`（55 件）。
 
-アプリ（`service.main`）を実 ADB・実 OCI につないだまま in-process で起動し、全経路を実 API で通した
-（モックなし）。検証用 Vector Store は run 固有名 `jetuse-spike-ragm01-<tag>`。ADB は増やしていない。
+### 3. 決めたこと（根拠つき）
+
+**埋め込みはクライアント側**。DB 内埋め込み（`UTL_TO_EMBEDDING`）は `OCI$RESOURCE_PRINCIPAL` では
+ORA-24247 で通らず（ACL に connect/resolve/http を付けても不可・実測）、`DBMS_VECTOR_CHAIN.CREATE_CREDENTIAL`
+による **API キーの DB 内資格証明**が要る＝ADR-0021 が廃止した経路のため、**実装に入れなかった**
+（使えない選択肢を設定で残さない）。ADR-0020 の未解決事項に結論を追記。
+
+## E2E（実 ADB・run 固有スキーマで隔離）
 
 | # | シナリオ | 結果 | 証跡 |
 |---|---|---|---|
-| 1 | 版違いの架空文書 2 件を属性付きで取り込み → 版フィルタ有無の対照 | PASS | `e2e/scenario-1.md` |
-| 2 | 回答の citations にセル範囲まで載る（実レスポンス） | PASS | `e2e/scenario-2.md` |
-| 否定 | 未知フィルタキー / `in` / 未知属性キー / 512 文字超 / バックエンド不一致 / エージェントモード / 子が null | PASS | `e2e/guard.md` |
+| 1 | 同一ファイル由来の 3 チャンクが**別々の** cells（`L1:L4` / `L4:L6` / `L6:L7`）を返す | PASS | `e2e/scenario-1.md` |
+| 2 | 業務表（文書管理台帳）と JOIN したベクタ検索が 1 クエリで成立・機密文書は除外 | PASS | `e2e/scenario-2.md` |
+| 3 | 版フィルタの対照（無し: 旧版 6 件 / `current_version='Y'`: 0 件） | PASS | `e2e/scenario-3.md` |
+| 4 | アプリ経路（`POST /api/chat/stream` の ASGI 統合テスト・相手は実 ADB / 実 LLM）で回答（v2 の 600 を返し旧版 300 を含まない）+ citations 後方互換 + バッジ | PASS | `e2e/scenario-4.md` |
+| 5 | 削除の原子性（台帳行とチャンクが同一トランザクションで消える） | PASS | `e2e/scenario-5.md` |
+| 6 | 現行版を削除すると**旧版が現行へ戻る**（2.0 削除 → 1.0 が現行に） | PASS | `e2e/scenario-6.md` |
+| 7 | **同名ファイルの同時取り込み**（2 接続・実行区間が重なったことも確認）で版 1.0/2.0 に分かれ、現行版は 1 つ | PASS | `e2e/scenario-7.md` |
+| 否定 | 安全ガード 6 件（作り直し / **同秒作り直し** / 台帳空 / **最終照合前の差し替え** / **既存再利用時に権限を変えずに中止**）で非ゼロ終了 | PASS | `e2e/guard.md` |
 
-- 対照の実測: フィルタ無し → 引用 v1.0 + v2.0（回答も両版を混ぜる）／`current_version='Y'` → v2.0 のみ。
-- 引用の実値: `source = {file, version:"2.0", sheet:"API一覧", cells:"B18:F18", kind, current_version, sha256}`。
-- 片付け: ファイル・Vector Store・登録簿行・検証スキーマ（`JETUSE_RAGM01`/`_Q`）を削除し不在を再照会で確認
-  （`e2e/teardown.md`。DROP は `--receipt` の `USER_ID` 一致時のみ）。証跡は `redact_evidence.py` で伏字化。
-- 実施しなかった範囲と理由: `e2e/SKIPPED.md`。
+マイグレーションの**クリーン適用**（001〜019。空スキーマへ順に適用し 3 表の存在を確認）も証跡に残した（`e2e/migrate.md`）。
 
-## テスト / lint
+- 実施しなかった範囲と理由: `e2e/SKIPPED.md`
+- 検証用リソースは削除済み（`e2e/teardown.md`。50,000 行の検証表を含むスキーマごと）。
+  本タスクのスクリプトが打つ `DROP USER` は `JETUSE_RAGM02` の 1 か所だけであることを証跡に併記
+- `.venv/bin/pytest packages/api/tests` **460 passed** / `.venv/bin/ruff check packages/api spikes` クリーン
 
-- `.venv/bin/pytest packages/api/tests` 442 passed（新規 `test_rag_metadata.py` 19 件 + 既存テストへ 16 件追加）
-- `.venv/bin/ruff check packages/api` クリーン
+## 実機で踏んだ落とし穴（`docs/tips.md` に追記済み）
 
-## 人間ゲート（未実施）
+- `:file` をバインド名にすると `ORA-01745`（予約語衝突）。接頭辞 `flt_` を付ける実装に変更し、単体テストで固定。
+- 同一セッションで DDL を打った直後の最初の `EXPLAIN PLAN` は `ORA-00900` になる。1 回引き直せば通る。
+  握り潰すと「計画取得不可」で証跡が空になり、測っていないのに測ったように見える（実際に一度そうなった）。
+- メタデータ絞り込みとベクタ索引の関係（上記 1）。
 
-- コミット / PR / push（未承認のため未実施）
-- 環境の記録事項: `.env` の `COMPARTMENT_OCID` は親（`jetuse`）を指すが実リソースは子の `dev` にあり、
-  `PROJECT_OCID` 未設定だと `ProjectResolutionError` になる。E2E は両者を明示して実行した。
-  恒久対応（既定値の変更 or `GENAI_COMPARTMENT_OCID` の追加）は仕様判断のため未実施（`docs/verification/RAGM-01.md`）。
-
-## review-1（PASS / blocker 0・major 3・minor 3。E2E adequacy=insufficient）への対応
-
-判定は PASS だったが、Codex が E2E 証跡を insufficient とし、完了主張を支える部分に指摘が出たため
-修正した（磨き込みではなく、主張と実装の食い違いの是正）。修正後に E2E を**最初から通しで再実行**した。
+## review-1（FAIL: blocker 1 / major 5 / minor 1）への対応
 
 | 指摘 | 対応 |
 |---|---|
-| F-001(major) エージェント経路に `rag_filters` を渡す口が公開 API に無く、`agent_id` 経路では黙って無視される | 投機的だった `_build_agent_tools` へのフィルタ受け渡しを**削除**し、`agent`/`agent_id` との併用を **400 で拒否**。実 API の否定側（`guard.md`）に追加 |
-| F-002(major) 補完する `file`（ファイル名）が 512 文字超だと `MetadataError` が 500 として漏れる | `_rag_call` で `MetadataError` を **422 に正規化**＋ルートテスト |
-| F-006(major) teardown が全例外を「削除済み」と扱い、OCI Files の不在を確認していない | 不在判定を **`NotFoundError` 限定**にし、ファイル 1 件ずつ Files API で再照会。確認できなければ台帳を残して**非ゼロ終了** |
-| F-003(minor) 複合フィルタの子の `null` が検証を素通りする | 最上位以外の `None` を拒否＋単体/実 API の否定テスト |
-| F-004(minor) 巨大 int で `math.isfinite` が OverflowError（500） | `int` はそのまま通し、有限性判定は `float` のみ |
-| F-005(minor) 丸め後スコアで比較し、最上位でないチャンクを引用しうる | 丸め前スコアで比較（0.8504 vs 0.8501 の回帰テスト） |
+| B-001: 所有台帳が `DB_NAME:SCHEMA:作成時刻(秒)` だけで、同秒の作り直しを見分けられない。DROP 直前の再照合も無い | 台帳を **USER_ID + 作成時刻 + run 固有のマーカー表**の 3 点に変更し、**開始時と `DROP USER` 直前の 2 回**照合する。否定 E2E を 5 件に拡張（同秒作り直し相当・**実際に race を起こす TOCTOU** を含む。いずれも exit≠0 でリソース無傷） |
+| M-001: 実装は `FETCH FIRST`（厳密）なのに検証は `FETCH APPROX FIRST` で測っており、索引利用の主張を裏づけない | 実装を `FETCH APPROX FIRST` に統一し、`search_sql()` を公開。**検証スクリプトが同じ関数から SQL を得る**ようにして、50,000 行で計画と recall を取り直した（ラウンド3） |
+| M-002: 取り込み・削除の best-effort で、削除は API 成功なのにチャンクが残りうる | 削除を**台帳行と同一トランザクション**に（`rag.py:_delete_row`）。失敗すれば commit しない＝削除は失敗として返る。実 DB のシナリオ 5 と単体テスト 2 件で固定。取り込みの自動リトライは未実装で残課題として明記 |
+| M-003: 1 migration に CREATE TABLE + 索引 3 本。途中失敗で再実行不能になる | 017 を **CREATE TABLE 1 文だけ**にし、索引は `ensure_indexes()` が冪等に作る。クリーン適用（001〜017）を証跡に追加 |
+| M-004: 上限超えの 1 行が分割されず、埋め込みの 2000 文字切り詰めと食い違う／生成の文脈が破裂する | 長い行を**文字オフセット付き**（`L12c1-800`）で分割。生成へ渡す文脈も 1 ヒット 1,200 文字で上限。境界テストを追加 |
+| M-005: 版採番に競合対策が無い | 既存行を `FOR UPDATE` でロックしてから採番。初回同時取り込みだけは直列化できない旨を docstring と限界に明記 |
+| m-001: シナリオ4 が回答内容を検証していない | HTTP 経路に変更し、**現行版の 600 を含み旧版の 300 を含まない**ことと citations が全件現行版であることを判定条件に |
 
-## review-2: PASS（完了ゲート到達）
+## review-2（FAIL: blocker 2 / major 3 / minor 3）への対応
 
-blocker 0 / E2E adequacy=sufficient。停止規律に従い、PASS の下に残る非 blocker は**修正せず
-residual として列挙**する（磨き込みの反復に入らない）。
+| 指摘 | 対応 |
+|---|---|
+| B-001: `setup_schema` の既存再利用が USER_ID・作成時刻しか見ずに GRANT / ACL / RP 付与を打つ | **最初の DDL の前に**マーカーを含む 3 点照合。否定 E2E に G6（既存再利用でマーカー不一致 → 権限が 1 つも変わらず中止）を追加 |
+| B-002: 削除時の `enabled()` が接続失敗を False に丸め、チャンク削除だけ飛ばして台帳行を commit しうる | 可用性チェックを外し、**同じ cursor で必ず** `delete_chunks` を実行。許すのは表が無い場合（ORA-00942）だけ。単体テスト 2 件を追加 |
+| M-001: 台帳の記録が全 GRANT 成功後で、途中失敗すると所有不明のスキーマが残る | **CREATE USER の直後**に receipt を記録し、マーカーは後から追記する（空マーカー同士の一致は許容） |
+| M-002: HTTP E2E がアップロード API 経路（`add_file` → `rag_adb.ingest`）を通っていない | 配線を単体テストで固定（有効時に呼ぶ / 無効時は呼ばない / 取り込み失敗でもアップロードは成功）。実アップロード API を実行しない理由は `SKIPPED.md` に明記 |
+| M-003: teardown の ACL 削除がホスト・権限の指定違いで ORA-01927、かつ ACL 残存でも成功終了 | 残っているときだけ**付与と同じホスト・権限**で削除し、**ユーザー 0 件かつ ACL 0 件**でのみ成功終了。実測では `DROP USER` で同時に消える |
+| m-001: 400 文字超のファイル名で採番・旧版化・INSERT の値がずれる | `doc_file` を 1 か所で正規化して全処理で共有。境界テストを追加 |
+| m-002: ADR / spec の「B木索引が無い限り使われない」が証跡と矛盾 | 「素の表では計画が不安定 / B木 + owner で PRE-FILTER が安定」に修正。反映先も `ensure_indexes()` と明記 |
+| m-003: `AdbBackendUnavailable` は 503 と書いてあるが実際は SSE の error フレーム | docstring を実装どおりに修正し、表が無いときに型付き例外が上がることを単体テストで固定 |
 
-| sev | file:line | 指摘 | 扱い |
-|---|---|---|---|
-| major | `jetuse_core/rag_metadata.py:49` | 任意精度 int を無制限に許可（`10**400` も通す）。SDK の attributes 型は `str/float/bool` で、上流が拒否する | residual（数値の上下限は仕様判断。実運用の属性で起きない入力） |
-| major | `jetuse_core/rag.py:276` | `vector_stores.files.create` が NotFound 以外で失敗すると OCI File と原本が孤児になる（DB 行が無く辿れない） | residual（本タスク以前からの経路。属性追加は失敗理由が1つ増えただけ） |
-| major | `service/routes/chat.py:188` | `rag_filters` の組み合わせ検証がモデル可用性判定・guard より後ろで、400 が保証されない経路がある | residual（どちらの経路でも検索は実行されない＝黙って効かないことは起きない） |
-| minor | `jetuse_core/rag_metadata.py:129` | 比較フィルタの値に空文字を許す（取り込み側は空を保存しないので必ず 0 件） | residual |
+## review-3（FAIL: blocker 2 / major 5）への対応
 
-## 完了ゲート
+| 指摘 | 対応 |
+|---|---|
+| B-001 / B-002: 固定名スキーマに対する自動 `DROP USER` / `CREATE USER` は、最終照合と実行の間に作り直されると別主体を触りうる。run 固有名にせよ | **スキーマ名はタスク指定の固定名**（`JETUSE_RAGM02` で隔離せよ）なので変更しない。Codex が示した代替（「固定名なら原子性を主張しない」）を採り、G5 の記述を「**最終照合より前**の差し替えを検出する」に修正し、残る窓を `SKIPPED.md` と報告書の「判断が要る事項」へ**受容した残リスク**として明示。`setup_schema` 側は最初の DDL 前に 3 点照合（G6）で塞いだ |
+| M-001: 現行版を削除しても旧版が `N` のままで検索不能になる | 削除と同一トランザクションで**最新の残存版を現行へ昇格**。単体テスト 3 件 + 実 DB のシナリオ 6 |
+| M-002: 同名ファイルの初回同時取り込みが両方 1.0 / 現行版になる | 文書レジストリ `rag_adb_docs`（018・PK=(owner,doc_file)）の行を作ってからロックして採番。初回競合も直列化される |
+| M-003: 0 チャンク・取り込み失敗が永久に `pending` で区別できない | レジストリに `status` / `error` を持たせ、バッジに **`error`** を追加。0 チャンク（本文を取り出せない PDF 等）と例外の両方を記録。単体テスト 4 件 |
+| M-004: チャンク長判定が改行と overlap を数えず上限を超える | 保存する本文（改行込み）で判定し、overlap も上限内に縮退。空行大量・上限近傍のテストを追加 |
+| M-005: 「TOCTOU 検証済み」は言い過ぎ | STATE・`guard.md`・`SKIPPED.md`・検証レポートの記述を実際に検証した内容へ修正（上記 B-001 と同じ） |
 
-- review_verdict = PASS（review-2・Codex 判定）
-- `.venv/bin/pytest packages/api/tests` 442 passed / `.venv/bin/ruff check packages/api` クリーン
-- 実環境 E2E: 正常系 2 本 + 否定系 7 本すべて PASS・証跡込みレビューで adequacy=sufficient
-- タスクパケット: `runs/2026-07-30T0025_RAGM-01/report/RAGM-01.html`（report パイプで配置）
+## review-4（FAIL: blocker 1 / major 6 / minor 1）への対応
+
+| 指摘 | 対応 |
+|---|---|
+| B-001: 固定名スキーマの自動 CREATE/DROP に閉じられない競合窓がある | Codex の代替案（「固定名なら自動 DROP を人間ゲートへ移す」）を採用。**`teardown.py` は `--yes` に加えて `--human-approved` が必須**になり、ループからは呼ばない。`setup_schema` は最初の DDL 前に 3 点照合。**run 固有名にするかはタスク指定（`JETUSE_RAGM02` で隔離）の変更**なので人間の判断事項として報告 |
+| M-001: PDF 以外を全部 UTF-8 で読むので DOCX / 画像が文字化け本文として indexed になる | 対応形式を `.txt` / `.md` / `.pdf` に明示。未対応・UTF-8 で読めない入力は取り込まず `error` として記録。単体テスト 2 件 |
+| M-002: `filename[:400]` を文書キーにしており、先頭が同じ別ファイルが統合される / BYTE セマンティクスで溢れる | `doc_key()` を新設。**バイト長**で切り、切ったときは原名のハッシュを付ける（衝突しない）。境界テスト追加 |
+| M-003: 取り込み状態が文書単位で、後続の取り込みが前の失敗を上書きする | 状態表を **`file_id` 単位**（`rag_adb_ingest` / 019）へ分離。文書レジストリ（018）は版のロック専用に |
+| M-004: 否定シナリオが `RAGM02_HOME` ごと複製してウォレット・パスワードを増やし、消していない | `RAGM02_LEDGER_PATH` で**台帳だけ**差し替える方式に変更（秘密を複製しない）。一時台帳は実行後に必ず削除 |
+| M-005: ユーザー不在時に早期 return するので、ACL の消し残しを再実行で回収できない | ユーザーの有無に関わらず ACL 残存を点検し、残っていれば削除。**ユーザー 0 件かつ ACL 0 件**でのみ成功終了 |
+| M-006: 初回同時取り込みの直列化が SQL 文字列の確認だけで実証されていない | **実 ADB の 2 接続で同時取り込み**（E2E シナリオ 7）。版 1.0 / 2.0 に分かれ、現行版は 1 つ、レジストリは 1 行 |
+| m-001: `backends.adb` の状態一覧に `error` が無い | 仕様（`specs/09-rag.md`）・コード内コメント・`SKIPPED.md`・検証レポートを `indexed` / `pending` / `error` / `disabled` に統一 |
+
+## review-5（FAIL: blocker 1 / major 3 / minor 1）への対応
+
+| 指摘 | 対応 |
+|---|---|
+| B-001: `CREATE USER` と所有証拠の記録が別 SQL で、間に作り直されると別主体を台帳へ採用しうる | ① **`setup_schema.py` も人間ゲート**（`--human-approved` 必須）にし、自動実行の経路から外した ② `CREATE USER` の直後に**自分が生成したパスワードでログインできること**を確かめてから権限を付ける（別主体が作り直していれば必ず失敗する）③ ログイン確認の直後に台帳へ記録（途中失敗からの復旧可能性）。run 固有名にするかは**タスク指定の変更**なので人間の判断事項として報告 |
+| M-001: `enabled()` が接続瞬断も「無効」に丸め、その間のアップロードが記録も残らず消える | 可用性を **`ready` / `absent` / `unavailable` の三値**に。`unavailable` はそのファイルを `error` として記録する（復旧後に気づける）。単体テスト 3 件 |
+| M-002: 20MB のアップロードで全チャンクのベクタを一括保持する | 埋め込みと INSERT を **200 チャンクずつの有界バッチ**に。バッチ境界を跨ぐ規模の単体テストを追加 |
+| M-003: `migrate.md` が「up to date」でクリーン適用を示していない | **空スキーマへ 001〜019 を適用**した証跡に差し替え、`RAG_ADB_CHUNKS` / `RAG_ADB_DOCS` / `RAG_ADB_INGEST` の 3 表の存在確認も記録 |
+| m-001: レジストリ INSERT が全 `IntegrityError` を握り潰す | **ORA-00001 だけ**を競合として許し、他は再送出。ロック後に行が無ければ明示的に失敗。単体テスト 2 件 |
+
+## review-6（FAIL: blocker 1 / major 2）への対応
+
+| 指摘 | 対応 |
+|---|---|
+| B-001: 取り込みと削除が別トランザクションで、取り込み中に削除すると「削除成功なのに後からチャンクが commit される」 | 取り込みは**台帳行（`rag_files`）を `FOR UPDATE` で押さえてから**チャンクを作り、行が無ければ 1 行も作らず中止（`IngestAborted`）。削除側も同じ行を `FOR UPDATE` で取る＝両者が直列化される。単体テスト追加。E2E も実運用と同じ順序（台帳行 → 取り込み）に統一 |
+| M-001: 可用性を一度 READY で覚えるため、その後の障害を検出できない | **キャッシュを廃止**（毎回問い合わせる）。「一度 READY を見た後に接続断 → UNAVAILABLE になる」テストを追加 |
+| M-002: G6 の setup 実行に `--human-approved` が無く、人間ゲートで止まっただけの証跡だった | フラグを渡して所有権照合まで到達させ、**停止理由が「マーカーが不一致」であること**も判定条件に加えた（証跡: `停止理由=所有権照合:True`） |
+
+## review-7（FAIL: blocker 1 / major 5 / minor 2）への対応
+
+| 指摘 | 対応 |
+|---|---|
+| B-001: ログイン確認の前に `GRANT CREATE SESSION` を打っており「他人のスキーマに権限を付けない」が成立していない | **権限を 1 つも付けずに**パスワード一致だけで同一性を判定する（`ORA-01045`= 権限不足＝資格情報は正しい / `ORA-01017`= 別主体、を区別）。`CREATE USER` 直後に receipt を永続化してから判定する |
+| M-001: DB 接続とロックを保持したまま外部の埋め込み API を待ち、プール（最大 4）が枯渇しうる | **埋め込みはトランザクションの外**で完了させ、そのあと短いトランザクションで台帳行ロック → INSERT。1 ファイル 2,000 チャンクの上限も追加（ベクタ保持量と時間の上限）。順序を固定する単体テスト追加 |
+| M-002: 障害中の `mark_unavailable()` は同じ落ちた DB へ書くので握り潰される | 記録は best-effort のままだが、`SKIPPED.md` / レポートに「全断中のアップロードは `pending` のまま残り、再アップロードで取り込まれる」と明記（恒久対策の outbox は後続） |
+| M-003: agent と rag の排他検査が RAG ディスパッチより後で、`agent + adb` が素通りする | 排他検査を**ディスパッチより前**に移動（`agent` / `agent_id` の双方）。非Responses系 3 経路すべてに効く |
+| M-004: 所有台帳を `write_text` で直接切り詰めており、途中で壊れると回収不能 | 同ディレクトリの 0600 一時ファイルへ書いて fsync → `os.replace` の**原子的更新**に（秘密ファイルも同じ） |
+| M-005: シナリオ4 を「実 HTTP 経路」と書いているが実体はプロセス内 ASGI | 表記を**「ASGI 統合テスト」**に修正し、配備環境での実ネットワーク検証は未実施として `SKIPPED.md` に残した |
+| m-001: 片付け後もローカルにウォレット・パスワードが残る | DB 側が完全に片付いたときだけ、ウォレット・秘密・台帳を削除する（失敗が残るときは回収のため保持） |
+| m-002: バッジのテストが実 DB へ接続しうる | `errored_file_ids` / `enabled` を monkeypatch し、DB に触れないよう固定 |
+
+## review-8（FAIL: blocker 1 / major 3 / minor 2）への対応
+
+| 指摘 | 対応 |
+|---|---|
+| B-001: パスワード確認前に台帳へ receipt を書くので、確認に失敗しても次回「空マーカー同士が一致」で再利用されうる | 台帳に **`verified` 状態**を持たせ、作成直後は `verified=false`。**未検証の receipt は所有証明として再利用しない**（照合が必ず落ちる）。既存再利用の経路でも**毎回パスワード一致を取り直す**。中断からの復旧用に `--reverify --human-approved`（DDL を打たずに再検証するだけ）を追加 |
+| M-001: `availability()` が 017 だけ見るので、部分適用中も READY になる | **3 表そろって初めて READY**。部分適用は `unavailable`（= そのファイルを error として残す）、未導入は `absent`。3 状態のテスト追加 |
+| M-002: 削除・昇格が文書レジストリをロックせず、同時削除で「全部 N」が残りうる | 削除も**取り込みと同じロック順序**（文書レジストリ行 → チャンク）に乗せた。順序を固定する単体テスト追加 |
+| M-003: `MAX_CHUNKS` 判定の前に PDF 全頁を展開するので上限が効かない | 抽出を**逐次（ジェネレータ）**にし、頁ごとに累計文字数を見て `MAX_EXTRACT_CHARS` で打ち切る。チャンク数も生成しながら打ち切る |
+| m-001: `rag_files.filename` を文字数で切っており、長い日本語名で ORA-12899 になりうる | 台帳側も**バイト境界**で切る（`_fit()`） |
+| m-002: DROP 済み・ACL 0 件の再実行経路でローカル資材が残る | その経路でも `purge_local_secrets()` を呼ぶ |
+
+## review-9（FAIL: blocker 1 / major 1 / minor 1）への対応
+
+| 指摘 | 対応 |
+|---|---|
+| B-001: 削除時の `ORA-00942` 握り潰しが広すぎ、017 のみ適用の**部分適用**でも台帳行だけ commit されてチャンクが残る | 「チャンク表が無い（＝未導入）」だけを**同じ接続で明示的に判定**して 0 件返し、それ以外の表欠落（部分適用）は**失敗させる**。単体テスト 2 件（未導入は許容 / 部分適用は commit しない） |
+| M-001: シナリオ7 が「実際に競合した」ことを示していない（逐次実行でも同じ結果） | 台帳行を**競争の前に**用意し、`threading.Barrier` で 2 スレッドを同時に突入させ、**実行区間が時間的に重なったこと**（`overlapped=True`）も判定条件にした |
+| m-001: 「実装どおりの構成で 2 回とも PRE-FILTER」は証跡と食い違う（その形の計測は 1 回） | 検証レポートを実測どおりに修正（「メタデータ列に索引がある構成では 2 回とも索引が使われた。実装どおりの形（PRE-FILTER）の計測は 1 回」） |
+
+## review-10（FAIL: blocker 1 / major 4）への対応と、停止の理由
+
+| 指摘 | 対応 |
+|---|---|
+| B-001: 否定テストが `--yes --human-approved` を自動付与しており、人間ゲートを迂回している | 破壊を伴うケース（G5）は **`RAGM02_GUARD_DESTRUCTIVE=1` の明示 opt-in でだけ**実行するようにし、既定は dry-run（所有権照合までは同じ経路）。**ただしこれは review-4 の指摘（「否定シナリオなのだから実削除を試させよ」）と逆向き**で、両立させるにはスキーマ名を run 固有にするしかない（= タスク指定の変更） |
+| M-001: 原本バックアップのキーだけ正規化前の名前を使い、長い名前で消し残る | バックアップ / 削除の両方を台帳と同じ正規化名（`_fit()`）に統一 |
+| M-002: 部分マイグレーション中は失敗の記録先（019）自体が無く、記録できない | 恒久対策（永続 outbox と再開ジョブ）は範囲外。`SKIPPED.md` に残課題として明記 |
+| M-003: DDL 成功 → 履歴 INSERT 前に停止すると再実行が ORA-00955 になる | **マイグレーションランナー（`jetuse_core/migrate.py`）の既存設計**に由来（001〜016 も同じ）。1 ファイル 1 DDL で影響を最小化したうえで、ランナーの回復設計はリポジトリ全体の後続課題として `SKIPPED.md` に記載 |
+| M-004: シナリオ7 の同期点が `ingest()` 入口で、版採番の critical section の重なりを直接示していない | 実測は「2 スレッドの実行区間が重なったうえで版が 1.0/2.0 に分かれ現行版が 1 つ」まで。直接示すには製品コードにテスト用フックが要るため、限界として `SKIPPED.md` に明記 |
+
+**停止の理由**: 10 ラウンドで製品コードの指摘（版の昇格・削除の原子性・部分適用・
+チャンク境界・競合・形式ゲート等）はすべて解消した。残る blocker は
+**検証用ハーネスが固定名スキーマ `JETUSE_RAGM02` を自動で作成・削除すること**に集約され、
+Codex の構造的な解決案（run 固有のスキーマ名）は**タスク指定（「タスク専用スキーマ
+JETUSE_RAGM02 で隔離すること」）の変更**にあたる。さらに review-4 と review-10 の指摘は
+互いに逆向き（実削除を試せ / 実削除のフラグをテストから立てるな）で、固定名のままでは
+両立しない。よって **FAIL override の判断を人間に仰いで停止**する（loop-protocol 手順7）。
+
+## review-10 への追加対応（オーケストレータ承認 2026-07-30 を受けて）
+
+判断1・2 の回答: **override はしない / 指示を「共有 loop ADB 内の run 固有スキーマ名で隔離」へ変更**。
+これを受けて正攻法で解消した。
+
+| 指摘 | 対応 |
+|---|---|
+| B-001（review-3〜10 で繰り返し出ていた固定名スキーマの TOCTOU） | **スキーマ名を run 固有（`JETUSE_RAGM02_<乱数>`）にした**。同名を作る他主体がいないので窓が構造的に消える。ADB は増やしていない（隔離はスキーマのみ）。既存があれば中止する形・3 点照合・DROP 直前の再照合は維持 |
+| review-4 と review-10 の相反（実削除を試させよ / テストが人間ゲートのフラグを立てるな） | **両立した**。否定シナリオは `teardown.py --yes` の**実削除を実際に試させる**（review-4）。run 固有名なので人間ゲート自体が不要になり、テストがフラグを立てる問題も消えた（review-10）。`RAGM02_GUARD_DESTRUCTIVE` の opt-in は撤去 |
+| setup / teardown の人間ゲート | 固定名に起因する措置だったので撤回。破壊操作の明示フラグ `--yes` は CLAUDE.md の規約どおり維持 |
+| M-001（正規化名の統一） | 対応済みを維持 |
+| M-002 / M-003 / M-004 | 範囲外・限界として `SKIPPED.md` に明記（部分適用中の再送キュー / マイグレーションランナー全体の回復設計 / 同期点の粒度） |
+
+証跡はスケール検証（3 ラウンド）・E2E（7 シナリオ）・ガード（6 件）とも **run 固有スキーマで
+最初から通しで再取得**した。片付け後、共有 ADB に `JETUSE_RAGM02%` は 1 つも残っていない。
+
+## review-11: **PASS**（blocker 0 / major 3 / minor 2・E2E adequacy=sufficient）
+
+固定名スキーマを run 固有名にしたことで、review-3〜10 で繰り返し出ていた B-001 系の指摘が解消し、
+11 ラウンド目で PASS。停止規律（loop-protocol 手順6）に従い、PASS 後は非 blocker を追わない。
+
+### PASS 後に行った修正（**コードは変更していない。文書と証跡のみ**）
+
+Codex の major 2 件は「引き渡す文書そのものの正確さ」だったので直した:
+
+- RAGM02-002: 検証レポートの数値が添付証跡と不一致 → **証跡（`scale/*.json`・ログ）と一致する数値へ全面的に直した**
+- RAGM02-003: 片付け手順の記述が実装と逆（`--human-approved` 必須と書いてあった）→ 実装どおり（`--yes` のみ）へ
+- 証跡の混在（旧固定名の setup / teardown ログ）→ **setup → スケール 3 ラウンド → E2E → ガード → 片付けを
+  単一の run 固有スキーマで通しで取り直し**、証跡セットを 1 本化
+
+### residual（未対応・後続トリアージ）
+
+| id | 位置 | 内容 |
+|---|---|---|
+| RAGM02-001 (major) | `jetuse_core/rag_adb.py:365` | `_mark_failed()` が `rag_files` をロックせず別トランザクションで状態を書くため、失敗記録と削除が競合すると取り込み状態の行が孤児として残りうる |
+| RAGM02-004 (minor) | `jetuse_core/rag.py:418` | `enabled()` が `absent` と `unavailable` の両方で False になり、DB 障害中もバッジが `disabled`（=未導入）に見える |
+| RAGM02-005 (minor) | `jetuse_core/rag_adb.py:316` | `error VARCHAR2(1000)` に対しエラー文を 1000 **文字**で切っており、日本語だと ORA-12899 になりうる |
+
+（M-002 部分適用中の再送キュー / M-003 マイグレーションランナー全体の回復設計 /
+M-004 同時取り込みの同期点の粒度は `e2e/SKIPPED.md` に限界として記載済み）
+
+## 残タスク
+
+- 人間ゲート: コミット / PR / push（未実施）

@@ -1,0 +1,71 @@
+{
+  "review_n": 10,
+  "timestamp": "2026-07-30T03:20:39+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-10.input.diff",
+  "raw_output_path": "reviews/review-10.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "自動否定テストが人間ゲートを代行し、固定名スキーマを誤って削除し得るため FAIL です。加えて、長いファイル名での原本削除漏れ、部分マイグレーション時の取り込み欠落、マイグレーション再開不能、競合 E2E の偽陽性があります。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 4,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "spikes/ragm02/guard_checks.py",
+      "line": 37,
+      "issue": "否定テストが `--yes --human-approved` を自動付与しています。特に G5 は正規台帳を渡し、非同期のマーカー更新が間に合うことだけを頼りに実 `DROP USER` を阻止しているため、更新スレッドの失敗やスケジューリング遅延で固定名スキーマを削除します。これは既存リソース変更の人間ゲートを実質的に迂回します。",
+      "suggestion": "自動テストから実削除フラグを除去し、DROP 直前の failpoint またはモック実行器で再照合までを検証してください。実 DROP を試す必要がある場合は run 固有の使い捨てスキーマを使い、人間承認値をテストコードから生成できない仕組みにしてください。"
+    },
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag.py",
+      "line": 103,
+      "issue": "長い UTF-8 ファイル名は `_fit()` で切って台帳へ保存されますが、原本バックアップは切る前の名前を Object Storage キーに使います。削除時は台帳の切り詰め済み名前を使うため、400 bytes 超のファイルを削除しても原本オブジェクトが残ります。",
+      "suggestion": "原本オブジェクトのキーを `file_id` のみにするか、作成時の完全なオブジェクトキーを台帳へ別途保存してください。400 bytes 超の日本語名についてアップロードから削除までのテストも追加してください。"
+    },
+    {
+      "id": "M-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag.py",
+      "line": 319,
+      "issue": "部分マイグレーションでは `availability()` が `UNAVAILABLE` を返しますが、続く `mark_unavailable()` はまだ存在しない `rag_adb_ingest` 表へ記録しようとして失敗します。その例外も握り潰されるため、バックグラウンドマイグレーション中に成功したアップロードが復旧後も永久に `pending` のまま取り込まれません。",
+      "suggestion": "部分適用中はアップロードを retriable error にするか、既に存在する `rag_files` に再取り込み対象を記録してください。永続 outbox を用意し、1表・2表だけ存在する状態からマイグレーション完了後に取り込みが再開されるテストを追加してください。"
+    },
+    {
+      "id": "M-003",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/migrations/017_rag_adb.sql",
+      "line": 1,
+      "issue": "Oracle DDL は暗黙コミットされる一方、`schema_migrations` への記録は後続 SQL です。CREATE TABLE 成功後、履歴 INSERT 前に停止すると、再実行は ORA-00955 で失敗して 018・019 へ進めません。1ファイル1 DDLへの分割だけでは再開可能性を保証できず、添付のクリーン適用証跡もこの境界を検証していません。",
+      "suggestion": "マイグレーターで既存オブジェクトの定義を検証したうえで当該 migration を回復記録するか、DDLを安全に冪等化してください。DDL成功直後の停止を注入し、次回起動で019まで完了する回復テストを追加してください。"
+    },
+    {
+      "id": "M-004",
+      "severity": "major",
+      "file": "spikes/ragm02/e2e.py",
+      "line": 424,
+      "issue": "シナリオ7の Barrier は `rag_adb.ingest()` 全体の前にあり、その後にDBトランザクション外の埋め込みAPI処理があります。計測区間の重なりは埋め込み処理だけでも成立し、DBの版採番区間が逐次実行でも版1.0/2.0という同じ結果になります。この証跡では文書レジストリのロック競合を実証できません。",
+      "suggestion": "両接続を `_lock_doc` 直前で同期し、片方がロックを保持している間にもう片方が待機することを観測してください。待機側が先行トランザクションのcommit後に2.0を採番することと、既存レジストリ行に対する同時取り込みも検証してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 13,
+    "adequacy": "insufficient",
+    "notes": "`e2e/scenario-1.md`〜`scenario-7.md` の7本と `e2e/guard.md` の否定6本を確認し、各記録上はPASSでした。クリーンマイグレーション、50,000チャンクの索引・recall測定、削除後照会も添付されています。一方、scenario-7はDBロック区間の競合を証明しておらず、実アップロードAPIと配備済みResource Principal経路はSKIPPED.mdに理由があるものの未検証です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザE2Eは実施していません。"
+    }
+  }
+}

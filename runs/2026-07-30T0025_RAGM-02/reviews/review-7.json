@@ -1,0 +1,95 @@
+{
+  "review_n": 7,
+  "timestamp": "2026-07-30T02:45:22+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-7.input.diff",
+  "raw_output_path": "reviews/review-7.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "固定名スキーマの所有確認前に権限変更が発生する安全上の blocker が残っています。実 ADB の検索・版管理・削除・競合証跡は充実していますが、配備環境の HTTP／Resource Principal 経路は未検証です。認証情報や OCID のコミットは差分内に見当たりません。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 5,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "spikes/ragm02/setup_schema.py",
+      "line": 81,
+      "issue": "作成したユーザーの同一性をログインで確認する前に `GRANT CREATE SESSION` を実行しています。`CREATE USER` 後に同名ユーザーが作り直されると別主体へ権限を付与し、GRANT失敗時にはreceipt未記録の孤児も残ります。「他人のスキーマには権限を一切付けない」という保証を満たしません。",
+      "suggestion": "run固有スキーマ名で競合を構造的に排除してください。固定名が必須なら、少なくともCREATE直後にreceiptを永続化し、CREATE SESSION未付与状態の認証結果（ORA-01045とORA-01017を区別）で資格情報を確認してから権限を付け、残る競合窓は自動処理せず個別の人間ゲートへ移してください。"
+    },
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag_adb.py",
+      "line": 341,
+      "issue": "`rag_files` と文書レジストリをロックしてDB接続を保持したまま、各バッチの外部GenAI埋め込みAPIを呼んでいます。20MB入力では多数のAPI往復中ずっと接続を占有し、最大4接続のプールが少数の同時アップロードで枯渇して、チャット・削除・状態取得まで失敗します。`call_timeout` は外部APIには効きません。",
+      "suggestion": "チャンク化と埋め込みをDBトランザクションの前に完了し、大量ベクトルは権限制限した一時ファイル等へスプールしてください。その後に台帳行をロックして存在を再確認し、短いトランザクションで版更新とINSERTを行ってください。"
+    },
+    {
+      "id": "M-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag_adb.py",
+      "line": 319,
+      "issue": "ADB障害を検出した直後の `mark_unavailable()` が、同じADBへ再接続してエラー状態を書こうとします。継続中の障害では書き込みも握り潰され、復旧後は当該ファイルが永久に `pending` となるため、「障害をerrorとして残して気づける」という主張が成立しません。",
+      "suggestion": "`rag_files` 登録時と同じトランザクションでADB取り込み状態を初期化し、未完了状態を復旧後に照合・error化または再試行するジョブを用意してください。少なくとも記録失敗を黙って完了扱いにしないでください。"
+    },
+    {
+      "id": "M-003",
+      "severity": "major",
+      "file": "packages/api/service/routes/chat.py",
+      "line": 203,
+      "issue": "非Responses RAG分岐が `agent and rag cannot be combined` の検査より先にreturnします。このため `agent=true` または `agent_id` と `rag_backend='adb'` を併用すると、拒否されずエージェント指定を無視してADB RAGを実行し、監査上はagentとして記録され得ます。",
+      "suggestion": "agent／agent_idとragの排他検査をモデル検査・RAGディスパッチより前へ移し、adbを含む各バックエンドの否定テストを追加してください。"
+    },
+    {
+      "id": "M-004",
+      "severity": "major",
+      "file": "spikes/ragm02/common.py",
+      "line": 256,
+      "issue": "DROP可否を決める所有台帳を `write_text` で直接切り詰めています。マーカー追記時のENOSPCやプロセス停止で既存receiptが壊れると、teardownが所有権を確認できず固定名スキーマを安全に回収できません。",
+      "suggestion": "同一ディレクトリの0600一時ファイルへ書き、flush・fsync後に `os.replace` する原子的更新へ変更してください。秘密ファイルの更新にも同じ方式を適用してください。"
+    },
+    {
+      "id": "M-005",
+      "severity": "major",
+      "file": "spikes/ragm02/e2e.py",
+      "line": 261,
+      "issue": "「実HTTP経路」とするシナリオ4は `TestClient(app)` によるインプロセスASGIテストで、証跡も `http://testserver` です。配備済みContainer Instance、認証、Resource Principal、実ネットワーク経路を通っておらず、SKIPPED.mdでも明示的に未実施です。完了条件のHTTP E2Eを完全には裏づけません。",
+      "suggestion": "jetuse-devへAPIを配備し、認証付きの実URLへ `POST /api/chat/stream` を実行してSSE回答とcitationsを検証してください。実施しない場合は「ASGI統合テスト」と表記し、配備環境検証を未完了ゲートとして残してください。"
+    },
+    {
+      "id": "m-001",
+      "severity": "minor",
+      "file": "spikes/ragm02/teardown.py",
+      "line": 100,
+      "issue": "正常なteardown後も `/tmp/jetuse-ragm02` の `secrets.json` と生成済みmTLS walletを削除しません。権限は0700/0600ですが、検証終了後も認証資材が残ります。",
+      "suggestion": "ユーザーとACLが0件であることを確認した後に限り、wallet・secrets・ledgerを削除してください。片付け失敗時は復旧用に保持する設計で構いません。"
+    },
+    {
+      "id": "m-002",
+      "severity": "minor",
+      "file": "packages/api/tests/test_rag.py",
+      "line": 183,
+      "issue": "ADB有効状態を作るテストで `errored_file_ids` をモックしていないため、実際のDB接続を試みる非 hermetic なテストになっています。環境内にowner `u` のエラー行がある場合は期待値も変わります。",
+      "suggestion": "`radb.errored_file_ids` も空集合を返すようmonkeypatchし、DBへ一切接続しないことを固定してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 13,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-07-30T0025_RAGM-02/e2e/scenario-1.md`〜`scenario-7.md` の7本と `guard.md` の否定6本はすべてPASS。`migrate.md` は001〜019のクリーン適用、`scale/appshape.json` 等は50,000チャンクでの索引計画・recallを裏づけています。一方、シナリオ4はTestClientであり、実アップロードAPIと配備済みContainer Instance／Resource Principal経路は `SKIPPED.md` のとおり未検証なので、配備完了の証跡としては不足します。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザE2Eは実施していません。"
+    }
+  }
+}

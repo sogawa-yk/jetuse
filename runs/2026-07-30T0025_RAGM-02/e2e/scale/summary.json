@@ -1,0 +1,80 @@
+{
+  "rows": 50000,
+  "dim": 1024,
+  "index": {
+    "kind": "HNSW(INMEMORY NEIGHBOR GRAPH)",
+    "seconds": 57.0,
+    "attempts": [
+      {
+        "kind": "HNSW(INMEMORY NEIGHBOR GRAPH)",
+        "ok": true,
+        "seconds": 57.0
+      }
+    ]
+  },
+  "index_meta": [],
+  "queries": 20,
+  "top_k": 10,
+  "by_filter": [
+    {
+      "filter": "F0 フィルタ無し",
+      "matching_rows": 50000,
+      "recall_at_10_mean": 1.0,
+      "recall_at_10_min": 1.0,
+      "exact_ms_median": 53.4,
+      "approx_ms_median": 59.6
+    },
+    {
+      "filter": "F1 版フィルタ current_version='Y'",
+      "matching_rows": 33333,
+      "recall_at_10_mean": 1.0,
+      "recall_at_10_min": 1.0,
+      "exact_ms_median": 47.0,
+      "approx_ms_median": 48.6
+    },
+    {
+      "filter": "F2 版+分類 current_version='Y' AND kind='constraint'",
+      "matching_rows": 16667,
+      "recall_at_10_mean": 1.0,
+      "recall_at_10_min": 1.0,
+      "exact_ms_median": 51.9,
+      "approx_ms_median": 67.5
+    },
+    {
+      "filter": "F3 高選択度 doc_file 指定 + 版フィルタ",
+      "matching_rows": 133,
+      "recall_at_10_mean": 1.0,
+      "recall_at_10_min": 1.0,
+      "exact_ms_median": 360.2,
+      "approx_ms_median": 346.0
+    }
+  ],
+  "accuracy_sweep": [
+    {
+      "target_accuracy": 70,
+      "recall_at_10_mean": 1.0,
+      "approx_ms_median": 37.8
+    },
+    {
+      "target_accuracy": 80,
+      "recall_at_10_mean": 1.0,
+      "approx_ms_median": 41.8
+    },
+    {
+      "target_accuracy": 90,
+      "recall_at_10_mean": 1.0,
+      "approx_ms_median": 42.5
+    },
+    {
+      "target_accuracy": 95,
+      "recall_at_10_mean": 1.0,
+      "approx_ms_median": 42.6
+    }
+  ],
+  "plans": {
+    "F0 フィルタ無し": true,
+    "F1 版フィルタ current_version='Y'": true,
+    "F2 版+分類 current_version='Y' AND kind='constraint'": true,
+    "F3 高選択度 doc_file 指定 + 版フィルタ": false
+  }
+}

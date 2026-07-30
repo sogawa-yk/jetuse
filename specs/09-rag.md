@@ -84,3 +84,44 @@
 - [ ] pytest / lint / build
 
 ## [RAG-04] RAGバックエンド比較ドキュメント — **完了** → docs/comparison/rag-backends.md（SPIKE-08で定量比較済み）
+
+## [RAGM-02] `adb` バックエンド — Oracle AI Database 自前索引（2026-07-30追記 / ADR-0020 §2）
+
+前提: ADB 23ai 以上（`VECTOR` 型）。既存 3 バックエンド（vector_store / select_ai / opensearch）は変更しない。
+
+### 設計
+
+- `/api/chat/stream` の `rag_backend` に `"adb"` を追加（既存の非 Responses 系と同じ枠組み＝自前検索 → 単発 delta）。
+- 表 `rag_adb_chunks`（migration `017_rag_adb.sql` は **CREATE TABLE 1 文だけ**）: 本文 `CLOB` +
+  メタ列（`doc_file` / `doc_version` / `sheet_name` / `cells` / `sha256` / `kind` / `current_version`）+
+  任意メタ `JSON` + `VECTOR(1024, FLOAT32)`。
+  **索引は `rag_adb.ensure_indexes()` が冪等に作る**（B木 3 本 + ベクタ索引）。マイグレーションに
+  複数 DDL を並べないのは、Oracle の DDL が暗黙コミットで、途中失敗すると「表はあるが migration
+  未記録」で再実行不能になるため。**フィルタ列の B木索引が無いと、メタデータ絞り込み付きの
+  ベクタ検索の実行計画が安定しない**（素の表では全件走査と `HNSW SCAN IN-FILTER` の両方が出た。
+  B木索引 + `owner_sub` 込みで `HNSW SCAN PRE-FILTER` に安定。実測: `docs/verification/RAGM-02.md`）。
+- 取り込み: 行を跨がないチャンク化（**チャンクごとに `sheet` と行範囲 `L{開始}:L{終了}` を出典として持つ**）→
+  クライアント側埋め込み（`jetuse_core.embeddings`）→ 投入。**DB 内埋め込みは採らない**
+  （`OCI$RESOURCE_PRINCIPAL` では ORA-24247。API キーの DB 内資格情報は ADR-0021 で廃止済み）。
+  同名ファイルの再取り込みは旧チャンクを `current_version='N'` に落として版を上げる（消さない）。
+- 索引は取り込み時に遅延作成（ベクタ索引は HNSW → 不可なら IVF）。作成できなくても厳密検索で
+  結果は正しいので取り込みは失敗させない。
+- 検索: 「メタデータ絞り込み + ベクタ類似検索」を 1 本の SQL（`FETCH APPROX FIRST` =
+  ベクタ索引を使う形。索引が無い / 使えないときは Oracle 側が厳密検索へ落ちる）。
+  フィルタは**許可キー制**（`current_version` /
+  `version` / `file` / `file_id` / `sheet` / `kind`）で、値は必ずバインドする。未知キーはエラーにする
+  （誤字が静かに 0 件になるのを防ぐ）。
+- citations: 既存契約 `{file_id, filename, score}` を保ったまま `source`（チャンク単位の出典）と `text` を足す。
+- 取り込み状況バッジ: `backends.adb` = `indexed` / `pending` / **`error`** / `disabled`。
+  - `indexed`: チャンク表にその `file_id` の行がある
+  - `error`: 取り込み状態表（019）が `error`（未対応形式・本文を取り出せない・取り込み時の例外）
+  - `pending`: どちらでもない（取り込み前 / 取り込み中）。再取り込みは同じファイルを上げ直す（版が上がる）
+  - `disabled`: チャンク表が無い環境（017 未適用 / 23ai 未満）
+
+### 完了条件
+
+- [x] 実機: `rag_backend='adb'` で取り込み → 検索 → 回答。同一ファイルの複数チャンクが別々の `cells` を返す
+- [x] 実機: 版フィルタの対照（`current_version='Y'` で旧版 0 件 / フィルタ無しでは返る）
+- [x] 実機: 業務表と JOIN したベクタ検索が 1 クエリで成立
+- [x] スケール検証（50,000 チャンク・実行計画と再現率）を `docs/verification/RAGM-02.md` に記録
+- [x] pytest / ruff
