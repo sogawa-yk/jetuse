@@ -1,0 +1,87 @@
+{
+  "review_n": 7,
+  "timestamp": "2026-07-29T16:53:31+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-7.input.diff",
+  "raw_output_path": "reviews/review-7.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "CLI 管理への移行には、既存リソースの誤採用・削除、旧 Terraform state との競合、shell command injection、失敗後に復旧不能となるライフサイクル上の blocker があります。実OCID・認証情報・Identity Domain実値の追加コミットは確認されませんでしたが、実環境E2Eは0件で中心経路を裏づけていません。",
+  "severity_counts": {
+    "blocker": 5,
+    "major": 2,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "infra/terraform/modules/hosted-agent/main.tf",
+      "line": 134,
+      "issue": "同じdisplayNameのACTIVEアプリを所有権や設定を検証せず採用し、後のreplace/destroyでは同じ名前で検索したアプリを削除します。prefixが既存リソースと衝突すると、Terraform管理外の既存アプリを取り込み、破壊するため、「既存リソースは参照のみ・変更は人間ゲート」という要件に反します。",
+      "suggestion": "スタック固有の所有権タグまたは一意な管理IDを作成時に付け、未所有の同名リソースを検出した場合は副作用なしで停止してください。削除時も名前だけでなく所有権を検証した正確なOCIDだけを対象にしてください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "blocker",
+      "file": "infra/terraform/modules/hosted-agent/main.tf",
+      "line": 89,
+      "issue": "旧`oci_generative_ai_hosted_application`、`oci_generative_ai_hosted_deployment`、`terraform_data.cascade_delete`から新しい`terraform_data.agent`へのstate移行がありません。既存またはtainted stateの更新では、旧リソースのdestroyと新resourceのcreateが独立して進み、新provisionerが旧アプリを再利用した後に旧resource/cascade_deleteがそれを削除する競合が発生します。applyが失敗するか、削除済みOCIDを出力して成功し得ます。",
+      "suggestion": "旧stateからの明示的な二段階移行を用意し、旧リソースの削除完了後に新規作成するか、destroyせず所有権付きで移管してください。旧構成を適用またはtaintしたstateから更新するacceptance testも追加してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "blocker",
+      "file": "infra/terraform/modules/hosted-agent/main.tf",
+      "line": 167,
+      "issue": "未引用のheredocへ`image_tag`、registry、repo、SDKなどをTerraform展開で直接埋め込んでいます。特に`image_tag`はORM入力として任意文字列を受け付けるため、`$(...)`やbacktickを含む値でResource Manager worker上のcommand substitutionを実行でき、引用符や改行でもrequest JSONが破損します。",
+      "suggestion": "request全体をTerraformの`jsonencode`で生成してsensitiveな環境変数または安全なファイルへ渡し、shell展開しないquoted heredocを使用してください。image tag、registry、SDKには仕様に沿った文字種validationも追加してください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "blocker",
+      "file": "infra/terraform/modules/hosted-agent/main.tf",
+      "line": 178,
+      "issue": "Application/Deployment作成後にpollがFAILED、NEEDS_ATTENTION、timeoutなどで終了すると、create-time provisioner失敗により`terraform_data`がtaintedになります。tainted resourceではdestroy-time provisionerが実行されないため外部リソースが残り、次回applyはACTIVEアプリと失敗済みDeploymentを再採用して同じ失敗を繰り返します。Application自体がFAILEDの場合もdestroy検索がACTIVE限定なので回収できません。",
+      "suggestion": "作成したOCIDと所有権を追跡し、create処理のfailure trap内で確実にカスケード削除してください。FAILED/CREATING/DELETINGも考慮し、POSTには安定した`opc-retry-token`を付けて応答喪失時の重複作成も防いでください。"
+    },
+    {
+      "id": "F-005",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1210_PORT-03/e2e/",
+      "line": 1,
+      "issue": "実環境E2E証跡が空で、最低2シナリオもSKIPPED.mdもありません。変更の中心である公開スタックapply、CLI経由の3SDK配備・invoke、置換、失敗時復旧、完全destroyはすべて未検証です。plan-only testはlocal-execを実行しないため、完了条件を裏づけません。",
+      "suggestion": "jetuse-devで公開ZIPのapply、3SDK invoke、設定変更による置換、失敗注入後の再apply、完全destroyを実施し、マスク済み証跡を保存してください。実施不能な経路には理由と代替検証をSKIPPED.mdへ記録してください。"
+    },
+    {
+      "id": "F-006",
+      "severity": "major",
+      "file": "infra/terraform/modules/hosted-agent/main.tf",
+      "line": 210,
+      "issue": "`api | grep | head | sed || echo GONE`はpipefailなしで実行されるため、GETが404やAPIエラーになっても末尾の`sed`が成功してpipeline全体は成功します。`GONE`にはならず空状態のまま12分待ってdestroyが失敗するため、コメントで意図した404終了経路が機能しません。",
+      "suggestion": "API呼び出しの終了コードをpipelineの外で捕捉し、404だけをGONEとして扱い、認証・通信・5xxは再試行または明示失敗にしてください。pipefailを使う場合はlocal-execのinterpreterをbashへ固定してください。"
+    },
+    {
+      "id": "F-007",
+      "severity": "major",
+      "file": "infra/terraform/modules/hosted-agent/tests/hosted-agent.tftest.hcl",
+      "line": 45,
+      "issue": "更新後のテストはlocal-execを実行せず、`distinct`なfingerprintが3個あることしか確認しません。この条件はSDK名だけで成立するため、minReplica、OAuth設定、環境JSON、image URI/tag、cleanup処理を欠落させても通ります。従来存在したpayload・scale-to-zero・artifact・destroy guardの回帰検査も失われています。",
+      "suggestion": "fingerprintを既知の期待hashと比較し、shell処理を独立スクリプトへ抽出してOCI CLIをmockしたfresh create、同名衝突、FAILED cleanup、replacement、destroy、特殊文字入力のテストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-07-29T1210_PORT-03/e2e/`は空でSKIPPED.mdもありません。シナリオ数は0件で、公開スタックapply、3SDK invoke、置換・復旧、destroyのいずれも確認できません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

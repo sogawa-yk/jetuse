@@ -21,7 +21,8 @@ apigw_allow_cidr = "0.0.0.0/0" # 例: "203.0.113.10/32"
 
 # CIへ注入する環境変数。共有値は environments/dev/terraform.tfvars の api_environment から流用し、
 # ADB_PASSWORD/ADB_QUERY_PASSWORD だけ本人スキーマのものに差し替える。
-# AUTH_REQUIRED / ADB_USER / ADB_QUERY_USER / LOG_OCID は main.tf が上書きするので不要。
+# AUTH_REQUIRED / ADB_USER / ADB_QUERY_USER / LOG_OCID / SELECT_AI_CREDENTIAL は
+# main.tf が上書きするので不要。
 api_environment = {
   AUTH_MODE           = "resource_principal"
   OCI_REGION          = "ap-osaka-1"

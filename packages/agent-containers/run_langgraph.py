@@ -13,14 +13,15 @@ SDK = "langgraph"
 DEFAULT_INSTRUCTIONS = "あなたは有能なアシスタント。必要に応じてツールを使い、日本語で簡潔に答える。"
 
 
-def _llm(model: str):
+def _llm(model: str, project_ocid: str = ""):
     from langchain_openai import ChatOpenAI
 
+    headers = ac._headers(project_ocid)
     return ChatOpenAI(
         model=model, api_key="OCI", base_url=ac.BASE_URL, temperature=0.2,
-        http_client=httpx.Client(auth=ac._signer(), headers=ac._headers(), timeout=120),
+        http_client=httpx.Client(auth=ac._signer(), headers=headers, timeout=120),
         http_async_client=httpx.AsyncClient(
-            auth=ac._signer(), headers=ac._headers(), timeout=120),
+            auth=ac._signer(), headers=headers, timeout=120),
     )
 
 
@@ -51,14 +52,14 @@ def _tools(enabled, ctx, trace):
 
 
 async def run(req: ac.InvokeRequest) -> ac.InvokeResponse:
-    ctx = {"rag_store_id": req.rag_store_id}
+    ctx = {"rag_store_id": req.rag_store_id, "project_ocid": req.project_ocid}
     trace: list[ac.ToolCallTrace] = []
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         from langgraph.prebuilt import create_react_agent
 
     agent = create_react_agent(
-        _llm(req.model), _tools(req.enabled_tools, ctx, trace),
+        _llm(req.model, req.project_ocid), _tools(req.enabled_tools, ctx, trace),
         prompt=req.system_prompt.strip() or DEFAULT_INSTRUCTIONS)
     msgs = [(m["role"], m["content"]) for m in req.history]
     msgs.append(("user", req.input))

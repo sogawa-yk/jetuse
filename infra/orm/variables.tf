@@ -138,6 +138,54 @@ variable "enable_semantic_store" {
   default     = true
 }
 
+# ホスト型エージェント(PORT-03 / ADR-0019)。min_replica=0(ゼロスケール)なので、
+# 使わない利用者にアイドル課金は発生しない。既定 ON で 3SDK すべてを配備する。
+variable "enable_hosted_agents" {
+  description = "ホスト型エージェント(3SDK の ReAct コンテナ)を配備する。認証有効かつ 大阪/シカゴ のときだけ有効"
+  type        = bool
+  default     = true
+}
+
+variable "hosted_agent_min_replica" {
+  description = "ホスト型エージェントのアイドル時レプリカ数。既定 0(ゼロスケール=アイドル課金なし)。デモで初回応答を速くしたいときだけ 1 にする"
+  type        = number
+  default     = 0
+
+  # モジュール側の max_replica は 2。整数かつ 0..2 に収めないと、
+  # 無効な scaling_config として apply 途中で失敗する(review F-007)。
+  validation {
+    condition     = floor(var.hosted_agent_min_replica) == var.hosted_agent_min_replica && var.hosted_agent_min_replica >= 0 && var.hosted_agent_min_replica <= 2
+    error_message = "hosted_agent_min_replica must be an integer between 0 and 2 (0 = scale to zero, 1 = always warm)."
+  }
+}
+
+# 既存IAMを流用する運用(enable_dynamic_group=false / enable_runtime_policy=false)では、
+# スタックはホスト型リソースを Dynamic Group / policy に載せられない。事前設定が無いまま
+# 配備すると、コンテナが resource principal を持てず invoke 時に必ず失敗する(review F-004)。
+variable "existing_iam_covers_hosted_agents" {
+  description = "既存IAM流用時に、既存 Dynamic Group が generativeaihostedapplication / generativeaihostedapplicationiam / generativeaihosteddeployment を含み、既存 policy が JetUse ランタイム権限を与えていることを確認済みである"
+  type        = bool
+  default     = false
+}
+
+# 配布物に含まれる全コンテナ画像(API / Functions ルーター / 3SDK エージェント)の共通タグ。
+# 契約を共有するコンポーネントを別リリースに散らさないため、1つの変数で束ねる(review F-004)。
+# release.yml は latest と commit SHA の両方を push しており、配布ZIP生成時に
+# scripts/package-orm-stacks.sh がこの既定値をそのビルドの commit SHA へ固定する。
+variable "image_tag" {
+  description = "コンテナ画像の共通タグ。配布ZIPではビルド時の commit SHA に固定される（api_image_url / fn_router_image を明示した場合はそちらが優先）"
+  type        = string
+  default     = "latest"
+}
+
+# ocir_namespace を公開既定から変えた(=自テナンシへミラーした)場合、エージェント画像も
+# ミラーしたことを明示させる。api_image_url / fn_router_image と同じ考え方(review F-006)。
+variable "hosted_agent_image_registry" {
+  description = "エージェント画像のレジストリを明示指定する(例 ord.ocir.io/<namespace>)。空ならデプロイリージョンの OCIR を ocir_namespace から自動合成"
+  type        = string
+  default     = ""
+}
+
 variable "enable_opensearch" {
   description = "OpenSearch RAGクラスタ(常設課金・高コスト)。既定OFF"
   type        = bool

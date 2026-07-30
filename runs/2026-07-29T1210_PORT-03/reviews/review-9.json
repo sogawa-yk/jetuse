@@ -1,0 +1,87 @@
+{
+  "review_n": 9,
+  "timestamp": "2026-07-29T18:47:06+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-9.input.diff",
+  "raw_output_path": "reviews/review-9.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "認証情報・OCID・エンドポイント実値の新規コミットは見当たりません。一方、OCI API 障害時に削除済みと誤認して state だけを除去する経路、および既存リソースを無視して重複作成する経路が残るため FAIL です。",
+  "severity_counts": {
+    "blocker": 3,
+    "major": 4,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "infra/terraform/modules/hosted-agent/scripts/delete_agent.sh",
+      "line": 58,
+      "issue": "DELETE 後の確認 GET が非0になると、404 かどうかを区別せず削除完了として exit 0 します。401/403、429、5xx、通信断でも destroy provisioner が成功し、Hosted Application を残したまま terraform_data が state から除去されます。",
+      "suggestion": "HTTP status を取得して404のみ削除完了としてください。429・5xx・通信失敗は再試行し、401/403や再試行上限到達時は非0終了して state を保持してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "blocker",
+      "file": "infra/terraform/modules/hosted-agent/scripts/ensure_agent.sh",
+      "line": 47,
+      "issue": "作り直し用 delete_app_and_wait も、DELETE 後の任意の GET 失敗を「もう無い」と判断します。一時的な障害で旧Applicationが残ったまま関数が成功し、次回applyが同名Applicationの作成へ進むため、重複・衝突・収束不能を起こし得ます。",
+      "suggestion": "削除待機処理を共通化し、404のみ完了、再試行可能なエラーはbackoff付き再試行、それ以外は失敗としてください。旧リソースが実際に消えるまでPOSTしない障害注入テストを追加してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "blocker",
+      "file": "infra/terraform/modules/hosted-agent/scripts/ensure_agent.sh",
+      "line": 72,
+      "issue": "FAILED/NEEDS_ATTENTION/CREATING の既存Applicationを発見した後、詳細GETに失敗すると continue で無視し、そのまま新規ApplicationをPOSTします。所有権を確認できない障害時に即終了するという修正方針に反し、既存リソースがある状態で重複作成へ進みます。",
+      "suggestion": "詳細GET失敗はcontinueせずfailしてください。同名リソースの所有者タグが不一致の場合も作成を停止し、一覧成功・詳細GET失敗・所有者不一致を網羅するテストを追加してください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "major",
+      "file": "infra/terraform/modules/hosted-agent/scripts/delete_agent.sh",
+      "line": 28,
+      "issue": "削除対象探索をACTIVE/CREATING/FAILED/NEEDS_ATTENTIONの4状態に限定しています。DELETINGなど未列挙の状態にあるApplicationは「既に存在しません」と誤判定され、stateから外れます。ensure_agent.sh側も未列挙状態を見落として新規作成へ進み得ます。",
+      "suggestion": "lifecycleStateで分割せず同名Applicationを一度一覧し、全候補の状態と所有者を評価してください。未知状態は安全側に倒して失敗させてください。"
+    },
+    {
+      "id": "F-005",
+      "severity": "major",
+      "file": "infra/terraform/modules/hosted-agent/scripts/ensure_agent.sh",
+      "line": 56,
+      "issue": "既存ACTIVE Applicationは所有者タグしか検証しません。scalingConfig、inboundAuthConfig、environmentVariablesが変更されても、DeploymentのURI/tagが同じなら再利用して終了するため、Terraform入力変更が実環境へ反映されません。",
+      "suggestion": "既存Applicationの設定をHA_APP_BODYと比較し、不一致なら所有済みApplicationをカスケード削除して再作成してください。環境変数、IDCS設定、scaling設定の変更後applyをテストしてください。"
+    },
+    {
+      "id": "F-006",
+      "severity": "major",
+      "file": "ops/e2e/agents-degraded.mjs",
+      "line": 42,
+      "issue": "health.pyは意図的な未配備をstatus=disabledへ変更しましたが、縮退E2Eは引き続きstatus=unavailableを期待しています。HOSTED_AGENTS_ENABLED=falseを渡す新構成では、修正後のE2Eを実行するとこの検査が失敗します。またルートのok=trueも検証していません。",
+      "suggestion": "縮退構成ではagents.status=disabledと/api/healthのok=trueを検証してください。配備有効なのに設定欠損した別シナリオでunavailableとok=falseを検証してください。"
+    },
+    {
+      "id": "F-007",
+      "severity": "major",
+      "file": "infra/terraform/modules/hosted-agent/scripts/ensure_agent.sh",
+      "line": 130,
+      "issue": "HA_DEP_BODY全体に対して最初の__APP_OCID__をsed置換しています。image_tagなど別の許可入力が同じ文字列を含む場合、そちらが先に置換されてhostedApplicationIdのプレースホルダが残る可能性があります。置換対象がJSONフィールドに限定されていません。",
+      "suggestion": "`\"hostedApplicationId\":\"__APP_OCID__\"`全体を対象に置換するか、JSONパーサーでhostedApplicationIdフィールドだけを設定してください。プレースホルダと同じimage_tagを使う境界テストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-07-29T1210_PORT-03/e2e/`には既存機能39/39、3 SDK 9/9、35分アイドル後実行、無効化構成6/6、destroy成功の5シナリオがあります。ただしSTATE.md記載のとおり、今回のCLI堅牢化・再利用判定・jsonencode・health disabled・縮退ハーネス修正はE2E成功後に追加されています。縮退証跡も旧6項目かつstatus=unavailableで、新コードの7項目・disabled・ルートokを裏づけません。障害注入や設定変更後の再収束も未検証で、SKIPPED.mdによる理由提示もないため現差分には不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

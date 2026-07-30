@@ -1,0 +1,87 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-07-29T16:40:08+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "リソースプリンシパルによる主要フローは実環境で動作していますが、提示差分だけでは新規共通モジュールが欠落しており、共有 ADB を変更する処理にも接続先を強制検証するゲートがありません。E2E の所有権管理と片付け証跡にも重大な不整合があるため完了とは判断できません。",
+  "severity_counts": {
+    "blocker": 4,
+    "major": 3,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "ops/setup-dev-schema.py",
+      "line": 28,
+      "issue": "新たに import した `ops/_adb.py` が提示された git 差分に含まれていません。`setup-select-ai.py` も同じ依存を持つため、この差分だけを適用した clean checkout では両スクリプトが `ModuleNotFoundError` で起動しません。添付E2Eは作業ツリーにだけ存在する未提示コードを使っており、差分の裏付けにもなっていません。",
+      "suggestion": "`ops/_adb.py` を変更セットへ追加し、その内容を含む差分で再レビューしてください。clean checkout にパッチを適用した状態で import とE2Eを再検証してください。"
+    },
+    {
+      "id": "B-002",
+      "severity": "blocker",
+      "file": "ops/setup-dev-schema.py",
+      "line": 86,
+      "issue": "ADMIN接続後の `_adb.show_target()` は DB_NAME/DSN を表示するだけで、ADB_OCID、OCIテナンシ、`jetuse/dev`コンパートメント、SQLセッションとADB API上の同一性を検証しません。その直後に CREATE/ALTER USER、GRANT、ACL、リソースプリンシパル付与を行うため、環境変数やウォレットの取り違えで任意の既存ADBを変更できます。`setup-select-ai.py`にも同じ問題があります。",
+      "suggestion": "共通ヘルパを fail-closed な `assert_target()` に変更し、OCI configのtenancy、ADB_OCIDの表示名・コンパートメント・リージョン、ADB接続文字列のインスタンス固有トークンとSQLセッションのDB_NAMEを照合してからDDLを許可してください。許可対象外は表示だけで続行せず非ゼロ終了させてください。"
+    },
+    {
+      "id": "B-003",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 281,
+      "issue": "E2E台帳がバケット名だけを所有権の根拠にし、teardown後にも台帳を失効させません。削除後に同名バケットが他者によって再作成されると、stale台帳で所有物と誤認して `put_object` や `delete_bucket` を実行します。スキーマも作成前に名前だけ記録しており、既存だった場合の中止がないため同様にALTER/DROPし得ます。実際のscenario-3は「バケット再利用」経路を通っています。",
+      "suggestion": "run-idを含む一意名を使って既存時は必ず中止するか、作成時刻・etag・不変IDなど再作成を識別できる値を台帳へ記録して全変更・削除前に照合してください。スキーマは事前不存在を必須条件にし、作成成功後の作成時刻を記録してください。削除成功時には台帳を失効させてください。"
+    },
+    {
+      "id": "B-004",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 154,
+      "issue": "E2EのOCI API側ではADB_OCIDを検証していますが、実際のSQL接続は固定パスのキャッシュ済みウォレットを再利用し、DB_NAMEの末尾が `JETUSELOOP2` かだけを確認しています。APIで確認したADBとSQLでDDL/DROPしたADBが同一である保証がなく、別テナンシの同名ADBでも通過します。",
+      "suggestion": "ウォレットをADB_OCIDごとのディレクトリへ保存し、APIが返す接続文字列のインスタンス固有トークンとSQLセッションのDB_NAMEを照合してください。OCI configのtenancyとコンパートメント階層のルートも一致確認し、同一ADBを証明できなければDDL・teardownを中止してください。"
+    },
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "ops/setup-dev-schema.py",
+      "line": 60,
+      "issue": "ORA-28007を「指定パスワードが現行値と同じ」と断定して `known=True` を返していますが、このエラーはパスワード履歴により再利用できない場合にも発生し、現在のパスワードと同じとは限りません。特にquery userは実ログイン確認がないまま指定値を配備用パスワードとして案内され、後続接続が失敗します。添付E2Eは現行値を再指定したケースしか検証していません。",
+      "suggestion": "ORAコードを構造的に判定したうえで、ORA-28007時はapp/queryの両ユーザーについて指定パスワードで実ログインを確認してください。確認できなければ失敗終了し、現行値と履歴値の双方を単体テストで網羅してください。"
+    },
+    {
+      "id": "M-002",
+      "severity": "major",
+      "file": "ops/setup-dev-schema.py",
+      "line": 102,
+      "issue": "既存app userのパスワードを省略すると、要求されているmigrationを実行せずexit 0になります。新しいmigrationがある再実行でも自動化側には成功と見えるため、スキーマが古いまま残ります。E2Eは常に `--app-password` を渡しており、この通常の再実行経路を検証していません。",
+      "suggestion": "`--skip-migrate` が明示された場合だけ成功扱いで省略し、それ以外でパスワード不明なら非ゼロ終了してください。またはADMIN経由で安全にmigrationできる方式を用意し、既存ユーザー・パスワード省略・未適用migrationありのテストを追加してください。"
+    },
+    {
+      "id": "M-003",
+      "severity": "major",
+      "file": "STATE.md",
+      "line": 42,
+      "issue": "「検証用リソースは削除済み」とする完了主張を添付証跡が裏付けていません。scenario-3はバケット再利用、文書投入、profile/index作成を記録していますが、`created-resources.json`にはschemaしかなく、`teardown.log`にもbucket/profile/indexの削除がありません。`post-teardown-state.log`もDBユーザーとcredentialだけでObject Storageやvector indexを確認していません。さらにteardown実装はDROP失敗を握り潰して成功終了します。",
+      "suggestion": "同一台帳・同一runの一貫した証跡でteardownを再実行し、bucketの404、対象objectの不存在、profile/index/schemaの不存在を再照会して記録してください。削除失敗は集約して非ゼロ終了し、削除後確認が全件成功するまで完了を主張しないでください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "insufficient",
+    "notes": "`scenario-1.log`（ops 2本の2回実行）、`scenario-2.log`（RPでObject Storage HTTP 200）、`scenario-3.log`（2文書の索引・検索）、`scenario-4.log`（旧APIキー方式ORA-20404との対照）はすべてPASSで、最低2シナリオの要件は満たしています。`SKIPPED.md`のterraform applyと配備済み `/api/health` を人間ゲートとして省略した理由も記載されています。ただし実行に使った `ops/_adb.py` が提示差分に含まれず、SQL接続先の同一性、既存リソースの所有権、scenario-3後のbucket/profile/index片付けを証明できないため、diffの裏付けとしては不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されておらず、ブラウザツールを使わないよう明示されているため未実施です。"
+    }
+  }
+}

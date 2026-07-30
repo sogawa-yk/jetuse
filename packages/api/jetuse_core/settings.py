@@ -115,8 +115,10 @@ class Settings(BaseSettings):
     # NL2SQL(SQL-02): SemanticStore + 読取専用ユーザー
     semstore_ocid: str = ""
     adb_query_password: str = ""
-    # Select AI クレデンシャル名。ORM/RP環境は OCI$RESOURCE_PRINCIPAL(INFRA-03)
-    select_ai_credential: str = "JETUSE_OCI_CRED"
+    # Select AI クレデンシャル名。配備先(ORM/dev)も開発も ADB 自身の身分に統一した(ADR-0021)。
+    # かつての既定 JETUSE_OCI_CRED は API キー焼き込み版で、これを作る経路は廃止済み
+    # (＝既定のままだと存在しない資格情報を指す)。上書きは env SELECT_AI_CREDENTIAL。
+    select_ai_credential: str = "OCI$RESOURCE_PRINCIPAL"
 
     # 議事録(VOICE-01): 音声と文字起こし結果のバケット(空なら機能無効=503)
     speech_bucket: str = ""
@@ -140,6 +142,10 @@ class Settings(BaseSettings):
     agent_openai_app_ocid: str = ""
     agent_langgraph_app_ocid: str = ""
     agent_adk_app_ocid: str = ""
+    # PORT-03: このスタックがホスト型エージェントを配備する構成かどうか。
+    # 「意図的に配備していない」と「配備したのに壊れている」を health で区別するために使う
+    # (前者で /api/health 全体の ok を落とすと、エージェント不要のスタックが常時赤くなる)。
+    hosted_agents_enabled: bool = False
 
     # OPS-02: OCI Logging(カスタムログOCID。空なら送らない) / Monitoring名前空間
     log_ocid: str = ""

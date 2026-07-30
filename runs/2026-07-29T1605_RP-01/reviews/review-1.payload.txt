@@ -1,0 +1,1282 @@
+diff --git a/.env.example b/.env.example
+index ae3c5cb..e93ad2a 100644
+--- a/.env.example
++++ b/.env.example
+@@ -24,6 +24,9 @@ ADB_OCID=
+ # 例: ADB_USER=JETUSE_ALICE / ADB_QUERY_USER=JETUSE_ALICE_Q（ops/setup-dev-schema.py で作成）
+ ADB_USER=JETUSE_APP
+ ADB_QUERY_USER=JETUSE_QUERY
++# DB の中で DBMS_CLOUD / DBMS_CLOUD_AI が使う資格情報(ADR-0021)。開発も配備も ADB 自身の身分に統一。
++# 空=既定 OCI$RESOURCE_PRINCIPAL。ops/setup-dev-schema.py が ENABLE_RESOURCE_PRINCIPAL 済みであること。
++SELECT_AI_CREDENTIAL=OCI$RESOURCE_PRINCIPAL
+ 
+ # SPIKE-02 (SSE)
+ APIGW_ENDPOINT=
+diff --git a/STATE.md b/STATE.md
+index 14eb392..a8cc035 100644
+--- a/STATE.md
++++ b/STATE.md
+@@ -1,185 +1,58 @@
+-# STATE — SPIKE-M1（RAG メタデータの実現方式スパイク）
++# STATE — RP-01（開発環境の DB 内資格情報をリソースプリンシパルへ統一）
+ 
+-- task: SPIKE-M1
+-- run_id: 2026-07-28T1848_SPIKE-M1
+-- branch: feat/SPIKE-M1（base: main。共有物のため dev ではなく main 起点）
++- task: RP-01
++- run_id: 2026-07-29T1605_RP-01
++- branch: feat/RP-01（base: main。共有物のため dev ではなく main 起点）
+ - area: api
+-- review_verdict: **PASS**（review-8。blocker 0 / major 7 / minor 1・E2E adequacy=sufficient）
+-- last_review_ref: runs/2026-07-28T1848_SPIKE-M1/reviews/review-8.json
+-- updated_at: 2026-07-28
+-
+-## 検証環境
+-
+-共有 loop ADB `jetuse-loop-adb`（ap-osaka-1 / Oracle AI Database 26ai 23.26.3.1.0）に
+-スキーマ `JETUSE_SPIKE_M1` を作って隔離（ADB は増やしていない）。
+-検証用 OCI リソースは `jetuse-spike-m1`（バケット）/ `jetuse-spike-m1-vs`（Vector Store）/
+-`jetuse-spike-m1-project`（GenAI プロジェクト）。片付けは `spikes/spike_m1/teardown.py --yes`。
+-
+-> 人間ゲート事項: 共有 loop ADB の **ADMIN パスワードをリセットした**（接続情報がこの worktree に
+-> 無く、②③ の実機検証が不可能だったため。承認を得て実施）。新パスワードは gitignore 済みの
+-> `.env` にのみ置いてある。他の利用者と共有する場合は同期が必要。
+-
+-## 完了したこと
+-
+-- 方式③（ADB 自前索引 / DBMS_VECTOR_CHAIN）: **PASS**。版フィルタ付きベクタ検索が 1 本の SQL で成立し、
+-  フィルタ無しでは旧版 c08/c09 がヒット、`current_version='Y'` では旧版 0 件（対照成立）。
+-  出典は列 / JSON として構造化返却。DB 内埋め込みも動作（1024 次元）。
+-- 方式②（Select AI 索引）: 任意キーは `ORA-20048` で**拒否**。`$VECTAB` は固定 6 キーのみ。
+-  列追加は可能だが**索引リフレッシュで新規行が NULL**（実測）。
+-- 方式①（OCI Vector Store + file_search）: **属性付与もフィルタ検索も可**だった（当初想定と逆）。
+-  限界は「属性がファイル単位」「キー16/値512/入れ子不可」「`in` 不可」「未定義キーが静かに 0 件」。
+-- レイテンシ実測（各 5 回・中央値／**3 方式が同じ chunk_id 集合 c01〜c10 を見ていることを計測前に実測確認**）:
+-  ③ 16.7 ms（SQLのみ・別途埋め込み 84.5 ms）/ 192.7 ms（DB内埋め込み込み）、② 69.3 ms、
+-  ① 121.5 ms（検索のみ）。生成込みは ① 4324 ms / ② 3276 ms。
+-  実行ごとの揺れが大きく **レイテンシは方式選択の決め手にならない**（同じ桁）。
+-- 成果物: `docs/verification/SPIKE-M1.md` / `docs/comparison/rag-metadata-backends.md` /
+-  `docs/decisions/ADR-0020-rag-metadata-backend.md`（**proposed**）/ `docs/tips.md` 追記 /
+-  `spikes/spike_m1/`。E2E 証跡は `runs/<run-id>/e2e/`（scenario-1〜3 + SKIPPED.md + 生ログ）。
+-- `.venv/bin/pytest packages/api/tests` 325 passed / `.venv/bin/ruff check packages/api spikes/` クリーン。
+-
+-## review-1（FAIL: blocker1 / major4 / minor1）への対応
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| blocker: 接続先を検証せず DDL を打つ | `common.assert_target()` を追加し、DB_NAME=JETUSELOOP2・region=ap-osaka-1 を実際に問い合わせて確認してから DDL を打つ（fail-closed）。setup_schema / teardown の両方で通す |
+-| major: 索引作成が全滅しても握り潰す | `build_index()` は HNSW/IVF 双方失敗で `RuntimeError`。作成できた索引種別を判定行に出す |
+-| major: `load_env()` の setdefault と戻り値がずれる | 戻り値を実効値（`os.environ`）に統一 |
+-| major: `call_timeout = 0`（無期限） | `common.CALL_TIMEOUT_MS`（既定 600 秒・env で上書き可）を接続時に設定 |
+-| major: teardown.py が無いのに案内していた | `spikes/spike_m1/teardown.py` を追加（既定 dry-run・`--yes` で実削除） |
+-| minor: 「実プラン」の記述が不正確 | EXPLAIN PLAN は推定計画であること、実績プランは V$SESSION 権限が無く取れないことを docstring とレポートに明記 |
+-
+-## review-3（FAIL: blocker5 / major8）への対応
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| blocker×3: 名前一致だけで既存 OCI リソース（Vector Store / バケット / GenAI プロジェクト）を再利用・削除 | 作成時に `created-resources.json` へ ID を記録する台帳を導入。再利用も削除も**台帳にある ID だけ**。台帳に無い同名は中止 |
+-| blocker: `connect_spike()` がガードを通らない | `connect_admin` / `connect_spike` の両方で `assert_target()` を通す |
+-| blocker: 既存ユーザーへ無条件に ALTER/GRANT/ACL | 既存かつ台帳に無ければ中止。ADB は `<prefix>_<db_name>` を返すため判定を末尾一致に修正 |
+-| major: 「本文が ADB から出ない」が実装と矛盾 | **事実誤り。訂正済み**。`UTL_TO_EMBEDDING` は本文を OCI GenAI の `embedText` へ送る。比較表・ADR・検証レポートの該当箇所を「アプリ層を経由しない／テナント外に出ないわけではない」に修正 |
+-| major: `CALL_TIMEOUT_MS` が import 時評価・0 を許す | `call_timeout_ms()` を接続時に解決し、0 以下は拒否 |
+-| major: ① の取り込み待ちがストア全体の件数 | 今回登録した file_id だけを待ち、失敗・タイムアウトは例外 |
+-| major: ②の索引構築タイムアウト / 常に exit(0) | タイムアウトを例外化。`sys.exit(0)` を撤去 |
+-| major: refresh チェックが失敗を握り潰す | STOP/RUN/START の失敗を再送出。プローブ用オブジェクトは**未使用の名前を選ぶ**（既存名だと「新規行なし＝欠損なし」と誤読する。実際に一度誤読した） |
+-| major: ③ の PASS 条件が緩い（B が 0 件でも PASS） | 対照成立・B が 5 件・全件現行版・C も非空、まで確認 |
+-| major: fingerprint をログ出力 | 出力を削除 |
+-| major: teardown が DB 失敗で OCI 片付けに到達しない | 各段を独立実行し、失敗を集約して非ゼロ終了 |
+-| E2E: 否定シナリオが無い / teardown 未実施 | `guard_checks.py`（G1〜G3）を追加し scenario-4 として証跡化。`teardown.py --yes` を実行し、残骸ゼロを OCI/ADB へ問い合わせて確認（`teardown.log` / `teardown-verify.log`） |
+-
+-## review-4（FAIL: blocker5 / major5 / minor1）への対応
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| blocker: COMPARTMENT_OCID が承認済みか未検証のままリソース作成 | `assert_compartment()` を追加。OCID を **API で名前解決**して親子（`jetuse`/`dev`）まで照合。バケット作成・プロジェクト作成の前に必ず通す。**これで `.env` が旧レイアウトの `jetuse-dev` を指していた誤りが実際に検出された**（loop ADB がいるのは `jetuse/dev`）。`.env` を修正して全証跡を取り直した |
+-| blocker: 書き換え可能な purpose メタデータを所有の根拠にしていた | 削除。**台帳（作成時に記録した ID）だけ**を所有の根拠にする |
+-| blocker: teardown が `_clients()` 経由でプロジェクトを新規作成しうる | `_clients(allow_create=False)`。片付け経路では作成を禁止し、無ければ中止 |
+-| blocker: guard_checks G2 がスキーマ不在時に本物を作ってしまう | 実行前に存在確認し、無ければ SKIP（理由を出力） |
+-| blocker: DB_NAME 末尾一致だけでは別 ADB を弾けない／台帳 ID がスキーマ名のみ | `.env` の ADB_OCID を Database API で解決し **表示名 `jetuse-loop-adb` とコンパートメント**まで照合。台帳の ID も `<DB_NAME>:<SCHEMA>` に変更 |
+-| major: `list_objects` の全例外を「既に無い」扱い | `ServiceError.status == 404` のみ正常扱い。他は再送出 |
+-| major: RUN 失敗で START に到達せずパイプライン停止のまま／プローブ残留 | `try/finally` で必ず START。プローブのオブジェクトと `$VECTAB` の行を後始末 |
+-| major: 計測条件が揃っていない（① 11 ファイル / ② 12 行） | 計測前に 3 方式の件数を実測し、10 件で揃わなければ**計測を中止**する。全証跡を取り直し 10/10/10 で再計測 |
+-| major: tips の「本文を DB の外へ出さずに」が他文書と矛盾 | 訂正（embedText へ送られる旨を明記） |
+-| minor: 比較表の「5.2 秒」が実測と不一致 | 実測値に更新 |
+-| major: redact がエンドポイント実値を残す | **対応しない（残差）**。対象は 地域推論エンドポイント 等の**公開されている地域サービスエンドポイント**で、CLAUDE.md 本文にも記載がある。伏せると「どの API を叩いたか」という検証の核が読めなくなるため残す。テナント固有値（OCID・ネームスペース）は伏せ済み |
+-
+-## review-5（FAIL: blocker6 / major6 / minor1）への対応
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| blocker: 単独実行の各スクリプトが所有ゲートを迂回（method_c の DROP TABLE / refresh の STOP・put_object / limits のファイル追加） | `require_owned_schema` / `require_owned_bucket` / `require_owned_store` を common に集約し、**各スクリプトの冒頭で必ず呼ぶ**ようにした（ゲートを経路ごとに書かない） |
+-| blocker: コンパートメント判定が名前だけでテナンシを見ていない | ルートコンパートメントまで辿り、`~/.oci/config` の tenancy と一致することを確認 |
+-| blocker: 台帳が teardown 後も失効せず、別人が同名を作り直すと誤認 | 削除成功時に `forget_created()` で台帳から落とす。teardown 後の台帳は空（証跡で確認） |
+-| blocker: `PROJECT_OCID` が env にあると無検証で再利用 | env 経由でも コンパートメント・表示名・台帳の 3 点を検証 |
+-| major: 台帳が e2e/ にあり、伏字化スクリプトが ID を壊す（片付け不能になる） | 台帳を gitignore 済みの `.spike-m1-registry.json` へ移動。証跡には**名前だけ**の写し `created-resources-names.json` を出す |
+-| major: 同一データセットの確認が件数だけ | 各方式から chunk_id を取り出し、集合が `c01〜c10` と一致するかで判定（不一致なら計測中止） |
+-| major: プローブの後始末が正常系のみ／teardown の一覧が非ページング・削除後未確認 | プローブ削除を確実化。バケット/ストアの一覧をページングし、削除後に再照会して消滅を確認 |
+-| major: 必須呼び出しが失敗しても exit 0 | ①の Responses と ②の GENERATE の失敗で非ゼロ終了 |
+-| major: teardown にエンドポイント実値をハードコード | リージョンから組み立てる形に変更 |
+-| minor: limits の取り込み未完了でも判定を続行 | `completed` 以外なら判定不能として中止 |
+-
+-## review-6（FAIL: blocker1 / major9 / minor1）への対応
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| **blocker**: SQL 接続先と ADB_OCID が同一 ADB だと結びついていない（DB 名が同じ別 ADB を通す） | ADB API の接続文字列に **DB_NAME のインスタンス固有トークン**（`G912…`）が含まれることを照合し、SQL セッションと ADB_OCID を同一 ADB に固定。実機で通過を確認 |
+-| major: `sdk_signer_args(region)` は config_file モードで region を無視する | `common.client_args()` を追加し、全 OCI クライアントで region を明示。`~/.oci/config` が別リージョンでも想定外の場所に作らない |
+-| major: 成果物にエンドポイント実値 | ドキュメントの URL を `<region>` プレースホルダ表記に変更（検証リージョンは本文で明記） |
+-| major: ① が件数だけ見て再アップロードを省略／API 成功だけで PASS | 既存ストアの chunk_id 集合が基準セットと一致するかを検証。検索も**結果が空でない**・**版フィルタ時に旧版が混ざらない**まで判定 |
+-| major: limits / refresh のプローブ後始末が正常系のみ | いずれも `try/finally` へ移動。後始末に失敗したら非ゼロ終了 |
+-| major: refresh が表全体の NULL 件数で判定 | **今回のプローブ行だけ**の `current_version` を見る |
+-| major: latency が set 化で重複を消す・1 ページ目しか見ない | 実レコード数と異なる chunk_id 数の両方を出し、重複も不一致として弾く。一覧はページング |
+-| major: teardown の files 一覧が非ページング | ページング対応 |
+-| major: guard_checks が固定パスのファイルを上書き・削除 | 一時ディレクトリへ書く |
+-| minor: 比較資料の本文に旧計測値が残存 | 表・本文・Tips をすべて最新実測へ統一 |
+-
+-## review-7（FAIL: blocker2 / major8 / minor2）への対応
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| **blocker×2**: 台帳の ID が再利用可能な名前（`DB_NAME:SCHEMA` / `namespace/bucket`）で、削除後に他人が同名を作ると stale ledger が一致して他人のリソースを変更・削除しうる | スキーマは **作成時刻**（`all_users.created`）を、バケットは **bucket OCID** を台帳 ID に含めた。作り直されたら別物として弾く |
+-| major: GenAI プロジェクト削除が受付だけで未確認／台帳 ID が一覧に無くても成功 | 削除後に `lifecycle_state` を再取得して DELETING/DELETED を確認。台帳にあって一覧に無いものは失敗として報告 |
+-| major: ストア切り離しと Files 本体削除が同一 tuple | 別ステップに分離（本体削除だけ失敗しても孤立ファイルを見失わない） |
+-| major: ① が 1 件成功で「属性対応」／`?`（属性欠損）を成功扱い／search 失敗が終了コードに出ない | 全件成功で初めて対応と判定。フィルタ時は `N` と `?` の両方を不合格に。search API の失敗も終了コードへ |
+-| major: limits の判定が緩い／try 外で残留しうる | ヒット 0 件・属性種類 ≠1 を失敗に。登録も try/finally の中へ |
+-| major: ② が `$VECTAB` 1 行で構築完了と判定 | 基準セット件数（10）に達するまで待つ |
+-| major: refresh の想定外・後始末失敗が exit 0 | いずれも例外にして非ゼロ終了 |
+-| major: 伏字化が OCID と namespace だけ | Vector Store ID・file ID・ADB インスタンストークン・地域エンドポイント（`<region>` 化）も伏せる |
+-| major: 比較表で VPD を確定事実として記載（SKIPPED では未実証） | 「原理的には併用できるが**本スパイクでは未実証**」に修正。ADR にも同注記 |
+-| minor: ADR 本文の旧数値／teardown docstring の台帳パス誤り | 実測値へ統一。docstring を `.spike-m1-registry.json` に修正 |
+-
+-## 片付け結果（実行済み）
+-
+-`teardown.py --yes` 実行後の実機確認（`e2e/teardown-verify.log`）:
+-**台帳の残り = 空**（すべて削除され台帳からも失効）。SPIKE-M1 のバケット なし /
+-GenAI プロジェクト なし / `JETUSE_SPIKE%` スキーマ なし。バケット（404）・Vector Store・
+-GenAI プロジェクト（DELETING）・スキーマの 4 つすべてを削除後の再照会で確認
+-（`teardown.log` の「確認: …」4 行）。
+-他タスクの `jetuse-spike-sp202-rag` / `jetuse-spike-sp303-e2e` は不可触のまま。
+-共有 ADB の他 `JETUSE_` スキーマ 7 件は無傷。
+-
+-## 自損事故（正直に記録）
+-
+-`guard_checks.py` の G3 初版が、**DB 側だけ台帳ゲートの無かった** `teardown.py --yes` を
+-空台帳で実行し、検証スキーマ `JETUSE_SPIKE_M1` を実際に削除した。共有 ADB の他スキーマ・
+-他リソースへの波及は無し。DB 側にも台帳ゲートを入れ、スキーマを作り直して ①②③ の証跡を
+-すべて取り直した。詳細 `e2e/scenario-4.md`、Tips にも追記済み。
+-
+-## PASS 後に残った非 blocker（residual・後続トリアージ）
+-
+-review-8 は blocker 0 で PASS。以下は**修正せず残した**助言（loop-protocol 手順 5.5「PASS 後は
+-非 blocker を追わない」）。いずれも検証スクリプトの堅牢性であって、**検証結果そのものには影響しない**。
+-スクリプトは調査用の使い捨てで、片付けは実機で完了を確認済み。
+-
+-| severity | 箇所 | 内容 |
+-|---|---|---|
+-| major | `spikes/spike_m1/redact_evidence.py:49` | 伏字化が引数で渡したサブツリー限定。`reviews/` は対象外 |
+-| major | `spikes/spike_m1/method_a_vector_store.py:75` | GenAI プロジェクト作成直後に ACTIVE を待たずに使う |
+-| major | `spikes/spike_m1/method_a_limits.py:164` | `multi_id` が正常終了後にしか設定されず、途中失敗で検証ファイルが残りうる |
+-| major | `spikes/spike_m1/method_a_limits.py:102` | 属性の Y→N→Y 復元が失敗しても終了コードに出ない |
+-| major | `spikes/spike_m1/method_b_refresh_check.py:54` | プローブの `put_object` が try/finally の外 |
+-| major | `spikes/spike_m1/teardown.py:196` | Vector Store の削除後確認だけ先頭ページ限定 |
+-| major | `STATE.md:82` | 「エンドポイント実値」の扱い（→ 本ターンで `<region>` 化して解消済み） |
+-| minor | `docs/decisions/ADR-0020…:30` | 本文の旧計測値（→ 本ターンで解消済み） |
+-
+-## 人間ゲートの結果（2026-07-29）
+-
+-- **ADR-0020 承認済み**。承認時にユーザーが決定内容を拡張:
+-  「どちらか一方でなく **選べる 2 バックエンド**（手軽さ＝マネージド Vector Store /
+-  高機能＝Oracle AI Database）」「**Oracle AI Database は Agent Memory の格納先としても使う**」
+-  「**高機能側で何が増えるかが API だけでなくフロントからも分かること**」。
+-  → ADR を `Accepted` に更新し、決定・却下理由・影響・実装タスクを書き換えた。
+-  比較ドキュメントにも「JetUse としての採用」節を追加。
+-- 起票した実装タスク: `tasks/RAGM-PROGRESS.md`（RAGM-01 / RAGM-02 / RAGM-03 / MEM-01）。
+-  SPIKE-M1 の宿題 4 件（ops パーサ修正・スケール検証・VPD 実証・Chicago）も同キューに記載。
+-
+-## 未完（人間ゲートのみ）
+-
+-- [ ] push / PR（コミットは承認済み）
+-
+-## 後続タスクとして起票が必要（本タスクの非ゴール）
+-
+-- `ops/setup-select-ai.py` / `ops/setup-dev-schema.py` の `~/.oci/config` パーサ修正
+-  （全プロファイルを 1 dict に潰すため、複数プロファイル環境で credential が別テナンシになり
+-  DBMS_CLOUD の全呼び出しが `ORA-20404` になる。本スパイクは `spikes/spike_m1/common.py:oci_api_key()`
+-  で回避しているだけで、`ops/` は未修正）
+-- ③ の大規模データでの索引利用・再現率の検証（10 行ではオプティマイザが索引を使わない）
+-- Chicago リージョンでの ①③ 再確認
++- review_verdict: **未実施**（実装＋E2E 完了。これから codex-review）
++- last_review_ref: -
++- updated_at: 2026-07-29
++
++## やったこと
++
++`ops/setup-select-ai.py` / `ops/setup-dev-schema.py` から `~/.oci/config` の手書きパース（4 箇所）と
++`DBMS_CLOUD.CREATE_CREDENTIAL` を**削除**し、`DBMS_CLOUD_ADMIN.ENABLE_RESOURCE_PRINCIPAL` に置換。
++両スクリプトの共通部（接続解決・権限付与・ACL・RP 有効化）を `ops/_adb.py` に集約した。
++
++- 接続先は環境変数 → `.env` → 既定値で解決（`ADB_DSN` / `ADB_WALLET_DIR` / `ADB_WALLET_PASSWORD`）。
++  従来の `dev/terraform.tfvars` 読み出しはウォレットパスワードのフォールバックとして残す。
++  これが無いと gitignore された tfvars が無い環境（この worktree）で ops を実行できず E2E できない。
++- `setup-select-ai.py` に `--schema`（既定 `.env` の `ADB_USER`）。ADMIN 接続のみになり
++  アプリ側パスワードが不要になった。
++- 冪等化: `ENABLE_RESOURCE_PRINCIPAL` は PL/SQL 側で冪等（実機確認）。ユーザー作成は
++  「既存ならパスワードを勝手に変えない（明示指定時のみ ALTER・ORA-28007 は続行）」。
++  パスワード不明で再実行したときは migrate を理由付きでスキップし、exit 0。
++- fail-closed: RP 有効化の直後に `DBA_TAB_PRIVS` を引いて EXECUTE が実際に付いたか確認する。
++- `settings.select_ai_credential` の既定を `OCI$RESOURCE_PRINCIPAL` へ（ADR §未解決 1 の結論）。
++- `infra/terraform/environments/app` は `merge()` の**上書き側**で `SELECT_AI_CREDENTIAL` を注入。
++- ドキュメント: `specs/09-rag.md` / `docs/guides/onboarding.md` / `docs/guides/dev-environments.md` /
++  `docs/tips.md`（解消済みへ・ListBuckets の compartmentId 必須を追記）/ `.env.example` /
++  ADR-0021 §未解決 1〜3 への結論追記（状態は Accepted のまま）/ `docs/verification/RP-01.md`。
++- `spikes/spike_m1/common.py:oci_api_key()` は再現性のため残し、「ops はこの方式を使わない」旨を明記。
++
++## E2E（実 ADB・共有 loop ADB / 検証用スキーマ `JETUSE_SPIKERP01` で隔離）
++
++| # | シナリオ | 結果 | 証跡 |
++|---|---|---|---|
++| 1 | ops 2 本を同じスキーマへ 2 回連続実行（冪等） | PASS | `e2e/scenario-1.log` |
++| 2 | RP で `DBMS_CLOUD.SEND_REQUEST` → Object Storage 200 | PASS | `e2e/scenario-2.log` |
++| 3 | RP でベクトル索引の作成・取り込み・検索（合言葉で照合） | PASS | `e2e/scenario-3.log` |
++| 4 | 対照: 旧パーサ由来の API キー資格情報で ORA-20404 | PASS | `e2e/scenario-4.log` |
++
++検証用リソースは `teardown.log` のとおり削除済み（共有 ADB は検証前の状態に戻っている）。
++実施しなかった範囲は `e2e/SKIPPED.md`。証跡の OCID・ネームスペースは
++`spikes/spike_m1/redact_evidence.py` で伏字化。
++
++- `.venv/bin/pytest packages/api/tests` 343 passed
++- `.venv/bin/ruff check packages/api ops spikes` クリーン
++- `terraform init -backend=false && fmt -check && validate`（environments/app）成功
++
++## IAM
++
++**変更していない**（タスクの禁止事項）。既存の動的グループ／ポリシーのままで
++シナリオ 2・3 が通ったため、権限不足による blocked は発生していない。
++
++## 人間ゲート（未実施）
++
++- コミット / PR / push（未承認のため未実施）
++- 配備済み dev アプリスタックへの `terraform apply` と `/api/health` の `dbchat` 確認（SKIPPED.md）
+diff --git a/docs/guides/dev-environments.md b/docs/guides/dev-environments.md
+index 385fb6c..0b92674 100644
+--- a/docs/guides/dev-environments.md
++++ b/docs/guides/dev-environments.md
+@@ -26,6 +26,9 @@
+   分離は専用スキーマで担保する。公開GWのため `apigw_allow_cidr` で社内/VPNのIPに絞ることを推奨。
+ - DBスキーマは `settings.adb_user`/`adb_query_user`(環境変数 `ADB_USER`/`ADB_QUERY_USER`)で切替。
+   既定は共有 `JETUSE_APP`/`JETUSE_QUERY`。
++- DBの中で `DBMS_CLOUD`/`DBMS_CLOUD_AI` が使う資格情報は **`OCI$RESOURCE_PRINCIPAL`**(ADB自身の身分)。
++  `ops/setup-dev-schema.py` が `ENABLE_RESOURCE_PRINCIPAL` を適用し、`environments/app` が
++  `SELECT_AI_CREDENTIAL` を注入する。開発者のAPIキーをDBへ焼き込む経路は廃止(ADR-0021)。
+ 
+ ## 前提(一度だけ・全体)
+ 
+@@ -36,7 +39,8 @@
+ ## 開発者の追加(1人につき一度)
+ 
+ ```bash
+-# 1) 専用スキーマ作成 + 権限 + 認証情報 + マイグレーション適用(パスワードが出力される)
++# 1) 専用スキーマ作成 + 権限 + リソースプリンシパル有効化 + マイグレーション適用
++#    (パスワードが出力される。再実行可: 既存ユーザーのパスワードは明示指定時のみ更新)
+ .venv/bin/python ops/setup-dev-schema.py --dev alice
+ 
+ # 2) tfvars 用意(出力されたパスワードと共有値を記入)
+diff --git a/docs/guides/onboarding.md b/docs/guides/onboarding.md
+index 44fdd8d..03f3d59 100644
+--- a/docs/guides/onboarding.md
++++ b/docs/guides/onboarding.md
+@@ -43,6 +43,9 @@ cp .env.example .env        # 値は管理者/チームから受領して記入(
+ 
+ ポイント:
+ - `.env` と `~/.oci/config` の実値は**絶対にコミットしない**(CLAUDE.md)。雛形は `.env.example`。
++- `~/.oci/config` を使うのは**手元のPythonプロセスのOCI署名だけ**。DBの中で `DBMS_CLOUD` /
++  `DBMS_CLOUD_AI` が使う資格情報はADB自身の身分 `OCI$RESOURCE_PRINCIPAL` で、APIキーをDBへ
++  焼き込む手順はもう無い(ADR-0021)。有効化は `ops/setup-dev-schema.py` が行う。
+ - ADBは**夜間停止**運用。作業前に起動確認: `bash ops/start-adb-if-stopped.sh`(「送信無反応/保存失敗(503)」の常連原因)。
+ 
+ ## 3. ローカルで動かす
+@@ -91,7 +94,7 @@ cd packages/web && npm run build && npm run lint
+ → 手順は **[dev-environments.md](./dev-environments.md)** を参照。要約:
+ 
+ ```bash
+-.venv/bin/python ops/setup-dev-schema.py --dev <you>     # 専用スキーマ作成(初回)
++.venv/bin/python ops/setup-dev-schema.py --dev <you>     # 専用スキーマ作成(再実行可)
+ cp infra/terraform/environments/app/alice.tfvars.example \
+    infra/terraform/environments/app/<you>.tfvars         # 値を記入
+ ops/dev-env-up.sh <you>     # build/push→plan確認→apply→SPA配信→URL表示
+diff --git a/docs/tips.md b/docs/tips.md
+index 8e98e5b..8347286 100644
+--- a/docs/tips.md
++++ b/docs/tips.md
+@@ -145,6 +145,6 @@
+ - **2026-07-28 OCI Vector Store はチャンク属性フィルタに対応している(SPIKE-M1)**: 「外部ベクタストアはメタデータを持てない」は誤り。`vector_stores.files.create(..., attributes={...})` で任意メタを付与でき、`vector_stores.search(filters=...)` と Responses の `tools[].filters` で絞り込める(`eq`/`and`/`or`/`gte` は動作、**`in` は 422**: `values` 配列を解釈せず `value` を要求)。返却の `file_search_call.results[]` には attributes・text・score・chunk_id が入る(annotations 側は file_id/filename のみ)。**制限**: 属性は**ファイル単位**(1ファイルが5チャンクに割れても attributes は1種類)・キー最大16・値512文字・文字列/数値/真偽のみ(入れ子不可)・存在しないキーのフィルタは**エラーにならず0件**。チャンク単位のセル範囲が要るなら 1チャンク=1ファイルで取り込むしかない。よって現行 `chat.py:_extract_citations()` が file_id/filename/score しか返さないのは OCI の制約ではなくアプリ側の実装。
+ - **2026-07-28 DBMS_CLOUD_AI.CREATE_VECTOR_INDEX の attributes に任意キーは載らない(SPIKE-M1)**: 任意メタのつもりで `current_version` を渡すと `ORA-20048: Invalid vector index attribute - current_version`。attributes は**索引の設定項目**であってチャンクのメタではない。`$VECTAB` の ATTRIBUTES(JSON) に入るのは固定6キー(object_name/object_size/last_modified/location_uri/start_offset/end_offset)のみ。回避は①オブジェクト名に埋め込む(文字列パース前提) ②`ALTER TABLE "<IDX>$VECTAB" ADD (...)` で列を足す。ただし②は**索引リフレッシュで入った新規行が NULL になる**(実測: 10行→11行で NULL 1件)ため補完ジョブを回し続ける必要がある。なお走行中パイプラインは `DBMS_CLOUD_PIPELINE.RUN_PIPELINE_ONCE` を拒否する(`ORA-20044: Pipeline must be in stopped state to run in foreground.`)ので STOP→RUN_ONCE→START の順。
+ - **2026-07-28 DBMS_VECTOR_CHAIN の資格証明ストアは DBMS_CLOUD と別(SPIKE-M1)**: `UTL_TO_EMBEDDING` の `credential_name` に `DBMS_CLOUD.CREATE_CREDENTIAL` で作った名前を渡すと `ORA-20003: error retrieving credential`(ORA-20002 でラップされる)。`DBMS_VECTOR_CHAIN.CREATE_CREDENTIAL(credential_name=>..., params=>json(...))` で別途作る。作れば ap-osaka-1 の ocigenai provider (`/20231130/actions/embedText` + cohere.embed-multilingual-v3.0)で DB 内埋め込みが 1024次元で動く。**ただし「本文が外に出ない」わけではない**: UTL_TO_EMBEDDING は本文を OCI Generative AI の embedText へ送る。得られるのは「アプリ層に本文を持ち出さずに済む」であって、テナント外への送信は起きる。
+-- **2026-07-28 ops/setup-select-ai.py の ~/.oci/config パーサは複数プロファイルで壊れる(SPIKE-M1で発覚・未修正)**: `dict(line.split("=",1) for line in config if "=" in line)` は全プロファイルを1つの dict に潰すため、`[DEFAULT]` と `[OTHER]` がある環境では**最後のプロファイル**の user/tenancy/fingerprint/key_file を拾う。結果として作られた credential は署名は通るが別テナンシのものになり、DBMS_CLOUD の**全呼び出しが `ORA-20404: Object not found`**(=OCI の NotAuthorizedOrNotFound を DBMS_CLOUD がこう見せる)になる。Object Storage も GenAI も一様に 404 なら真っ先にこれを疑う。切り分けは `DBMS_CLOUD.SEND_REQUEST` で既知エンドポイント(Object Storage の `/n/<ns>/b/`)を叩き、そこも404なら資格証明側。`ops/` の修正は後続タスク。
++- **2026-07-28 ops/setup-select-ai.py の ~/.oci/config パーサは複数プロファイルで壊れる(SPIKE-M1で発覚 → 2026-07-29 RP-01 で解消。パーサごと廃止)**: 現在この経路は無い。DB内の資格情報は `OCI$RESOURCE_PRINCIPAL` に統一し、`~/.oci/config` を読んで `DBMS_CLOUD.CREATE_CREDENTIAL` を呼ぶコードを削除した(ADR-0021 / `docs/verification/RP-01.md`)。**症状の見分け方は今も有効なので残す**: `dict(line.split("=",1) for line in config if "=" in line)` は全プロファイルを1つの dict に潰すため、`[DEFAULT]` と `[OTHER]` がある環境では**最後のプロファイル**の user/tenancy/fingerprint/key_file を拾う。結果として作られた credential は署名は通るが別テナンシのものになり、DBMS_CLOUD の**全呼び出しが `ORA-20404: Object not found`**(=OCI の NotAuthorizedOrNotFound を DBMS_CLOUD がこう見せる)になる。Object Storage も GenAI も一様に 404 なら真っ先にこれを疑う。切り分けは `DBMS_CLOUD.SEND_REQUEST` で既知エンドポイント(Object Storage の `/n/<ns>/b/`)を叩き、そこも404なら資格証明側。**ただし ListBuckets は `?compartmentId=<OCID>` が必須**で、付け忘れると認証と無関係に HTTP 400 になり、指定コンパートメントに権限が無ければ ORA-20404 になる(RP-01 実測)。切り分けに使うなら「権限があるはずのコンパートメント」を明示すること。
+ - **2026-07-28 10行規模ではベクタ索引は使われない(SPIKE-M1・数字の読み方)**: HNSW索引(`ORGANIZATION INMEMORY NEIGHBOR GRAPH DISTANCE COSINE`)を作っても、10行の表に `WHERE current_version='Y'` 付きベクタ検索を投げると実行計画は `TABLE ACCESS STORAGE FULL` + `filter("CURRENT_VERSION"='Y')` で、厳密検索が選ばれる。よって小規模スパイクのレイテンシ実測(16.7ms)は「索引つきベクタ検索の速さ」ではなく「全件走査の速さ」であり、大規模での傾きを示さない。比較資料に載せるときはこの但し書きを必ず付ける。さらに **SQL 単体(16.7ms)と外部ベクタストアの検索API(121.5ms)を直接並べない**: 前者はクエリ埋め込みを含まず、埋め込みAPI単体が別途 84.5ms かかる。同じ土俵にすると ADB 約101〜192.7ms / 外部ストア121.5ms でほぼ同じになり、しかも実行ごとに揺れるので、レイテンシは方式選択の決め手にならない。**そして 3 方式が同じデータ(件数でなく chunk_id の集合)を見ているかを計測前に実測で確かめること**(片方に検証用ファイルが残ったまま数字を並べて比較にならない、を一度やった)。
+ - **2026-07-28 「消してよいか」の判定を経路ごとに書くと片方が抜ける(SPIKE-M1 の自損事故)**: 片付けスクリプトで OCI 側(バケット/Vector Store/GenAIプロジェクト)は「自分が作ったと台帳に記録した ID だけ消す」ゲートを入れたが、**DB 側(DROP USER/DROP TABLE)は名前一致のまま**だった。その状態で「台帳が空なら消さないこと」を確認する否定テストを `--yes` 付きで走らせた結果、テスト自身が本物の検証用スキーマを削除した(共有ADBの他スキーマには波及せず)。教訓: 破壊操作のゲートは**経路ごとに書かず単一の述語に集約**し、否定テストは「ゲートが無い経路が残っていないか」まで数える(本件は skip 件数を 3→5 に増やして検出できるようにした)。
+diff --git a/infra/terraform/environments/app/alice.tfvars.example b/infra/terraform/environments/app/alice.tfvars.example
+index bf38d98..c6a16d9 100644
+--- a/infra/terraform/environments/app/alice.tfvars.example
++++ b/infra/terraform/environments/app/alice.tfvars.example
+@@ -21,7 +21,8 @@ apigw_allow_cidr = "0.0.0.0/0" # 例: "203.0.113.10/32"
+ 
+ # CIへ注入する環境変数。共有値は environments/dev/terraform.tfvars の api_environment から流用し、
+ # ADB_PASSWORD/ADB_QUERY_PASSWORD だけ本人スキーマのものに差し替える。
+-# AUTH_REQUIRED / ADB_USER / ADB_QUERY_USER / LOG_OCID は main.tf が上書きするので不要。
++# AUTH_REQUIRED / ADB_USER / ADB_QUERY_USER / LOG_OCID / SELECT_AI_CREDENTIAL は
++# main.tf が上書きするので不要。
+ api_environment = {
+   AUTH_MODE           = "resource_principal"
+   OCI_REGION          = "ap-osaka-1"
+diff --git a/infra/terraform/environments/app/main.tf b/infra/terraform/environments/app/main.tf
+index ea82e0d..43fc23b 100644
+--- a/infra/terraform/environments/app/main.tf
++++ b/infra/terraform/environments/app/main.tf
+@@ -30,6 +30,9 @@ module "container_instance" {
+     ADB_USER       = var.adb_user
+     ADB_QUERY_USER = var.adb_query_user
+     LOG_OCID       = data.terraform_remote_state.shared.outputs.app_log_id
++    # DB 内の資格情報は ADB 自身の身分に統一(ADR-0021)。ops/setup-dev-schema.py が
++    # ENABLE_RESOURCE_PRINCIPAL 済み。tfvars 側で上書きさせない(APIキー版へ戻す事故を塞ぐ)。
++    SELECT_AI_CREDENTIAL = "OCI$RESOURCE_PRINCIPAL"
+   })
+ }
+ 
+diff --git a/ops/setup-dev-schema.py b/ops/setup-dev-schema.py
+index fe3dd69..efd021f 100644
+--- a/ops/setup-dev-schema.py
++++ b/ops/setup-dev-schema.py
+@@ -1,61 +1,33 @@
+-"""開発者ごとのADBスキーマを共有ADBに作成する(1回/開発者)。
++"""開発者ごとのADBスキーマを共有ADBに作成する(再実行可)。
+ 
+-共有ADB(jetusedev_low)に本人用のアプリスキーマ JETUSE_<DEV> と読取専用 JETUSE_<DEV>_Q を作り、
+-データセット機能(Select AI)に必要な権限・ネットワークACL・JETUSE_OCI_CRED を付与し、
++共有ADBに本人用のアプリスキーマ JETUSE_<DEV> と読取専用 JETUSE_<DEV>_Q を作り、
++データセット機能(Select AI)に必要な権限・ネットワークACL・リソースプリンシパルを付与し、
+ 最後にマイグレーションを本人スキーマへ適用する。
+ 
++資格情報は ADB 自身の身分 OCI$RESOURCE_PRINCIPAL を使う。開発者の ~/.oci/config から
++API キーを抜き出して DB へ焼き込む JETUSE_OCI_CRED は廃止した(ADR-0021)。
++
++再実行時: 既に存在するユーザーのパスワードは**勝手に変えない**(配備済みの dev スタックが
++接続できなくなるため)。パスワードを明示した場合だけ ALTER USER で合わせる。
++権限・ACL・リソースプリンシパルは毎回そろえ直す(いずれも再適用して無害)。
++
+ 採用方針 docs/guides/dev-environments.md / 設計 environments/app を参照。
+ 
+ 実行: .venv/bin/python ops/setup-dev-schema.py --dev alice
+-前提: ~/.oci/config(APIキー)、共有ウォレット /tmp/jetusedev_wallet、.env と
+-      infra/terraform/environments/dev/terraform.tfvars(ADMIN/ウォレットPW参照)
++前提: 共有ウォレット(ADB_WALLET_DIR・既定 /tmp/jetusedev_wallet)、.env の ADB_ADMIN_PASSWORD
+ """
+ 
+ import argparse
+ import os
+-import pathlib
+ import re
+ import secrets
+ import string
+ import subprocess
+ import sys
+ 
++import _adb
+ import oracledb
+ 
+-ROOT = pathlib.Path(__file__).resolve().parent.parent
+-ENV = dict(
+-    line.split("=", 1)
+-    for line in (ROOT / ".env").read_text().splitlines()
+-    if "=" in line and not line.startswith("#")
+-)
+-TFVARS = (ROOT / "infra/terraform/environments/dev/terraform.tfvars").read_text()
+-
+-
+-def _tfvar(name: str) -> str:
+-    m = re.search(rf'{name}\s*=\s*"([^"]+)"', TFVARS)
+-    if not m:
+-        raise SystemExit(f"{name} not found in dev/terraform.tfvars")
+-    return m.group(1)
+-
+-
+-WALLET = "/tmp/jetusedev_wallet"
+-WALLET_PW = _tfvar("ADB_WALLET_PASSWORD")
+-DSN = "jetusedev_low"
+-REGION = ENV["OCI_REGION"]
+-ACL_HOSTS = [
+-    f"inference.generativeai.{REGION}.oci.oraclecloud.com",
+-    f"generativeai.{REGION}.oci.oraclecloud.com",
+-    f"objectstorage.{REGION}.oraclecloud.com",
+-]
+-
+-
+-def _conn(user: str, pw: str) -> oracledb.Connection:
+-    return oracledb.connect(
+-        user=user, password=pw, dsn=DSN,
+-        config_dir=WALLET, wallet_location=WALLET, wallet_password=WALLET_PW,
+-        tcp_connect_timeout=20.0,
+-    )
+-
+ 
+ def _gen_pw() -> str:
+     # Oracleパスワード要件を満たす(英大小+数字+記号、先頭は英字)
+@@ -64,6 +36,33 @@ def _gen_pw() -> str:
+     return "Gx" + body + "#7"
+ 
+ 
++def _ensure_user(cur, user: str, pw: str, explicit: bool) -> bool:
++    """ユーザーを用意し、「このパスワードで入れると分かっているか」を返す。
++
++    既存ユーザーのパスワードは明示指定(--app-password / --query-password)のときだけ上書きする。
++    無指定の再実行で自動生成パスワードを流し込むと、そのスキーマで動いている dev スタックが
++    黙って接続不能になる。
++    """
++    cur.execute("SELECT COUNT(*) FROM dba_users WHERE username = :u", u=user)
++    if cur.fetchone()[0] == 0:
++        cur.execute(f'CREATE USER {user} IDENTIFIED BY "{pw}"')
++        print(f"  created {user}")
++        return True
++    if not explicit:
++        print(f"  {user} は既存。パスワードは変更しない(変えるなら明示指定する)")
++        return False
++    try:
++        cur.execute(f'ALTER USER {user} IDENTIFIED BY "{pw}"')
++        print(f"  {user} は既存。指定パスワードに更新")
++    except oracledb.DatabaseError as e:
++        # ORA-28007: 同じパスワードの再設定は既定プロファイルが拒否する(FIX-58 の知見)。
++        # 指定値が現行値なら実害は無いので続行する。
++        if "ORA-28007" not in str(e):
++            raise
++        print(f"  {user} は既存。指定パスワードは現行と同じ(ORA-28007)ため変更なし")
++    return True
++
++
+ def main() -> None:
+     ap = argparse.ArgumentParser()
+     ap.add_argument("--dev", required=True, help="開発者識別子(英小文字)。例: alice")
+@@ -75,72 +74,46 @@ def main() -> None:
+     if not re.fullmatch(r"[a-z][a-z0-9]{1,12}", args.dev):
+         raise SystemExit("--dev は英小文字+数字、先頭英字、2〜13文字")
+ 
+-    app_user = f"JETUSE_{args.dev.upper()}"
+-    qry_user = f"{app_user}_Q"
++    app_user = _adb.assert_schema(f"JETUSE_{args.dev.upper()}")
++    qry_user = _adb.assert_schema(f"{app_user}_Q")
+     app_pw = args.app_password or _gen_pw()
+     qry_pw = args.query_password or _gen_pw()
+ 
+-    print(f"== ADMIN: create {app_user} / {qry_user} ==")
+-    admin = _conn("ADMIN", ENV["ADB_ADMIN_PASSWORD"])
+-    cur = admin.cursor()
+-    # アプリスキーマ(CREATE TABLE/VIEW + データセットのSelect AI実行に必要なDBMS_CLOUD系)
+-    cur.execute(f'CREATE USER {app_user} IDENTIFIED BY "{app_pw}"')
+-    cur.execute(f"GRANT CREATE SESSION, RESOURCE, CREATE VIEW TO {app_user}")
+-    cur.execute(f"ALTER USER {app_user} QUOTA UNLIMITED ON DATA")
+-    for pkg in ("DBMS_CLOUD", "DBMS_CLOUD_AI", "DBMS_CLOUD_AI_AGENT", "DBMS_CLOUD_PIPELINE"):
+-        cur.execute(f"GRANT EXECUTE ON {pkg} TO {app_user}")
+-    for host in ACL_HOSTS:
+-        cur.execute("""
+-            BEGIN
+-              DBMS_NETWORK_ACL_ADMIN.APPEND_HOST_ACE(
+-                host => :h,
+-                ace  => xs$ace_type(privilege_list => xs$name_list('http'),
+-                                    principal_name => :p,
+-                                    principal_type => xs_acl.ptype_db));
+-            END;""", h=host, p=app_user)
+-    # 読取専用ユーザー(CREATE SESSIONのみ。datasetsが個別表にSELECTを付与する)
+-    cur.execute(f'CREATE USER {qry_user} IDENTIFIED BY "{qry_pw}"')
+-    cur.execute(f"GRANT CREATE SESSION TO {qry_user}")
+-    admin.commit()
+-    admin.close()
+-    print(f"  created {app_user}, {qry_user} (+grants, ACL)")
+-
+-    print(f"== {app_user}: credential JETUSE_OCI_CRED ==")
+-    app = _conn(app_user, app_pw)
+-    cur = app.cursor()
+-    oci_conf = dict(
+-        line.replace(" ", "").split("=", 1)
+-        for line in pathlib.Path("~/.oci/config").expanduser().read_text().splitlines()
+-        if "=" in line
+-    )
+-    key = pathlib.Path(oci_conf["key_file"]).expanduser().read_text()
+-    cur.execute("""
+-        BEGIN
+-          DBMS_CLOUD.CREATE_CREDENTIAL(
+-            credential_name => 'JETUSE_OCI_CRED',
+-            user_ocid       => :u, tenancy_ocid => :t,
+-            private_key     => :k, fingerprint  => :f);
+-        END;""",
+-        u=oci_conf["user"], t=oci_conf["tenancy"],
+-        k="".join(
+-            line for line in key.splitlines()
+-            if line and "-----" not in line and line != "OCI_API_KEY"
+-        ),
+-        f=oci_conf["fingerprint"])
+-    app.commit()
+-    app.close()
+-    print("  credential created")
+-
+-    if not args.skip_migrate:
++    print(f"== ADMIN: ensure {app_user} / {qry_user} ==")
++    admin = _adb.connect("ADMIN", _adb.env("ADB_ADMIN_PASSWORD"))
++    try:
++        cur = admin.cursor()
++        _adb.show_target(admin)
++        # アプリスキーマ(CREATE TABLE/VIEW + データセットのSelect AI実行に必要なDBMS_CLOUD系)
++        app_pw_known = _ensure_user(cur, app_user, app_pw, bool(args.app_password))
++        cur.execute(f"GRANT CREATE SESSION, RESOURCE, CREATE VIEW TO {app_user}")
++        cur.execute(f"ALTER USER {app_user} QUOTA UNLIMITED ON DATA")
++        _adb.grant_cloud_packages(cur, app_user)
++        _adb.append_acl(cur, app_user)
++        # 読取専用ユーザー(CREATE SESSIONのみ。datasetsが個別表にSELECTを付与する)
++        qry_pw_known = _ensure_user(cur, qry_user, qry_pw, bool(args.query_password))
++        cur.execute(f"GRANT CREATE SESSION TO {qry_user}")
++        # DBMS_CLOUD / DBMS_CLOUD_AI が使う資格情報(ADR-0021)。API キーは焼き込まない。
++        _adb.enable_resource_principal(cur, app_user)
++        admin.commit()
++    finally:
++        admin.close()
++
++    if not args.skip_migrate and not app_pw_known:
++        print(f"== migrate: スキップ({app_user} は既存でパスワード不明) ==")
++        print(f"   適用するには: --app-password '<{app_user} の現行パスワード>' を付けて再実行")
++    elif not args.skip_migrate:
+         print(f"== migrate -> schema {app_user} ==")
+         env = {
+             **os.environ,
+             "ADB_USER": app_user, "ADB_PASSWORD": app_pw,
+-            "ADB_DSN": DSN, "ADB_WALLET_DIR": WALLET, "ADB_WALLET_PASSWORD": WALLET_PW,
++            "ADB_DSN": _adb.dsn(),
++            "ADB_WALLET_DIR": _adb.wallet_dir(),
++            "ADB_WALLET_PASSWORD": _adb.wallet_password(),
+         }
+         r = subprocess.run(
+             [sys.executable, "-m", "jetuse_core.migrate"],
+-            cwd=str(ROOT / "packages/api"), env=env,
++            cwd=str(_adb.ROOT / "packages/api"), env=env, check=False,
+         )
+         if r.returncode != 0:
+             raise SystemExit("migration failed")
+@@ -150,8 +123,20 @@ def main() -> None:
+     print(f"  adb_user       = \"{app_user}\"")
+     print(f"  adb_query_user = \"{qry_user}\"")
+     print("  api_environment = { ... , ADB_PASSWORD = <下記>, ADB_QUERY_PASSWORD = <下記> }")
+-    print(f"  ADB_PASSWORD       (JETUSE app)  = {app_pw}")
+-    print(f"  ADB_QUERY_PASSWORD (JETUSE read) = {qry_pw}")
++    # 自動生成したパスワードだけを出す。呼び出し側が渡した値は出さない
++    # (実行ログが証跡やCIに残るため。渡した側は既に知っている)
++    for label, user, pw, known, generated in (
++        ("ADB_PASSWORD       (JETUSE app) ", app_user, app_pw, app_pw_known,
++         not args.app_password),
++        ("ADB_QUERY_PASSWORD (JETUSE read)", qry_user, qry_pw, qry_pw_known,
++         not args.query_password),
++    ):
++        if not known:
++            print(f"  {label} = <{user} の既存パスワードを流用>")
++        elif generated:
++            print(f"  {label} = {pw}")
++        else:
++            print(f"  {label} = <実行時に指定した値>")
+     print("その後: ops/dev-env-up.sh", args.dev)
+ 
+ 
+diff --git a/ops/setup-select-ai.py b/ops/setup-select-ai.py
+index 860cfe6..873d79a 100644
+--- a/ops/setup-select-ai.py
++++ b/ops/setup-select-ai.py
+@@ -1,105 +1,43 @@
+-"""Select AI RAG(RAG-03)のADMINセットアップ(1回実行)。
++"""Select AI RAG(RAG-03)のADMINセットアップ(何度実行してもよい)。
+ 
+-1. JETUSE_APPへ DBMS_CLOUD / DBMS_CLOUD_AI のEXECUTE付与 + ネットワークACL
+-2. JETUSE_APPスキーマにAPIキーcredential JETUSE_OCI_CRED を作成
+-   (Vault/リソースプリンシパル化はPhase 8)
++1. 対象スキーマへ DBMS_CLOUD / DBMS_CLOUD_AI 系の EXECUTE 付与 + ネットワークACL
++2. DBMS_CLOUD_ADMIN.ENABLE_RESOURCE_PRINCIPAL で OCI$RESOURCE_PRINCIPAL を使えるようにする
+ 
+-実行: .venv/bin/python ops/setup-select-ai.py
+-前提: jetusedevウォレット /tmp/jetusedev_wallet、~/.oci/config のAPIキー
+-"""
+-
+-import pathlib
+-
+-import oracledb
++資格情報は ADB 自身の身分(リソースプリンシパル)を使う。開発者の ~/.oci/config から API キーを
++抜き出して DB へ焼き込む JETUSE_OCI_CRED は廃止した(ADR-0021)。
+ 
+-ROOT = pathlib.Path(__file__).resolve().parent.parent
+-ENV = dict(
+-    line.split("=", 1)
+-    for line in (ROOT / ".env").read_text().splitlines()
+-    if "=" in line and not line.startswith("#")
+-)
+-TFVARS = (ROOT / "infra/terraform/environments/dev/terraform.tfvars").read_text()
+-WALLET_PW = next(
+-    line.split('"')[1] for line in TFVARS.splitlines() if "ADB_WALLET_PASSWORD" in line
+-)
+-APP_PW = ENV["ADB_APP_PASSWORD"]
+-WALLET = "/tmp/jetusedev_wallet"
+-REGION = ENV["OCI_REGION"]
+-
+-ACL_HOSTS = [
+-    f"inference.generativeai.{REGION}.oci.oraclecloud.com",
+-    f"generativeai.{REGION}.oci.oraclecloud.com",
+-    f"objectstorage.{REGION}.oraclecloud.com",
+-]
++実行: .venv/bin/python ops/setup-select-ai.py [--schema JETUSE_APP]
++前提: 共有ウォレット(ADB_WALLET_DIR・既定 /tmp/jetusedev_wallet)、.env の ADB_ADMIN_PASSWORD
++"""
+ 
++import argparse
+ 
+-def conn_as(user: str, pw: str) -> oracledb.Connection:
+-    return oracledb.connect(
+-        user=user, password=pw, dsn="jetusedev_low",
+-        config_dir=WALLET, wallet_location=WALLET, wallet_password=WALLET_PW,
+-        tcp_connect_timeout=20.0,
+-    )
++import _adb
+ 
+ 
+-def main():
+-    print("== ADMIN: grants + ACL ==")
+-    admin = conn_as("ADMIN", ENV["ADB_ADMIN_PASSWORD"])
+-    cur = admin.cursor()
+-    cur.execute("SELECT version_full FROM product_component_version")
+-    print("db version:", cur.fetchone()[0])
+-    cur.execute("GRANT EXECUTE ON DBMS_CLOUD TO JETUSE_APP")
+-    cur.execute("GRANT EXECUTE ON DBMS_CLOUD_AI TO JETUSE_APP")
+-    # Select AI Agent フレームワーク(ENH-04/SPIKE-E1)。これが無いとPLS-00201で使えない
+-    cur.execute("GRANT EXECUTE ON DBMS_CLOUD_AI_AGENT TO JETUSE_APP")
+-    # ベクトル索引はDBMS_CLOUD_PIPELINEで同期される(実機: ORA-20000で発覚)
+-    cur.execute("GRANT EXECUTE ON DBMS_CLOUD_PIPELINE TO JETUSE_APP")
+-    for host in ACL_HOSTS:
+-        cur.execute("""
+-            BEGIN
+-              DBMS_NETWORK_ACL_ADMIN.APPEND_HOST_ACE(
+-                host => :h,
+-                ace  => xs$ace_type(privilege_list => xs$name_list('http'),
+-                                    principal_name => 'JETUSE_APP',
+-                                    principal_type => xs_acl.ptype_db));
+-            END;""", h=host)
+-        print(f"  ACL: {host}")
+-    admin.commit()
+-    admin.close()
++def main() -> None:
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--schema", default=_adb.env("ADB_USER", "JETUSE_APP"),
++                    help="対象スキーマ(既定: .env の ADB_USER、無ければ JETUSE_APP)")
++    args = ap.parse_args()
++    schema = _adb.assert_schema(args.schema)
+ 
+-    print("== JETUSE_APP: credential ==")
+-    app = conn_as("JETUSE_APP", APP_PW)
+-    cur = app.cursor()
+-    oci_conf = dict(
+-        line.replace(" ", "").split("=", 1)
+-        for line in pathlib.Path("~/.oci/config").expanduser().read_text().splitlines()
+-        if "=" in line
+-    )
+-    key = pathlib.Path(oci_conf["key_file"]).expanduser().read_text()
++    print(f"== ADMIN: grants + ACL + resource principal ({schema}) ==")
++    admin = _adb.connect("ADMIN", _adb.env("ADB_ADMIN_PASSWORD"))
+     try:
+-        cur.execute("""
+-            BEGIN
+-              DBMS_CLOUD.CREATE_CREDENTIAL(
+-                credential_name => 'JETUSE_OCI_CRED',
+-                user_ocid       => :u,
+-                tenancy_ocid    => :t,
+-                private_key     => :k,
+-                fingerprint     => :f);
+-            END;""",
+-            u=oci_conf["user"], t=oci_conf["tenancy"],
+-            # OCI_API_KEYマーカー行の除去必須(SPIKE-04)
+-            k="".join(
+-                line for line in key.splitlines()
+-                if line and "-----" not in line and line != "OCI_API_KEY"
+-            ),
+-            f=oci_conf["fingerprint"])
+-        print("  credential created")
+-    except oracledb.DatabaseError as e:
+-        if "already exists" in str(e):
+-            print("  credential already exists")
+-        else:
+-            raise
+-    app.commit()
+-    app.close()
++        cur = admin.cursor()
++        _adb.show_target(admin)
++        cur.execute("SELECT version_full FROM product_component_version")
++        print("  db version:", cur.fetchone()[0])
++        cur.execute("SELECT COUNT(*) FROM dba_users WHERE username = :u", u=schema)
++        if cur.fetchone()[0] == 0:
++            raise SystemExit(f"スキーマ {schema} が存在しない。先に ops/setup-dev-schema.py を実行する。")
++        _adb.grant_cloud_packages(cur, schema)
++        _adb.append_acl(cur, schema)
++        _adb.enable_resource_principal(cur, schema)
++        admin.commit()
++    finally:
++        admin.close()
+     print("done")
+ 
+ 
+diff --git a/ops/setup-sql-search.py b/ops/setup-sql-search.py
+index a5ca8ef..6dedce3 100644
+--- a/ops/setup-sql-search.py
++++ b/ops/setup-sql-search.py
+@@ -34,7 +34,7 @@ NL2SQL_BASE = f"https://inference.generativeai.{ENV['OCI_REGION']}.oci.oracleclo
+ 
+ 
+ def oci_cmd(*args, parse=True):
+-    res = subprocess.run(["oci", *args], capture_output=True, text=True)
++    res = subprocess.run(["oci", *args], capture_output=True, text=True, check=False)
+     if res.returncode != 0:
+         raise RuntimeError(f"oci {' '.join(args[:3])}...: {res.stderr[:500]}")
+     return json.loads(res.stdout) if parse and res.stdout.strip() else None
+@@ -88,7 +88,7 @@ def step_wallet_secret() -> str:
+ def step_dbtools(wallet_secret: str) -> tuple[str, str]:
+     print("== 3. DBTools接続 (enrich=ADMIN / query=JETUSE_QUERY) ==")
+     tns = (pathlib.Path(WALLET) / "tnsnames.ora").read_text()
+-    m = re.search(r"jetusedev_low\s*=\s*(\(description.*?)(?=\n\w|\Z)", tns, re.S | re.I)
++    m = re.search(r"jetusedev_low\s*=\s*(\(description.*?)(?=\n\w|\Z)", tns, re.DOTALL | re.IGNORECASE)
+     conn_str = re.sub(r"\s+", " ", m.group(1)).strip()
+     out = []
+     for name, user, secret in [
+@@ -174,7 +174,7 @@ def step_enrich(ss_id: str):
+         ["oci", "raw-request", "--http-method", "POST",
+          "--target-uri", f"{NL2SQL_BASE}/semanticStores/{ss_id}/actions/enrich",
+          "--request-body", json.dumps(body)],
+-        capture_output=True, text=True,
++        capture_output=True, text=True, check=False,
+     )
+     print("  request:", (res.stdout or res.stderr)[:400])
+     if res.returncode != 0:
+@@ -185,7 +185,7 @@ def step_enrich(ss_id: str):
+         res = subprocess.run(
+             ["oci", "raw-request", "--http-method", "GET",
+              "--target-uri", f"{NL2SQL_BASE}/semanticStores/{ss_id}/enrichmentJobs/{job_id}"],
+-            capture_output=True, text=True,
++            capture_output=True, text=True, check=False,
+         )
+         st = json.loads(res.stdout)["data"].get("lifecycleState")
+         print(f"  job: {st} ({i * 15}s)")
+diff --git a/packages/api/jetuse_core/nl2sql.py b/packages/api/jetuse_core/nl2sql.py
+index 6927e8f..5d89786 100644
+--- a/packages/api/jetuse_core/nl2sql.py
++++ b/packages/api/jetuse_core/nl2sql.py
+@@ -110,7 +110,7 @@ def _sh_profile_for_model(model: str) -> str:
+ def create_profile(cur, prof: str, model: str, object_list: list[dict]) -> None:
+     """DBMS_CLOUD_AI プロファイルを(あれば作り直して)作成する共通ヘルパ。
+ 
+-    credential JETUSE_OCI_CRED と DBMS_CLOUD_AI 権限は ops/setup-select-ai.py 済み前提。
++    資格情報(OCI$RESOURCE_PRINCIPAL)と DBMS_CLOUD_AI 権限は ops/setup-select-ai.py 済み前提。
+     DROP/CREATE_PROFILE は既定の call_timeout(10s)を超えることがある(特にADB再開直後)ため、
+     この接続のタイムアウトを一時的に引き上げる。
+     """
+@@ -142,7 +142,9 @@ def create_profile(cur, prof: str, model: str, object_list: list[dict]) -> None:
+             f"Select AI プロファイル作成に失敗しました。DBMS_CLOUD_AI のクレデンシャル"
+             f"({s.select_ai_credential})が未整備の可能性があります。動的グループへの"
+             "generative-ai-family 権限、Object Storage バケットの read 権限、および"
+-            "ENABLE_RESOURCE_PRINCIPAL の起動ログ(/api/health)を確認してください"
++            "ENABLE_RESOURCE_PRINCIPAL の起動ログ(/api/health)を確認してください。"
++            f"ローカル実行(コンテナ外)なら .venv/bin/python ops/setup-select-ai.py "
++            f"--schema {s.adb_user} で当該スキーマへ有効化できます(ADR-0021)"
+         ) from e
+ 
+ 
+diff --git a/packages/api/jetuse_core/rag_select_ai.py b/packages/api/jetuse_core/rag_select_ai.py
+index cba66aa..1d209c7 100644
+--- a/packages/api/jetuse_core/rag_select_ai.py
++++ b/packages/api/jetuse_core/rag_select_ai.py
+@@ -4,7 +4,8 @@ SPIKE-08実機確定:
+ - ベクトル索引はADB 23ai+必須(19cはORA-20047)
+ - 索引はバケットURL直結(RAG-01の原本バックアップ rag/{owner}/ を共用)
+ - GENERATEの応答末尾に "Sources:" ブロックが自動付与される
+-前提: ops/setup-select-ai.py によるADMINセットアップ(権限+JETUSE_OCI_CRED)が済んでいること。
++前提: ops/setup-select-ai.py によるADMINセットアップ(権限+リソースプリンシパル有効化)が
++済んでいること。DB内の資格情報は OCI$RESOURCE_PRINCIPAL に統一(ADR-0021)。
+ """
+ 
+ import hashlib
+diff --git a/packages/api/jetuse_core/settings.py b/packages/api/jetuse_core/settings.py
+index 8e1c3a8..c0577cb 100644
+--- a/packages/api/jetuse_core/settings.py
++++ b/packages/api/jetuse_core/settings.py
+@@ -56,8 +56,10 @@ class Settings(BaseSettings):
+     # NL2SQL(SQL-02): SemanticStore + 読取専用ユーザー
+     semstore_ocid: str = ""
+     adb_query_password: str = ""
+-    # Select AI クレデンシャル名。ORM/RP環境は OCI$RESOURCE_PRINCIPAL(INFRA-03)
+-    select_ai_credential: str = "JETUSE_OCI_CRED"
++    # Select AI クレデンシャル名。配備先(ORM/dev)も開発も ADB 自身の身分に統一した(ADR-0021)。
++    # かつての既定 JETUSE_OCI_CRED は API キー焼き込み版で、これを作る経路は廃止済み
++    # (＝既定のままだと存在しない資格情報を指す)。上書きは env SELECT_AI_CREDENTIAL。
++    select_ai_credential: str = "OCI$RESOURCE_PRINCIPAL"
+ 
+     # 議事録(VOICE-01): 音声と文字起こし結果のバケット(空なら機能無効=503)
+     speech_bucket: str = ""
+diff --git a/packages/api/tests/test_health.py b/packages/api/tests/test_health.py
+index 02e17d9..67d898a 100644
+--- a/packages/api/tests/test_health.py
++++ b/packages/api/tests/test_health.py
+@@ -107,7 +107,8 @@ def test_dbchat_health_survives_sample_check_crash(monkeypatch):
+ 
+ 
+ def test_speech_health_unavailable_without_bucket(monkeypatch):
+-    monkeypatch.delenv("SPEECH_BUCKET", raising=False)
++    # delenv だけでは Settings が .env(env_file) から拾い直す(上の COMPARTMENT_OCID と同じ理由)
++    monkeypatch.setenv("SPEECH_BUCKET", "")
+     get_settings.cache_clear()
+     out = health.speech_health()
+     assert out["status"] == "unavailable"
+diff --git a/packages/api/tests/test_service.py b/packages/api/tests/test_service.py
+index d7d5117..4987bc8 100644
+--- a/packages/api/tests/test_service.py
++++ b/packages/api/tests/test_service.py
+@@ -41,6 +41,9 @@ def test_auth_required_rejects_missing_token(monkeypatch):
+ def test_auth_required_fails_closed_without_oidc_config(monkeypatch):
+     # OIDC未設定のままトークンを出されても素通りさせない(fail-closed)
+     monkeypatch.setenv("AUTH_REQUIRED", "true")
++    # 空文字を明示する(delenv だと Settings が .env から拾い直し、OIDC を設定済みの開発機で落ちる)
++    monkeypatch.setenv("OIDC_ISSUER", "")
++    monkeypatch.setenv("OIDC_JWKS_URL", "")
+     get_settings.cache_clear()
+     res = client.get("/api/chat/ping", headers={"Authorization": "Bearer dummy"})
+     assert res.status_code == 500
+diff --git a/specs/09-rag.md b/specs/09-rag.md
+index 68abc69..b8ef672 100644
+--- a/specs/09-rag.md
++++ b/specs/09-rag.md
+@@ -56,7 +56,7 @@
+ - **per-user分離**: ユーザーごとに `JETUSE_RAG_{sha1(owner)[:8]}` のprofile+vector indexを遅延作成。索引の取り込み元は **RAG-01の原本バックアップ先 `rag/{owner}/`**（同じアップロードが両バックエンドに供給される設計）
+ - 実行: `DBMS_CLOUD_AI.GENERATE(action=>'narrate')` をスレッドで実行→単発deltaで返す（非ストリーミング）。応答末尾のSourcesをcitationsイベントに変換
+ - 同期の制約: select_ai側は索引の `refresh_rate`（60分に設定）間隔でバケットと同期。アップロード直後は反映されない場合がある旨をUIに注記
+-- **ADMINセットアップ（1回）**: `ops/setup-select-ai.py` — JETUSE_APPへ `EXECUTE ON DBMS_CLOUD / DBMS_CLOUD_AI` 付与 + GenAI/Object StorageホストへのACL + APIキーcredential作成（Vault/リソースプリンシパル化はPhase 8）
++- **ADMINセットアップ（再実行可）**: `ops/setup-select-ai.py [--schema <SCHEMA>]` — 対象スキーマへ `EXECUTE ON DBMS_CLOUD / DBMS_CLOUD_AI` 付与 + GenAI/Object StorageホストへのACL + `DBMS_CLOUD_ADMIN.ENABLE_RESOURCE_PRINCIPAL`。DB内の資格情報は開発も配備も **`OCI$RESOURCE_PRINCIPAL`**（ADB自身の身分）に統一し、APIキーを焼き込む `JETUSE_OCI_CRED` は廃止（ADR-0021）。Vault化はPhase 8の検討事項
+ - UI: /ragにバックエンドセレクタ（標準=ベクトル検索 / Select AI）。select_ai選択時は同期タイミングの注記表示
+ 
+ ### 完了条件
+diff --git a/spikes/spike_m1/common.py b/spikes/spike_m1/common.py
+index 259ad17..a29c777 100644
+--- a/spikes/spike_m1/common.py
++++ b/spikes/spike_m1/common.py
+@@ -331,9 +331,14 @@ def require_owned_store(vs_id: str, name: str) -> None:
+ def oci_api_key(profile: str = "") -> dict[str, str]:
+     """~/.oci/config から**指定プロファイルだけ**を読む。
+ 
+-    ops/setup-select-ai.py / setup-dev-schema.py の parser は全行を1つの dict に潰すため、
+-    複数プロファイルがある config では最後のプロファイルの値を拾ってしまう（実機で発覚:
++    かつて ops/setup-select-ai.py / setup-dev-schema.py の parser は全行を1つの dict に潰すため、
++    複数プロファイルがある config では最後のプロファイルの値を拾ってしまった（実機で発覚:
+     DBMS_CLOUD の全呼び出しが ORA-20404 = OCI の NotAuthorizedOrNotFound になる）。
++
++    **ops はこの方式を使わなくなった**（RP-01 / ADR-0021。DB 内の資格情報は
++    OCI$RESOURCE_PRINCIPAL に統一し、API キーを DB へ焼き込む経路ごと廃止した）。
++    ここに残しているのは SPIKE-M1 の実行結果を当時のまま再現するためで、
++    新しいコードでこの関数を真似ないこと。
+     """
+     want = (profile or os.environ.get("OCI_PROFILE") or "DEFAULT").upper()
+     conf: dict[str, str] = {}
+
+
+===== 実環境 E2E 証跡 (jetuse-dev / Codex は実行せず証跡を評価する) =====
+--- runs/2026-07-29T1605_RP-01/e2e/created-resources.json ---
+{
+  "schema": "JETUSE_SPIKERP01",
+  "query_schema": "JETUSE_SPIKERP01_Q"
+}
+
+--- runs/2026-07-29T1605_RP-01/e2e/deploy.log ---
+date: invalid argument 's' for -I
+ jetuse-dev-adb is not STOPPED — nothing to do
+exit=0
+
+--- runs/2026-07-29T1605_RP-01/e2e/driver.py ---
+       f"/n/{ns}/b/{BUCKET}/o/rag/{DEV}")
+    conn = connect(SCHEMA, schema_pw(SCHEMA))
+    conn.call_timeout = 0  # 索引構築は長い
+    cur = conn.cursor()
+    drop_index = ("DBMS_CLOUD_AI.DROP_VECTOR_INDEX(index_name => :p,"
+                  " include_data => TRUE, force => TRUE)")
+    for stmt, arg in ((drop_index, INDEX), ("DBMS_CLOUD_AI.DROP_PROFILE(:p)", PROFILE)):
+        try:
+            cur.execute(f"BEGIN {stmt}; END;", p=arg)
+        except oracledb.DatabaseError:
+            pass
+    cur.execute("BEGIN DBMS_CLOUD_AI.CREATE_PROFILE(:p, :a); END;", p=PROFILE,
+                a=json.dumps({"provider": "oci", "credential_name": RP_CRED,
+                              "region": env("OCI_REGION"), "model": LLM,
+                              "embedding_model": EMBED, "vector_index_name": INDEX}))
+    record("profile", PROFILE)
+    print(f"  CREATE_PROFILE: {PROFILE}（credential_name={RP_CRED}）")
+    cur.execute("BEGIN DBMS_CLOUD_AI.CREATE_VECTOR_INDEX(:i, :a); END;", i=INDEX,
+                a=json.dumps({"vector_db_provider": "oracle", "location": location,
+                              "object_storage_credential_name": RP_CRED,
+                              "profile_name": PROFILE, "vector_distance_metric": "cosine",
+                              "chunk_size": 1024, "chunk_overlap": 128, "refresh_rate": 60}))
+    record("vector_index", INDEX)
+    conn.commit()
+    print(f"  CREATE_VECTOR_INDEX: {INDEX}（object_storage_credential_name={RP_CRED}）")
+
+    rows, deadline = 0, time.time() + 300
+    while time.time() < deadline:
+        try:
+            cur.execute(f'SELECT COUNT(*) FROM "{INDEX}$VECTAB"')
+            rows = cur.fetchone()[0]
+            if rows > 0:
+                break
+        except oracledb.DatabaseError:
+            pass
+        time.sleep(5)
+    print(f"  索引の取り込み行数: {rows}")
+    assert rows > 0, "ベクトル表に行が入らない（Object Storage 読み取りに失敗している）"
+    cur.execute(f"SELECT DISTINCT JSON_VALUE(attributes, '$.object_name') FROM \"{INDEX}$VECTAB\"")
+    print("  取り込み対象:", sorted(r[0] for r in cur.fetchall()))
+
+    for prompt, expect in (("ドキュメントAの合言葉は何か。", "BLUEHERON"),
+                           ("ドキュメントBの合言葉は何か。", "REDFALCON")):
+        cur.execute("""SELECT DBMS_CLOUD_AI.GENERATE(
+                         prompt => :q, profile_name => :p, action => 'narrate') FROM dual""",
+                    q=prompt, p=PROFILE)
+        answer = (cur.fetchone()[0] or "").strip()
+        hit = expect in answer
+        print(f"\n  Q: {prompt}\n  A: {answer[:600]}\n  → 期待語 {expect} を含む: {hit}")
+        assert hit, f"検索結果に {expect} が現れない"
+    conn.close()
+    print("\n判定: PASS（索引作成・取り込み・検索のすべてがリソースプリンシパルで成立）")
+
+
+# ---------------------------------------------------------------- シナリオ 4
+def scenario_4() -> None:
+    """対照: 誤ったプロファイル由来の API キー資格情報だと ORA-20404 になる。"""
+    print("== シナリオ4（対照）: 誤ったプロファイル由来の API キー資格情報 ==")
+    comp = target()["compartment_ocid"]
+    ns, region = env("OS_NAMESPACE"), env("OCI_REGION")
+    url = f"https://objectstorage.{region}.oraclecloud.com/n/{ns}/b/?compartmentId={comp}"
+
+    # RP-01 で削除した旧パーサの再現（セクションを無視して全行を 1 つの dict に潰す）。
+    # 複数プロファイルがある config では **最後のプロファイル** の値になる。
+    conf = dict(
+        line.replace(" ", "").split("=", 1)
+        for line in pathlib.Path("~/.oci/config").expanduser().read_text().splitlines()
+        if "=" in line
+    )
+    sections = [ln.strip("[]") for ln in
+                pathlib.Path("~/.oci/config").expanduser().read_text().splitlines()
+                if ln.startswith("[")]
+    print(f"  ~/.oci/config のプロファイル: {sections}")
+    print(f"  旧パーサが拾う値: 最後のプロファイル [{sections[-1]}] のもの")
+    key = pathlib.Path(conf["key_file"]).expanduser().read_text()
+    private_key = "".join(ln for ln in key.splitlines()
+                          if ln and "-----" not in ln and ln != "OCI_API_KEY")
+
+    conn = connect(SCHEMA, schema_pw(SCHEMA))
+    cur = conn.cursor()
+    try:
+        cur.execute("BEGIN DBMS_CLOUD.DROP_CREDENTIAL(:c); END;", c=BAD_CRED)
+    except oracledb.DatabaseError:
+        pass
+    cur.execute("""
+        BEGIN
+          DBMS_CLOUD.CREATE_CREDENTIAL(credential_name => :n, user_ocid => :u,
+            tenancy_ocid => :t, private_key => :k, fingerprint => :f);
+        END;""", n=BAD_CRED, u=conf["user"], t=conf["tenancy"],
+        k=private_key, f=conf["fingerprint"])
+    conn.commit()
+    print(f"  資格情報作成: {BAD_CRED}（CREATE_CREDENTIAL 自体は成功する＝ここでは気づけない）")
+    try:
+        status = send_request(cur, BAD_CRED, url)
+        result = f"HTTP {status}（想定外）"
+        ok = False
+    except oracledb.DatabaseError as e:
+        msg = str(e).splitlines()[0]
+        result = msg
+        ok = "ORA-20404" in msg
+    print(f"  同じ URL を {BAD_CRED} で叩く: {result}")
+    status_rp = send_request(cur, RP_CRED, url)
+    print(f"  同じ URL を {RP_CRED} で叩く: HTTP {status_rp}")
+    cur.execute("BEGIN DBMS_CLOUD.DROP_CREDENTIAL(:c); END;", c=BAD_CRED)
+    conn.commit()
+    print(f"  片付け: {BAD_CRED} を削除（API キーを ADB に残さない）")
+    conn.close()
+    assert ok and status_rp == 200, "対照が成立していない"
+    print("判定: PASS（旧方式は ORA-20404 / 新方式は 200。本変更が原因を潰したことの対照）")
+
+
+# ---------------------------------------------------------------- 片付け
+def teardown() -> None:
+    """検証用に作ったものだけを消す（台帳に記録した名前のみ）。"""
+    import oci
+    print("== 片付け ==")
+    data = ledger()
+    conn = connect(SCHEMA, schema_pw(SCHEMA)) if data.get("schema") == SCHEMA else None
+    if conn:
+        cur = conn.cursor()
+        conn.call_timeout = 0
+        drop_index = ("DBMS_CLOUD_AI.DROP_VECTOR_INDEX(index_name => :p,"
+                      " include_data => TRUE, force => TRUE)")
+        for stmt, arg in ((drop_index, data.get("vector_index")),
+                          ("DBMS_CLOUD_AI.DROP_PROFILE(:p)", data.get("profile")),
+                          ("DBMS_CLOUD.DROP_CREDENTIAL(:p)", BAD_CRED)):
+            if not arg:
+                continue
+            try:
+                cur.execute(f"BEGIN {stmt}; END;", p=arg)
+                print(f"  dropped {arg}")
+            except oracledb.DatabaseError as e:
+                print(f"  skip {arg}: {str(e).splitlines()[0]}")
+        conn.commit()
+        conn.close()
+    if data.get("bucket") == BUCKET:
+        cfg = oci_config()
+        osc = oci.object_storage.ObjectStorageClient(cfg)
+        ns = osc.get_namespace().data
+        for obj in osc.list_objects(ns, BUCKET).data.objects:
+            osc.delete_object(ns, BUCKET, obj.name)
+        osc.delete_bucket(ns, BUCKET)
+        print(f"  dropped bucket {BUCKET}")
+    conn = admin()
+    cur = conn.cursor()
+    for user in (data.get("schema"), data.get("query_schema")):
+        if user not in (SCHEMA, QRY_SCHEMA) or not user:
+            continue
+        try:
+            cur.execute(f"DROP USER {user} CASCADE")
+            print(f"  dropped user {user}")
+        except oracledb.DatabaseError as e:
+            print(f"  skip {user}: {str(e).splitlines()[0]}")
+    conn.commit()
+    conn.close()
+    print("done")
+
+
+def main() -> None:
+    what = sys.argv[1] if len(sys.argv) > 1 else ""
+    fn = {"1": scenario_1, "2": scenario_2, "3": scenario_3, "4": scenario_4,
+          "teardown": teardown}.get(what)
+    if not fn:
+        sys.exit(__doc__)
+    fn()
+
+
+if __name__ == "__main__":
+    main()
+
+--- runs/2026-07-29T1605_RP-01/e2e/post-teardown-state.log ---
+users: ['JETUSE_APP', 'JETUSE_APP_Q', 'JETUSE_SP1_02', 'JETUSE_SP1_03', 'JETUSE_SP2_01', 'JETUSE_SP2_02', 'JETUSE_SP2_02_Q']
+creds: [('ADMIN', 'OCI$RESOURCE_PRINCIPAL'), ('JETUSE_APP', 'JETUSE_OCI_CRED'), ('JETUSE_SP2_02', 'JETUSE_OCI_CRED')]
+
+--- runs/2026-07-29T1605_RP-01/e2e/scenario-1.log ---
+== シナリオ1: 検証用スキーマへの適用と冪等性 ==
+  接続先確認: jetuse-loop-adb / jetuse:dev / AVAILABLE
+  実行前: JETUSE_SPIKERP01 存在=0 / RP 付与=0
+
+---- setup-dev-schema.py 1 回目 ----
+
+$ .venv/bin/python ops/setup-dev-schema.py --dev spikerp01 --app-password <PASSWORD> --query-password <PASSWORD>
+applied: ['001_init', '002_presets', '003_oci_conversation', '004_usecases', '005_rag', '006_mcp_servers', '007_agents', '008_agent_auto_tools', '009_minutes', '010_agent_framework', '011_audit', '012_normalize_framework', '013_installed_plugins', '014_usecase_source', '015_agent_source', '016_demos']
+== ADMIN: ensure JETUSE_SPIKERP01 / JETUSE_SPIKERP01_Q ==
+  接続先: DB_NAME=<DB_TOKEN>_JETUSELOOP2 DSN=jetuseloop2_low
+  created JETUSE_SPIKERP01
+  grants: DBMS_CLOUD, DBMS_CLOUD_AI, DBMS_CLOUD_AI_AGENT, DBMS_CLOUD_PIPELINE -> JETUSE_SPIKERP01
+  ACL: inference.generativeai.<region>.oci.oraclecloud.com
+  ACL: generativeai.<region>.oci.oraclecloud.com
+  ACL: objectstorage.<region>.oraclecloud.com
+  created JETUSE_SPIKERP01_Q
+  resource principal: JETUSE_SPIKERP01 -> OCI$RESOURCE_PRINCIPAL
+== migrate -> schema JETUSE_SPIKERP01 ==
+
+== done ==
+次の手順: infra/terraform/environments/app/<dev>.tfvars に以下を設定
+  adb_user       = "JETUSE_SPIKERP01"
+  adb_query_user = "JETUSE_SPIKERP01_Q"
+  api_environment = { ... , ADB_PASSWORD = <下記>, ADB_QUERY_PASSWORD = <下記> }
+  ADB_PASSWORD       (JETUSE app)  = <実行時に指定した値>
+  ADB_QUERY_PASSWORD (JETUSE read) = <実行時に指定した値>
+その後: ops/dev-env-up.sh spikerp01
+
+---- setup-select-ai.py 1 回目 ----
+
+$ .venv/bin/python ops/setup-select-ai.py --schema JETUSE_SPIKERP01
+== ADMIN: grants + ACL + resource principal (JETUSE_SPIKERP01) ==
+  接続先: DB_NAME=<DB_TOKEN>_JETUSELOOP2 DSN=jetuseloop2_low
+  db version: 23.26.3.1.0
+  grants: DBMS_CLOUD, DBMS_CLOUD_AI, DBMS_CLOUD_AI_AGENT, DBMS_CLOUD_PIPELINE -> JETUSE_SPIKERP01
+  ACL: inference.generativeai.<region>.oci.oraclecloud.com
+  ACL: generativeai.<region>.oci.oraclecloud.com
+  ACL: objectstorage.<region>.oraclecloud.com
+  resource principal: JETUSE_SPIKERP01 -> OCI$RESOURCE_PRINCIPAL
+done
+  1 回目終了: JETUSE_SPIKERP01 存在=1 / OCI$RESOURCE_PRINCIPAL EXECUTE=1 / migrate 適用表数=14
+
+---- setup-dev-schema.py 2 回目 ----
+
+$ .venv/bin/python ops/setup-dev-schema.py --dev spikerp01 --app-password <PASSWORD> --query-password <PASSWORD>
+applied: (none — up to date)
+== ADMIN: ensure JETUSE_SPIKERP01 / JETUSE_SPIKERP01_Q ==
+  接続先: DB_NAME=<DB_TOKEN>_JETUSELOOP2 DSN=jetuseloop2_low
+  JETUSE_SPIKERP01 は既存。指定パスワードは現行と同じ(ORA-28007)ため変更なし
+  grants: DBMS_CLOUD, DBMS_CLOUD_AI, DBMS_CLOUD_AI_AGENT, DBMS_CLOUD_PIPELINE -> JETUSE_SPIKERP01
+  ACL: inference.generativeai.<region>.oci.oraclecloud.com
+  ACL: generativeai.<region>.oci.oraclecloud.com
+  ACL: objectstorage.<region>.oraclecloud.com
+  JETUSE_SPIKERP01_Q は既存。指定パスワードは現行と同じ(ORA-28007)ため変更なし
+  resource principal: JETUSE_SPIKERP01 -> OCI$RESOURCE_PRINCIPAL
+== migrate -> schema JETUSE_SPIKERP01 ==
+
+== done ==
+次の手順: infra/terraform/environments/app/<dev>.tfvars に以下を設定
+  adb_user       = "JETUSE_SPIKERP01"
+  adb_query_user = "JETUSE_SPIKERP01_Q"
+  api_environment = { ... , ADB_PASSWORD = <下記>, ADB_QUERY_PASSWORD = <下記> }
+  ADB_PASSWORD       (JETUSE app)  = <実行時に指定した値>
+  ADB_QUERY_PASSWORD (JETUSE read) = <実行時に指定した値>
+その後: ops/dev-env-up.sh spikerp01
+
+---- setup-select-ai.py 2 回目 ----
+
+$ .venv/bin/python ops/setup-select-ai.py --schema JETUSE_SPIKERP01
+== ADMIN: grants + ACL + resource principal (JETUSE_SPIKERP01) ==
+  接続先: DB_NAME=<DB_TOKEN>_JETUSELOOP2 DSN=jetuseloop2_low
+  db version: 23.26.3.1.0
+  grants: DBMS_CLOUD, DBMS_CLOUD_AI, DBMS_CLOUD_AI_AGENT, DBMS_CLOUD_PIPELINE -> JETUSE_SPIKERP01
+  ACL: inference.generativeai.<region>.oci.oraclecloud.com
+  ACL: generativeai.<region>.oci.oraclecloud.com
+  ACL: objectstorage.<region>.oraclecloud.com
+  resource principal: JETUSE_SPIKERP01 -> OCI$RESOURCE_PRINCIPAL
+done
+  2 回目終了: JETUSE_SPIKERP01 存在=1 / OCI$RESOURCE_PRINCIPAL EXECUTE=1 / migrate 適用表数=14
+
+判定: PASS（2 回連続実行しても成功。RP 付与・スキーマ・マイグレーション適用が保たれる）
+
+--- runs/2026-07-29T1605_RP-01/e2e/scenario-2.log ---
+== シナリオ2: OCI$RESOURCE_PRINCIPAL で Object Storage 200 ==
+  接続先確認: jetuse-loop-adb / jetuse:dev / AVAILABLE
+  この接続から見える資格情報: [('ADMIN', 'OCI$RESOURCE_PRINCIPAL', 'TRUE')]
+  ListBuckets(dev コンパートメント): HTTP 200
+  GetBucket(共有 SPA バケット): HTTP 200
+判定: PASS（API キー資格情報を作らずに Object Storage を読めている）
+
+--- runs/2026-07-29T1605_RP-01/e2e/scenario-3.log ---
+== シナリオ3: OCI$RESOURCE_PRINCIPAL でベクトル索引の作成と検索 ==
+  接続先確認: jetuse-loop-adb / jetuse:dev / AVAILABLE
+  バケット再利用: jetuse-spike-rp01-rag
+  文書投入: 2 件
+  CREATE_PROFILE: JETUSE_SPIKE_RP01_PROF（credential_name=OCI$RESOURCE_PRINCIPAL）
+  CREATE_VECTOR_INDEX: JETUSE_SPIKE_RP01_IDX（object_storage_credential_name=OCI$RESOURCE_PRINCIPAL）
+  索引の取り込み行数: 2
+  取り込み対象: ['doc-a.txt', 'doc-b.txt']
+
+  Q: ドキュメントAの合言葉は何か。
+  A: ドキュメントAの合言葉はBLUEHERONです。
+
+Sources:
+  - doc-a.txt (https://objectstorage.<region>.oraclecloud.com/n/<OS_NAMESPACE>/b/jetuse-spike-rp01-rag/o/rag/spikerp01/doc-a.txt)
+  → 期待語 BLUEHERON を含む: True
+
+  Q: ドキュメントBの合言葉は何か。
+  A: ドキュメントBの合言葉はREDFALCONである。
+
+Sources:
+  - doc-b.txt (https://objectstorage.<region>.oraclecloud.com/n/<OS_NAMESPACE>/b/jetuse-spike-rp01-rag/o/rag/spikerp01/doc-b.txt)
+  → 期待語 REDFALCON を含む: True
+
+判定: PASS（索引作成・取り込み・検索のすべてがリソースプリンシパルで成立）
+
+--- runs/2026-07-29T1605_RP-01/e2e/scenario-4.log ---
+== シナリオ4（対照）: 誤ったプロファイル由来の API キー資格情報 ==
+  接続先確認: jetuse-loop-adb / jetuse:dev / AVAILABLE
+  ~/.oci/config のプロファイル: ['DEFAULT', 'ORASEJAPAN', 'DEPLOYTEST']
+  旧パーサが拾う値: 最後のプロファイル [DEPLOYTEST] のもの
+  資格情報作成: JETUSE_SPIKE_RP01_BADCRED（CREATE_CREDENTIAL 自体は成功する＝ここでは気づけない）
+  同じ URL を JETUSE_SPIKE_RP01_BADCRED で叩く: ORA-20404: Object not found - https://objectstorage.<region>.oraclecloud.com/n/<OS_NAMESPACE>/b/?compartmentId=ocid1.compartment.oc1..<REDACTED>
+  同じ URL を OCI$RESOURCE_PRINCIPAL で叩く: HTTP 200
+  片付け: JETUSE_SPIKE_RP01_BADCRED を削除（API キーを ADB に残さない）
+判定: PASS（旧方式は ORA-20404 / 新方式は 200。本変更が原因を潰したことの対照）
+
+--- runs/2026-07-29T1605_RP-01/e2e/SKIPPED.md ---
+# RP-01 E2E で実施しなかった範囲と理由
+
+tasks/RP-01.md の E2E シナリオ 1〜4 は**すべて実施し、すべて PASS**（`scenario-1..4.log`）。
+以下は ADR-0021「検証計画」に挙がっているが今回実施していない範囲。
+
+## 1. 配備済み dev アプリスタックでの `/api/health` の `dbchat=ok`（ADR-0021 検証計画 5）
+
+**やらなかった理由**: 実行には ①API イメージのビルドと OCIR への push ②開発者専用の
+`app` スタック（Container Instance + API Gateway + SPA バケット）の `terraform apply`
+が要る。本タスクの変更は「DB の中の資格情報」と「その env 注入」であり、コンテナを
+1 セット新設しないと確認できない一方、確認したい振る舞い
+（`OCI$RESOURCE_PRINCIPAL` で DBMS_CLOUD / DBMS_CLOUD_AI が通る）は
+シナリオ 2・3 で**同じ ADB・同じ資格情報**に対して直接検証済み。
+リソースを増やさない方針（loop-config `e2e.dev_env`）とも合わない。
+
+**代わりに確認したこと**:
+- `infra/terraform/environments/app` の env 注入は `terraform init -backend=false` →
+  `terraform fmt -check` → `terraform validate` が成功（`terraform-validate.log`）。
+- 注入値が効く先である `settings.select_ai_credential` の既定を
+  `OCI$RESOURCE_PRINCIPAL` に合わせたため、注入が漏れても API キー版へ落ちない。
+
+**残る人間ゲート**: 実際の `terraform apply` は承認が必要（CLAUDE.md）。
+配備後の `/api/health` の `dbchat` 確認は、次に dev スタックを更新する人が
+そのついでに見れば足りる（新規リスクは無い＝bootstrap.py は従来から
+`ENABLE_RESOURCE_PRINCIPAL` を実行しており、本タスクで変えていない）。
+
+## 2. 既存 dev スキーマ（`JETUSE_APP` 等）への適用
+
+**やらなかった理由**: 共有 ADB の既存スキーマを本タスクの検証のために書き換えない
+（tasks/RP-01.md 非ゴール「実 ADB の既存スキーマ・共有リソースを壊さない」）。
+なお `JETUSE_APP` には既に `OCI$RESOURCE_PRINCIPAL` の EXECUTE が付いており
+（`post-teardown-state.log` の `dba_credentials` と本文の調査結果）、
+本変更後の `ops/setup-select-ai.py --schema JETUSE_APP` は追加の付与を行うだけで済む。
+
+**残る人間ゲート**: 既存スキーマに残る `JETUSE_OCI_CRED` の削除は ADR-0021 §未解決 2 の
+結論どおり**自動では行わない**。消したい場合の手順は `docs/verification/RP-01.md` に記載。
+
+--- runs/2026-07-29T1605_RP-01/e2e/teardown.log ---
+== 片付け ==
+  skip JETUSE_SPIKE_RP01_BADCRED: ORA-20004: Credential "JETUSE_SPIKERP01"."JETUSE_SPIKE_RP01_BADCRED" does not exist
+  接続先確認: jetuse-loop-adb / jetuse:dev / AVAILABLE
+  dropped user JETUSE_SPIKERP01
+  dropped user JETUSE_SPIKERP01_Q
+done
+
+--- runs/2026-07-29T1605_RP-01/e2e/terraform-validate.log ---
+[0m[1mInitializing modules...[0m
+- api_gateway in ../../modules/api-gateway
+- container_instance in ../../modules/container-instance
+- spa in ../../modules/spa-bucket
+
+[0m[1mInitializing provider plugins...[0m
+- terraform.io/builtin/terraform is built in to Terraform
+- Finding hashicorp/time versions matching ">= 0.9.0"...
+- Finding oracle/oci versions matching ">= 6.0.0"...
+- Installing hashicorp/time v0.14.0...
+- Installed hashicorp/time v0.14.0 (signed by HashiCorp)
+- Installing oracle/oci v8.24.0...
+- Installed oracle/oci v8.24.0 (signed by a HashiCorp partner, key ID [0m[1m1533A49284137CEB[0m[0m)
+
+Partner and community providers are signed by their developers.
+If you'd like to know more about provider signing, you can read about it here:
+https://www.terraform.io/docs/cli/plugins/signing.html
+
+Terraform has created a lock file [1m.terraform.lock.hcl[0m to record the provider
+selections it made above. Include this file in your version control repository
+so that Terraform can guarantee to make the same selections by default when
+you run "terraform init" in the future.[0m
+
+[0m[1m[32mTerraform has been successfully initialized![0m[32m[0m
+[0m[32m
+You may now begin working with Terraform. Try running "terraform plan" to see
+any changes that are required for your infrastructure. All Terraform commands
+should now work.
+
+If you ever set or change modules or backend configuration for Terraform,
+rerun this command to reinitialize your working directory. If you forget, other
+commands will detect it and remind you to do so if necessary.[0m
+[32m[1mSuccess![0m The configuration is valid.
+[0m
+

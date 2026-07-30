@@ -1,0 +1,63 @@
+{
+  "review_n": 12,
+  "timestamp": "2026-07-29T20:37:15+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-12.input.diff",
+  "raw_output_path": "reviews/review-12.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "Resource Principal の機能経路は4本の実環境シナリオで裏づけられ、IAM変更や認証情報・OCID実値の混入も見当たりません。ただし、作成直後の再照会を所有証跡に採用しているため、競合時に別プロセスが作り直したユーザーやバケットを自分のものとして削除できる blocker が残っています。",
+  "severity_counts": {
+    "blocker": 2,
+    "major": 2,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "ops/setup-dev-schema.py",
+      "line": 60,
+      "issue": "receipt の USER_ID と作成時刻は CREATE USER の結果に結び付いておらず、CREATE 成功後に DBA_USERS を名前で再照会して取得している。この間に別セッションが DROP USER と同名再作成を行うと、再作成後の USER_ID を created_by_this_run=true として記録し、capture_ownership() もそのユーザーを所有物として採用するため、teardown が他者のユーザーを削除し得る。",
+      "suggestion": "CREATE したパスワードで直ちに新規セッションへ接続し、そのセッション自身の SESSION_USERID を receipt に記録するなど、CREATE した実体に結び付く識別子を取得すること。取得後と DROP 前には現在の DBA_USERS.USER_ID と照合し、この競合を再現するテストも追加する。"
+    },
+    {
+      "id": "B-002",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 554,
+      "issue": "create_bucket() のレスポンスを捨て、成功後に名前で get_bucket() した結果を所有証跡としている。作成直後にバケットが削除・同名再作成された場合は他者の etag/time_created を台帳へ取り込み、そのバケットへ書き込み、teardown で削除できる。また再照会が一時的に None の場合は台帳値が None となり、作成済みバケットが片付け対象から外れる。",
+      "suggestion": "create_bucket() が返す Bucket オブジェクトから etag/time_created/name を直接台帳へ記録し、その後の再照会結果が完全一致した場合だけ put_object や削除を許可すること。作成レスポンス後の同名再作成と直後の再照会失敗をテストする。"
+    },
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "ops/setup-dev-schema.py",
+      "line": 91,
+      "issue": "receipt の出力先を事前検証せず、CREATE USER の後で JSON 読み込み・書き込みを行うため、既存 receipt が壊れている、親ディレクトリが無い、書き込み不能などの場合にユーザーだけが作成され、所有証跡が残らない。E2E ドライバの finally も receipt が無ければ回収できない。",
+      "suggestion": "DDL 前に receipt の親ディレクトリ、既存JSON、書き込み可否を検証して安全な初期ファイルを作ること。CREATE 後の保存失敗時には安定した USER_ID を照合して即時回収するか、DB側の耐久的な receipt 台帳を使用し、破損・書き込み不能ケースをテストする。"
+    },
+    {
+      "id": "M-002",
+      "severity": "major",
+      "file": "ops/setup-dev-schema.py",
+      "line": 171,
+      "issue": "--require-new は2ユーザーを一組として事前確認していない。app_user が不在で query_user が既存の場合、app_user を作成して GRANT・ACLまで変更した後に query_user の検査で中止し、「既存ユーザーがあれば一切触れずに中止」というCLIの契約に反して部分的なリソースを残す。",
+      "suggestion": "--require-new 指定時は両ユーザーの存在を1回のプリフライトで調べ、どちらかが存在すればDDL前に中止すること。プリフライト後の競合で2人目のCREATEが失敗した場合は、安定したreceiptを使って1人目を回収する処理とmainレベルのテストを追加する。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "insufficient",
+    "notes": "scenario-1〜4 は冪等セットアップ、Object Storage 200、Select AI索引・検索、旧APIキー資格情報との対照を実 ADB で確認しており、guard.md の5否定ケース、teardown.md、post-teardown-state.md も結果整合している。SKIPPED.md の配備済みdevスタックと既存スキーマを未変更とした理由も妥当。ただし guard は台帳値を事後的に壊す検証だけで、CREATE USERからreceipt取得まで、およびcreate_bucketから所有証跡取得までの実リソース差し替えを網羅していないため、差分が主張する破壊操作の安全性を十分には裏づけていない。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されておらず、指示に従いブラウザ検証は実施していない。"
+    }
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "review_n": 6,
+  "timestamp": "2026-07-29T17:41:41+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-6.input.diff",
+  "raw_output_path": "reviews/review-6.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "リソースプリンシパル化の機能自体は実環境証跡で確認できています。しかし、dev 外ADBを許すコンパートメント判定と、E2Eドライバが競合時に他者のスキーマ／バケットを所有物として取り込んで削除し得る経路が残るため FAIL です。",
+  "severity_counts": {
+    "blocker": 4,
+    "major": 1,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "ops/_adb.py",
+      "line": 156,
+      "issue": "承認済み `COMPARTMENT_OCID` と完全一致する場合だけでなく、その任意の子孫コンパートメントにあるADBも許可します。検証資料ではこの値が親 `jetuse` を指すため、dev の兄弟・子孫環境にあるADBでもゲートを通過し、setupスクリプトが既存ユーザー、GRANT、ACLを変更できます。",
+      "suggestion": "devコンパートメントの正確なOCIDを別の `.env` 値またはTerraform出力から取得し、`adb.compartment_id` と完全一致させてください。承認済み親配下だがdev以外、という否定テストも追加してください。"
+    },
+    {
+      "id": "B-002",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 272,
+      "issue": "`capture_ownership()` は、事前不存在チェック後に同名ユーザーが別プロセスで作成された場合でも、現在存在するという理由だけで台帳へ登録し、ADMINでマーカーまで書き込みます。`setup-dev-schema.py` は明示パスワード指定時に既存ユーザーをALTERするため、競合時には他者のユーザーを変更したうえ、後続teardownで削除できます。",
+      "suggestion": "固定名をやめてrun固有の推測困難なスキーマ名を使用するか、各CREATEの成功結果と直結した所有証跡だけを記録してください。単なる事後照会で既存ユーザーを所有物として採用してはいけません。作成競合の否定テストを追加してください。"
+    },
+    {
+      "id": "B-003",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 413,
+      "issue": "バケット作成を `finally` で事後照会し、見つかった同名バケットを無条件に台帳へ登録しています。不存在確認後に別実行者が同名バケットを作成してこちらのCREATEが409等で失敗すると、その別バケットを所有物として記録し、後続teardownでオブジェクトとバケットを削除します。",
+      "suggestion": "CREATEが競合エラーで失敗した場合は絶対に台帳へ採用しないでください。run固有名を使用し、作成要求と結び付けられる証跡がないタイムアウト等の不確定結果は自動削除せず人間確認へ送ってください。"
+    },
+    {
+      "id": "B-004",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 245,
+      "issue": "読取専用ユーザーの所有識別子が秒精度の作成時刻だけです。`JETUSE_SPIKERP01_Q` が同じ秒内に削除・再作成されると台帳と一致し、マーカーを持たない別ユーザーを `DROP USER` できます。アプリスキーマについて作成時刻だけでは不足すると認識してマーカーを追加している一方、query schemaには同等の保護がありません。",
+      "suggestion": "query schemaにもrun固有マーカーを持たせるか、少なくともUSER_IDなど作り直しを識別できる値と実ログイン確認を組み合わせ、DROP直前に再照合してください。同一秒での再作成を模した否定テストを追加してください。"
+    },
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "ops/setup-dev-schema.py",
+      "line": 105,
+      "issue": "新規ユーザーの生成パスワードを表示するのは全DDL・ACL・RP付与が成功した後です。queryパスワードの構文エラーやGRANT／ACL／ENABLE_RESOURCE_PRINCIPALの途中失敗では、Oracle DDLにより作成済みユーザーだけが残り、生成パスワードは表示されず失われます。特にqueryパスワード検証はappユーザー作成後に行われるため、「不正パスワードならDDL 0件」という検証レポートの主張も満たしません。",
+      "suggestion": "両パスワードをすべてのDDL前に検証し、生成値はDDL前に安全に提示または0600の回収可能な一時ファイルへ保存してください。各DDL段階の障害注入テストで、部分作成時にも再実行・片付けできることを確認してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "insufficient",
+    "notes": "scenario-1（冪等、scenario-1.log/md）、scenario-2（Object Storage 200、scenario-2.log/md）、scenario-3（索引・2文書検索、scenario-3.log/md）、scenario-4（旧資格情報との対照、scenario-4.log/md）、guard（3種類のstale台帳拒否、guard.log/md）はすべてPASSし、RP化の機能主張は裏づけている。teardown.log/mdとpost-teardown-state.log/mdも片付け完了を示す。SKIPPED.mdの未配備理由と既存スキーマを変更しない理由は妥当。ただし、dev以外の親配下コンパートメント、作成時のスキーマ／バケット競合、query schemaの同一秒再作成という安全クリティカルな経路が未検証で、差分全体の裏づけとしては不十分。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザツールは使用していない。"
+    }
+  }
+}
