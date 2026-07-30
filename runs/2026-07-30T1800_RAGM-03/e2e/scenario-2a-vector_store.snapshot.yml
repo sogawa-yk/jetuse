@@ -1,0 +1,108 @@
+- generic [ref=f5e3]:
+  - banner [ref=f5e4]:
+    - button "toggle navigation" [ref=f5e5]: ☰
+    - generic [ref=f5e6]: JetUse
+    - generic [ref=f5e7]:
+      - button "EN" [ref=f5e8]
+      - button "☾" [ref=f5e9]
+      - button "アカウント" [ref=f5e11]: D
+  - generic [ref=f5e12]:
+    - navigation [ref=f5e13]:
+      - list [ref=f5e14]:
+        - listitem [ref=f5e15]:
+          - link "ホーム" [ref=f5e16] [cursor=pointer]:
+            - /url: "#/"
+        - listitem [ref=f5e19]:
+          - link "チャット" [ref=f5e20] [cursor=pointer]:
+            - /url: "#/chat"
+        - listitem [ref=f5e23]:
+          - link "エージェント" [ref=f5e24] [cursor=pointer]:
+            - /url: "#/agents"
+        - listitem [ref=f5e28]:
+          - link "RAGチャット" [ref=f5e29] [cursor=pointer]:
+            - /url: "#/rag"
+        - listitem [ref=f5e32]:
+          - link "DBチャット" [ref=f5e33] [cursor=pointer]:
+            - /url: "#/dbchat"
+        - listitem [ref=f5e37]:
+          - link "議事録" [ref=f5e38] [cursor=pointer]:
+            - /url: "#/minutes"
+        - listitem [ref=f5e41]:
+          - link "リアルタイム翻訳" [ref=f5e42] [cursor=pointer]:
+            - /url: "#/realtime"
+        - listitem [ref=f5e46]:
+          - link "音声チャット" [ref=f5e47] [cursor=pointer]:
+            - /url: "#/voicechat"
+        - listitem [ref=f5e50]:
+          - link "映像分析" [ref=f5e51] [cursor=pointer]:
+            - /url: "#/video"
+        - listitem [ref=f5e54]:
+          - link "OCR / 文書認識" [ref=f5e55] [cursor=pointer]:
+            - /url: "#/ocr"
+        - listitem [ref=f5e60]:
+          - link "設定" [ref=f5e61] [cursor=pointer]:
+            - /url: "#/settings"
+        - listitem [ref=f5e65]:
+          - link "デザインギャラリー" [ref=f5e66] [cursor=pointer]:
+            - /url: "#/design"
+    - separator "メニュー幅を調整（ドラッグ）" [ref=f5e72]
+    - main [ref=f5e73]:
+      - generic [ref=f5e74]:
+        - generic [ref=f5e79]:
+          - generic [ref=f5e80]:
+            - heading "RAGチャット" [level=1] [ref=f5e81]
+            - button "この機能の説明と構成図を見る" [ref=f5e82]: "?"
+          - paragraph [ref=f5e83]: 文書をアップロードし、その内容に基づいて質問できます
+        - generic [ref=f5e85]:
+          - generic [ref=f5e87]:
+            - generic [ref=f5e88]:
+              - heading "文書ファイル" [level=2] [ref=f5e89]
+              - generic [ref=f5e90] [cursor=pointer]: ＋ アップロード
+            - paragraph [ref=f5e91]: "対応形式: PDF / テキスト / Markdown / Excel（.xlsx。20MBまで）"
+            - paragraph [ref=f5e92]: まだ文書がありません。アップロードしてください
+          - generic [ref=f5e93]:
+            - paragraph [ref=f5e95]: 文書をアップロードすると質問できます（取り込み完了後）
+            - region "backend capabilities" [ref=f5e97]:
+              - generic [ref=f5e98]:
+                - heading "このバックエンドでできること" [level=3] [ref=f5e99]
+                - paragraph [ref=f5e100]: Enterprise AI マネージド Vector Store (file_search) — 手軽さ側(既定)。追加開発ほぼ無しで文書 Q&A が出せる
+              - list [ref=f5e101]:
+                - listitem [ref=f5e102]:
+                  - generic "docs/verification/SPIKE-M1.md ①-a / docs/verification/PREP-01.md" [ref=f5e103]: △ 条件付き
+                  - generic [ref=f5e104]:
+                    - text: 出典の粒度
+                    - generic [ref=f5e105]: "— ファイル単位。1 ファイルが複数チャンクに割れても属性は 1 種類しか返らない(xlsx は sheet='(ブック全体: N シート)')。チャンク本文・スコアは返る。チャンク単位の出典が要るなら 1 チャンク = 1 ファイルで取り込む運用が要る。"
+                - listitem [ref=f5e106]:
+                  - generic "docs/verification/SPIKE-M1.md ①-b/①-d / docs/verification/RAGM-01.md" [ref=f5e107]: △ 条件付き
+                  - generic [ref=f5e108]:
+                    - text: 絞り込みの表現力
+                    - generic [ref=f5e109]: — 属性フィルタ eq/and/or/gte(in は不可・キー 16 / 値 512 文字 / 入れ子不可)。版で絞るにはリクエストで rag_filters を明示指定する(既定は絞らないので旧版が混ざりうる)。存在しないキーはエラーにならず 0 件になるため、キーはアプリ側の許可制で守っている。
+                - listitem [ref=f5e110]:
+                  - generic "docs/comparison/rag-metadata-backends.md" [ref=f5e111]: ✕ 使えない
+                  - generic [ref=f5e112]:
+                    - text: 業務データとの結合
+                    - generic [ref=f5e113]: — 別サービスのため、在庫表・契約表などの業務表と結合した検索はできない。
+                - listitem [ref=f5e114]:
+                  - generic "docs/comparison/rag-metadata-backends.md" [ref=f5e115]: ✕ 使えない
+                  - generic [ref=f5e116]:
+                    - text: 行レベル制御
+                    - generic [ref=f5e117]: — アクセス制御はストア分離と IAM。行(チャンク)単位の制御機構は無い。
+                - listitem [ref=f5e118]:
+                  - generic "docs/verification/SPIKE-M1.md ①" [ref=f5e119]: △ 条件付き
+                  - generic [ref=f5e120]:
+                    - text: メタデータ更新の整合性
+                    - generic [ref=f5e121]: — files.update(attributes=) で再取り込み無しに直せるが、API 越しの更新で検索とは別トランザクション(結果整合)。
+              - list [ref=f5e122]:
+                - listitem [ref=f5e123]: ※ 素の xlsx は 400 unsupported_file で拒否されるため、抽出テキストに変換して投入している(表示名・sha256 は原本のまま)。
+              - paragraph [ref=f5e124]: ファイル右のバッジ（VS/ADB/SAI/OS）は「取り込めたか」、ここは「何ができるか」。「未実証」は実機で確かめていない項目で、できるとは言えない（バッジにカーソルを合わせると根拠の所在が出る）。
+            - generic [ref=f5e125]:
+              - combobox "rag backend" [ref=f5e126]:
+                - option "VS — Vector Store / File Search" [selected]
+                - option "ADB — Oracle AI Database（自前索引）"
+                - option "SAI — Select AI with RAG"
+                - option "OS — OpenSearch"
+              - textbox "文書をアップロードすると質問できます（取り込み完了後）" [disabled] [ref=f5e127]
+              - button "送信" [disabled] [ref=f5e128]
+  - contentinfo [ref=f5e129]:
+    - generic [ref=f5e130]: JetUse — Copyright © 2026 AISA
+    - generic [ref=f5e131]: v0.1.0

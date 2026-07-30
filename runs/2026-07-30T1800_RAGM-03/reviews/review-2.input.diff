@@ -1,0 +1,952 @@
+diff --git a/docs/verification/RAGM-03.md b/docs/verification/RAGM-03.md
+new file mode 100644
+index 0000000..1e1bc9c
+--- /dev/null
++++ b/docs/verification/RAGM-03.md
+@@ -0,0 +1,89 @@
++# RAGM-03 検証レポート: バックエンドの能力差を API と画面から見えるようにする
++
++実施日: 2026-07-30 / リージョン: ap-osaka-1 / 仕様の正本: `docs/decisions/ADR-0020-rag-metadata-backend.md` §3
++比較表の中身: `docs/comparison/rag-metadata-backends.md`
++証跡: `runs/2026-07-30T1800_RAGM-03/e2e/`（実施しなかった範囲は同ディレクトリの `SKIPPED.md`）
++
++## 結論（先に）
++
++**「Oracle AI Database を選ぶと何が増えるか」が、API（`GET /api/capabilities`）と画面の双方で
++そのまま読める状態になった。** そして **未実証のものは「未実証」と出る**。
++
++1. `rag.search` ディスクリプタに `backend_capabilities` を追加した。4 バックエンド × 5 軸
++   （出典粒度 / 絞り込みの表現力 / 業務データ結合 / 行レベル制御 / メタ更新の整合性）を
++   機械可読で持ち、各項目に `support` / `verified` / `detail` / `evidence` が付く。
++2. 画面（`rag.tsx`）のバックエンド選択に `adb` を足し、選択中のバックエンドで
++   「使える / 条件付き / 使えない / **未実証**」を出す。ADB を選ぶと
++   **セル範囲つき出典**と**版フィルタ（既定で現行版のみ）**が「使える」として現れる。
++3. **VPD（行レベル制御）と業務表 JOIN は「未実証」**。SPIKE-M1 でどちらも実行結果を残していない
++   （`runs/2026-07-28T1848_SPIKE-M1/e2e/SKIPPED.md` 3）ため、「できる」とは書いていない。
++
++## 何を機械可読にしたか
++
++```
++rag.search.backend_capabilities
++├── axes[5]            : 比較ドキュメントと同じ 5 軸
++├── support_levels     : yes / limited / no / unverified の意味
++└── backends{4}        : vector_store / adb / select_ai / opensearch
++    └── axes{5} → { support, verified, detail, evidence }
++```
++
++`verified` は手で立てず `support` から導出する（`_axis()`）。`unverified` のときだけ `false`。
++つまり **「未実証なのに verified=true」という状態を構造的に作れない**。
++
++| backend | 出典粒度 | 絞り込み | 業務データ結合 | 行レベル制御 | メタ更新整合 |
++|---|---|---|---|---|---|
++| vector_store | limited（ファイル単位） | limited（属性 eq/and/or/gte・明示指定） | no | no | limited（結果整合） |
++| **adb** | **yes**（チャンク単位・セル範囲） | **yes**（SQL WHERE・既定で現行版のみ） | **unverified** | **unverified** | **yes**（同一Tx） |
++| select_ai | limited（ファイル + offset） | no（ORA-20048） | no | unverified | no（refresh で欠損） |
++| opensearch | unverified ×5（ADR-0020 の比較対象外） | | | | |
++
++数字と制約の出所はすべて `evidence` に入れてある（SPIKE-M1 / RAGM-01 / RAGM-02 / PREP-01 /
++比較ドキュメント）。画面ではバッジの `title` としてそのまま読める。
++
++## 画面（取り込み状況バッジとは別物にした）
++
++| | 取り込み状況バッジ（既存） | 能力パネル（本タスク） |
++|---|---|---|
++| 問い | そのファイルを**取り込めたか** | そのバックエンドで**何ができるか** |
++| 出る場所 | ファイル一覧の各行 | チャット欄の上（選択中バックエンド 1 つ分） |
++| 値 | indexed / pending / error / disabled | yes / limited / no / **unverified** |
++
++既存バッジの意味は変えていない。`adb` は API が前から返していた（RAGM-02）ので、
++表示対象に加えただけである。文言は i18n（`rag.cap.*` / `rag.backend.adb` / `rag.be.adb`）に置いた。
++
++証跡のスクリーンショット（同じ画面・選択だけが違う）:
++
++- `runs/2026-07-30T1800_RAGM-03/e2e/scenario-2a-vector_store.png`
++- `runs/2026-07-30T1800_RAGM-03/e2e/scenario-2b-adb.png` — 「✓ 使える 出典の粒度 — チャンク単位。
++  xlsx はシート名とセル範囲まで返る(実測例: 『制約』C5:E6 / 『改訂履歴』A1:C2)」
++- `runs/2026-07-30T1800_RAGM-03/e2e/scenario-2c-select_ai.png`
++
++## 実装（何を足したか）
++
++| 変更 | 内容 |
++|---|---|
++| `packages/api/jetuse_core/capabilities.py` | `RAG_BACKEND_CAPABILITIES` と `_axis()`。`rag.search` に `backend_capabilities` を追加（既存キーは不変） |
++| `packages/api/tests/test_capabilities.py` | 選べるバックエンド（`ChatRequest.rag_backend`）との一致 / 全軸の充足 / **未実証を「できる」と書かせない**不変条件 / 未実証 3 項目の期待値固定 |
++| `packages/web/src/pages/rag/capabilityCatalog.ts` | バックエンドの語彙と能力カタログからの取り出し（能力の事実は画面に持たない） |
++| `packages/web/src/pages/rag/BackendCapabilities.tsx` | 能力パネル（API の記述を描くだけ） |
++| `packages/web/src/pages/rag/BackendStatusBadges.tsx` | 既存の取り込み状況バッジを切り出し、`adb` を表示対象に追加（意味は不変） |
++| `packages/web/src/pages/rag.tsx` | `adb` を選択肢に追加・能力パネルの配置・カタログ取得 |
++| `packages/web/src/i18n/dict.{ja,en}.ts` | `rag.cap.*` / `rag.backend.adb` / `rag.be.adb`・凡例更新 |
++
++## 分かったこと・注意
++
++- **`adb` の「版フィルタ」は vector_store のそれと性格が違う**。チャット API の `rag_filters` は
++  vector_store 専用で、`adb` は検索が**既定で現行版のみ**（`current_version='Y'`）。
++  「指定を忘れると旧版が混ざる」のは vector_store 側だけである。画面の説明文もそう書いた。
++- **業務表 JOIN も未実証だった**。ADR / 比較ドキュメントは「可」と書いているが、SPIKE-M1 は
++  業務表を作らず実行結果を残していない。「SQL だから書ける」は実証ではないので `unverified` にした。
++- `select_ai` の xlsx の扱いは PREP-02 が実機確認中のため「未確認」と注記した（断定しない）。
++- `opensearch` はメタデータ観点で未評価。5 軸すべて `unverified` にしてある。
++
++## 残課題
++
++- VPD / Data Redaction がベクタ検索に効くか、業務表 JOIN の実行結果 — どちらも実機確認が要る。
++  確認できたら `capabilities.py` の該当軸を `unverified` から上げる（テストの `UNPROVEN_AXES` も更新）。
++- `opensearch` の 5 軸の評価。
++- 配備済み URL（API Gateway 経由）での確認は未実施（`SKIPPED.md` 1。作業機にコンテナランタイムが無い）。
+diff --git a/packages/api/jetuse_core/capabilities.py b/packages/api/jetuse_core/capabilities.py
+index 158f3b2..724567e 100644
+--- a/packages/api/jetuse_core/capabilities.py
++++ b/packages/api/jetuse_core/capabilities.py
+@@ -6,6 +6,191 @@
+ 3. 以上で GET /api/capabilities に自動で載る(routes の乖離は tests/test_capabilities.py が検出)。
+ """
+ 
++# --- RAG バックエンドの能力差(RAGM-03 / ADR-0020 §3) ---------------------------
++# 「Oracle AI Database を選ぶと何が増えるか」を機械可読で示す。軸は比較ドキュメント
++# docs/comparison/rag-metadata-backends.md と揃える(ここを増やすときは向こうも直す)。
++#
++# **未実証のものを「できる」と書かない**のがこの表の存在理由である。実機で確かめていない
++# 項目は support="unverified"(= verified False)にする。設計上できるはずでも、実行結果が
++# 無いものは未実証(例: VPD による行レベル制御・業務表との JOIN は SPIKE-M1 の非ゴールで
++# 実行結果が無い = SKIPPED.md 1/3)。この不変条件は _axis() が構造で守り、
++# tests/test_capabilities.py が検査する。
++RAG_BACKEND_AXES: tuple[str, ...] = (
++    "citation_granularity",        # 出典粒度
++    "filter_expressiveness",       # 絞り込みの表現力
++    "business_data_join",          # 業務データ結合
++    "row_level_security",          # 行レベル制御
++    "metadata_update_consistency",  # メタ更新の整合性
++)
++# yes=できる / limited=条件付きでできる / no=できない / unverified=未実証(できるとは書かない)
++RAG_SUPPORT_LEVELS: tuple[str, ...] = ("yes", "limited", "no", "unverified")
++
++_COMPARISON = "docs/comparison/rag-metadata-backends.md"
++
++
++def _axis(support: str, detail: str, evidence: str) -> dict:
++    """1 軸の記述。verified は support から導出する(手で立てさせない)。
++
++    verified=True は「この記述に一次情報(実測 / 実機で確認した制約)の裏付けがある」であり、
++    yes/limited なら能力の実証、no なら実現できないことの根拠が evidence にある、という意味。
++    verified=False は unverified のときだけ = 確かめていない = できるとは言えない。
++    """
++    if support not in RAG_SUPPORT_LEVELS:
++        raise ValueError(f"unknown support level: {support}")
++    return {"support": support, "verified": support != "unverified",
++            "detail": detail, "evidence": evidence}
++
++
++RAG_BACKEND_CAPABILITIES: dict = {
++    "axes": RAG_BACKEND_AXES,
++    "support_levels": {
++        "yes": "実機で確認済み。使える",
++        "limited": "使えるが条件・制約がある",
++        "no": "この方式では実現できない",
++        "unverified": "未実証。できるとは言えない(顧客に言う前に実機確認が要る)",
++    },
++    "comparison_doc": _COMPARISON,
++    "backends": {
++        "vector_store": {
++            "label": "Enterprise AI マネージド Vector Store (file_search)",
++            "role": "手軽さ側(既定)。追加開発ほぼ無しで文書 Q&A が出せる",
++            "axes": {
++                "citation_granularity": _axis(
++                    "limited",
++                    "ファイル単位。1 ファイルが複数チャンクに割れても属性は 1 種類しか返らない"
++                    "(xlsx は sheet='(ブック全体: N シート)')。チャンク本文・スコアは返る。"
++                    "チャンク単位の出典が要るなら 1 チャンク = 1 ファイルで取り込む運用が要る。",
++                    "docs/verification/SPIKE-M1.md ①-a / docs/verification/PREP-01.md",
++                ),
++                "filter_expressiveness": _axis(
++                    "limited",
++                    "属性フィルタ eq/and/or/gte(in は不可・キー 16 / 値 512 文字 / 入れ子不可)。"
++                    "版で絞るにはリクエストで rag_filters を明示指定する(既定は絞らないので"
++                    "旧版が混ざりうる)。存在しないキーはエラーにならず 0 件になるため、"
++                    "キーはアプリ側の許可制で守っている。",
++                    "docs/verification/SPIKE-M1.md ①-b/①-d / docs/verification/RAGM-01.md",
++                ),
++                "business_data_join": _axis(
++                    "no",
++                    "別サービスのため、在庫表・契約表などの業務表と結合した検索はできない。",
++                    _COMPARISON,
++                ),
++                "row_level_security": _axis(
++                    "no",
++                    "アクセス制御はストア分離と IAM。行(チャンク)単位の制御機構は無い。",
++                    _COMPARISON,
++                ),
++                "metadata_update_consistency": _axis(
++                    "limited",
++                    "files.update(attributes=) で再取り込み無しに直せるが、API 越しの更新で"
++                    "検索とは別トランザクション(結果整合)。",
++                    "docs/verification/SPIKE-M1.md ①",
++                ),
++            },
++            "notes": [
++                "素の xlsx は 400 unsupported_file で拒否されるため、抽出テキストに変換して"
++                "投入している(表示名・sha256 は原本のまま)。",
++            ],
++        },
++        "adb": {
++            "label": "Oracle AI Database 自前索引 (DBMS_VECTOR_CHAIN)",
++            "role": "高機能側。業務データと絡む提案・監査が要る用途",
++            "axes": {
++                "citation_granularity": _axis(
++                    "yes",
++                    "チャンク単位。xlsx はシート名とセル範囲まで返る"
++                    "(実測例: 『制約』C5:E6 / 『改訂履歴』A1:C2)。"
++                    "同じファイル由来でもチャンクごとに違う出典になる。",
++                    "docs/verification/PREP-01.md / docs/verification/RAGM-02.md",
++                ),
++                "filter_expressiveness": _axis(
++                    "yes",
++                    "SQL の WHERE。current_version / version / file / file_id / sheet / kind で"
++                    "絞れる。検索は既定で現行版のみ(current_version='Y')なので、指定を忘れて"
++                    "旧版が混ざることがない。チャット API の rag_filters は vector_store 専用。",
++                    "docs/verification/RAGM-02.md",
++                ),
++                "business_data_join": _axis(
++                    "unverified",
++                    "同じ DB の業務表と JOIN したベクタ検索が 1 SQL で書ける — が、"
++                    "実行結果はまだ無い(SPIKE-M1 は業務表を作らず非ゴールにした)。"
++                    "顧客に示す前に実機確認が要る。",
++                    "runs/2026-07-28T1848_SPIKE-M1/e2e/SKIPPED.md 3",
++                ),
++                "row_level_security": _axis(
++                    "unverified",
++                    "VPD / Data Redaction は同じ表に対する DB 機能なので原理的には併用できるが、"
++                    "ベクタ検索に効くことは未実証(SPIKE-M1 の非ゴール)。"
++                    "「行レベル制御ができる」と顧客に言う前に実機確認が要る。",
++                    "runs/2026-07-28T1848_SPIKE-M1/e2e/SKIPPED.md 3 / ADR-0020 未解決",
++                ),
++                "metadata_update_consistency": _axis(
++                    "yes",
++                    "UPDATE 1 文で直せて、検索・台帳と同一トランザクション"
++                    "(現行版の付け替えも削除と同じトランザクションで整合する)。",
++                    "docs/verification/RAGM-02.md",
++                ),
++            },
++            "notes": [
++                "ADB 23ai 以上・マイグレーション 017 適用が前提。"
++                "未導入なら取り込み状況は disabled になる。",
++                "埋め込みはクライアント側。本文は OCI Generative AI の embedText へ送られる"
++                "(「テナント外に一切出ない」ではない)。",
++            ],
++        },
++        "select_ai": {
++            "label": "Select AI with RAG (DBMS_CLOUD_AI 索引)",
++            "role": "バケットに置くだけで RAG。メタデータ管理の基盤としては採用しない",
++            "axes": {
++                "citation_granularity": _axis(
++                    "limited",
++                    "ファイル単位(object_name + start/end offset)。応答末尾に Sources: の"
++                    "文字列として付き、スコアは無い。",
++                    "docs/verification/SPIKE-M1.md ②",
++                ),
++                "filter_expressiveness": _axis(
++                    "no",
++                    "標準経路に絞り込みの口が無い。任意メタデータは ORA-20048 で拒否される。",
++                    "docs/verification/SPIKE-M1.md ②",
++                ),
++                "business_data_join": _axis(
++                    "no",
++                    "$VECTAB は DB 内にあるが索引用途で、業務表との結合は実質できない。",
++                    _COMPARISON,
++                ),
++                "row_level_security": _axis(
++                    "unverified",
++                    "DB 権限は効くが、行レベル制御がベクタ検索に効くことは未実証。",
++                    "runs/2026-07-28T1848_SPIKE-M1/e2e/SKIPPED.md 3",
++                ),
++                "metadata_update_consistency": _axis(
++                    "no",
++                    "索引リフレッシュで入った新規行は自前で足した列が NULL になる。"
++                    "取り込みのたびに補完処理を回す前提の設計になる。",
++                    "docs/verification/SPIKE-M1.md ②",
++                ),
++            },
++            "notes": [
++                "アップロードの反映は refresh_rate 次第(既定 60 分)。",
++                "xlsx をこの経路でどう扱うかは実機確認中(PREP-02)で未確認。",
++            ],
++        },
++        "opensearch": {
++            "label": "OCI Search with OpenSearch",
++            "role": "既存の選択肢。ADR-0020 のメタデータ比較の対象外",
++            "axes": {
++                axis: _axis(
++                    "unverified",
++                    "ADR-0020 / SPIKE-M1 の比較対象外で未計測。この軸について言えることは無い。",
++                    _COMPARISON,
++                )
++                for axis in RAG_BACKEND_AXES
++            },
++            "notes": ["メタデータ・出典粒度の観点では未評価。評価するなら別タスクが要る。"],
++        },
++    },
++}
++
+ # ponytail: 素の dict のリスト。統一 Capability インターフェース(案2)は作らない(specs/17 §3)。
+ CAPABILITIES: list[dict] = [
+     {
+@@ -33,6 +218,9 @@ CAPABILITIES: list[dict] = [
+                       "messages": [{"role": "user", "content": "経費精算の締め日は?"}]},
+             "output": "文書由来の回答が SSE で届き、末尾に citations(引用元ファイル名)が付く。",
+         },
++        # RAGM-03: バックエンドを選べても「選ぶと何が増えるか」が分からなければ選べない。
++        # 能力差は backend_capabilities に機械可読で載せる(ADR-0020 §3)。
++        "backend_capabilities": RAG_BACKEND_CAPABILITIES,
+         "demo_safe": True,
+         "routes": [
+             {"path": "/api/chat/stream", "method": "post"},
+diff --git a/packages/api/tests/test_capabilities.py b/packages/api/tests/test_capabilities.py
+index 6fdd74c..bbdf575 100644
+--- a/packages/api/tests/test_capabilities.py
++++ b/packages/api/tests/test_capabilities.py
+@@ -4,12 +4,19 @@
+ (ディスクリプタとルートの乖離をここで検出する)。
+ """
+ 
++import typing
++
+ import pytest
+ from fastapi.testclient import TestClient
+ 
+-from jetuse_core.capabilities import CAPABILITIES
++from jetuse_core.capabilities import (
++    CAPABILITIES,
++    RAG_BACKEND_AXES,
++    RAG_SUPPORT_LEVELS,
++)
+ from jetuse_core.settings import get_settings
+ from service.main import app
++from service.schemas import ChatRequest
+ 
+ client = TestClient(app)
+ 
+@@ -80,6 +87,66 @@ def test_example_model_keys_are_public_registry_keys():
+             assert model in MODELS, f"{cap['capability']}: {model}"
+ 
+ 
++# --- RAGM-03: RAG バックエンドの能力差(ADR-0020 §3) ---------------------------
++
++
++def _rag_backend_capabilities() -> dict:
++    res = client.get("/api/capabilities")
++    cap = next(c for c in res.json()["capabilities"] if c["capability"] == "rag.search")
++    return cap["backend_capabilities"]
++
++
++def test_rag_backends_match_the_api_contract():
++    # 選べるバックエンド(ChatRequest.rag_backend)と能力表がズレたら、画面は
++    # 「選べるのに何が使えるか分からない」バックエンドを出してしまう。
++    selectable = set(typing.get_args(ChatRequest.model_fields["rag_backend"].annotation))
++    assert set(_rag_backend_capabilities()["backends"]) == selectable
++
++
++def test_every_backend_describes_every_axis():
++    backends = _rag_backend_capabilities()["backends"]
++    for name, be in backends.items():
++        assert be["label"] and be["role"], name
++        assert set(be["axes"]) == set(RAG_BACKEND_AXES), name
++        for axis, entry in be["axes"].items():
++            assert entry["support"] in RAG_SUPPORT_LEVELS, f"{name}.{axis}"
++            assert entry["detail"] and entry["evidence"], f"{name}.{axis}"
++
++
++def test_unverified_capabilities_are_never_claimed_as_available():
++    # このタスクの核。実機で確かめていないものを「できる」と書かせない。
++    for name, be in _rag_backend_capabilities()["backends"].items():
++        for axis, entry in be["axes"].items():
++            where = f"{name}.{axis}"
++            if entry["support"] in ("yes", "limited"):
++                assert entry["verified"] is True, where
++            if entry["support"] == "unverified":
++                assert entry["verified"] is False, where
++
++
++# SPIKE-M1 が実行結果を残していない項目(runs/2026-07-28T1848_SPIKE-M1/e2e/SKIPPED.md 3)。
++# ここを "yes" にも "limited" にもできないよう期待値で固定する。"limited" にすると画面には
++# 「条件付きで使える」と出る = 未実証の能力を顧客に見せることになる。
++UNPROVEN_AXES = {
++    ("adb", "row_level_security"),        # VPD がベクタ検索に効くこと
++    ("adb", "business_data_join"),        # 業務表と JOIN したベクタ検索
++    ("select_ai", "row_level_security"),
++}
++
++
++@pytest.mark.parametrize(("backend", "axis"), sorted(UNPROVEN_AXES))
++def test_unproven_axes_stay_unverified(backend: str, axis: str):
++    entry = _rag_backend_capabilities()["backends"][backend]["axes"][axis]
++    assert entry["support"] == "unverified", f"{backend}.{axis}"
++    assert entry["verified"] is False
++
++
++def test_row_level_security_is_never_advertised_as_available():
++    # VPD はベクタ検索に効くことが未実証。どのバックエンドでも「使える」と出してはいけない。
++    for name, be in _rag_backend_capabilities()["backends"].items():
++        assert be["axes"]["row_level_security"]["support"] in ("no", "unverified"), name
++
++
+ def test_requires_auth(monkeypatch):
+     monkeypatch.setenv("AUTH_REQUIRED", "true")
+     get_settings.cache_clear()
+diff --git a/packages/web/src/i18n/dict.en.ts b/packages/web/src/i18n/dict.en.ts
+index 90d33d8..282f5f6 100644
+--- a/packages/web/src/i18n/dict.en.ts
++++ b/packages/web/src/i18n/dict.en.ts
+@@ -165,11 +165,25 @@ export const en: Record<keyof typeof ja, string> = {
+   'rag.be.vector_store': 'Vector Store / File Search',
+   'rag.be.select_ai': 'Select AI with RAG',
+   'rag.be.opensearch': 'OpenSearch',
++  'rag.be.adb': 'Oracle AI Database (own index)',
+   'rag.bestatus.indexed': 'Ingested',
+   'rag.bestatus.pending': 'Ingesting (awaiting sync)',
+   'rag.bestatus.error': 'Failed',
+   'rag.bestatus.disabled': 'Disabled',
+-  'rag.beLegend': 'VS / SAI / OS next to each file show per-backend ingestion. VS=Vector Store (File Search), SAI=Select AI (in-DB RAG), OS=OpenSearch. ✓=done ⏳=awaiting sync (Select AI up to 60 min).',
++  'rag.beLegend': 'VS / ADB / SAI / OS next to each file show per-backend ingestion. VS=Vector Store (File Search), ADB=Oracle AI Database (own index), SAI=Select AI (in-DB RAG), OS=OpenSearch. ✓=done ⏳=awaiting sync (Select AI up to 60 min) –=disabled.',
++  'rag.backend.adb': 'Oracle AI Database (own index)',
++  // RAGM-03: what the selected backend can do (distinct from per-file ingestion badges).
++  'rag.cap.title': 'What this backend can do',
++  'rag.cap.axis.citation_granularity': 'Citation granularity',
++  'rag.cap.axis.filter_expressiveness': 'Filter expressiveness',
++  'rag.cap.axis.business_data_join': 'Join with business data',
++  'rag.cap.axis.row_level_security': 'Row-level control',
++  'rag.cap.axis.metadata_update_consistency': 'Metadata update consistency',
++  'rag.cap.support.yes': 'available',
++  'rag.cap.support.limited': 'with limits',
++  'rag.cap.support.no': 'not available',
++  'rag.cap.support.unverified': 'unverified',
++  'rag.cap.legend': 'The VS/ADB/SAI/OS badges next to each file mean "was it ingested"; this panel means "what can it do". "unverified" means it has not been proven on real infrastructure, so it must not be presented as supported (hover a badge for where the evidence lives). Details come from the API capability catalog and are in Japanese.',
+   'rag.backend.saiNote':
+     'Select AI with RAG is in-database RAG (experimental). First query builds an index (minutes); uploads sync within 60 min. No conversation context',
+   'rag.status.processing': 'processing',
+diff --git a/packages/web/src/i18n/dict.ja.ts b/packages/web/src/i18n/dict.ja.ts
+index 2e74b05..df113fb 100644
+--- a/packages/web/src/i18n/dict.ja.ts
++++ b/packages/web/src/i18n/dict.ja.ts
+@@ -163,11 +163,25 @@ export const ja = {
+   'rag.be.vector_store': 'Vector Store / File Search',
+   'rag.be.select_ai': 'Select AI with RAG',
+   'rag.be.opensearch': 'OpenSearch',
++  'rag.be.adb': 'Oracle AI Database（自前索引）',
+   'rag.bestatus.indexed': '取り込み済み',
+   'rag.bestatus.pending': '取り込み中（同期待ち）',
+   'rag.bestatus.error': '取り込み失敗',
+   'rag.bestatus.disabled': '無効',
+-  'rag.beLegend': '各ファイル右の VS / SAI / OS は各バックエンドの取り込み状況。VS=Vector Store（File Search）、SAI=Select AI（DB内RAG）、OS=OpenSearch。✓=済 ⏳=同期待ち（Select AIは最大60分）。',
++  'rag.beLegend': '各ファイル右の VS / ADB / SAI / OS は各バックエンドの取り込み状況。VS=Vector Store（File Search）、ADB=Oracle AI Database（自前索引）、SAI=Select AI（DB内RAG）、OS=OpenSearch。✓=済 ⏳=同期待ち（Select AIは最大60分） –=無効。',
++  'rag.backend.adb': 'Oracle AI Database（自前索引）',
++  // RAGM-03: 「選ぶと何ができるか」。取り込み状況バッジ（何を取り込めたか）とは別物。
++  'rag.cap.title': 'このバックエンドでできること',
++  'rag.cap.axis.citation_granularity': '出典の粒度',
++  'rag.cap.axis.filter_expressiveness': '絞り込みの表現力',
++  'rag.cap.axis.business_data_join': '業務データとの結合',
++  'rag.cap.axis.row_level_security': '行レベル制御',
++  'rag.cap.axis.metadata_update_consistency': 'メタデータ更新の整合性',
++  'rag.cap.support.yes': '使える',
++  'rag.cap.support.limited': '条件付き',
++  'rag.cap.support.no': '使えない',
++  'rag.cap.support.unverified': '未実証',
++  'rag.cap.legend': 'ファイル右のバッジ（VS/ADB/SAI/OS）は「取り込めたか」、ここは「何ができるか」。「未実証」は実機で確かめていない項目で、できるとは言えない（バッジにカーソルを合わせると根拠の所在が出る）。',
+   'rag.backend.saiNote':
+     'Select AI with RAGはDB内RAG（実験的）。初回は索引構築に数分、アップロード反映は最大60分かかります。会話の文脈は使われません',
+   'rag.status.processing': '取り込み中',
+diff --git a/packages/web/src/pages/rag.tsx b/packages/web/src/pages/rag.tsx
+index 83dd55a..7eccbe0 100644
+--- a/packages/web/src/pages/rag.tsx
++++ b/packages/web/src/pages/rag.tsx
+@@ -5,28 +5,23 @@ import { PageContainer } from '../components/layout'
+ import { Md } from '../components/markdown'
+ import { readSse } from '../lib/sse'
+ import { usePrefs } from '../prefs'
++import { BackendCapabilityPanel } from './rag/BackendCapabilities'
++import { BackendStatusBadges } from './rag/BackendStatusBadges'
++import {
++  pickRagBackendCapabilities,
++  type BackendStatus,
++  type RagBackend,
++  type RagBackendCapabilities,
++} from './rag/capabilityCatalog'
+ 
+-type BackendStatus = 'indexed' | 'pending' | 'error' | 'disabled'
+ type RagFile = {
+   id: string
+   filename: string
+   status: 'processing' | 'completed' | 'failed'
+   bytes?: number
+   error?: string | null
+-  backends?: { vector_store: BackendStatus; select_ai: BackendStatus; opensearch: BackendStatus }
++  backends?: Partial<Record<RagBackend, BackendStatus>>
+ }
+-// 取り込み状況バッジの色
+-const beBadge: Record<BackendStatus, string> = {
+-  indexed: 'bg-pill-ok text-pill-ok-ink',
+-  pending: 'bg-band-chip/20 text-ink-muted',
+-  error: 'bg-primary-soft text-primary-strong',
+-  disabled: 'bg-band-chip/10 text-ink-muted/50',
+-}
+-const BACKEND_LABELS: { key: 'vector_store' | 'select_ai' | 'opensearch'; short: string }[] = [
+-  { key: 'vector_store', short: 'VS' },
+-  { key: 'select_ai', short: 'SAI' },
+-  { key: 'opensearch', short: 'OS' },
+-]
+ type Citation = { file_id: string; filename: string; score: number | null }
+ type Msg = { role: 'user' | 'assistant'; content: string; citations?: Citation[] }
+ 
+@@ -45,7 +40,8 @@ export default function Rag() {
+   const [msgs, setMsgs] = useState<Msg[]>([])
+   const [input, setInput] = useState('')
+   const [busy, setBusy] = useState(false)
+-  const [backend, setBackend] = useState<'vector_store' | 'select_ai' | 'opensearch'>('vector_store')
++  const [backend, setBackend] = useState<RagBackend>('vector_store')
++  const [caps, setCaps] = useState<RagBackendCapabilities | null>(null)
+   const abortRef = useRef<AbortController | null>(null)
+   const fileInputRef = useRef<HTMLInputElement>(null)
+   const bottomRef = useRef<HTMLDivElement>(null)
+@@ -53,7 +49,9 @@ export default function Rag() {
+   const loadFiles = () =>
+     fetch('/api/rag/files', { headers: authHeaders(user) })
+       .then((r) => r.json())
+-      .then((d) => setFiles(d.files))
++      // DB 停止時などは 200 以外の JSON({detail}) が返る。files が無い応答で
++      // undefined を state に入れると、以降の files.some(...) でページごと落ちる。
++      .then((d) => setFiles(Array.isArray(d?.files) ? d.files : []))
+       .catch(() => setFiles([]))
+ 
+   useEffect(() => {
+@@ -61,6 +59,15 @@ export default function Rag() {
+     // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, [user])
+ 
++  // RAGM-03: バックエンドの能力差は API の能力カタログが正本(画面は描くだけ)。
++  // 取れなければパネルを出さない(RAGチャット自体は動く)。
++  useEffect(() => {
++    fetch('/api/capabilities', { headers: authHeaders(user) })
++      .then((r) => (r.ok ? r.json() : null))
++      .then((d) => setCaps(pickRagBackendCapabilities(d)))
++      .catch(() => setCaps(null))
++  }, [user])
++
+   // 取り込み中(VS処理中 or いずれかのバックエンドがpending)は定期的に状態を更新。
+   // Select AIは最大60分の同期間隔があるため、未反映の間はゆっくり(20秒)ポーリング
+   useEffect(() => {
+@@ -213,23 +220,7 @@ export default function Rag() {
+                       📄 {f.filename}
+                     </span>
+                     {f.backends ? (
+-                      <span className="flex shrink-0 gap-1">
+-                        {BACKEND_LABELS.map((b) => {
+-                          const st = f.backends![b.key]
+-                          const mark =
+-                            st === 'indexed' ? '✓' : st === 'pending' ? '⏳'
+-                              : st === 'error' ? '!' : '–'
+-                          return (
+-                            <span
+-                              key={b.key}
+-                              className={`rounded-full px-1.5 py-0.5 text-[10px] ${beBadge[st]}`}
+-                              title={`${t(`rag.be.${b.key}`)}: ${t(`rag.bestatus.${st}`)}`}
+-                            >
+-                              {mark} {b.short}
+-                            </span>
+-                          )
+-                        })}
+-                      </span>
++                      <BackendStatusBadges backends={f.backends} />
+                     ) : (
+                       <span
+                         className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] ${statusBadge[f.status]}`}
+@@ -302,6 +293,10 @@ export default function Rag() {
+             )}
+             <div ref={bottomRef} />
+           </div>
++          {/* RAGM-03: 選択中のバックエンドで何ができるか(取り込み状況バッジとは別物) */}
++          <div className="border-t border-line p-3 pb-0">
++            <BackendCapabilityPanel backend={backend} caps={caps} />
++          </div>
+           <form
+             className="flex items-end gap-2 border-t border-line p-3"
+             onSubmit={(e) => {
+@@ -311,13 +306,14 @@ export default function Rag() {
+           >
+             <select
+               value={backend}
+-              onChange={(e) => setBackend(e.target.value as 'vector_store' | 'select_ai' | 'opensearch')}
++              onChange={(e) => setBackend(e.target.value as RagBackend)}
+               disabled={busy}
+               className="rounded-rw border border-line bg-bg px-2 py-2 text-xs outline-none focus:border-action"
+               aria-label="rag backend"
+               title={backend === 'select_ai' ? t('rag.backend.saiNote') : ''}
+             >
+               <option value="vector_store">VS — {t('rag.backend.vs')}</option>
++              <option value="adb">ADB — {t('rag.backend.adb')}</option>
+               <option value="select_ai">SAI — {t('rag.backend.sai')}</option>
+               <option value="opensearch">OS — {t('rag.backend.os')}</option>
+             </select>
+diff --git a/packages/web/src/pages/rag/BackendCapabilities.test.tsx b/packages/web/src/pages/rag/BackendCapabilities.test.tsx
+new file mode 100644
+index 0000000..3932c4f
+--- /dev/null
++++ b/packages/web/src/pages/rag/BackendCapabilities.test.tsx
+@@ -0,0 +1,119 @@
++import { describe, it, expect } from 'vitest'
++import { render, screen } from '@testing-library/react'
++import { PrefsProvider } from '../../prefs'
++import { BackendCapabilityPanel } from './BackendCapabilities'
++import {
++  pickRagBackendCapabilities,
++  type RagBackendCapabilities,
++} from './capabilityCatalog'
++
++/** RAGM-03: バックエンドを切り替えると「何ができるか」の表示が変わること、
++ *  未実証の能力が「使える」として出ないこと(ADR-0020 §3)。 */
++
++const CAPS: RagBackendCapabilities = {
++  axes: ['citation_granularity', 'filter_expressiveness', 'row_level_security'],
++  backends: {
++    vector_store: {
++      label: 'マネージド Vector Store',
++      role: '手軽さ側',
++      axes: {
++        citation_granularity: {
++          support: 'limited', verified: true,
++          detail: 'ファイル単位。', evidence: 'SPIKE-M1 ①-a',
++        },
++        filter_expressiveness: {
++          support: 'limited', verified: true,
++          detail: '属性フィルタ eq/and/or/gte。', evidence: 'RAGM-01',
++        },
++        row_level_security: {
++          support: 'no', verified: false,
++          detail: '行単位の制御機構は無い。', evidence: '比較ドキュメント',
++        },
++      },
++    },
++    adb: {
++      label: 'Oracle AI Database 自前索引',
++      role: '高機能側',
++      axes: {
++        citation_granularity: {
++          support: 'yes', verified: true,
++          detail: 'チャンク単位。セル範囲まで返る。', evidence: 'PREP-01',
++        },
++        filter_expressiveness: {
++          support: 'yes', verified: true,
++          detail: 'SQL の WHERE。既定で現行版のみ。', evidence: 'RAGM-02',
++        },
++        row_level_security: {
++          support: 'unverified', verified: false,
++          detail: 'VPD は未実証。', evidence: 'SPIKE-M1 SKIPPED 3',
++        },
++      },
++      notes: ['ADB 23ai 以上が前提。'],
++    },
++  },
++}
++
++const renderPanel = (backend: string, caps: RagBackendCapabilities | null = CAPS) =>
++  render(
++    <PrefsProvider>
++      <BackendCapabilityPanel backend={backend} caps={caps} />
++    </PrefsProvider>,
++  )
++
++describe('pickRagBackendCapabilities', () => {
++  it('extracts backend_capabilities from the rag.search descriptor', () => {
++    const payload = {
++      capabilities: [
++        { capability: 'chat' },
++        { capability: 'rag.search', backend_capabilities: CAPS },
++      ],
++    }
++    expect(pickRagBackendCapabilities(payload)).toEqual(CAPS)
++  })
++
++  it('returns null when the catalog has no rag.search capabilities', () => {
++    expect(pickRagBackendCapabilities({ capabilities: [{ capability: 'chat' }] })).toBeNull()
++    expect(pickRagBackendCapabilities({ capabilities: [{ capability: 'rag.search' }] })).toBeNull()
++    expect(pickRagBackendCapabilities(null)).toBeNull()
++    expect(pickRagBackendCapabilities('nope')).toBeNull()
++  })
++})
++
++describe('BackendCapabilityPanel', () => {
++  it('shows chunk-level citations and the version filter when adb is selected', () => {
++    renderPanel('adb')
++    expect(screen.getByText('出典の粒度')).toBeInTheDocument()
++    expect(screen.getByText(/チャンク単位。セル範囲まで返る。/)).toBeInTheDocument()
++    expect(screen.getByText(/SQL の WHERE。既定で現行版のみ。/)).toBeInTheDocument()
++    expect(screen.getByText(/ADB 23ai 以上が前提。/)).toBeInTheDocument()
++  })
++
++  it('shows file-level citations for vector_store (switching backend switches the panel)', () => {
++    const { rerender } = renderPanel('adb')
++    expect(screen.getByTestId('rag-capabilities-adb')).toBeInTheDocument()
++
++    rerender(
++      <PrefsProvider>
++        <BackendCapabilityPanel backend="vector_store" caps={CAPS} />
++      </PrefsProvider>,
++    )
++    expect(screen.queryByTestId('rag-capabilities-adb')).not.toBeInTheDocument()
++    expect(screen.getByText(/ファイル単位。/)).toBeInTheDocument()
++    expect(screen.queryByText(/チャンク単位/)).not.toBeInTheDocument()
++  })
++
++  it('marks unverified capabilities as unverified, never as available', () => {
++    renderPanel('adb')
++    // 行レベル制御の行のバッジ(凡例の「未実証」ではなく、能力そのものの表示)
++    const badge = screen.getByTitle('SPIKE-M1 SKIPPED 3')
++    expect(badge.textContent).toMatch(/未実証/)
++    expect(badge.textContent).not.toMatch(/使える/)
++  })
++
++  it('renders nothing when the catalog is unavailable or the backend is unknown', () => {
++    const { container: noCaps } = renderPanel('adb', null)
++    expect(noCaps).toBeEmptyDOMElement()
++    const { container: unknown } = renderPanel('does_not_exist')
++    expect(unknown).toBeEmptyDOMElement()
++  })
++})
+diff --git a/packages/web/src/pages/rag/BackendCapabilities.tsx b/packages/web/src/pages/rag/BackendCapabilities.tsx
+new file mode 100644
+index 0000000..35bf5d2
+--- /dev/null
++++ b/packages/web/src/pages/rag/BackendCapabilities.tsx
+@@ -0,0 +1,69 @@
++/** RAGM-03: 選択中の RAG バックエンドで「何ができるか」を出す(ADR-0020 §3)。
++ *
++ *  ファイル右の取り込み状況バッジ(VS/SAI/OS)とは**別物**である:
++ *    取り込み状況バッジ = そのファイルを取り込めたか(indexed / pending / disabled)
++ *    ここ               = そのバックエンドを選ぶと何ができるか(出典粒度・絞り込み…)
++ *
++ *  中身(事実)は API の能力カタログが正本で、画面はそれを描くだけ(capabilityCatalog.ts)。
++ */
++import { usePrefs } from '../../prefs'
++import type { RagBackendCapabilities, SupportLevel } from './capabilityCatalog'
++
++const supportBadge: Record<SupportLevel, string> = {
++  yes: 'bg-pill-ok text-pill-ok-ink',
++  limited: 'bg-band-chip/20 text-ink-muted',
++  no: 'bg-band-chip/10 text-ink-muted/60',
++  unverified: 'bg-primary-soft text-primary-strong',
++}
++const supportMark: Record<SupportLevel, string> = {
++  yes: '✓', limited: '△', no: '✕', unverified: '?',
++}
++
++export function BackendCapabilityPanel(
++  { backend, caps }: { backend: string; caps: RagBackendCapabilities | null },
++) {
++  const { t } = usePrefs()
++  const be = caps?.backends[backend]
++  if (!caps || !be) return null
++
++  return (
++    <section
++      className="rounded-rw border border-line bg-bg p-3"
++      aria-label="backend capabilities"
++      data-testid={`rag-capabilities-${backend}`}
++    >
++      <div className="mb-2">
++        <h3 className="text-xs font-semibold text-ink-muted">{t('rag.cap.title')}</h3>
++        <p className="text-[11px] text-ink-muted/80">{be.label} — {be.role}</p>
++      </div>
++      <ul className="space-y-1.5">
++        {caps.axes.map((axis) => {
++          const entry = be.axes[axis]
++          if (!entry) return null
++          return (
++            <li key={axis} className="flex items-start gap-2 text-[11px]">
++              <span
++                className={`mt-px shrink-0 rounded-full px-1.5 py-0.5 ${supportBadge[entry.support]}`}
++                title={entry.evidence}
++              >
++                {supportMark[entry.support]} {t(`rag.cap.support.${entry.support}`)}
++              </span>
++              <span className="min-w-0">
++                <span className="font-medium">{t(`rag.cap.axis.${axis}`)}</span>
++                <span className="text-ink-muted"> — {entry.detail}</span>
++              </span>
++            </li>
++          )
++        })}
++      </ul>
++      {be.notes && be.notes.length > 0 && (
++        <ul className="mt-2 space-y-0.5">
++          {be.notes.map((n) => (
++            <li key={n} className="text-[10px] leading-snug text-ink-muted/80">※ {n}</li>
++          ))}
++        </ul>
++      )}
++      <p className="mt-2 text-[10px] leading-snug text-ink-muted/70">{t('rag.cap.legend')}</p>
++    </section>
++  )
++}
+diff --git a/packages/web/src/pages/rag/BackendStatusBadges.test.tsx b/packages/web/src/pages/rag/BackendStatusBadges.test.tsx
+new file mode 100644
+index 0000000..d6d6bd3
+--- /dev/null
++++ b/packages/web/src/pages/rag/BackendStatusBadges.test.tsx
+@@ -0,0 +1,44 @@
++import { describe, it, expect } from 'vitest'
++import { render, screen } from '@testing-library/react'
++import { PrefsProvider } from '../../prefs'
++import { BackendStatusBadges } from './BackendStatusBadges'
++import type { BackendStatus, RagBackend } from './capabilityCatalog'
++
++/** 取り込み状況バッジ(「取り込めたか」)。RAGM-03 で adb も出るようにした。
++ *  能力差パネル(「何ができるか」)とは別物であることを、意味の違うテストで固定する。 */
++
++const renderBadges = (backends: Partial<Record<RagBackend, BackendStatus>>) =>
++  render(
++    <PrefsProvider>
++      <BackendStatusBadges backends={backends} />
++    </PrefsProvider>,
++  )
++
++describe('BackendStatusBadges', () => {
++  it('shows adb ingestion state alongside the existing backends', () => {
++    renderBadges({
++      vector_store: 'indexed', adb: 'indexed', select_ai: 'pending', opensearch: 'disabled',
++    })
++    expect(screen.getByText('✓ ADB')).toBeInTheDocument()
++    expect(screen.getByText('✓ VS')).toBeInTheDocument()
++    expect(screen.getByText('⏳ SAI')).toBeInTheDocument()
++    expect(screen.getByText('– OS')).toBeInTheDocument()
++  })
++
++  it.each<[BackendStatus, string, string]>([
++    ['indexed', '✓ ADB', '取り込み済み'],
++    ['pending', '⏳ ADB', '取り込み中（同期待ち）'],
++    ['error', '! ADB', '取り込み失敗'],
++    ['disabled', '– ADB', '無効'],
++  ])('renders adb %s as "%s"', (status, mark, title) => {
++    renderBadges({ adb: status })
++    const badge = screen.getByText(mark)
++    expect(badge.getAttribute('title')).toBe(`Oracle AI Database（自前索引）: ${title}`)
++  })
++
++  it('omits backends the API response does not mention (forward compatible)', () => {
++    renderBadges({ vector_store: 'indexed' })
++    expect(screen.queryByText(/ADB/)).not.toBeInTheDocument()
++    expect(screen.queryByText(/SAI/)).not.toBeInTheDocument()
++  })
++})
+diff --git a/packages/web/src/pages/rag/BackendStatusBadges.tsx b/packages/web/src/pages/rag/BackendStatusBadges.tsx
+new file mode 100644
+index 0000000..5921cb2
+--- /dev/null
++++ b/packages/web/src/pages/rag/BackendStatusBadges.tsx
+@@ -0,0 +1,48 @@
++/** ファイルごとの取り込み状況バッジ(RAG-01 から rag.tsx にあったものを切り出した)。
++ *
++ *  意味は従来どおり「そのバックエンドに取り込めたか」で、変えていない。
++ *  「そのバックエンドで何ができるか」は BackendCapabilityPanel の担当（別物）。
++ *  RAGM-03 で adb を選べるようにしたので、adb の取り込み状況もここに出る。
++ */
++import { usePrefs } from '../../prefs'
++import type { BackendStatus, RagBackend } from './capabilityCatalog'
++
++const beBadge: Record<BackendStatus, string> = {
++  indexed: 'bg-pill-ok text-pill-ok-ink',
++  pending: 'bg-band-chip/20 text-ink-muted',
++  error: 'bg-primary-soft text-primary-strong',
++  disabled: 'bg-band-chip/10 text-ink-muted/50',
++}
++const beMark: Record<BackendStatus, string> = {
++  indexed: '✓', pending: '⏳', error: '!', disabled: '–',
++}
++// 表示順はバックエンド選択プルダウンと揃える。
++const BACKEND_LABELS: { key: RagBackend; short: string }[] = [
++  { key: 'vector_store', short: 'VS' },
++  { key: 'adb', short: 'ADB' },
++  { key: 'select_ai', short: 'SAI' },
++  { key: 'opensearch', short: 'OS' },
++]
++
++export function BackendStatusBadges(
++  { backends }: { backends: Partial<Record<RagBackend, BackendStatus>> },
++) {
++  const { t } = usePrefs()
++  return (
++    <span className="flex shrink-0 gap-1">
++      {BACKEND_LABELS.map((b) => {
++        const st = backends[b.key]
++        if (!st) return null  // そのバックエンドを知らない応答(前方互換)
++        return (
++          <span
++            key={b.key}
++            className={`rounded-full px-1.5 py-0.5 text-[10px] ${beBadge[st]}`}
++            title={`${t(`rag.be.${b.key}`)}: ${t(`rag.bestatus.${st}`)}`}
++          >
++            {beMark[st]} {b.short}
++          </span>
++        )
++      })}
++    </span>
++  )
++}
+diff --git a/packages/web/src/pages/rag/capabilityCatalog.ts b/packages/web/src/pages/rag/capabilityCatalog.ts
+new file mode 100644
+index 0000000..61b4b2e
+--- /dev/null
++++ b/packages/web/src/pages/rag/capabilityCatalog.ts
+@@ -0,0 +1,56 @@
++/** RAG バックエンドの語彙と、能力差(RAGM-03 / ADR-0020 §3)の型・取り出し。
++ *
++ *  事実の正本は API の GET /api/capabilities（`rag.search` の `backend_capabilities`）。
++ *  画面側に能力をハードコードしない — したら「未実証を『できる』と書く」経路が
++ *  画面にもできてしまう。ここは型付けと取り出しだけを持つ。
++ */
++
++/** チャットで選べる RAG バックエンド(API 側 ChatRequest.rag_backend と同じ集合)。 */
++export type RagBackend = 'vector_store' | 'adb' | 'select_ai' | 'opensearch'
++
++/** 取り込み状況(そのファイルを取り込めたか)。能力差(何ができるか)とは別物。 */
++export type BackendStatus = 'indexed' | 'pending' | 'error' | 'disabled'
++
++export type SupportLevel = 'yes' | 'limited' | 'no' | 'unverified'
++
++export type AxisKey =
++  | 'citation_granularity'
++  | 'filter_expressiveness'
++  | 'business_data_join'
++  | 'row_level_security'
++  | 'metadata_update_consistency'
++
++export type AxisEntry = {
++  support: SupportLevel
++  verified: boolean
++  detail: string
++  evidence: string
++}
++
++export type BackendCapability = {
++  label: string
++  role: string
++  axes: Partial<Record<AxisKey, AxisEntry>>
++  notes?: string[]
++}
++
++export type RagBackendCapabilities = {
++  axes: AxisKey[]
++  backends: Record<string, BackendCapability>
++}
++
++const isObj = (v: unknown): v is Record<string, unknown> =>
++  typeof v === 'object' && v !== null && !Array.isArray(v)
++
++/** GET /api/capabilities のレスポンスから rag.search の能力差を取り出す。
++ *  形が違えば null(＝パネルを出さない)。能力表が無くても RAG チャット自体は動く。 */
++export function pickRagBackendCapabilities(payload: unknown): RagBackendCapabilities | null {
++  if (!isObj(payload) || !Array.isArray(payload.capabilities)) return null
++  const cap = payload.capabilities.find(
++    (c: unknown) => isObj(c) && c.capability === 'rag.search',
++  )
++  if (!isObj(cap)) return null
++  const bc = cap.backend_capabilities
++  if (!isObj(bc) || !Array.isArray(bc.axes) || !isObj(bc.backends)) return null
++  return bc as unknown as RagBackendCapabilities
++}

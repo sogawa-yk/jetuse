@@ -1,0 +1,1 @@
+tasks/RAGM-03.md の受け入れ条件をすべて満たし、かつ (1) pytest 全件パス・ruff クリーン (2) npm --prefix packages/web の test/lint/build が緑 (3) STATE.md の review_verdict が PASS (4) 実環境 E2E（/api/capabilities にバックエンド別能力が返る / 画面でバックエンドを切り替えると能力表示が変わることをスクリーンショットで）を runs/<run-id>/e2e/ に記録し、その証跡込みの Codex レビューが PASS であること。未実証の能力を「できる」と書かない（VPD は未実証）。顧客名を書かない。未承認のコミット・PR・push を行わない。

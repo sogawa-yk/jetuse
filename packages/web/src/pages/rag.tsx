@@ -5,28 +5,24 @@ import { PageContainer } from '../components/layout'
 import { Md } from '../components/markdown'
 import { readSse } from '../lib/sse'
 import { usePrefs } from '../prefs'
+import { BackendCapabilityPanel } from './rag/BackendCapabilities'
+import { BackendStatusBadges } from './rag/BackendStatusBadges'
+import { UPLOAD_ACCEPT } from './rag/uploadFormats'
+import {
+  pickRagBackendCapabilities,
+  type BackendStatus,
+  type RagBackend,
+  type RagBackendCapabilities,
+} from './rag/capabilityCatalog'
 
-type BackendStatus = 'indexed' | 'pending' | 'error' | 'disabled'
 type RagFile = {
   id: string
   filename: string
   status: 'processing' | 'completed' | 'failed'
   bytes?: number
   error?: string | null
-  backends?: { vector_store: BackendStatus; select_ai: BackendStatus; opensearch: BackendStatus }
+  backends?: Partial<Record<RagBackend, BackendStatus>>
 }
-// 取り込み状況バッジの色
-const beBadge: Record<BackendStatus, string> = {
-  indexed: 'bg-pill-ok text-pill-ok-ink',
-  pending: 'bg-band-chip/20 text-ink-muted',
-  error: 'bg-primary-soft text-primary-strong',
-  disabled: 'bg-band-chip/10 text-ink-muted/50',
-}
-const BACKEND_LABELS: { key: 'vector_store' | 'select_ai' | 'opensearch'; short: string }[] = [
-  { key: 'vector_store', short: 'VS' },
-  { key: 'select_ai', short: 'SAI' },
-  { key: 'opensearch', short: 'OS' },
-]
 type Citation = { file_id: string; filename: string; score: number | null }
 type Msg = { role: 'user' | 'assistant'; content: string; citations?: Citation[] }
 
@@ -45,7 +41,8 @@ export default function Rag() {
   const [msgs, setMsgs] = useState<Msg[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
-  const [backend, setBackend] = useState<'vector_store' | 'select_ai' | 'opensearch'>('vector_store')
+  const [backend, setBackend] = useState<RagBackend>('vector_store')
+  const [caps, setCaps] = useState<RagBackendCapabilities | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -53,12 +50,23 @@ export default function Rag() {
   const loadFiles = () =>
     fetch('/api/rag/files', { headers: authHeaders(user) })
       .then((r) => r.json())
-      .then((d) => setFiles(d.files))
+      // DB 停止時などは 200 以外の JSON({detail}) が返る。files が無い応答で
+      // undefined を state に入れると、以降の files.some(...) でページごと落ちる。
+      .then((d) => setFiles(Array.isArray(d?.files) ? d.files : []))
       .catch(() => setFiles([]))
 
   useEffect(() => {
     void loadFiles()
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user])
+
+  // RAGM-03: バックエンドの能力差は API の能力カタログが正本(画面は描くだけ)。
+  // 取れなければパネルを出さない(RAGチャット自体は動く)。
+  useEffect(() => {
+    fetch('/api/capabilities', { headers: authHeaders(user) })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setCaps(pickRagBackendCapabilities(d)))
+      .catch(() => setCaps(null))
   }, [user])
 
   // 取り込み中(VS処理中 or いずれかのバックエンドがpending)は定期的に状態を更新。
@@ -186,7 +194,7 @@ export default function Rag() {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".pdf,.txt,.md"
+                  accept={UPLOAD_ACCEPT}
                   className="hidden"
                   disabled={uploading}
                   onChange={(e) => {
@@ -213,23 +221,7 @@ export default function Rag() {
                       📄 {f.filename}
                     </span>
                     {f.backends ? (
-                      <span className="flex shrink-0 gap-1">
-                        {BACKEND_LABELS.map((b) => {
-                          const st = f.backends![b.key]
-                          const mark =
-                            st === 'indexed' ? '✓' : st === 'pending' ? '⏳'
-                              : st === 'error' ? '!' : '–'
-                          return (
-                            <span
-                              key={b.key}
-                              className={`rounded-full px-1.5 py-0.5 text-[10px] ${beBadge[st]}`}
-                              title={`${t(`rag.be.${b.key}`)}: ${t(`rag.bestatus.${st}`)}`}
-                            >
-                              {mark} {b.short}
-                            </span>
-                          )
-                        })}
-                      </span>
+                      <BackendStatusBadges backends={f.backends} />
                     ) : (
                       <span
                         className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] ${statusBadge[f.status]}`}
@@ -302,6 +294,10 @@ export default function Rag() {
             )}
             <div ref={bottomRef} />
           </div>
+          {/* RAGM-03: 選択中のバックエンドで何ができるか(取り込み状況バッジとは別物) */}
+          <div className="border-t border-line p-3 pb-0">
+            <BackendCapabilityPanel backend={backend} caps={caps} />
+          </div>
           <form
             className="flex items-end gap-2 border-t border-line p-3"
             onSubmit={(e) => {
@@ -311,13 +307,14 @@ export default function Rag() {
           >
             <select
               value={backend}
-              onChange={(e) => setBackend(e.target.value as 'vector_store' | 'select_ai' | 'opensearch')}
+              onChange={(e) => setBackend(e.target.value as RagBackend)}
               disabled={busy}
               className="rounded-rw border border-line bg-bg px-2 py-2 text-xs outline-none focus:border-action"
               aria-label="rag backend"
               title={backend === 'select_ai' ? t('rag.backend.saiNote') : ''}
             >
               <option value="vector_store">VS — {t('rag.backend.vs')}</option>
+              <option value="adb">ADB — {t('rag.backend.adb')}</option>
               <option value="select_ai">SAI — {t('rag.backend.sai')}</option>
               <option value="opensearch">OS — {t('rag.backend.os')}</option>
             </select>
