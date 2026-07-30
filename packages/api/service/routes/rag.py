@@ -5,14 +5,15 @@
 """
 
 import asyncio
+import json
 import logging
 import pathlib
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from openai import APIStatusError
 
-from jetuse_core import rag
+from jetuse_core import rag, rag_metadata
 from jetuse_core.auth import AuthContext, require_user
 from jetuse_core.genai import ProjectResolutionError
 
@@ -31,6 +32,10 @@ _GENAI_HINT = (
 async def _rag_call(fn, *args):
     try:
         return await asyncio.to_thread(fn, *args)
+    except rag_metadata.MetadataError as e:
+        # 取り込み側で補完する属性(長すぎるファイル名由来の file 等)も 422 に正規化する。
+        # 500 のまま漏らすと API 契約(不正な属性は 422)が破れる — レビュー F-002
+        raise HTTPException(status_code=422, detail=str(e)) from e
     except rag.StoreNotReadyError as e:
         raise HTTPException(
             status_code=503, detail="vector store not ready, retry later"
@@ -53,7 +58,28 @@ async def list_files_response(ns: str) -> dict:
     return {"files": files}
 
 
-async def upload_file_response(ns: str, file: UploadFile) -> dict:
+def _parse_attributes(raw: str | None) -> dict:
+    """multipart の attributes フィールド(JSON文字列)を検証して返す(RAGM-01)。
+
+    未知キー・上限超過・入れ子は 422。切り詰めない(値が変わるとフィルタが静かに外れる)。
+    """
+    if raw is None or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise HTTPException(
+            status_code=422, detail=f"attributes must be a JSON object: {e}"
+        ) from e
+    try:
+        return rag_metadata.normalize_attributes(parsed)
+    except rag_metadata.MetadataError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+
+async def upload_file_response(
+    ns: str, file: UploadFile, attributes: str | None = None
+) -> dict:
     name = pathlib.Path(file.filename or "untitled").name
     ext = pathlib.Path(name).suffix.lower()
     if ext not in rag.ALLOWED_EXTENSIONS:
@@ -61,12 +87,13 @@ async def upload_file_response(ns: str, file: UploadFile) -> dict:
         if ext == ".docx":
             detail += " (docxはVector Store非対応 — SPIKE-03)"
         raise HTTPException(status_code=422, detail=detail)
+    attrs = _parse_attributes(attributes)  # 読み込み前に弾く(不正なら OCI を呼ばない)
     content = await file.read()
     if len(content) > rag.MAX_BYTES:
         raise HTTPException(status_code=413, detail="file too large (max 20MB)")
     if not content:
         raise HTTPException(status_code=422, detail="empty file")
-    return await _rag_call(rag.add_file, ns, name, content)
+    return await _rag_call(rag.add_file, ns, name, content, attrs)
 
 
 async def delete_file_response(ns: str, file_id: str) -> dict:
@@ -94,9 +121,12 @@ async def list_rag_files(user: Annotated[AuthContext, Depends(require_user)]):
 
 @router.post("/api/rag/files")
 async def upload_rag_file(
-    file: UploadFile, user: Annotated[AuthContext, Depends(require_user)]
+    file: UploadFile,
+    user: Annotated[AuthContext, Depends(require_user)],
+    # RAGM-01: 出典メタデータ(JSONオブジェクト文字列)。省略可 — 既存クライアントは無変更で動く
+    attributes: Annotated[str | None, Form()] = None,
 ):
-    return await upload_file_response(user.subject, file)
+    return await upload_file_response(user.subject, file, attributes)
 
 
 @router.delete("/api/rag/files/{file_id}")

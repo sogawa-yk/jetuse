@@ -6,6 +6,7 @@ SPIKE-03実機確定事項に準拠:
 - CP completed後のDP伝播待ちが必要
 """
 
+import hashlib
 import logging
 import time
 import uuid
@@ -14,6 +15,7 @@ from typing import Any
 import oracledb
 from openai import NotFoundError
 
+from . import rag_metadata
 from .db import connect
 from .genai import make_cp_client, make_inference_client, resolve_project_ocid
 from .settings import get_settings
@@ -241,8 +243,27 @@ def ensure_store(owner: str) -> str:
     return winner
 
 
-def add_file(owner: str, filename: str, content: bytes) -> dict[str, Any]:
-    """Files APIへアップロードしVector Storeへ登録(status=processingで返す)"""
+def build_attributes(
+    filename: str, content: bytes, attributes: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Vector Store へ渡すメタデータ属性を組み立てる(RAGM-01 / ADR-0020 §1)。
+
+    `file`(元のファイル名)と `sha256`(本文のハッシュ)は指定が無ければこちらで補う。
+    呼び出し側が明示した値が優先。検証(未知キー・上限・空値の除去)は rag_metadata が担う。
+    """
+    base = {"file": filename, "sha256": hashlib.sha256(content).hexdigest()}
+    return rag_metadata.normalize_attributes({**base, **(attributes or {})})
+
+
+def add_file(
+    owner: str, filename: str, content: bytes, attributes: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Files APIへアップロードしVector Storeへ登録(status=processingで返す)。
+
+    attributes は出典の構造化と版フィルタのためのメタデータ(RAGM-01)。
+    不正な属性は `rag_metadata.MetadataError`(ルート側で 422)で、OCI を呼ぶ前に弾く。
+    """
+    attrs = build_attributes(filename, content, attributes)  # 送信前に検証(失敗時は未実行)
     vs_id = ensure_store(owner)
     file_id = _uid()
     _backup_original(owner, file_id, filename, content)
@@ -252,7 +273,9 @@ def add_file(owner: str, filename: str, content: bytes) -> dict[str, Any]:
     # なので初回uploadが通常経路 — 有界リトライで吸収する(SP1-03 REV-005)。
     for attempt in range(6):
         try:
-            dp.vector_stores.files.create(vector_store_id=vs_id, file_id=f.id)
+            dp.vector_stores.files.create(
+                vector_store_id=vs_id, file_id=f.id, attributes=attrs
+            )
             break
         except NotFoundError:
             if attempt == 5:
