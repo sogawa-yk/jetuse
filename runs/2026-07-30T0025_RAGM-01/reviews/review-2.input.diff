@@ -1,0 +1,1533 @@
+diff --git a/STATE.md b/STATE.md
+index 480ef32..0cdc21b 100644
+--- a/STATE.md
++++ b/STATE.md
+@@ -1,210 +1,77 @@
+-# STATE — RP-01（開発環境の DB 内資格情報をリソースプリンシパルへ統一）
++# STATE — RAGM-01（マネージド Vector Store に属性付与・構造化出典・版フィルタ）
+ 
+-- task: RP-01
+-- run_id: 2026-07-29T1605_RP-01
+-- branch: feat/RP-01（base: main。共有物のため dev ではなく main 起点）
++- task: RAGM-01
++- run_id: 2026-07-30T0025_RAGM-01
++- branch: feat/RAGM-01（base: main。共有物のため main 起点）
+ - area: api
+-- review_verdict: **PASS**（review-14。blocker 0 / major 2 / minor 2・E2E adequacy=sufficient）
+-- last_review_ref: runs/2026-07-29T1605_RP-01/reviews/review-14.json
+-- updated_at: 2026-07-29
++- review_verdict: **PASS**（review-1。blocker 0 / major 3 / minor 3 → **6 件すべて修正済み**・再レビュー待ち）
++- last_review_ref: runs/2026-07-30T0025_RAGM-01/reviews/review-1.json
++- updated_at: 2026-07-30
+ 
+ ## やったこと
+ 
+-`ops/setup-select-ai.py` / `ops/setup-dev-schema.py` から `~/.oci/config` の手書きパース（4 箇所）と
+-`DBMS_CLOUD.CREATE_CREDENTIAL` を**削除**し、`DBMS_CLOUD_ADMIN.ENABLE_RESOURCE_PRINCIPAL` に置換。
+-両スクリプトの共通部（接続解決・権限付与・ACL・RP 有効化）を `ops/_adb.py` に集約した。
+-
+-- 接続先は環境変数 → `.env` → 既定値で解決（`ADB_DSN` / `ADB_WALLET_DIR` / `ADB_WALLET_PASSWORD`）。
+-  従来の `dev/terraform.tfvars` 読み出しはウォレットパスワードのフォールバックとして残す。
+-  これが無いと gitignore された tfvars が無い環境（この worktree）で ops を実行できず E2E できない。
+-- `setup-select-ai.py` に `--schema`（既定 `.env` の `ADB_USER`）。ADMIN 接続のみになり
+-  アプリ側パスワードが不要になった。
+-- 冪等化: `ENABLE_RESOURCE_PRINCIPAL` は PL/SQL 側で冪等（実機確認）。ユーザー作成は
+-  「既存ならパスワードを勝手に変えない（明示指定時のみ ALTER・ORA-28007 は続行）」。
+-  パスワード不明で再実行したときは migrate を理由付きでスキップし、exit 0。
+-- fail-closed: DDL の前に `assert_target()` で「SQL 接続先が `ADB_OCID` と同一 ADB」かつ
+-  「その ADB が `ADB_COMPARTMENT_OCID`（無ければ `COMPARTMENT_OCID`）**そのもの**」
+-  （OCID の完全一致）を確認。RP 有効化の直後には
+-  `DBA_TAB_PRIVS`（`owner='ADMIN'`）で EXECUTE が実際に付いたかを確認する。
+-  接続後の `call_timeout` も有限値を強制（`ADB_CALL_TIMEOUT_MS`・0 以下は拒否）。
+-- `settings.select_ai_credential` の既定を `OCI$RESOURCE_PRINCIPAL` へ（ADR §未解決 1 の結論）。
+-- `infra/terraform/environments/app` は `merge()` の**上書き側**で `SELECT_AI_CREDENTIAL` を注入。
+-- ドキュメント: `specs/09-rag.md` / `docs/guides/onboarding.md` / `docs/guides/dev-environments.md` /
+-  `docs/tips.md`（解消済みへ・ListBuckets の compartmentId 必須を追記）/ `.env.example` /
+-  ADR-0021 §未解決 1〜3 への結論追記（状態は Accepted のまま）/ `docs/verification/RP-01.md`。
+-- `spikes/spike_m1/common.py:oci_api_key()` は再現性のため残し、「ops はこの方式を使わない」旨を明記。
+-
+-## E2E（実 ADB・共有 loop ADB / 検証用スキーマ `JETUSE_SPIKERP01` で隔離）
+-
+-検証が作る資源の名前は **run 固有**（この run は `rp01d389` → `JETUSE_RP01D389` /
+-`jetuse-spike-rp01d389-rag` 等）。固定名による所有権の取り違え（TOCTOU）を構造的に潰した。
++ADR-0020 §1 の `vector_store` バックエンド（既定）に、属性付き取り込み・構造化出典・版フィルタを実装した。
++SPIKE-M1 で「OCI 側は対応済み・不足はアプリ側」と確定していた穴を塞ぐ作業。
+ 
+-| # | シナリオ | 結果 | 証跡 |
+-|---|---|---|---|
+-| 1 | ops 2 本を同じスキーマへ 2 回連続実行（冪等） | PASS | `e2e/scenario-1.md` |
+-| 2 | RP で `DBMS_CLOUD.SEND_REQUEST` → Object Storage 200 | PASS | `e2e/scenario-2.md` |
+-| 3 | RP でベクトル索引の作成・取り込み・検索（合言葉で照合） | PASS | `e2e/scenario-3.md` |
+-| 4 | 対照: 旧パーサ由来の API キー資格情報で ORA-20404 | PASS | `e2e/scenario-4.md` |
+-| 否定 | 台帳が一致しないと片付けが何も消さずに止まる（5 ケース。うち 2 件は USER_ID による同秒作り直しの検出） | PASS | `e2e/guard.md` |
+-
+-1→guard→2→3→4→teardown を通しで 1 回実行した証跡。検証用リソースは `teardown.md` のとおり
+-削除し、削除後の再照会でも不在を確認済み（`post-teardown-state.md` で共有 ADB が検証前と
+-同じ状態に戻っていることも確認）。実施しなかった範囲は `e2e/SKIPPED.md`。
+-証跡の OCID・ネームスペースは `spikes/spike_m1/redact_evidence.py` で伏字化。
+-
+-- `.venv/bin/pytest packages/api/tests` 381 passed
+-  （新規 `packages/api/tests/test_ops_adb.py` 38 件＝ゲートの否定側の単体テスト）
+-- `.venv/bin/ruff check packages/api ops spikes` クリーン
+-- `terraform init -backend=false && fmt -check && validate`（environments/app）成功
+-
+-## IAM
+-
+-**変更していない**（タスクの禁止事項）。既存の動的グループ／ポリシーのままで
+-シナリオ 2・3 が通ったため、権限不足による blocked は発生していない。
+-
+-## review-1（FAIL: blocker 4 / major 3）への対応
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001: 新規 `ops/_adb.py` が差分に含まれず、clean checkout では `ModuleNotFoundError` | 新規ファイルを `git add -N` して差分に載せた（コミットはしない） |
+-| B-002: `show_target()` は表示のみで、DDL 前に接続先を検証していない | `_adb.assert_target()` を新設。`.env` の `ADB_OCID` を API で解決し、`DB_NAME` のインスタンス固有トークンが当該 ADB の接続文字列に現れることまで照合。未設定・不一致は SystemExit（両スクリプトの DDL 前に必ず通す） |
+-| B-003: E2E 台帳が名前だけで所有権を判断し、teardown 後も失効しない | 台帳に「作った証拠」（ユーザーの作成時刻 / バケットの etag・作成時刻）を記録し、再照合できたものだけ再利用・削除。削除できたら台帳から落とす。シナリオ1は対象スキーマが**既存なら中止** |
+-| B-004: E2E の SQL 接続先が API 確認した ADB と同一とは限らない | ドライバも `ops/_adb` 経由で接続し `assert_target()` を通す。ウォレット展開先を `ADB_OCID` ごとに分離 |
+-| M-001: ORA-28007 を「現行値と同じ」と断定 | 実ログインで裏取りし、入れなければ中止（推測でパスワードを案内しない） |
+-| M-002: パスワード不明時に migrate を飛ばして exit 0 | 非ゼロ終了に変更。意図的に飛ばすなら `--skip-migrate` の明示を要求 |
+-| M-003: 片付け証跡が主張と不整合（bucket/profile/index の削除が無い） | シナリオ1→4→teardown を**通しで 1 回**流し直し、teardown は削除後に再照会して不在を確認・失敗があれば非ゼロ終了。台帳は完了後 `{}` |
+-
+-## review-2（FAIL: blocker 1 / major 5 / minor 1）への対応
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001: teardown が所有権照合より先にスキーマ内オブジェクトを削除する | 所有権照合を **最初に ADMIN 接続で**行い、一致しなければスキーマへ接続すらしない。照合は作成時刻に加えて**この run 固有の乱数マーカー表**（`RP01_RUN_MARKER`）。否定 E2E（`driver.py guard`）で「台帳が壊れていると exit 1・リソース無傷」を実機確認 |
+-| M-001: `call_timeout=0`（無期限）で片付けに到達できなくなる | 有限値へ（通常 600s・索引構築 900s） |
+-| M-002: `/tmp` の認証資材が既定権限で残る | ディレクトリ 0700・秘密ファイル 0600 で作成し、teardown で削除 |
+-| M-003: 所有証跡の記録が遅く、途中失敗で孤児が残る | 作成直後に記録し、シナリオの `finally` でも「存在するのに台帳に無いユーザー」を回収。バケット・索引も作成前後で記録 |
+-| M-004: 安全クリティカルな共通部に単体テストが無い | `packages/api/tests/test_ops_adb.py`（17 件）。ADB_OCID 未設定 / トークン不一致 / DB_NAME 形式不正 / RP 未付与 / ORA-28007 のログイン失敗 など**通ってはいけない経路**を網羅 |
+-| M-005: 証跡にウォレットパス（ADB_OCID 由来）が残る | パスの接尾辞を ADB_OCID の**ハッシュ**に変更し、ログ出力自体も `<WALLET_DIR>` に伏字化 |
+-| m-006: `JETUSE_APP` の RP 付与に証跡が無い | `post-teardown-state.md` に `DBA_TAB_PRIVS` の read-only 照会結果を追加 |
+-
+-## review-4（FAIL: blocker 1 / major 2 / minor 1）への対応
+-
+-review-3 は codex が異常終了（ERROR）。原因は E2E 証跡ディレクトリに `__pycache__/*.pyc`（バイナリ）が
+-できていて、レビュー入力が UTF-8 として壊れたこと。`__pycache__` を削除して再実行した。
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001: `DROP USER` は台帳の名前だけで実行しており、読取専用ユーザーは作成時刻を一度も照合していない（TOCTOU） | `DROP USER` の直前に**両ユーザー分**作成時刻を、アプリスキーマはマーカーも再照合する。1 件でも不一致なら 1 件も DROP しない。否定 E2E に「読取専用ユーザーだけズレている」ケースを追加（開始時のゲートは通過するので、この再照合でしか止まらない） |
+-| M-001: RP 付与の確認が `OWNER` を限定しておらず、別スキーマの同名 grant を誤認しうる | 照合条件に `owner = 'ADMIN'` を追加＋単体テスト |
+-| M-002: teardown が失敗すると `/tmp` に認証資材が残る | `try/finally` で必ず片付け。ただし**作り直せない**検証スキーマのパスワードだけは残作業があるとき保持する（消すと残ったスキーマを片付けられなくなるため）。ウォレットは常に削除 |
+-| m-003: パスワードを `IDENTIFIED BY "..."` へ直接補間している | `_adb.assert_password()` で引用符・空白・改行・長さを拒否（拒否時は DDL を 1 本も出さない）＋境界テスト |
+-
+-## review-5（FAIL: blocker 2 / major 3 / minor 1）への対応
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001: `assert_target()` は「SQL 接続先＝ADB_OCID」しか見ておらず、承認済みテナンシ/コンパートメントかを見ていない | ADB のコンパートメントをルートまで辿り、`.env` の `COMPARTMENT_OCID` を経由することを **OCID で**確認する（名前は根拠にしない）。未設定・不一致は DDL 0 件で中止。同名の `jetuse/dev` 階層を持つ別テナンシを拒否する単体テストを追加 |
+-| B-002: E2E 側の認可も表示名とコンパートメント名だけ | ドライバは `_adb.assert_target()`（OCID 照合）を必ず通す。`assert_loop_adb()` の名前照合はその上乗せに位置づけ直した |
+-| M-001: app 既存＋パスワード未指定のとき、読取専用ユーザーを作った後に落ちて生成パスワードが失われる | **DDL 前にプリフライトで中止**（何も作らない）。生成パスワードの出力も migrate より前に移し、migrate 失敗でも失われないようにした |
+-| M-002: 台帳へ書く前にマーカー表を CREATE（暗黙コミット）しており、途中失敗で孤児になる | ユーザーの識別値を**先に**永続化 → マーカーは INSERT 成功後に追記。既存の空マーカー表からの回収も実装（ORA-00955 を許容） |
+-| M-003: 接続後の SQL 往復に有限タイムアウトが無く、別プロセスの ops へは driver の設定が伝わらない | `_adb.connect()` が `call_timeout` を設定（既定 600s・`ADB_CALL_TIMEOUT_MS` で上書き・0 以下は拒否）＝ops 本体にも効く |
+-| m-001: `settings.select_ai_credential` の既定変更に単体テストが無い | 既定が `OCI$RESOURCE_PRINCIPAL` であることと、env で旧名へ戻せることをテストで固定 |
+-
+-## review-6（FAIL: blocker 4 / major 1）への対応
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001: 承認済み `COMPARTMENT_OCID` の**子孫**まで許すため、dev 以外の ADB でも通る | **完全一致**に変更。ADB が子コンパートメントにある環境は `.env` の `ADB_COMPARTMENT_OCID` で明示する（`.env.example` に追加）。承認済みの子を拒否する単体テストを追加 |
+-| B-002: E2E 側も表示名とコンパートメント名だけを認可根拠にしている | 承認済みの根の直下から `dev` の OCID を引き、ADB のコンパートメントと**OCID 完全一致**を要求。その OCID を `ADB_COMPARTMENT_OCID` として ops サブプロセスへ渡し、両者を同じ値で照合 |
+-| B-003/B-004/B-002 の TOCTOU 系: 固定名の資源を事後照会で所有物として取り込みうる | **資源名を run 固有にした**（`rp01<乱数4>`）。衝突自体が起こらず、既存なら中止。バケット作成の 409（競合）・結果不確定は台帳へ入れない＝自動削除しない |
+-| M-001: query ユーザーだけ作って落ちると生成パスワードが失われる | 両パスワードを**全 DDL の前に**検証し、生成値も DDL 前に出力する。app 既存＋パスワード未指定＋migrate 要求はプリフライトで（何も作らずに）中止 |
+-
+-## review-7（FAIL: blocker 3 / major 1 / minor 1）への対応
++- `jetuse_core/rag_metadata.py`（新規・唯一の門番）: 許可キー 8 種（`file` / `version` / `sheet` /
++  `cells` / `sha256` / `kind` / `current_version` / `chunk_id`）を定数化。`normalize_attributes()` は
++  **値の無いメタをキーごと省き**（`0`/`False` は残す）、未知キー・512 文字超・入れ子・非有限数を拒否。
++  `validate_filters()` は `eq/ne/gt/gte/lt/lte` と `and/or` を許可し、**未知キーを深い位置でも拒否**、
++  `in`/`nin` は上流未対応として拒否、既知フィールドだけに正規化する。
++- `jetuse_core/rag.py`: `add_file(..., attributes=)` → `vector_stores.files.create(attributes=)`。
++  `file` / `sha256` は未指定なら補完。検証は **OCI 呼び出しより前**（不正なら Files API を汚さない）。
++- `jetuse_core/chat.py`: `_extract_citations()` に `source`（attributes）/ `text`（500 字）/ `chunk_id` を追加。
++  既存 `{file_id, filename, score}` は温存。代表チャンクの選択は**丸め前スコア**で比較する。
++  `file_search_tool()` で `tools[].filters` を載せる。
++- ルート: `POST /api/rag/files` に `attributes`（JSON 文字列・省略可）、`/api/chat/stream` に `rag_filters`。
++  未知キー等は 422（属性の自動補完値が長すぎる場合も 422 に正規化）。`vector_store` 以外の
++  バックエンドおよびエージェントモードとの併用は 400（渡す口が無い経路で黙って無視しない）。
++- ドキュメント: `specs/09-rag.md`（API 契約）/ `docs/verification/RAGM-01.md`。
+ 
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001: `ADB_COMPARTMENT_OCID` の上書きが承認済みの根と無関係でも通る | 上書き値が `COMPARTMENT_OCID` の配下にあることを OCID で遡って確認。別テナンシの値を上書きに指定した否定テストを追加 |
+-| B-002: 事前確認〜ops 実行の間に作られた同名ユーザーを所有物として取り込みうる | ops 実行の**直前に DB の現在時刻**を取り、それより前からあるユーザーは所有物にせず中止する（作成時刻の下限で「この run が作った」を担保） |
+-| B-003: app の `DROP ... CASCADE` の後、query は名前だけで DROP していた | **1 件ごとに DROP の直前**で作成時刻を再照合（アプリスキーマはマーカーも）。合わなければその 1 件を DROP しない |
+-| M-001: DROP の任意のエラーを握り潰し、再照会前に台帳から落としていた | 「既に無い」を表す ORA コードだけ成功扱いにし、それ以外は失敗として数える。台帳から落とすのは**不在を再照会で確認できたときだけ**（照会不能なら残す） |
+-| m-001: 片付け後の台帳が `{}` という記述が実物と違う | 「資源の項目はゼロで `run_tag` だけ残る」に修正 |
+-
+-## review-8（FAIL: blocker 1 / major 2 / minor 1）への対応
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001: 所有権取得を拒否した後、`finally` の再取得が下限なしで同じユーザーを取り込む | `finally` も 1 回目の ops 実行直前の DB 時刻を下限として渡す（拒否したものを後から拾わない） |
+-| M-001: DROP の任意のエラーを「既に無い」として握り潰し、再照会前に台帳から落としていた | **前ラウンドで書いたつもりの修正が当たっていなかった**（引用符の正規化でパターンが一致せず無音で失敗）。今回は編集の適用を確認済み。既知の not-found（ORA-20004 / ORA-00942）だけ成功扱いにし、他は失敗として数える。台帳から落とすのは不在を再照会できたときだけ |
+-| M-002: 生成パスワードをプリフライトより前に出しており、中止時に「設定していない値」を案内する | 出力をプリフライト後・DDL 前へ移した |
+-| m-001: ADB 表示名・DB 名・共有バケット名が検証コードに固定 | **未対応（residual）**。`spikes/spike_m1/common.py` と同じ「承認済み対象を名前で固定する fail-closed ガード」の踏襲で、.env 化すると「.env を差し替えれば別環境を触れる」ことになり弱くなる。判断は人間ゲートへ |
+-
+-## review-9（FAIL: blocker 1 / minor 1）への対応
++### 実装判断（タスクの「切り詰めるか拒否するか」）
+ 
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001: 事前確認〜ops 実行の間に同名ユーザーが作られると、明示パスワード指定の ops が既存ユーザーを ALTER しうる | `ops/setup-dev-schema.py` に **`--require-new`** を追加（既存があれば ALTER も CREATE もせず中止）。E2E の 1 回目はこれを付けて実行し、競合時に他人のスキーマへ触れない。2 回目は付けない（＝冪等性の確認そのもの）。単体テストを 2 件追加 |
+-| m-001: ADB 表示名・DB 名・共有バケット名が検証コードに固定 | **未対応（residual・人間ゲートへ）**。承認済み対象を名前で固定するのは `spikes/spike_m1/common.py` と同じ fail-closed ガードの踏襲で、.env 化すると「.env を差し替えれば別環境を触れる」ことになりゲートとして弱くなる |
++**拒否（422）を選んだ。** 切り詰めると `sha256`/`version` が別物になり、フィルタが静かに外れる。
++それは SPIKE-M1 ①-b の「未知キーで 0 件」と同じ失敗の形（利用者が気付けない）なので入口で弾く。
+ 
+-## review-10（FAIL: blocker 1 / minor 1）への対応
++## E2E（実 ADB + 実 OCI / 共有 loop ADB のタスク専用スキーマ `JETUSE_RAGM01` で隔離）
+ 
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001: `--require-new` で setup が中止しても、`finally` の所有権回収が「作成時刻が下限以降」だけで取り込んでしまう | 所有権を取るのは **setup が exit 0 のときだけ**に限定（`created_by_us`）。1 回目は `--require-new` が通っている＝「実行前に存在せず、この実行が作った」が確定する。失敗時は台帳へ入れず「残っていないか人間が確認すること」と警告を出す |
+-| m-001: 環境依存値（ADB 表示名等）が検証コードに固定 | 前回と同じく **未対応（residual・人間ゲートへ）** |
++アプリ（`service.main`）を実 ADB・実 OCI につないだまま in-process で起動し、全経路を実 API で通した
++（モックなし）。検証用 Vector Store は run 固有名 `jetuse-spike-ragm01-<tag>`。ADB は増やしていない。
+ 
+-## review-11 への対応（人間ゲートの判断: override せず修正）
++| # | シナリオ | 結果 | 証跡 |
++|---|---|---|---|
++| 1 | 版違いの架空文書 2 件を属性付きで取り込み → 版フィルタ有無の対照 | PASS | `e2e/scenario-1.md` |
++| 2 | 回答の citations にセル範囲まで載る（実レスポンス） | PASS | `e2e/scenario-2.md` |
++| 否定 | 未知フィルタキー / `in` / 未知属性キー / 512 文字超 / バックエンド不一致 / エージェントモード / 子が null | PASS | `e2e/guard.md` |
+ 
+-**停止理由として書いた「blocker と major が互いに反対の要求」は誤りだった。** review-11 の
+-suggestion は両方とも同じ機構を提示していた:「`CREATE USER` の直後に、作り直しで変わる識別子
+-（`DBA_USERS.USER_ID`）を receipt として永続化し、台帳化のときと DROP 直前に照合する」。
+-＝「作った瞬間に、作り直しを検出できる形で記録する」1 つの機構で両方が閉じる。
++- 対照の実測: フィルタ無し → 引用 v1.0 + v2.0（回答も両版を混ぜる）／`current_version='Y'` → v2.0 のみ。
++- 引用の実値: `source = {file, version:"2.0", sheet:"API一覧", cells:"B18:F18", kind, current_version, sha256}`。
++- 片付け: ファイル・Vector Store・登録簿行・検証スキーマ（`JETUSE_RAGM01`/`_Q`）を削除し不在を再照会で確認
++  （`e2e/teardown.md`。DROP は `--receipt` の `USER_ID` 一致時のみ）。証跡は `redact_evidence.py` で伏字化。
++- 実施しなかった範囲と理由: `e2e/SKIPPED.md`。
+ 
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001: 作成を証明できないユーザーを取り込みうる | `ops/setup-dev-schema.py` に `--receipt <path>` を追加し、**CREATE 直後に** `USER_ID` / 作成時刻 / この実行が作ったかを書き出す。ドライバは「いま在るユーザー」を推測で取り込まず receipt だけを根拠にし、台帳化時・DROP 直前・各 DROP の直前に `USER_ID` を照合する |
+-| M-001: setup が途中失敗すると作成物が孤児になる | receipt は CREATE 直後にあるので、権限付与・RP 有効化・migration のどこで失敗しても台帳化でき、teardown で消せる。`created_by_us` のようなプロセス全体の成否ゲートは廃止 |
+-| m-001: 環境依存値の直書き | **人間ゲートで「意図的な residual として受容」と決定**（`.env` 化すると差し替えで別環境を触れることになり、安全装置として弱くなるため）。理由を `docs/verification/RP-01.md` に明記 |
++## テスト / lint
+ 
+-追加した競合テスト:
+-- 実機（`guard.md`）: `USER_ID` を食い違わせた 2 ケース＝「同じ秒内に DROP → 同名で再作成」相当。
+-  作成時刻では区別できないが `USER_ID` で検出し、**ユーザーもマーカーも無傷のまま非ゼロ終了**する。
+-- 単体（`test_ops_adb.py`）: CREATE 直後に receipt が出る / **CREATE 後の GRANT 失敗を注入しても
+-  receipt は残る** / 実行前から在ったユーザーは `created_by_this_run=false` になる / `--receipt` 無しでも動く。
++- `.venv/bin/pytest packages/api/tests` 442 passed（新規 `test_rag_metadata.py` 19 件 + 既存テストへ 16 件追加）
++- `.venv/bin/ruff check packages/api` クリーン
+ 
+-## review-12（FAIL: blocker 2 / major 2）への対応
++## 人間ゲート（未実施）
+ 
+-**成果物（`ops/`）への指摘が 3 件出たため、人間が定めた停止条件に従って修正した。**
++- コミット / PR / push（未承認のため未実施）
++- 環境の記録事項: `.env` の `COMPARTMENT_OCID` は親（`jetuse`）を指すが実リソースは子の `dev` にあり、
++  `PROJECT_OCID` 未設定だと `ProjectResolutionError` になる。E2E は両者を明示して実行した。
++  恒久対応（既定値の変更 or `GENAI_COMPARTMENT_OCID` の追加）は仕様判断のため未実施（`docs/verification/RAGM-01.md`）。
+ 
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001 `ops/setup-dev-schema.py`: receipt の `USER_ID` が CREATE の結果と結び付かず、作成後に名前で引き直している | `CREATE USER` と識別子取得を **1 本の PL/SQL ブロック**（`EXECUTE IMMEDIATE` + `SELECT ... INTO`）にまとめ、OUT バインドで受け取る。クライアント側の「作ってから読む」窓を無くした |
+-| B-002 `e2e/driver.py`: バケットの所有証跡を作成後の再照会で取っている | `create_bucket` の**応答そのもの**（`etag` / `time_created`）を記録。応答に etag が無ければ台帳へ入れず中止 |
+-| M-001 `ops/setup-dev-schema.py`: receipt の出力先を検証せず、CREATE の後で書き込むため証跡が残らない場合がある | `_assert_receipt_writable()` を **DDL の前**に実行（親ディレクトリの有無・書き込み可否・既存ファイルが JSON 配列か）。単体テスト 3 件追加 |
+-| M-002 `ops/setup-dev-schema.py`: `--require-new` が 2 ユーザーを一組で事前確認しておらず、部分作成を残しうる | `--require-new` 時は **app と query をまとめて先に照会**し、どちらかが在れば何も作らずに中止（CLI の契約どおり） |
++## review-1（PASS / blocker 0・major 3・minor 3。E2E adequacy=insufficient）への対応
+ 
+-## review-13（FAIL: blocker 2 / major 1）への対応
++判定は PASS だったが、Codex が E2E 証跡を insufficient とし、完了主張を支える部分に指摘が出たため
++修正した（磨き込みではなく、主張と実装の食い違いの是正）。修正後に E2E を**最初から通しで再実行**した。
+ 
+ | 指摘 | 対応 |
+ |---|---|
+-| B-001 `ops/`: `CREATE USER` の暗黙コミット〜`SELECT` の窓は PL/SQL にまとめても残る | **原理的に閉じない**（識別子はオブジェクトができた後にしか読めず、DBA 権限の別セッションがその窓で作り直せば、クライアント側のどんな receipt 方式でも同じ）。クライアント側の窓は PL/SQL 化で除去済み。緩和 3 点（run 固有名 / `--require-new` / 破壊操作ごとの再照合）とあわせて `docs/verification/RP-01.md`「既知の限界」とコード docstring に明記した |
+-| B-002 `e2e/driver.py`: 作成応答を台帳化した後、書き込み前に再確認していない | `put_object` の直前にバケットの同一性（etag / 作成時刻）を再照合し、違えば**書き込まずに中止** |
+-| M-001 `ops/`: receipt の事前検証が配列であることしか見ていない / open 成功は write 成功を保証しない | 各要素が dict であることまで検証し、事前に**実際の書き込みを試す**（新規なら書いて消す）。`_write_receipt` 側も dict 以外の要素を無視する |
+-
+-## review-14: PASS（完了ゲート到達）
+-
+-blocker 0 / E2E adequacy=sufficient。loop-protocol の停止規律に従い、PASS の下に残る
+-非 blocker は**修正せず residual として列挙**する（磨き込みの反復に入らない）。
+-
+-| sev | file:line | 指摘 | 扱い |
+-|---|---|---|---|
+-| major | `ops/setup-dev-schema.py:119` | receipt を `write_text` で切り詰めるため、ENOSPC やプロセス停止で既存 receipt が壊れうる | residual（原子的書き込み＝一時ファイル + rename にすべき。後続トリアージ） |
+-| major | `runs/<run-id>/e2e/driver.py:284` | 所有権台帳も直接上書き。更新中に停止すると JSON が壊れ teardown 不能になりうる | residual（同上。検証スクリプト側） |
+-| minor | `ops/_adb.py:230` | `verify_login()` が全 `DatabaseError` を「パスワード違い」と診断する（通信障害等も同じ扱い） | residual |
+-| minor | `runs/<run-id>/e2e/driver.py:311` | `read_marker()` が全 `DatabaseError` を「マーカー無し」と扱う | residual |
+-
+-受容済み residual（人間ゲートで決定・2026-07-29）: `review-11 m-001` 検証コードへの環境依存値の直書き。
+-既知の限界（原理的に閉じない）: `CREATE USER` の暗黙コミット〜識別子取得の窓（`docs/verification/RP-01.md`）。
+-
+-## 人間ゲート（未実施）
+-
+-- コミット / PR / push（未承認のため未実施）
+-- 配備済み dev アプリスタックへの `terraform apply` と `/api/health` の `dbchat` 確認（SKIPPED.md）
++| F-001(major) エージェント経路に `rag_filters` を渡す口が公開 API に無く、`agent_id` 経路では黙って無視される | 投機的だった `_build_agent_tools` へのフィルタ受け渡しを**削除**し、`agent`/`agent_id` との併用を **400 で拒否**。実 API の否定側（`guard.md`）に追加 |
++| F-002(major) 補完する `file`（ファイル名）が 512 文字超だと `MetadataError` が 500 として漏れる | `_rag_call` で `MetadataError` を **422 に正規化**＋ルートテスト |
++| F-006(major) teardown が全例外を「削除済み」と扱い、OCI Files の不在を確認していない | 不在判定を **`NotFoundError` 限定**にし、ファイル 1 件ずつ Files API で再照会。確認できなければ台帳を残して**非ゼロ終了** |
++| F-003(minor) 複合フィルタの子の `null` が検証を素通りする | 最上位以外の `None` を拒否＋単体/実 API の否定テスト |
++| F-004(minor) 巨大 int で `math.isfinite` が OverflowError（500） | `int` はそのまま通し、有限性判定は `float` のみ |
++| F-005(minor) 丸め後スコアで比較し、最上位でないチャンクを引用しうる | 丸め前スコアで比較（0.8504 vs 0.8501 の回帰テスト） |
+diff --git a/docs/verification/RAGM-01.md b/docs/verification/RAGM-01.md
+new file mode 100644
+index 0000000..dd273c1
+--- /dev/null
++++ b/docs/verification/RAGM-01.md
+@@ -0,0 +1,123 @@
++# RAGM-01 検証レポート: マネージド Vector Store の属性付与・構造化出典・版フィルタ
++
++実施日: 2026-07-30 / リージョン: ap-osaka-1 / 対象: `vector_store` バックエンド（既定）
++仕様の正本: `docs/decisions/ADR-0020-rag-metadata-backend.md` §1 / 実測の根拠: `docs/verification/SPIKE-M1.md` ①-a〜①-e
++証跡: `runs/2026-07-30T0025_RAGM-01/e2e/`
++
++## 結論（先に）
++
++SPIKE-M1 で「OCI 側は属性もフィルタも対応済み・不足はアプリ側」と確定していた穴を塞いだ。
++実環境（実 ADB + 実 OCI Generative AI）で次の 2 点を確認した。
++
++1. **出典が構造化されて返る**。回答の `citations[].source` に `file` / `version` / `sheet` / `cells` /
++   `sha256` / `kind` / `current_version` が構造化値として載る（本文への埋め込みではない）。
++   併せて該当箇所の本文 `text` と `chunk_id` も返す。
++2. **旧版を検索から外せる**。同一クエリで `current_version='Y'` の有無だけを変えると、
++   フィルタ無しでは v1.0 と v2.0 の両方が引かれ、フィルタ有りでは v2.0 だけになる。
++
++## 実装（アプリ側の穴の塞ぎ方）
++
++| 変更 | 内容 |
++|---|---|
++| `jetuse_core/rag_metadata.py`（新規） | 属性とフィルタの唯一の門番。許可キー 8 種を定数化し、未知キー・上限超過・入れ子・非スカラーを `MetadataError` で拒否する |
++| `jetuse_core/rag.py` | `add_file(..., attributes=...)` → `vector_stores.files.create(attributes=...)`。`file` と `sha256` は未指定なら補完。**値の無いメタはキーごと省く** |
++| `jetuse_core/chat.py` | `_extract_citations()` を拡張（`source` / `text` / `chunk_id` を追加、既存 3 フィールドは温存）。`file_search_tool()` で `tools[].filters` を載せる |
++| `service/schemas.py` / `service/routes/{chat,rag}.py` | `rag_filters`（チャット）と `attributes`（アップロード）を受け、境界で 422 |
++
++### 決めたこと 1: 上限超過は切り詰めずに拒否する
++
++属性は値 512 文字まで（SPIKE-M1 ①-d）。**切り詰めない。** `sha256` や `version` を黙って
++切り詰めると値が別物になり、後段のフィルタが一致しなくなる。これは ①-b の
++「存在しないキーで絞るとエラーにならず 0 件」と同じ失敗の形（利用者から見て「該当なし」と
++区別が付かない）なので、入口で 422 にして気付けるようにした。
++
++### 決めたこと 2: 空値はキーごと省く
++
++`""` を入れると `eq` 一致が成立しなくなる。「値が無い」は**キーの不在**で表す。
++ただし `0` と `False` は値なので残す（truthy 判定で落とさない — 単体テストで固定）。
++
++### 決めたこと 3: 効かない組み合わせは黙って無視しない
++
++`rag_filters` は `vector_store` バックエンドの `file_search` でしか効かない。
++`select_ai` / `opensearch`、および**エージェントモード**（`agent` / `agent_id`。別ディスパッチで
++絞り込みを渡す口が無い）と併用されたら 400 で断る。無視すると「版フィルタを掛けたのに
++旧版が混ざる」という、最も避けたい壊れ方になる。エージェント経路の絞り込み対応は本タスクの
++範囲外（`rag_search` ツールへ渡す口を作る設計判断が要る）。
++
++## 実環境 E2E
++
++共有 loop ADB（`jetuse-loop-adb`）の**タスク専用スキーマ `JETUSE_RAGM01`** で隔離し、ADB は増やしていない。
++OCI 側の検証用 Vector Store は run 固有名 `jetuse-spike-ragm01-<tag>`。アプリの全経路
++（FastAPI ルート → `jetuse_core` → OCI）を実 API に対して通した（モックなし）。
++
++| # | シナリオ | 結果 | 証跡 |
++|---|---|---|---|
++| 1 | 版違いの架空文書 2 件を属性付きで取り込み → 版フィルタ有無の対照 | PASS | `e2e/scenario-1.md` |
++| 2 | 回答の citations にセル範囲まで載る（実レスポンス） | PASS | `e2e/scenario-2.md` |
++| 否定 | 未知フィルタキー / `in` / 未知属性キー / 512 文字超 / バックエンド不一致 / エージェントモード / 子が null | PASS | `e2e/guard.md` |
++
++### シナリオ 1 の対照（同一クエリ・フィルタの有無だけが違う）
++
++| 条件 | 引用ファイル | 引用の version |
++|---|---|---|
++| フィルタ無し | v1.md, v2.md | 1.0, 2.0 |
++| `current_version='Y'` | v2.md | 2.0 |
++
++フィルタ無しの回答は「v1.0 は 100 件 / v2.0 は 200 件」と両版を混ぜて答える。
++フィルタ有りでは v2.0（200 件）だけを根拠に答え、旧版の引用は 1 件も返らない。
++
++### シナリオ 2 の引用（実レスポンス）
++
++```json
++{"file_id": "file-<REDACTED>", "filename": "inventory-api-spec-v2.md", "score": 0.943,
++ "source": {"file": "架空サンプル_在庫連携API仕様書.xlsx", "version": "2.0",
++            "sheet": "API一覧", "cells": "B18:F18", "kind": "spec", "current_version": "Y",
++            "sha256": "2f56fb…"},
++ "text": "…在庫照会API GET /v1/inventory は一度に最大200件まで返却する。…",
++ "chunk_id": "0_9789e265-…"}
++```
++
++既存フロントが読む `file_id` / `filename` / `score` はそのまま。拡張は追加フィールドのみ
++（後方互換テスト `test_extract_citations_backward_compatible_shape`）。
++
++### 片付け
++
++検証用の Vector Store・ファイル・登録簿行・検証スキーマ（`JETUSE_RAGM01` / `_Q`）はすべて削除し、
++**不在は `NotFoundError` で確認**した（通信断や 5xx を「消えた」と読まない。確認できなければ
++台帳を残して非ゼロ終了する）。Files API 側も 1 ファイルずつ再照会している（`e2e/teardown.md`）。スキーマの DROP は `--receipt` に記録した
++`USER_ID` と一致したときだけ実行する（RP-01 と同じ所有権照合）。
++
++実施しなかった範囲と理由は `e2e/SKIPPED.md`（配備済みスタックへの再配備・属性 16 キー超過・
++`in` の上流 400 再実測・属性更新 API・フロント・`adb` バックエンド）。
++
++## 単体テスト
++
++- `.venv/bin/pytest packages/api/tests` 442 passed（新規 `test_rag_metadata.py` 19 件 + 既存テストへの追加 16 件）
++- `.venv/bin/ruff check packages/api` クリーン
++
++守っている契約:
++- 未知のフィルタキーは 422（`test_chat_stream_rejects_unknown_filter_key`）
++- 空値のキーは送らない・`0`/`False` は残す（`test_normalize_attributes_*`）
++- 既存 citations 形式が壊れない（`test_extract_citations_backward_compatible_shape`）
++- 絞り込みが効かない経路（select_ai / opensearch / エージェント）は 400 で断る
++  （`test_chat_stream_rejects_filters_without_vector_store_backend` / `test_chat_stream_rejects_filters_in_agent_mode`）
++- 引用の代表チャンクは丸め前スコアで選ぶ（`test_extract_citations_compares_unrounded_scores`）
++- 補完した属性が長すぎても 500 にせず 422（`test_upload_rejects_overlong_filename_with_422`）
++
++## 環境について気付いたこと（この worktree 固有ではない）
++
++`.env` の `COMPARTMENT_OCID` が親コンパートメント（`jetuse`）を指す一方、実リソース
++（loop ADB / GenerativeAiProject）は子の `dev` にある。`PROJECT_OCID` 未設定だと
++`resolve_project_ocid()` が親を探して `ProjectResolutionError` になる。E2E では
++`COMPARTMENT_OCID`（=dev）と `PROJECT_OCID` を明示して実行した。`.env.example` は
++`ADB_COMPARTMENT_OCID` の上書きを既に案内しているが、GenAI 側にも同じ「子コンパートメント」問題がある。
++恒久的な扱い（`GENAI_COMPARTMENT_OCID` を足すか、`.env` の既定値を dev にするか）は仕様判断なので
++ここでは変更せず記録に留める。
++
++## 残る限界
++
++- **属性はファイル単位**（SPIKE-M1 ①-a）。1 ファイルが複数チャンクに割れると全チャンクが同じ
++  `cells` を返す。チャンク単位の出典が要る文書は 1 チャンク = 1 ファイルで取り込む（ADR-0020 §1 の代償）。
++  チャンク単位の出典は `adb` バックエンド（RAGM-02）の担当。
++- 同一ファイルの複数ヒットは**最上位スコアのチャンク**を代表として返す（引用はファイル単位に畳む既存仕様）。
++- 版の付け替え運用（`current_version` を Y→N にする操作の主体とタイミング）は未仕様。
+diff --git a/packages/api/jetuse_core/chat.py b/packages/api/jetuse_core/chat.py
+index ada5c0e..5f9ee38 100644
+--- a/packages/api/jetuse_core/chat.py
++++ b/packages/api/jetuse_core/chat.py
+@@ -39,6 +39,9 @@ class GenParams:
+     max_tokens: int | None = None
+     reasoning_effort: ReasoningEffort | None = None  # 推論モデルのみ有効
+     file_search_store: str | None = None  # RAG(RAG-02)。Responses系のみ
++    # RAGM-01: file_searchのメタデータ絞り込み(例: current_version='Y'で旧版を外す)。
++    # 検証済み(rag_metadata.validate_filters)の構造だけを渡す — 未知キーは静かに0件になる
++    file_search_filters: dict | None = None
+ 
+ 
+ def _to_responses_input(messages: list[dict]) -> list[dict]:
+@@ -85,28 +88,82 @@ def _extra_responses_params(model: ModelDef, params: "GenParams") -> dict:
+         out["reasoning"] = {"effort": params.reasoning_effort}
+     if params.file_search_store:
+         out["tools"] = [
+-            {"type": "file_search", "vector_store_ids": [params.file_search_store]}
++            file_search_tool(params.file_search_store, params.file_search_filters)
+         ]
+         out["include"] = ["file_search_call.results"]
+         out["instructions"] = RAG_INSTRUCTIONS
+     return out
+ 
+ 
++def file_search_tool(store_id: str, filters: dict | None = None) -> dict:
++    """file_search ツール仕様(RAGM-01: メタデータ絞り込みを任意で載せる)。
++
++    filters は `rag_metadata.validate_filters` を通った構造のみ(未知キーは上流でエラーに
++    ならず 0 件になるため、境界で弾いてからここへ来る — SPIKE-M1 ①-b)。
++    """
++    tool: dict = {"type": "file_search", "vector_store_ids": [store_id]}
++    if filters:
++        tool["filters"] = filters
++    return tool
++
++
++# 引用に載せる本文抜粋の上限(SSEペイロードを膨らませないための切り詰め)
++CITATION_TEXT_CHARS = 500
++
++
++def _as_dict(value: Any) -> dict:
++    """SDKの属性値(dict / pydanticモデル)を素のdictへ。取れなければ空dict。"""
++    if isinstance(value, dict):
++        return value
++    dump = getattr(value, "model_dump", None)
++    if callable(dump):
++        try:
++            return dump(exclude_none=True)
++        except Exception:  # noqa: BLE001 - 引用の付加情報。落とさず捨てる
++            return {}
++    return {}
++
++
++def _structured_citation(r: Any) -> dict:
++    """file_search_call の 1 ヒットを構造化引用にする(RAGM-01)。
++
++    既存の `{file_id, filename, score}` は後方互換のため必ず含め、拡張分
++    (`source` = 取り込み時の attributes / `text` = 該当箇所の本文 / `chunk_id`)を足す。
++    属性はファイル単位なので(SPIKE-M1 ①-a)、同一ファイルの複数ヒットからは
++    最上位スコアのものを採る。
++    """
++    score = getattr(r, "score", None)
++    cite: dict = {
++        "file_id": getattr(r, "file_id", ""),
++        "filename": getattr(r, "filename", ""),
++        "score": round(score, 3) if score is not None else None,
++    }
++    source = {k: v for k, v in _as_dict(getattr(r, "attributes", None)).items() if v != ""}
++    if source:
++        cite["source"] = source
++    text = getattr(r, "text", None)
++    if text:
++        cite["text"] = str(text)[:CITATION_TEXT_CHARS]
++    chunk_id = _as_dict(getattr(r, "additional_properties", None)).get("chunk_id")
++    if chunk_id:
++        cite["chunk_id"] = chunk_id
++    return cite
++
++
+ def _extract_citations(response: Any) -> list[dict]:
+-    """file_search_call.results + message annotations から引用元を抽出(RAG-02)"""
++    """file_search_call.results + message annotations から引用元を抽出(RAG-02/RAGM-01)"""
+     by_file: dict[str, dict] = {}
++    # 比較は丸め前のスコアで行う(丸めた値で比べると 0.8504 と 0.8501 が同値になり、
++    # 最上位でないチャンクの text/chunk_id を引用してしまう — レビュー F-005)
++    raw_scores: dict[str, float] = {}
+     for item in getattr(response, "output", None) or []:
+         if getattr(item, "type", "") == "file_search_call":
+             for r in getattr(item, "results", None) or []:
+                 fid = getattr(r, "file_id", "")
+-                score = getattr(r, "score", None)
+-                cur = by_file.get(fid)
+-                if not cur or (score or 0) > (cur.get("score") or 0):
+-                    by_file[fid] = {
+-                        "file_id": fid,
+-                        "filename": getattr(r, "filename", ""),
+-                        "score": round(score, 3) if score is not None else None,
+-                    }
++                score = getattr(r, "score", None) or 0
++                if fid not in by_file or score > raw_scores.get(fid, 0):
++                    by_file[fid] = _structured_citation(r)
++                    raw_scores[fid] = score
+         elif getattr(item, "type", "") == "message":
+             for part in getattr(item, "content", None) or []:
+                 for a in getattr(part, "annotations", None) or []:
+@@ -293,7 +350,8 @@ def _build_agent_tools(
+     ]
+     if enabled_tools and RAG_SEARCH in enabled_tools and rag_store:
+         # rag_searchの実体はfile_search built-in(ユーザーのVector Store) — AGT-01c
+-        all_tools.append({"type": "file_search", "vector_store_ids": [rag_store]})
++        # 絞り込み(RAGM-01)はこの経路では未対応。ルート側が rag_filters を 400 で断る
++        all_tools.append(file_search_tool(rag_store))
+     return all_tools
+ 
+ 
+diff --git a/packages/api/jetuse_core/rag.py b/packages/api/jetuse_core/rag.py
+index 1f965f4..fd5da3e 100644
+--- a/packages/api/jetuse_core/rag.py
++++ b/packages/api/jetuse_core/rag.py
+@@ -6,6 +6,7 @@ SPIKE-03実機確定事項に準拠:
+ - CP completed後のDP伝播待ちが必要
+ """
+ 
++import hashlib
+ import logging
+ import time
+ import uuid
+@@ -14,6 +15,7 @@ from typing import Any
+ import oracledb
+ from openai import NotFoundError
+ 
++from . import rag_metadata
+ from .db import connect
+ from .genai import make_cp_client, make_inference_client, resolve_project_ocid
+ from .settings import get_settings
+@@ -241,8 +243,27 @@ def ensure_store(owner: str) -> str:
+     return winner
+ 
+ 
+-def add_file(owner: str, filename: str, content: bytes) -> dict[str, Any]:
+-    """Files APIへアップロードしVector Storeへ登録(status=processingで返す)"""
++def build_attributes(
++    filename: str, content: bytes, attributes: dict[str, Any] | None = None
++) -> dict[str, Any]:
++    """Vector Store へ渡すメタデータ属性を組み立てる(RAGM-01 / ADR-0020 §1)。
++
++    `file`(元のファイル名)と `sha256`(本文のハッシュ)は指定が無ければこちらで補う。
++    呼び出し側が明示した値が優先。検証(未知キー・上限・空値の除去)は rag_metadata が担う。
++    """
++    base = {"file": filename, "sha256": hashlib.sha256(content).hexdigest()}
++    return rag_metadata.normalize_attributes({**base, **(attributes or {})})
++
++
++def add_file(
++    owner: str, filename: str, content: bytes, attributes: dict[str, Any] | None = None
++) -> dict[str, Any]:
++    """Files APIへアップロードしVector Storeへ登録(status=processingで返す)。
++
++    attributes は出典の構造化と版フィルタのためのメタデータ(RAGM-01)。
++    不正な属性は `rag_metadata.MetadataError`(ルート側で 422)で、OCI を呼ぶ前に弾く。
++    """
++    attrs = build_attributes(filename, content, attributes)  # 送信前に検証(失敗時は未実行)
+     vs_id = ensure_store(owner)
+     file_id = _uid()
+     _backup_original(owner, file_id, filename, content)
+@@ -252,7 +273,9 @@ def add_file(owner: str, filename: str, content: bytes) -> dict[str, Any]:
+     # なので初回uploadが通常経路 — 有界リトライで吸収する(SP1-03 REV-005)。
+     for attempt in range(6):
+         try:
+-            dp.vector_stores.files.create(vector_store_id=vs_id, file_id=f.id)
++            dp.vector_stores.files.create(
++                vector_store_id=vs_id, file_id=f.id, attributes=attrs
++            )
+             break
+         except NotFoundError:
+             if attempt == 5:
+diff --git a/packages/api/jetuse_core/rag_metadata.py b/packages/api/jetuse_core/rag_metadata.py
+new file mode 100644
+index 0000000..91ae1ac
+--- /dev/null
++++ b/packages/api/jetuse_core/rag_metadata.py
+@@ -0,0 +1,129 @@
++"""RAGM-01: マネージド Vector Store のメタデータ属性とフィルタの検証。
++
++取り込み(`rag.add_file`)と検索(`chat` の `tools[].filters`)の両方が通る唯一の門番。
++SPIKE-M1(`docs/verification/SPIKE-M1.md` ①-b/①-d)の実測に基づく:
++
++- 存在しないキーで絞っても **エラーにならず 0 件**になる。タイポが「該当なし」に化けて
++  静かに全件を除外するため、許可キーはアプリ側で定数化し未知キーは弾く(ルート側で 422)。
++- 属性の上限は キー 16 個 / 値 512 文字 / 文字列・数値・真偽のみ・入れ子不可。
++- `in` フィルタは上流が受け付けない(`values` 配列を解釈せず `value` を要求する)。
++
++**上限超過は切り詰めずに拒否する**(ADR-0020 §1 の実装判断)。sha256 や version を
++黙って切り詰めると値が別物になり、①-b と同じ「静かに 0 件」を作ってしまうため。
++"""
++
++import math
++from collections.abc import Mapping
++from typing import Any
++
++# ADR-0020 §1 が定める属性キー。ここに無いキーは取り込み・検索とも受け付けない。
++ATTRIBUTE_KEYS: tuple[str, ...] = (
++    "file", "version", "sheet", "cells", "sha256", "kind", "current_version", "chunk_id",
++)
++
++MAX_ATTRIBUTE_KEYS = 16          # ①-d: Metadata must not contain more than 16 key-value pairs
++MAX_ATTRIBUTE_VALUE_CHARS = 512  # ①-d: exceeds max length of 512 characters
++MAX_FILTER_DEPTH = 5             # 複合フィルタの入れ子上限(病的な入力の打ち切り)
++
++_COMPARISON_TYPES = frozenset({"eq", "ne", "gt", "gte", "lt", "lte"})
++_COMPOUND_TYPES = frozenset({"and", "or"})
++_UNSUPPORTED_TYPES = frozenset({"in", "nin"})
++
++_KEYS_HINT = ", ".join(ATTRIBUTE_KEYS)
++
++
++class MetadataError(ValueError):
++    """属性・フィルタが受け付けられない。ルート側で 422 に正規化する。"""
++
++
++def _check_scalar(value: Any, where: str) -> str | int | float | bool:
++    """OCI が受け付けるスカラー(文字列/数値/真偽)であることを確認する。"""
++    if isinstance(value, bool):  # bool は int のサブクラスなので先に判定する
++        return value
++    if isinstance(value, str):
++        if len(value) > MAX_ATTRIBUTE_VALUE_CHARS:
++            raise MetadataError(
++                f"{where}: value exceeds max length of {MAX_ATTRIBUTE_VALUE_CHARS} characters"
++            )
++        return value
++    if isinstance(value, int):
++        # Python の int は任意精度。math.isfinite に渡すと OverflowError(=500)になるため
++        # int はそのまま通し、有限性の判定は float だけに適用する
++        return value
++    if isinstance(value, float):
++        if not math.isfinite(value):
++            raise MetadataError(f"{where}: value must be a finite number")
++        return value
++    raise MetadataError(
++        f"{where}: value must be a string, number, or boolean (nesting is not supported)"
++    )
++
++
++def normalize_attributes(raw: Any) -> dict[str, str | int | float | bool]:
++    """取り込み時の attributes を検証して返す。
++
++    - 値が無いもの(None / 空文字 / 空白のみ)は **キーごと省く**。空文字を入れると
++      フィルタが一致しなくなり、①-b と同じ「静かに 0 件」を作る。
++    - `0` / `False` は「値が無い」ではないので残す。
++    - 未知キー・上限超過・非スカラーは `MetadataError`(呼び出し側で 422)。
++    """
++    if raw is None:
++        return {}
++    if not isinstance(raw, Mapping):
++        raise MetadataError("attributes must be an object")
++    out: dict[str, str | int | float | bool] = {}
++    for key, value in raw.items():
++        if key not in ATTRIBUTE_KEYS:
++            raise MetadataError(f"unknown attribute key '{key}'. allowed: {_KEYS_HINT}")
++        if value is None or (isinstance(value, str) and not value.strip()):
++            continue  # 値が無いメタはキーごと省く
++        out[key] = _check_scalar(value, f"attribute '{key}'")
++    if len(out) > MAX_ATTRIBUTE_KEYS:
++        raise MetadataError(
++            f"attributes must not contain more than {MAX_ATTRIBUTE_KEYS} key-value pairs"
++        )
++    return out
++
++
++def validate_filters(raw: Any, _depth: int = 0) -> dict | None:
++    """検索フィルタ(`tools[].filters`)を検証し、既知フィールドだけの dict に正規化する。
++
++    未知キーの静かな 0 件(①-b)を防ぐのが主目的。余計なフィールドは上流へ渡さない。
++    """
++    if raw is None:
++        # 「フィルタ無し」を意味してよいのは最上位だけ。複合フィルタの子の null は
++        # 検証を素通りして上流へ送られてしまう(レビュー F-003)ので弾く
++        if _depth:
++            raise MetadataError("filter must be an object")
++        return None
++    if _depth > MAX_FILTER_DEPTH:
++        raise MetadataError(f"filters nested deeper than {MAX_FILTER_DEPTH}")
++    if not isinstance(raw, Mapping):
++        raise MetadataError("filter must be an object")
++    ftype = raw.get("type")
++    if not isinstance(ftype, str):
++        raise MetadataError("filter requires a 'type'")
++    if ftype in _UNSUPPORTED_TYPES:
++        raise MetadataError(
++            f"filter type '{ftype}' is not supported by the vector_store backend "
++            "(SPIKE-M1 ①-b). use 'or' with 'eq' instead"
++        )
++    if ftype in _COMPOUND_TYPES:
++        subs = raw.get("filters")
++        if not isinstance(subs, list) or not subs:
++            raise MetadataError(f"filter type '{ftype}' requires a non-empty 'filters' array")
++        return {
++            "type": ftype,
++            "filters": [validate_filters(s, _depth + 1) for s in subs],
++        }
++    if ftype not in _COMPARISON_TYPES:
++        raise MetadataError(
++            f"unknown filter type '{ftype}'. allowed: "
++            f"{', '.join(sorted(_COMPARISON_TYPES | _COMPOUND_TYPES))}"
++        )
++    key = raw.get("key")
++    if key not in ATTRIBUTE_KEYS:
++        raise MetadataError(f"unknown filter key '{key}'. allowed: {_KEYS_HINT}")
++    if "value" not in raw:
++        raise MetadataError(f"filter on '{key}' requires a 'value'")
++    return {"type": ftype, "key": key, "value": _check_scalar(raw["value"], f"filter '{key}'")}
+diff --git a/packages/api/service/routes/chat.py b/packages/api/service/routes/chat.py
+index be95061..6ad7ff0 100644
+--- a/packages/api/service/routes/chat.py
++++ b/packages/api/service/routes/chat.py
+@@ -183,6 +183,23 @@ async def stream_chat_response(  # noqa: ANN202
+                 pi_blocked_gen(), media_type="text/event-stream", headers=SSE_HEADERS
+             )
+ 
++    # RAGM-01: 絞り込みは vector_store バックエンドの file_search でしか効かない。
++    # 黙って無視すると「版フィルタを掛けたのに旧版が混ざる」ため、明示的に断る。
++    if req.rag_filters is not None:
++        if not req.rag:
++            raise HTTPException(status_code=400, detail="rag_filters requires rag=true")
++        if req.rag_backend != "vector_store":
++            raise HTTPException(
++                status_code=400,
++                detail=f"rag_filters is not supported on the {req.rag_backend} backend",
++            )
++        if req.agent or req.agent_id:
++            # エージェント経路(AGT-01/03)は別ディスパッチで、絞り込みを渡す口が無い。
++            # 素通しすると黙って無視される(レビュー F-001)ので、ここで断る。
++            raise HTTPException(
++                status_code=400, detail="rag_filters is not supported in agent mode"
++            )
++
+     # Select AI / OpenSearch バックエンド: 非ストリーミングGENERATEを単発deltaで返す
+     if req.rag and req.rag_backend in ("select_ai", "opensearch"):
+         prompt = req.messages[-1].content
+@@ -360,6 +377,7 @@ async def stream_chat_response(  # noqa: ANN202
+                 max_tokens=req.max_tokens,
+                 reasoning_effort=req.reasoning_effort,
+                 file_search_store=rag_store,
++                file_search_filters=req.rag_filters,  # RAGM-01(検証済み構造のみ)
+             )
+             eff_model = agent_def["model"] if agent_def else req.model
+             use_agent_loop = req.agent or bool(
+diff --git a/packages/api/service/routes/rag.py b/packages/api/service/routes/rag.py
+index d49d409..512a4e9 100644
+--- a/packages/api/service/routes/rag.py
++++ b/packages/api/service/routes/rag.py
+@@ -5,14 +5,15 @@
+ """
+ 
+ import asyncio
++import json
+ import logging
+ import pathlib
+ from typing import Annotated
+ 
+-from fastapi import APIRouter, Depends, HTTPException, UploadFile
++from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+ from openai import APIStatusError
+ 
+-from jetuse_core import rag
++from jetuse_core import rag, rag_metadata
+ from jetuse_core.auth import AuthContext, require_user
+ from jetuse_core.genai import ProjectResolutionError
+ 
+@@ -31,6 +32,10 @@ _GENAI_HINT = (
+ async def _rag_call(fn, *args):
+     try:
+         return await asyncio.to_thread(fn, *args)
++    except rag_metadata.MetadataError as e:
++        # 取り込み側で補完する属性(長すぎるファイル名由来の file 等)も 422 に正規化する。
++        # 500 のまま漏らすと API 契約(不正な属性は 422)が破れる — レビュー F-002
++        raise HTTPException(status_code=422, detail=str(e)) from e
+     except rag.StoreNotReadyError as e:
+         raise HTTPException(
+             status_code=503, detail="vector store not ready, retry later"
+@@ -53,7 +58,28 @@ async def list_files_response(ns: str) -> dict:
+     return {"files": files}
+ 
+ 
+-async def upload_file_response(ns: str, file: UploadFile) -> dict:
++def _parse_attributes(raw: str | None) -> dict:
++    """multipart の attributes フィールド(JSON文字列)を検証して返す(RAGM-01)。
++
++    未知キー・上限超過・入れ子は 422。切り詰めない(値が変わるとフィルタが静かに外れる)。
++    """
++    if raw is None or not raw.strip():
++        return {}
++    try:
++        parsed = json.loads(raw)
++    except json.JSONDecodeError as e:
++        raise HTTPException(
++            status_code=422, detail=f"attributes must be a JSON object: {e}"
++        ) from e
++    try:
++        return rag_metadata.normalize_attributes(parsed)
++    except rag_metadata.MetadataError as e:
++        raise HTTPException(status_code=422, detail=str(e)) from e
++
++
++async def upload_file_response(
++    ns: str, file: UploadFile, attributes: str | None = None
++) -> dict:
+     name = pathlib.Path(file.filename or "untitled").name
+     ext = pathlib.Path(name).suffix.lower()
+     if ext not in rag.ALLOWED_EXTENSIONS:
+@@ -61,12 +87,13 @@ async def upload_file_response(ns: str, file: UploadFile) -> dict:
+         if ext == ".docx":
+             detail += " (docxはVector Store非対応 — SPIKE-03)"
+         raise HTTPException(status_code=422, detail=detail)
++    attrs = _parse_attributes(attributes)  # 読み込み前に弾く(不正なら OCI を呼ばない)
+     content = await file.read()
+     if len(content) > rag.MAX_BYTES:
+         raise HTTPException(status_code=413, detail="file too large (max 20MB)")
+     if not content:
+         raise HTTPException(status_code=422, detail="empty file")
+-    return await _rag_call(rag.add_file, ns, name, content)
++    return await _rag_call(rag.add_file, ns, name, content, attrs)
+ 
+ 
+ async def delete_file_response(ns: str, file_id: str) -> dict:
+@@ -94,9 +121,12 @@ async def list_rag_files(user: Annotated[AuthContext, Depends(require_user)]):
+ 
+ @router.post("/api/rag/files")
+ async def upload_rag_file(
+-    file: UploadFile, user: Annotated[AuthContext, Depends(require_user)]
++    file: UploadFile,
++    user: Annotated[AuthContext, Depends(require_user)],
++    # RAGM-01: 出典メタデータ(JSONオブジェクト文字列)。省略可 — 既存クライアントは無変更で動く
++    attributes: Annotated[str | None, Form()] = None,
+ ):
+-    return await upload_file_response(user.subject, file)
++    return await upload_file_response(user.subject, file, attributes)
+ 
+ 
+ @router.delete("/api/rag/files/{file_id}")
+diff --git a/packages/api/service/schemas.py b/packages/api/service/schemas.py
+index 1098818..322ac8b 100644
+--- a/packages/api/service/schemas.py
++++ b/packages/api/service/schemas.py
+@@ -7,9 +7,9 @@ import される。`validated()` は service/validators.py 側の純粋関数へ
+ 
+ from typing import Literal
+ 
+-from pydantic import BaseModel, Field
++from pydantic import BaseModel, Field, field_validator
+ 
+-from jetuse_core import tts
++from jetuse_core import rag_metadata, tts
+ 
+ from .validators import validate_agent_definition, validate_usecase_definition
+ 
+@@ -32,6 +32,9 @@ class ChatRequest(BaseModel):
+     rag: bool = False  # file_searchツール接続(RAG-02。Responses系のみ)
+     # RAG-03/ENH-05
+     rag_backend: Literal["vector_store", "select_ai", "opensearch"] = "vector_store"
++    # RAGM-01: file_searchのメタデータ絞り込み(例 {"type":"eq","key":"current_version",
++    # "value":"Y"} で旧版を検索から外す)。vector_storeバックエンドのみ。
++    rag_filters: dict | None = None
+     # エージェントモード(AGT-01)。tool_resultsは承認フローの継続時に使用
+     agent: bool = False
+     auto_tools: bool = False
+@@ -48,6 +51,16 @@ class ChatRequest(BaseModel):
+     sdk_state: str | None = Field(default=None, max_length=2_000_000)
+     sdk_approvals: dict[str, bool] | None = None
+ 
++    @field_validator("rag_filters")
++    @classmethod
++    def _check_rag_filters(cls, v: dict | None) -> dict | None:
++        """RAGM-01: 未知キーは上流でエラーにならず0件になる(SPIKE-M1 ①-b)ため
++        ここで弾く(422)。既知フィールドだけに正規化して通す。"""
++        try:
++            return rag_metadata.validate_filters(v)
++        except rag_metadata.MetadataError as e:
++            raise ValueError(str(e)) from e
++
+ 
+ class ConversationCreate(BaseModel):
+     model: str
+diff --git a/packages/api/tests/test_chat.py b/packages/api/tests/test_chat.py
+index a3e5f02..5a5b292 100644
+--- a/packages/api/tests/test_chat.py
++++ b/packages/api/tests/test_chat.py
+@@ -98,3 +98,20 @@ def test_chat_stream_requires_auth(monkeypatch):
+         json={"model": DEFAULT_MODEL, "messages": [{"role": "user", "content": "hi"}]},
+     )
+     assert res.status_code == 401
++
++
++def test_extract_citations_compares_unrounded_scores():
++    """丸め後に同値になる僅差でも、最上位チャンクの text/chunk_id を採る(レビュー F-005)。"""
++    from types import SimpleNamespace
++
++    from jetuse_core.chat import _extract_citations
++
++    def hit(score, cid):
++        return SimpleNamespace(file_id="f1", filename="a.md", score=score, attributes=None,
++                               text=f"chunk {cid}", additional_properties={"chunk_id": cid})
++
++    response = SimpleNamespace(output=[SimpleNamespace(
++        type="file_search_call", results=[hit(0.8504, "top"), hit(0.8501, "second")]
++    )])
++    (c,) = _extract_citations(response)
++    assert c["chunk_id"] == "top" and c["score"] == 0.85
+diff --git a/packages/api/tests/test_demo_routes.py b/packages/api/tests/test_demo_routes.py
+index 5f5c06d..fe31104 100644
+--- a/packages/api/tests/test_demo_routes.py
++++ b/packages/api/tests/test_demo_routes.py
+@@ -37,7 +37,7 @@ class NsFakeRag:
+     def refresh_statuses(self, ns, files):
+         return files
+ 
+-    def add_file(self, ns, filename, content):
++    def add_file(self, ns, filename, content, attributes=None):
+         box = self.files.setdefault(ns, {})
+         fid = f"{ns}-f{len(box) + 1}"
+         box[fid] = {
+@@ -130,7 +130,7 @@ def test_demo_upload_same_validation_as_user_route():
+ 
+ 
+ def test_demo_upload_returns_503_when_store_not_ready(monkeypatch):
+-    def not_ready(ns, filename, content):
++    def not_ready(ns, filename, content, attributes=None):
+         raise service_main.rag.StoreNotReadyError("dp propagation timeout")
+ 
+     monkeypatch.setattr(service_main.rag, "add_file", not_ready)
+diff --git a/packages/api/tests/test_project_resolution.py b/packages/api/tests/test_project_resolution.py
+index 36852d7..4d70be3 100644
+--- a/packages/api/tests/test_project_resolution.py
++++ b/packages/api/tests/test_project_resolution.py
+@@ -186,7 +186,7 @@ def _api_error(cls, status):
+ 
+ 
+ def test_upload_surfaces_notfound_as_503(monkeypatch):
+-    def raise_404(owner, filename, content):
++    def raise_404(owner, filename, content, attributes=None):
+         raise _api_error(openai.NotFoundError, 404)
+ 
+     monkeypatch.setattr(rag, "add_file", raise_404)
+@@ -197,7 +197,7 @@ def test_upload_surfaces_notfound_as_503(monkeypatch):
+ 
+ 
+ def test_upload_surfaces_badrequest_as_502(monkeypatch):
+-    def raise_400(owner, filename, content):
++    def raise_400(owner, filename, content, attributes=None):
+         raise _api_error(openai.BadRequestError, 400)
+ 
+     monkeypatch.setattr(rag, "add_file", raise_400)
+@@ -206,7 +206,7 @@ def test_upload_surfaces_badrequest_as_502(monkeypatch):
+ 
+ 
+ def test_upload_surfaces_project_resolution_as_503(monkeypatch):
+-    def raise_unresolved(owner, filename, content):
++    def raise_unresolved(owner, filename, content, attributes=None):
+         raise genai.ProjectResolutionError("set PROJECT_OCID or grant generative-ai-project")
+ 
+     monkeypatch.setattr(rag, "add_file", raise_unresolved)
+diff --git a/packages/api/tests/test_rag.py b/packages/api/tests/test_rag.py
+index e1c6ee3..047feef 100644
+--- a/packages/api/tests/test_rag.py
++++ b/packages/api/tests/test_rag.py
+@@ -16,6 +16,7 @@ class FakeRag:
+     def __init__(self):
+         self.files: dict[str, dict] = {}
+         self.store_id: str | None = None
++        self.last_attributes: dict | None = None
+ 
+     def list_files(self, owner):
+         return [dict(v) for v in self.files.values()]
+@@ -23,7 +24,8 @@ class FakeRag:
+     def refresh_statuses(self, owner, files):
+         return files
+ 
+-    def add_file(self, owner, filename, content):
++    def add_file(self, owner, filename, content, attributes=None):
++        self.last_attributes = attributes
+         fid = f"f{len(self.files) + 1}"
+         self.files[fid] = {
+             "id": fid, "filename": filename, "status": "processing",
+@@ -73,7 +75,7 @@ def test_upload_rejects_bad_files():
+ 
+ 
+ def test_upload_returns_503_when_store_not_ready(monkeypatch):
+-    def not_ready(owner, filename, content):
++    def not_ready(owner, filename, content, attributes=None):
+         raise service_main.rag.StoreNotReadyError("dp propagation timeout")
+ 
+     monkeypatch.setattr(service_main.rag, "add_file", not_ready)
+@@ -215,3 +217,212 @@ def test_attach_backend_status_opensearch_disabled(monkeypatch):
+     monkeypatch.setattr(ros, "enabled", lambda: False)
+     out = rag.attach_backend_status("u", [{"id": "f1", "filename": "a", "status": "completed"}])
+     assert out[0]["backends"]["opensearch"] == "disabled"
++
++
++# --- RAGM-01: 構造化引用 / 版フィルタ / 属性付き取り込み ---
++
++
++def _hit(**kw):
++    """file_search_call.results の 1 件(SPIKE-M1 ①-c の実レスポンス形)。"""
++    base = {
++        "file_id": "f1", "filename": "c01__v2.0__current__spec.txt", "score": 0.85,
++        "attributes": {
++            "file": "在庫連携API仕様書.xlsx", "version": "2.0", "sheet": "API一覧",
++            "cells": "B12:F12", "kind": "spec", "current_version": "Y",
++        },
++        "text": "在庫照会API GET /v1/inventory は最大200件まで返却する。",
++        "additional_properties": {"vector_store_id": "vs_x", "chunk_id": "0_ad585b8f"},
++    }
++    base.update(kw)
++    return SimpleNamespace(**base)
++
++
++def test_extract_citations_returns_structured_source():
++    """完了条件: file/version/sheet/cells が構造化された値として載る(本文埋め込みでない)。"""
++    response = SimpleNamespace(
++        output=[SimpleNamespace(type="file_search_call", results=[_hit()])]
++    )
++    (c,) = _extract_citations(response)
++    assert c["source"] == {
++        "file": "在庫連携API仕様書.xlsx", "version": "2.0", "sheet": "API一覧",
++        "cells": "B12:F12", "kind": "spec", "current_version": "Y",
++    }
++    assert c["text"].startswith("在庫照会API")
++    assert c["chunk_id"] == "0_ad585b8f"
++
++
++def test_extract_citations_backward_compatible_shape():
++    """既存フロントは {file_id, filename, score} を読む。拡張は追加のみで壊さない。"""
++    response = SimpleNamespace(
++        output=[
++            SimpleNamespace(type="file_search_call", results=[
++                _hit(),
++                # 属性なしの旧データ(拡張フィールドは付かない)
++                _hit(file_id="f2", filename="old.txt", score=0.4,
++                     attributes=None, text=None, additional_properties=None),
++            ]),
++            SimpleNamespace(type="message", content=[
++                SimpleNamespace(annotations=[
++                    SimpleNamespace(file_id="f3", filename="extra.txt")
++                ])
++            ]),
++        ]
++    )
++    cites = _extract_citations(response)
++    assert [c["file_id"] for c in cites] == ["f1", "f2", "f3"]
++    for c in cites:
++        assert set(c) >= {"file_id", "filename", "score"}
++    assert "source" not in cites[1] and "text" not in cites[1]
++    assert cites[0]["score"] == 0.85
++
++
++def test_extract_citations_keeps_top_scoring_chunk_of_a_file():
++    """属性はファイル単位(①-a)。同一ファイルの複数ヒットは最上位スコアのものを採る。"""
++    response = SimpleNamespace(output=[SimpleNamespace(type="file_search_call", results=[
++        _hit(score=0.3, text="低スコアのチャンク",
++             additional_properties={"chunk_id": "9_low"}),
++        _hit(score=0.9, text="高スコアのチャンク",
++             additional_properties={"chunk_id": "1_high"}),
++    ])])
++    (c,) = _extract_citations(response)
++    assert c["score"] == 0.9 and c["chunk_id"] == "1_high"
++
++
++def test_citation_text_is_truncated():
++    from jetuse_core.chat import CITATION_TEXT_CHARS
++
++    response = SimpleNamespace(output=[SimpleNamespace(
++        type="file_search_call", results=[_hit(text="あ" * (CITATION_TEXT_CHARS + 50))]
++    )])
++    (c,) = _extract_citations(response)
++    assert len(c["text"]) == CITATION_TEXT_CHARS
++
++
++def test_file_search_tool_carries_filters():
++    from jetuse_core.chat import GenParams, _extra_responses_params
++    from jetuse_core.models import MODELS
++
++    f = {"type": "eq", "key": "current_version", "value": "Y"}
++    extra = _extra_responses_params(
++        MODELS["gpt-oss-120b"],
++        GenParams(file_search_store="vs_x", file_search_filters=f),
++    )
++    assert extra["tools"] == [
++        {"type": "file_search", "vector_store_ids": ["vs_x"], "filters": f}
++    ]
++    # 未指定なら filters キー自体を送らない(既存挙動の維持)
++    extra2 = _extra_responses_params(
++        MODELS["gpt-oss-120b"], GenParams(file_search_store="vs_x")
++    )
++    assert extra2["tools"] == [{"type": "file_search", "vector_store_ids": ["vs_x"]}]
++
++
++def test_chat_stream_rejects_filters_in_agent_mode(fake_rag):
++    """エージェント経路は別ディスパッチでフィルタを渡す口が無い。
++    素通しすると黙って無視されるので 400 で断る(レビュー F-001)。"""
++    fake_rag.store_id = "vs_fake"
++    f = {"type": "eq", "key": "current_version", "value": "Y"}
++    res = client.post("/api/chat/stream", json={
++        "model": "gpt-oss-120b", "messages": [{"role": "user", "content": "q"}],
++        "rag": True, "agent": True, "rag_filters": f,
++    })
++    assert res.status_code == 400 and "agent mode" in res.json()["detail"]
++    res2 = client.post("/api/chat/stream", json={
++        "model": "gpt-oss-120b", "messages": [{"role": "user", "content": "q"}],
++        "rag": True, "agent_id": "a1", "rag_filters": f,
++    })
++    assert res2.status_code == 400 and "agent mode" in res2.json()["detail"]
++
++
++def test_upload_rejects_overlong_filename_with_422(monkeypatch):
++    """自動補完する file(=ファイル名)が 512 文字超でも 500 にせず 422(レビュー F-002)。"""
++    from jetuse_core import rag_metadata
++
++    calls = {"n": 0}
++
++    def add_file(owner, filename, content, attributes=None):
++        calls["n"] += 1
++        # 実物と同じ順序: 属性の組み立て(検証)が OCI 呼び出しより前に走る
++        rag_metadata.normalize_attributes({"file": filename, **(attributes or {})})
++        raise AssertionError("検証を通ってはいけない")
++
++    monkeypatch.setattr(service_main.rag, "add_file", add_file)
++    res = client.post(
++        "/api/rag/files", files={"file": ("a" * 520 + ".md", b"x", "text/markdown")}
++    )
++    assert res.status_code == 422 and "512" in res.json()["detail"]
++    assert calls["n"] == 1
++
++
++def test_chat_stream_passes_rag_filters(fake_rag, monkeypatch):
++    fake_rag.store_id = "vs_fake"
++    captured = {}
++
++    def fake_stream(model_key, messages, temperature=None, user="",
++                    oci_conversation_id=None, params=None):
++        captured["filters"] = params.file_search_filters
++        yield {"delta": "ok"}
++
++    monkeypatch.setattr(service_main, "stream_chat", fake_stream)
++    res = client.post("/api/chat/stream", json={
++        "model": "gpt-oss-120b", "messages": [{"role": "user", "content": "q"}],
++        "rag": True,
++        "rag_filters": {"type": "eq", "key": "current_version", "value": "Y"},
++    })
++    assert res.status_code == 200
++    assert captured["filters"] == {"type": "eq", "key": "current_version", "value": "Y"}
++
++
++def test_chat_stream_rejects_unknown_filter_key(fake_rag):
++    """SPIKE-M1 ①-b: 未知キーは上流では 0 件になるだけ。アプリが 422 で弾く。"""
++    fake_rag.store_id = "vs_fake"
++    res = client.post("/api/chat/stream", json={
++        "model": "gpt-oss-120b", "messages": [{"role": "user", "content": "q"}],
++        "rag": True,
++        "rag_filters": {"type": "eq", "key": "current_verison", "value": "Y"},
++    })
++    assert res.status_code == 422
++    assert "current_verison" in res.text
++
++
++def test_chat_stream_rejects_filters_without_vector_store_backend(fake_rag):
++    """効かない組み合わせを黙って無視しない(旧版が混ざる事故を防ぐ)。"""
++    fake_rag.store_id = "vs_fake"
++    f = {"type": "eq", "key": "current_version", "value": "Y"}
++    res = client.post("/api/chat/stream", json={
++        "model": "gpt-oss-120b", "messages": [{"role": "user", "content": "q"}],
++        "rag": True, "rag_backend": "select_ai", "rag_filters": f,
++    })
++    assert res.status_code == 400 and "select_ai" in res.json()["detail"]
++    res2 = client.post("/api/chat/stream", json={
++        "model": "gpt-oss-120b", "messages": [{"role": "user", "content": "q"}],
++        "rag_filters": f,
++    })
++    assert res2.status_code == 400 and "rag=true" in res2.json()["detail"]
++
++
++def test_upload_accepts_attributes_form_field(fake_rag):
++    res = client.post(
++        "/api/rag/files",
++        files={"file": ("spec.md", b"# spec", "text/markdown")},
++        data={"attributes": '{"version": "2.0", "cells": "B12:F12", "sheet": ""}'},
++    )
++    assert res.status_code == 200
++    # 空値はキーごと落ちる。file/sha256 は rag.add_file 側で補う
++    assert fake_rag.last_attributes == {"version": "2.0", "cells": "B12:F12"}
++
++
++def test_upload_rejects_bad_attributes():
++    for bad in ('{"versoin": "2.0"}', "not json", '["file"]', '{"cells": "' + "x" * 513 + '"}'):
++        res = client.post(
++            "/api/rag/files",
++            files={"file": ("spec.md", b"# spec", "text/markdown")},
++            data={"attributes": bad},
++        )
++        assert res.status_code == 422, bad
++
++
++def test_upload_without_attributes_stays_backward_compatible(fake_rag):
++    res = client.post("/api/rag/files", files={"file": ("a.md", b"x", "text/markdown")})
++    assert res.status_code == 200
++    assert fake_rag.last_attributes == {}
+diff --git a/packages/api/tests/test_rag_add_file_retry.py b/packages/api/tests/test_rag_add_file_retry.py
+index a4886a7..baedec8 100644
+--- a/packages/api/tests/test_rag_add_file_retry.py
++++ b/packages/api/tests/test_rag_add_file_retry.py
+@@ -4,12 +4,13 @@ test_rag.py は autouse fixture が rag.add_file 自体を fake に差し替え
+ 実関数を検証する本テストは別モジュールに置く。
+ """
+ 
++import hashlib
+ from types import SimpleNamespace
+ 
+ import httpx
+ from openai import NotFoundError
+ 
+-from jetuse_core import rag
++from jetuse_core import rag, rag_metadata
+ 
+ 
+ def _not_found() -> NotFoundError:
+@@ -21,6 +22,7 @@ def _not_found() -> NotFoundError:
+ 
+ def test_add_file_retries_dp_propagation_404(monkeypatch):
+     calls = {"n": 0}
++    captured: dict = {}
+ 
+     class FakeDp:
+         class files:
+@@ -31,8 +33,9 @@ def test_add_file_retries_dp_propagation_404(monkeypatch):
+         class vector_stores:
+             class files:
+                 @staticmethod
+-                def create(vector_store_id, file_id):
++                def create(vector_store_id, file_id, attributes=None):
+                     calls["n"] += 1
++                    captured["attributes"] = attributes
+                     if calls["n"] < 3:
+                         raise _not_found()
+ 
+@@ -63,7 +66,7 @@ def test_add_file_gives_up_after_bounded_retries(monkeypatch):
+         class vector_stores:
+             class files:
+                 @staticmethod
+-                def create(vector_store_id, file_id):
++                def create(vector_store_id, file_id, attributes=None):
+                     calls["n"] += 1
+                     raise _not_found()
+ 
+@@ -154,3 +157,66 @@ def test_save_store_id_conflict_only_on_unique_violation(monkeypatch):
+         raise AssertionError("expected IntegrityError")
+     except oracledb.IntegrityError:
+         pass
++
++
++# --- RAGM-01: 取り込み時のメタデータ属性 ---
++
++
++def test_add_file_passes_attributes_and_autofills_file_and_sha256(monkeypatch):
++    """ADR-0020 §1: vector_stores.files.create に属性を付ける。
++    file/sha256 は未指定なら補い、呼び出し側の明示値が優先する。"""
++    captured: dict = {}
++
++    class FakeDp:
++        class files:
++            @staticmethod
++            def create(file, purpose):
++                return SimpleNamespace(id="file-x")
++
++        class vector_stores:
++            class files:
++                @staticmethod
++                def create(vector_store_id, file_id, attributes=None):
++                    captured["attributes"] = attributes
++
++    monkeypatch.setattr(rag, "ensure_store", lambda owner: "vs_x")
++    monkeypatch.setattr(rag, "make_inference_client", lambda **kw: FakeDp)
++    monkeypatch.setattr(rag, "_backup_original", lambda *a: None)
++    monkeypatch.setattr(rag, "_insert_file", lambda *a: None)
++
++    rag.add_file("ns", "spec.md", b"body", {
++        "version": "2.0", "sheet": "API一覧", "cells": "B12:F12",
++        "current_version": "Y", "kind": "",  # 空値はキーごと落ちる
++    })
++    attrs = captured["attributes"]
++    assert attrs["file"] == "spec.md"
++    assert attrs["sha256"] == hashlib.sha256(b"body").hexdigest()
++    assert attrs["cells"] == "B12:F12" and attrs["current_version"] == "Y"
++    assert "kind" not in attrs
++
++    rag.add_file("ns", "spec.md", b"body", {"file": "元の仕様書.xlsx"})
++    assert captured["attributes"]["file"] == "元の仕様書.xlsx"
++
++
++def test_add_file_rejects_bad_attributes_before_calling_oci(monkeypatch):
++    """検証は OCI 呼び出しより前。未知キーで Files API を汚さない。"""
++    called = {"n": 0}
++
++    class FakeDp:
++        class files:
++            @staticmethod
++            def create(file, purpose):
++                called["n"] += 1
++                return SimpleNamespace(id="file-x")
++
++    monkeypatch.setattr(rag, "ensure_store", lambda owner: "vs_x")
++    monkeypatch.setattr(rag, "make_inference_client", lambda **kw: FakeDp)
++    monkeypatch.setattr(rag, "_backup_original", lambda *a: None)
++
++    for bad in ({"versoin": "2.0"}, {"cells": "x" * 513}, {"sheet": {"a": 1}}):
++        try:
++            rag.add_file("ns", "spec.md", b"body", bad)
++            raise AssertionError("expected MetadataError")
++        except rag_metadata.MetadataError:
++            pass
++    assert called["n"] == 0
+diff --git a/packages/api/tests/test_rag_metadata.py b/packages/api/tests/test_rag_metadata.py
+new file mode 100644
+index 0000000..ff3e18e
+--- /dev/null
++++ b/packages/api/tests/test_rag_metadata.py
+@@ -0,0 +1,169 @@
++"""RAGM-01: Vector Store 属性とフィルタの検証(jetuse_core/rag_metadata.py)。
++
++SPIKE-M1 ①-b で「存在しないキーで絞るとエラーにならず 0 件」を実測したため、
++キー名の担保はアプリ側の責任。ここが唯一の門番なので否定側を厚く固定する。
++"""
++
++import pytest
++
++from jetuse_core import rag_metadata as rm
++
++# --- attributes(取り込み時) ---
++
++
++def test_normalize_attributes_keeps_values_and_drops_empty_keys():
++    out = rm.normalize_attributes({
++        "file": "在庫連携API仕様書.xlsx",
++        "version": "2.0",
++        "sheet": "API一覧",
++        "cells": "B12:F12",
++        "current_version": "Y",
++        "kind": "",          # 空文字はキーごと省く(フィルタが静かに効かなくなるため)
++        "sha256": None,      # None も同様
++        "chunk_id": "   ",   # 空白のみも「値が無い」扱い
++    })
++    assert out == {
++        "file": "在庫連携API仕様書.xlsx", "version": "2.0", "sheet": "API一覧",
++        "cells": "B12:F12", "current_version": "Y",
++    }
++
++
++def test_normalize_attributes_keeps_falsy_numbers_and_booleans():
++    """0 / False は「値が無い」ではないので残す(truthy 判定で落とさない)。"""
++    out = rm.normalize_attributes({"chunk_id": 0, "current_version": False})
++    assert out == {"chunk_id": 0, "current_version": False}
++
++
++def test_normalize_attributes_rejects_unknown_key():
++    with pytest.raises(rm.MetadataError) as e:
++        rm.normalize_attributes({"versoin": "2.0"})
++    assert "versoin" in str(e.value)
++
++
++def test_normalize_attributes_rejects_oversized_value():
++    """①-d: 値 512 文字超は OCI が拒否する。切り詰めると sha256/version が
++    別物になりフィルタが静かに外れるため、切り詰めずに拒否する。"""
++    ok = rm.normalize_attributes({"file": "a" * rm.MAX_ATTRIBUTE_VALUE_CHARS})
++    assert len(ok["file"]) == rm.MAX_ATTRIBUTE_VALUE_CHARS
++    with pytest.raises(rm.MetadataError):
++        rm.normalize_attributes({"file": "a" * (rm.MAX_ATTRIBUTE_VALUE_CHARS + 1)})
++
++
++def test_normalize_attributes_rejects_nested_and_non_scalar():
++    """①-d: 入れ子は `must be a string, number, or boolean` で拒否される。"""
++    for bad in ({"sheet": {"name": "x"}}, {"sheet": ["a"]}, {"sheet": object()}):
++        with pytest.raises(rm.MetadataError):
++            rm.normalize_attributes(bad)
++
++
++def test_normalize_attributes_rejects_non_finite_number():
++    for bad in (float("nan"), float("inf")):
++        with pytest.raises(rm.MetadataError):
++            rm.normalize_attributes({"chunk_id": bad})
++
++
++def test_normalize_attributes_rejects_non_mapping():
++    for bad in ("{}", [("file", "a")], 3):
++        with pytest.raises(rm.MetadataError):
++            rm.normalize_attributes(bad)
++
++
++def test_normalize_attributes_empty_input_is_empty_dict():
++    assert rm.normalize_attributes(None) == {}
++    assert rm.normalize_attributes({}) == {}
++
++
++def test_allowed_keys_fit_provider_limit():
++    """①-d: キーは 16 個まで。許可キー集合自体がそれを超えないことを固定する。"""
++    assert len(rm.ATTRIBUTE_KEYS) <= rm.MAX_ATTRIBUTE_KEYS
++
++
++# --- filters(検索時) ---
++
++
++def test_validate_filters_accepts_eq_and_normalizes():
++    f = rm.validate_filters({"type": "eq", "key": "current_version", "value": "Y"})
++    assert f == {"type": "eq", "key": "current_version", "value": "Y"}
++
++
++def test_validate_filters_drops_extraneous_fields():
++    """余計なフィールドは素通しせず落とす(上流に未知の指示を渡さない)。"""
++    f = rm.validate_filters(
++        {"type": "eq", "key": "version", "value": "2.0", "boost": 3}
++    )
++    assert f == {"type": "eq", "key": "version", "value": "2.0"}
++
++
++def test_validate_filters_accepts_compound():
++    f = rm.validate_filters({
++        "type": "and",
++        "filters": [
++            {"type": "eq", "key": "current_version", "value": "Y"},
++            {"type": "gte", "key": "version", "value": "2.0"},
++        ],
++    })
++    assert f["type"] == "and" and len(f["filters"]) == 2
++
++
++def test_validate_filters_rejects_unknown_key_at_any_depth():
++    """タイポは 0 件になるだけでエラーにならない(①-b)。深い位置でも弾く。"""
++    with pytest.raises(rm.MetadataError) as e:
++        rm.validate_filters({
++            "type": "or",
++            "filters": [
++                {"type": "eq", "key": "current_version", "value": "Y"},
++                {"type": "eq", "key": "verison", "value": "2.0"},
++            ],
++        })
++    assert "verison" in str(e.value)
++
++
++def test_validate_filters_rejects_in_operator():
++    """①-b: `in` は上流が 400(values 配列を解釈せず value を要求する)。"""
++    with pytest.raises(rm.MetadataError) as e:
++        rm.validate_filters(
++            {"type": "in", "key": "version", "values": ["1.0", "2.0"]}
++        )
++    assert "in" in str(e.value)
++
++
++def test_validate_filters_rejects_unknown_type_and_malformed():
++    bad_cases = [
++        {"type": "matches", "key": "file", "value": "a"},   # 未知の演算子
++        {"key": "file", "value": "a"},                       # type 欠落
++        {"type": "eq", "value": "a"},                        # key 欠落
++        {"type": "eq", "key": "file"},                       # value 欠落
++        {"type": "and", "filters": []},                      # 空の複合
++        {"type": "and", "filters": {"type": "eq"}},          # filters が配列でない
++        {"type": "eq", "key": "file", "value": {"x": 1}},    # 値が非スカラー
++        "current_version=Y",                                  # そもそも dict でない
++    ]
++    for bad in bad_cases:
++        with pytest.raises(rm.MetadataError):
++            rm.validate_filters(bad)
++
++
++def test_validate_filters_rejects_too_deep_nesting():
++    f = {"type": "eq", "key": "file", "value": "a"}
++    for _ in range(rm.MAX_FILTER_DEPTH + 1):
++        f = {"type": "and", "filters": [f]}
++    with pytest.raises(rm.MetadataError):
++        rm.validate_filters(f)
++
++
++def test_validate_filters_none_is_none():
++    assert rm.validate_filters(None) is None
++
++
++def test_validate_filters_rejects_null_child():
++    """複合フィルタの子の null は素通りさせない(最上位の None だけが「絞り込み無し」)。"""
++    with pytest.raises(rm.MetadataError):
++        rm.validate_filters({"type": "and", "filters": [
++            {"type": "eq", "key": "version", "value": "2.0"}, None,
++        ]})
++
++
++def test_normalize_attributes_accepts_huge_int():
++    """Python の int は任意精度。math.isfinite に渡して OverflowError(=500)にしない。"""
++    big = 10 ** 400
++    assert rm.normalize_attributes({"chunk_id": big}) == {"chunk_id": big}
+diff --git a/specs/09-rag.md b/specs/09-rag.md
+index b8ef672..867af72 100644
+--- a/specs/09-rag.md
++++ b/specs/09-rag.md
+@@ -25,6 +25,17 @@
+ - `GET /api/rag/files` / `POST /api/rag/files`（multipart）/ `DELETE /api/rag/files/{id}`
+ - 依存追加: `python-multipart`（FastAPIのUploadFile要件）
+ 
++### [RAGM-01] メタデータ属性（ADR-0020 §1）
++
++- `POST /api/rag/files` の multipart に **`attributes`（JSONオブジェクト文字列・省略可）**。
++  許可キーは `file` / `version` / `sheet` / `cells` / `sha256` / `kind` / `current_version` / `chunk_id`
++  （`jetuse_core/rag_metadata.py` が単一の門番）。`file` と `sha256` は未指定なら取り込み側で補完。
++- **値が無いメタはキーごと省く**（空文字を入れない＝`eq` フィルタが静かに一致しなくなるため）。
++  `0` / `False` は値として残す。
++- 上限（キー16 / 値512文字 / 入れ子不可 — SPIKE-M1 ①-d）超過と未知キーは **422 で拒否**（切り詰めない。
++  値が変わるとフィルタが静かに外れ、「該当なし」と区別できなくなる）。
++- 属性は**ファイル単位**（①-a）。チャンク単位の出典が要る文書は 1 チャンク = 1 ファイルで取り込む。
++
+ ## [RAG-02] RAGチャット
+ 
+ ### 設計
+@@ -32,6 +43,14 @@
+ - `/api/chat/stream` 拡張: `rag: true` で当該ユーザーのvector_storeを `file_search` ツールに接続（**Responses系=gpt-ossのみ**。他モデル指定時は400）
+ - instructionsにツール強制文を自動付与（SPIKE-03b文言ベース）。`include=["file_search_call.results"]`
+ - SSEに **`{"citations": [{filename, file_id, score}]}` イベント**を追加（response.completed時にfile_search_call.results + annotationsから抽出、重複排除）
++- [RAGM-01] citations は**追加専用**で拡張（既存3フィールドは温存＝既存フロントは無変更で動く）:
++  `source`（取り込み時 attributes 由来の構造化出典）/ `text`（該当箇所の本文・500字で切り詰め）/ `chunk_id`。
++  同一ファイルの複数ヒットは最上位スコアのチャンクを代表にする（属性はファイル単位のため）。
++- [RAGM-01] `/api/chat/stream` に **`rag_filters`**（`{"type":"eq","key":"current_version","value":"Y"}`
++  や `and`/`or` の複合）。`tools[].filters` として渡す。**未知キーは 422**（上流はエラーにせず0件を返すため
++  — SPIKE-M1 ①-b）。`in` は上流未対応につき 422。`vector_store` 以外のバックエンドと併用したら 400
++  （黙って無視すると旧版が混ざる）。エージェントモード（`agent` / `agent_id`）も同じ理由で 400
++  （別ディスパッチで絞り込みを渡す口が無い）。
+ - 会話はクライアント保持の全履歴再送（ステートレス）。ADB永続化はPhase 4出口で要否判断
+ 
+ ### UI（/rag）

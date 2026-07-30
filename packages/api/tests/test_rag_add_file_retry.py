@@ -4,12 +4,13 @@ test_rag.py は autouse fixture が rag.add_file 自体を fake に差し替え�
 実関数を検証する本テストは別モジュールに置く。
 """
 
+import hashlib
 from types import SimpleNamespace
 
 import httpx
 from openai import NotFoundError
 
-from jetuse_core import rag
+from jetuse_core import rag, rag_metadata
 
 
 def _not_found() -> NotFoundError:
@@ -21,6 +22,7 @@ def _not_found() -> NotFoundError:
 
 def test_add_file_retries_dp_propagation_404(monkeypatch):
     calls = {"n": 0}
+    captured: dict = {}
 
     class FakeDp:
         class files:
@@ -31,8 +33,9 @@ def test_add_file_retries_dp_propagation_404(monkeypatch):
         class vector_stores:
             class files:
                 @staticmethod
-                def create(vector_store_id, file_id):
+                def create(vector_store_id, file_id, attributes=None):
                     calls["n"] += 1
+                    captured["attributes"] = attributes
                     if calls["n"] < 3:
                         raise _not_found()
 
@@ -63,7 +66,7 @@ def test_add_file_gives_up_after_bounded_retries(monkeypatch):
         class vector_stores:
             class files:
                 @staticmethod
-                def create(vector_store_id, file_id):
+                def create(vector_store_id, file_id, attributes=None):
                     calls["n"] += 1
                     raise _not_found()
 
@@ -154,3 +157,66 @@ def test_save_store_id_conflict_only_on_unique_violation(monkeypatch):
         raise AssertionError("expected IntegrityError")
     except oracledb.IntegrityError:
         pass
+
+
+# --- RAGM-01: 取り込み時のメタデータ属性 ---
+
+
+def test_add_file_passes_attributes_and_autofills_file_and_sha256(monkeypatch):
+    """ADR-0020 §1: vector_stores.files.create に属性を付ける。
+    file/sha256 は未指定なら補い、呼び出し側の明示値が優先する。"""
+    captured: dict = {}
+
+    class FakeDp:
+        class files:
+            @staticmethod
+            def create(file, purpose):
+                return SimpleNamespace(id="file-x")
+
+        class vector_stores:
+            class files:
+                @staticmethod
+                def create(vector_store_id, file_id, attributes=None):
+                    captured["attributes"] = attributes
+
+    monkeypatch.setattr(rag, "ensure_store", lambda owner: "vs_x")
+    monkeypatch.setattr(rag, "make_inference_client", lambda **kw: FakeDp)
+    monkeypatch.setattr(rag, "_backup_original", lambda *a: None)
+    monkeypatch.setattr(rag, "_insert_file", lambda *a: None)
+
+    rag.add_file("ns", "spec.md", b"body", {
+        "version": "2.0", "sheet": "API一覧", "cells": "B12:F12",
+        "current_version": "Y", "kind": "",  # 空値はキーごと落ちる
+    })
+    attrs = captured["attributes"]
+    assert attrs["file"] == "spec.md"
+    assert attrs["sha256"] == hashlib.sha256(b"body").hexdigest()
+    assert attrs["cells"] == "B12:F12" and attrs["current_version"] == "Y"
+    assert "kind" not in attrs
+
+    rag.add_file("ns", "spec.md", b"body", {"file": "元の仕様書.xlsx"})
+    assert captured["attributes"]["file"] == "元の仕様書.xlsx"
+
+
+def test_add_file_rejects_bad_attributes_before_calling_oci(monkeypatch):
+    """検証は OCI 呼び出しより前。未知キーで Files API を汚さない。"""
+    called = {"n": 0}
+
+    class FakeDp:
+        class files:
+            @staticmethod
+            def create(file, purpose):
+                called["n"] += 1
+                return SimpleNamespace(id="file-x")
+
+    monkeypatch.setattr(rag, "ensure_store", lambda owner: "vs_x")
+    monkeypatch.setattr(rag, "make_inference_client", lambda **kw: FakeDp)
+    monkeypatch.setattr(rag, "_backup_original", lambda *a: None)
+
+    for bad in ({"versoin": "2.0"}, {"cells": "x" * 513}, {"sheet": {"a": 1}}):
+        try:
+            rag.add_file("ns", "spec.md", b"body", bad)
+            raise AssertionError("expected MetadataError")
+        except rag_metadata.MetadataError:
+            pass
+    assert called["n"] == 0

@@ -25,6 +25,17 @@
 - `GET /api/rag/files` / `POST /api/rag/files`（multipart）/ `DELETE /api/rag/files/{id}`
 - 依存追加: `python-multipart`（FastAPIのUploadFile要件）
 
+### [RAGM-01] メタデータ属性（ADR-0020 §1）
+
+- `POST /api/rag/files` の multipart に **`attributes`（JSONオブジェクト文字列・省略可）**。
+  許可キーは `file` / `version` / `sheet` / `cells` / `sha256` / `kind` / `current_version` / `chunk_id`
+  （`jetuse_core/rag_metadata.py` が単一の門番）。`file` と `sha256` は未指定なら取り込み側で補完。
+- **値が無いメタはキーごと省く**（空文字を入れない＝`eq` フィルタが静かに一致しなくなるため）。
+  `0` / `False` は値として残す。
+- 上限（キー16 / 値512文字 / 入れ子不可 — SPIKE-M1 ①-d）超過と未知キーは **422 で拒否**（切り詰めない。
+  値が変わるとフィルタが静かに外れ、「該当なし」と区別できなくなる）。
+- 属性は**ファイル単位**（①-a）。チャンク単位の出典が要る文書は 1 チャンク = 1 ファイルで取り込む。
+
 ## [RAG-02] RAGチャット
 
 ### 設計
@@ -32,6 +43,14 @@
 - `/api/chat/stream` 拡張: `rag: true` で当該ユーザーのvector_storeを `file_search` ツールに接続（**Responses系=gpt-ossのみ**。他モデル指定時は400）
 - instructionsにツール強制文を自動付与（SPIKE-03b文言ベース）。`include=["file_search_call.results"]`
 - SSEに **`{"citations": [{filename, file_id, score}]}` イベント**を追加（response.completed時にfile_search_call.results + annotationsから抽出、重複排除）
+- [RAGM-01] citations は**追加専用**で拡張（既存3フィールドは温存＝既存フロントは無変更で動く）:
+  `source`（取り込み時 attributes 由来の構造化出典）/ `text`（該当箇所の本文・500字で切り詰め）/ `chunk_id`。
+  同一ファイルの複数ヒットは最上位スコアのチャンクを代表にする（属性はファイル単位のため）。
+- [RAGM-01] `/api/chat/stream` に **`rag_filters`**（`{"type":"eq","key":"current_version","value":"Y"}`
+  や `and`/`or` の複合）。`tools[].filters` として渡す。**未知キーは 422**（上流はエラーにせず0件を返すため
+  — SPIKE-M1 ①-b）。`in` は上流未対応につき 422。`vector_store` 以外のバックエンドと併用したら 400
+  （黙って無視すると旧版が混ざる）。エージェントモード（`agent` / `agent_id`）も同じ理由で 400
+  （別ディスパッチで絞り込みを渡す口が無い）。
 - 会話はクライアント保持の全履歴再送（ステートレス）。ADB永続化はPhase 4出口で要否判断
 
 ### UI（/rag）

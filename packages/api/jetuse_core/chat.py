@@ -39,6 +39,9 @@ class GenParams:
     max_tokens: int | None = None
     reasoning_effort: ReasoningEffort | None = None  # 推論モデルのみ有効
     file_search_store: str | None = None  # RAG(RAG-02)。Responses系のみ
+    # RAGM-01: file_searchのメタデータ絞り込み(例: current_version='Y'で旧版を外す)。
+    # 検証済み(rag_metadata.validate_filters)の構造だけを渡す — 未知キーは静かに0件になる
+    file_search_filters: dict | None = None
 
 
 def _to_responses_input(messages: list[dict]) -> list[dict]:
@@ -85,28 +88,82 @@ def _extra_responses_params(model: ModelDef, params: "GenParams") -> dict:
         out["reasoning"] = {"effort": params.reasoning_effort}
     if params.file_search_store:
         out["tools"] = [
-            {"type": "file_search", "vector_store_ids": [params.file_search_store]}
+            file_search_tool(params.file_search_store, params.file_search_filters)
         ]
         out["include"] = ["file_search_call.results"]
         out["instructions"] = RAG_INSTRUCTIONS
     return out
 
 
+def file_search_tool(store_id: str, filters: dict | None = None) -> dict:
+    """file_search ツール仕様(RAGM-01: メタデータ絞り込みを任意で載せる)。
+
+    filters は `rag_metadata.validate_filters` を通った構造のみ(未知キーは上流でエラーに
+    ならず 0 件になるため、境界で弾いてからここへ来る — SPIKE-M1 ①-b)。
+    """
+    tool: dict = {"type": "file_search", "vector_store_ids": [store_id]}
+    if filters:
+        tool["filters"] = filters
+    return tool
+
+
+# 引用に載せる本文抜粋の上限(SSEペイロードを膨らませないための切り詰め)
+CITATION_TEXT_CHARS = 500
+
+
+def _as_dict(value: Any) -> dict:
+    """SDKの属性値(dict / pydanticモデル)を素のdictへ。取れなければ空dict。"""
+    if isinstance(value, dict):
+        return value
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        try:
+            return dump(exclude_none=True)
+        except Exception:  # noqa: BLE001 - 引用の付加情報。落とさず捨てる
+            return {}
+    return {}
+
+
+def _structured_citation(r: Any) -> dict:
+    """file_search_call の 1 ヒットを構造化引用にする(RAGM-01)。
+
+    既存の `{file_id, filename, score}` は後方互換のため必ず含め、拡張分
+    (`source` = 取り込み時の attributes / `text` = 該当箇所の本文 / `chunk_id`)を足す。
+    属性はファイル単位なので(SPIKE-M1 ①-a)、同一ファイルの複数ヒットからは
+    最上位スコアのものを採る。
+    """
+    score = getattr(r, "score", None)
+    cite: dict = {
+        "file_id": getattr(r, "file_id", ""),
+        "filename": getattr(r, "filename", ""),
+        "score": round(score, 3) if score is not None else None,
+    }
+    source = {k: v for k, v in _as_dict(getattr(r, "attributes", None)).items() if v != ""}
+    if source:
+        cite["source"] = source
+    text = getattr(r, "text", None)
+    if text:
+        cite["text"] = str(text)[:CITATION_TEXT_CHARS]
+    chunk_id = _as_dict(getattr(r, "additional_properties", None)).get("chunk_id")
+    if chunk_id:
+        cite["chunk_id"] = chunk_id
+    return cite
+
+
 def _extract_citations(response: Any) -> list[dict]:
-    """file_search_call.results + message annotations から引用元を抽出(RAG-02)"""
+    """file_search_call.results + message annotations から引用元を抽出(RAG-02/RAGM-01)"""
     by_file: dict[str, dict] = {}
+    # 比較は丸め前のスコアで行う(丸めた値で比べると 0.8504 と 0.8501 が同値になり、
+    # 最上位でないチャンクの text/chunk_id を引用してしまう — レビュー F-005)
+    raw_scores: dict[str, float] = {}
     for item in getattr(response, "output", None) or []:
         if getattr(item, "type", "") == "file_search_call":
             for r in getattr(item, "results", None) or []:
                 fid = getattr(r, "file_id", "")
-                score = getattr(r, "score", None)
-                cur = by_file.get(fid)
-                if not cur or (score or 0) > (cur.get("score") or 0):
-                    by_file[fid] = {
-                        "file_id": fid,
-                        "filename": getattr(r, "filename", ""),
-                        "score": round(score, 3) if score is not None else None,
-                    }
+                score = getattr(r, "score", None) or 0
+                if fid not in by_file or score > raw_scores.get(fid, 0):
+                    by_file[fid] = _structured_citation(r)
+                    raw_scores[fid] = score
         elif getattr(item, "type", "") == "message":
             for part in getattr(item, "content", None) or []:
                 for a in getattr(part, "annotations", None) or []:
@@ -293,7 +350,8 @@ def _build_agent_tools(
     ]
     if enabled_tools and RAG_SEARCH in enabled_tools and rag_store:
         # rag_searchの実体はfile_search built-in(ユーザーのVector Store) — AGT-01c
-        all_tools.append({"type": "file_search", "vector_store_ids": [rag_store]})
+        # 絞り込み(RAGM-01)はこの経路では未対応。ルート側が rag_filters を 400 で断る
+        all_tools.append(file_search_tool(rag_store))
     return all_tools
 
 
