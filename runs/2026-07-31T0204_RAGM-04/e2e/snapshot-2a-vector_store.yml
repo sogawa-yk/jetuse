@@ -1,0 +1,8 @@
+# 2a: VS 選択・同じ 1 件（送信可 = 従来どおり）
+- generic:
+  - combobox "rag backend":
+    - option "VS — Vector Store / File Search" [selected]
+    - option "ADB — Oracle AI Database（自前索引）"
+  - textbox "文書について質問（Shift+Enterで改行）"   # disabled 属性なし
+  - button "送信" [disabled]                         # 入力が空のときだけ disabled
+- paragraph: 左の文書について質問してください

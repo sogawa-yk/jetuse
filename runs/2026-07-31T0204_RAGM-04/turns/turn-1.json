@@ -1,0 +1,9 @@
+{
+  "turn": 1,
+  "timestamp": "2026-07-31T10:23:56+09:00",
+  "action_summary": "(loop-protocol 側で追記可)",
+  "files_changed": ["docs/verification/PREP-01.md", "docs/verification/RAGM-04.md", "docs/verification/e2e-screenshots/RAGM-04-2a-vs-sendable.png", "docs/verification/e2e-screenshots/RAGM-04-2b-adb-not-sendable.png", "docs/verification/e2e-screenshots/RAGM-04-2c-adb-sendable.png", "packages/api/jetuse_core/rag.py", "packages/api/jetuse_core/rag_metadata.py", "packages/api/tests/test_rag.py", "packages/api/tests/test_rag_metadata.py", "packages/web/src/pages/rag.tsx", "packages/web/src/pages/rag/sendReadiness.test.ts", "packages/web/src/pages/rag/sendReadiness.ts", "specs/09-rag.md", "tasks/RAGM-04.md"],
+  "diff_path": "diffs/turn-1.diff",
+  "review_ref": "reviews/review-2.json",
+  "goal_checker": { "verdict": "(/goal 判定モデルが記録)", "reason": "" }
+}

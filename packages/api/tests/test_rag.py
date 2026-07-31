@@ -649,16 +649,38 @@ def test_kind_longer_than_the_adb_column_is_rejected():
         assert res.status_code == 422 and "32" in res.json()["detail"], bad
 
 
-def test_kind_keeps_accepting_non_string_scalars(fake_rag):
-    """既存クライアント（`kind` に数値・真偽を入れていた）を壊さない。"""
+def test_kind_rejects_non_string_scalars(fake_rag):
+    """RAGM-04: `kind` は文字列のみ。数値・真偽は 422（黙って文字列化しない）。
+
+    取り込みは 1 リクエストで両バックエンドへ入るので、ここで断ることが
+    「同じ入力なら両バックエンドとも同じ応答」になる唯一の門。
+    """
     for value in (0, False, 1.5):
         res = client.post(
             "/api/rag/files",
             files={"file": ("a.md", b"x", "text/markdown")},
             data={"attributes": json.dumps({"kind": value})},
         )
-        assert res.status_code == 200, value
-        assert fake_rag.last_attributes == {"kind": value}
+        assert res.status_code == 422, value
+        assert "string" in res.json()["detail"]
+        assert fake_rag.last_attributes is None  # OCI も ADB も呼ばない
+
+
+@pytest.mark.parametrize("backend", ["vector_store", "adb", "select_ai", "opensearch"])
+def test_chat_rejects_non_string_kind_filter_on_every_backend(fake_rag, backend):
+    """RAGM-04: 同じ不正な `kind` フィルタは、選んだバックエンドに関わらず 422。
+
+    バックエンド別の 400（絞り込み非対応）より**先に**型を弾く。ここが分かれると
+    「同じ条件が選んだ先で違う応答になる」が検索側に残る。
+    """
+    fake_rag.store_id = "vs_fake"
+    res = client.post("/api/chat/stream", json={
+        "model": "gpt-oss-120b", "messages": [{"role": "user", "content": "q"}],
+        "rag": True, "rag_backend": backend,
+        "rag_filters": {"type": "eq", "key": "kind", "value": 1},
+    })
+    assert res.status_code == 422, backend
+    assert "string" in res.text
 
 
 def test_long_filename_keeps_its_extension():

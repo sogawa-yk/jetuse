@@ -385,9 +385,10 @@ def add_file(
         if state == rag_adb.READY:
             # `kind` は**両バックエンドで同じ値**にする。ここを既定値のままにすると、
             # 同じファイルがマネージド側では kind='spec'、ADB 側では kind='doc' になり、
-            # 分類での絞り込みがバックエンドを変えた瞬間に結果を変える(review-2 PREP01-004)
+            # 分類での絞り込みがバックエンドを変えた瞬間に結果を変える(review-2 PREP01-004)。
+            # 値は rag_metadata が文字列に限っているので、ここで変換はしない(RAGM-04)
             rag_adb.ingest(owner, file_id, filename, content,
-                           **({"kind": str(attrs["kind"])} if "kind" in attrs else {}))
+                           **({"kind": attrs["kind"]} if "kind" in attrs else {}))
         elif state == rag_adb.UNAVAILABLE:
             # 「表が無い(未導入)」と「今つながらない」を区別する。後者を黙って飛ばすと、
             # 復旧後もそのファイルだけ取り込まれないまま誰も気づけない。

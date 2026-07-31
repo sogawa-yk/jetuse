@@ -1,0 +1,17 @@
+# 2b: ADB 選択・ADB 未取り込みのみ（送信不可）
+- list:
+  - listitem:
+    - generic "jetuse-spike-ragm04-未取り込み.md": 📄 jetuse-spike-ragm04-未取り込み.md
+    - generic:
+      - 'generic "Vector Store / File Search: 取り込み済み"': ✓ VS
+      - 'generic "Oracle AI Database（自前索引）: 取り込み中（同期待ち）"': ⏳ ADB
+      - 'generic "Select AI with RAG: 取り込み中（同期待ち）"': ⏳ SAI
+      - 'generic "OpenSearch: 無効"': – OS
+- generic:
+  - combobox "rag backend":
+    - option "VS — Vector Store / File Search"
+    - option "ADB — Oracle AI Database（自前索引）" [selected]
+    - option "SAI — Select AI with RAG"
+    - option "OS — OpenSearch"
+  - textbox "文書をアップロードすると質問できます（取り込み完了後）" [disabled]
+  - button "送信" [disabled]

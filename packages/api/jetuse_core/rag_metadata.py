@@ -28,8 +28,6 @@ MAX_ATTRIBUTE_VALUE_CHARS = 512  # ①-d: exceeds max length of 512 characters
 # 「マネージドでは絞れるのに ADB では取り込み自体が失敗する」というズレが起きる。
 # **バイト長で見る**: 列は BYTE セマンティクスのことがあり、日本語 11 文字(33 バイト)は
 # 文字数では通っても ORA-12899 になる(`rag._fit` が同じ理由でバイト長を使っている)。
-# 型は従来どおりスカラー(文字列 / 数値 / 真偽)を許す — ここで文字列限定にすると
-# `kind=0` を送っていた既存クライアントが壊れる。
 MAX_KIND_BYTES = 32
 MAX_FILTER_DEPTH = 5             # 複合フィルタの入れ子上限(病的な入力の打ち切り)
 
@@ -67,6 +65,30 @@ def _check_scalar(value: Any, where: str) -> str | int | float | bool:
     )
 
 
+def _check_kind(value: Any, where: str) -> str:
+    """`kind` は**文字列のみ**(RAGM-04)。取り込み・検索の両方でこれを通す。
+
+    数値・真偽を受けると、マネージド側は値のまま(`0`)・ADB 側は列が
+    VARCHAR2 なので文字列(`"0"`)で入り、**同じ条件が選んだバックエンドで違う結果**になる
+    (`rag_adb.build_where` は非文字列のフィルタ値を拒否する)。黙って文字列化はしない —
+    入れた値と検索条件が食い違うだけで、ズレが見えなくなる。
+    長さ上限は ADB 列に合わせたまま広げない(狭い側で揃える)。検索側にも同じ上限を掛けるのは、
+    取り込めない長さで絞っても必ず 0 件になり ①-b と同じ「静かに該当なし」になるため。
+    """
+    if not isinstance(value, str):
+        raise MetadataError(
+            f"{where}: value must be a string "
+            "(numbers and booleans are not accepted: the adb backend stores kind in a "
+            "VARCHAR2 column, so the same value would filter differently per backend)"
+        )
+    if len(value.encode("utf-8")) > MAX_KIND_BYTES:
+        raise MetadataError(
+            f"{where}: value must be at most {MAX_KIND_BYTES} bytes in UTF-8 "
+            "(the adb backend stores it in a VARCHAR2(32) column)"
+        )
+    return value
+
+
 def normalize_attributes(raw: Any) -> dict[str, str | int | float | bool]:
     """取り込み時の attributes を検証して返す。
 
@@ -85,12 +107,8 @@ def normalize_attributes(raw: Any) -> dict[str, str | int | float | bool]:
             raise MetadataError(f"unknown attribute key '{key}'. allowed: {_KEYS_HINT}")
         if value is None or (isinstance(value, str) and not value.strip()):
             continue  # 値が無いメタはキーごと省く
-        out[key] = _check_scalar(value, f"attribute '{key}'")
-        if key == "kind" and len(str(out[key]).encode("utf-8")) > MAX_KIND_BYTES:
-            raise MetadataError(
-                f"attribute 'kind' must be at most {MAX_KIND_BYTES} bytes in UTF-8 "
-                "(the adb backend stores it in a VARCHAR2(32) column)"
-            )
+        where = f"attribute '{key}'"
+        out[key] = _check_kind(value, where) if key == "kind" else _check_scalar(value, where)
     if len(out) > MAX_ATTRIBUTE_KEYS:
         raise MetadataError(
             f"attributes must not contain more than {MAX_ATTRIBUTE_KEYS} key-value pairs"
@@ -139,4 +157,7 @@ def validate_filters(raw: Any, _depth: int = 0) -> dict | None:
         raise MetadataError(f"unknown filter key '{key}'. allowed: {_KEYS_HINT}")
     if "value" not in raw:
         raise MetadataError(f"filter on '{key}' requires a 'value'")
-    return {"type": ftype, "key": key, "value": _check_scalar(raw["value"], f"filter '{key}'")}
+    where = f"filter '{key}'"
+    value = (_check_kind(raw["value"], where) if key == "kind"
+             else _check_scalar(raw["value"], where))
+    return {"type": ftype, "key": key, "value": value}
