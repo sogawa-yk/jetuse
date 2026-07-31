@@ -18,6 +18,10 @@ locals {
   # JetUse 公開イメージの namespace。auto-synth(空 image URL 時)が pull 可能なパスを作れるのは
   # この公開 namespace のときだけ。var.ocir_namespace の既定値と一致させること(region_guard が検証)。
   public_ocir_namespace = "idqcucnenh88"
+  # `inspect tenancies in tenancy` が無いと region_subscriptions は null になる(実測 PUBLIC-IAM-02)。
+  # 下の try がそれを "" に丸めてしまうので、読めたかどうかは別に持って region_guard で案内する。
+  region_subscriptions_readable = try(length(data.oci_identity_region_subscriptions.this.region_subscriptions) > 0, false)
+
   deploy_region_key = try(lower(one([
     for r in data.oci_identity_region_subscriptions.this.region_subscriptions : r.region_key
     if r.region_name == var.region

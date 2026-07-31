@@ -51,7 +51,8 @@ Administratorsグループのメンバーは通常追加設定不要。委任す
 
 1. Runtime / ADB / Semantic StoreのDynamic Groupを確認する。
 2. Runtime PolicyのコンパートメントOCIDを確認する。
-3. root compartmentのPolicyがObject Storage namespaceのread 1文だけであることを確認する。
+3. root compartmentのPolicyがObject Storage namespaceのread 1文だけであることを確認する
+   （この1文は実測では無くても動く保険。詳細は [PUBLIC-IAM-02](../verification/PUBLIC-IAM-02.md)）。
 4. IAM反映のため5〜10分待つ。
 5. Outputの`app_url`を開き、`demo_username` / `demo_password`でログインする。
 

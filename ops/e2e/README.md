@@ -20,7 +20,11 @@ OUT_DIR=./shots ASSETS=ops/e2e/assets \
 node ops/e2e/public-deploy.mjs
 ```
 
-- 合否一覧は `$OUT_DIR/results.json`、スクリーンショットは `$OUT_DIR/*.png`
+- 合否一覧は `$OUT_DIR/results.json`（`agents-3sdk.mjs` は `agents-3sdk-results.json`、
+  `agents-degraded.mjs` は `agents-degraded-results.json`）、スクリーンショットは `$OUT_DIR/*.png`
+  - **2026-07-30 に出力名を分離した**（それ以前は3つとも `results.json` に書き、同じ `OUT_DIR` で
+    続けて走らせると先行の証跡を黙って上書きしていた）。旧名を前提にした収集処理があれば
+    エージェント系だけファイル名の読み替えが要る。
 - 4xx/5xx レスポンスは全件 `$OUT_DIR/http-errors.txt` に記録される（**0件が合格条件**）
 - 終了コードは全件 PASS で 0
 

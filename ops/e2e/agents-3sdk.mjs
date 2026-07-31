@@ -72,7 +72,10 @@ for (const [sdk, label] of SDKS) {
 }
 
 fs.writeFileSync(`${OUT}/timings.json`, JSON.stringify(timings, null, 2))
-fs.writeFileSync(`${OUT}/results.json`, JSON.stringify(results, null, 2))
+// 出力名はハーネスごとに分ける。同じ OUT_DIR で public-deploy.mjs と続けて走らせるのが
+// 通常運用なので、共通の results.json にすると**先に走ったほうの証跡を黙って上書きする**
+// （PUBLIC-IAM-02 で実際に 39項目の結果を失った）。
+fs.writeFileSync(`${OUT}/agents-3sdk-results.json`, JSON.stringify(results, null, 2))
 console.log('\n--- コールドスタート含む初回実行時間(秒) ---')
 console.log(JSON.stringify(timings))
 const ok = results.filter((r) => r.ok).length
