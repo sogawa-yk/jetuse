@@ -108,8 +108,17 @@ Any {
 | `fnfunc` | Functions Routerの各Function |
 | `autonomousdatabase` | Select AI / DBMS_CLOUD_AIで使うADB Resource Principal |
 | `generativeaisemanticstore` | SQL Search用Semantic Store |
+| `generativeaihostedapplication` | ホスト型エージェント本体（PORT-03 / ADR-0019） |
+| `generativeaihostedapplicationiam` | ホスト型エージェントの実行時Resource Principal |
+| `generativeaihosteddeployment` | ホスト型エージェントの配備単位 |
 
 Semantic Storeを使用しない環境でもmatching ruleを残して問題ない。対象リソースが存在しなければDynamic Groupのメンバーにならない。
+
+ホスト型エージェントを配備する環境では`generativeaihosted*`の**3型すべて**を含める。
+`generativeaihostedapplicationiam`が欠けると、配備自体は成功するのに実行時のResource Principalが
+Dynamic Groupに入らず、エージェントのGenerative AI / Object Storage / ADB呼び出しが権限エラーになる。
+逆にエージェントを配備しない環境では3型を入れない（同じコンパートメントにある無関係な
+Hosted ApplicationへJetUseのランタイム権限が付くのを避ける）。
 
 ## Dynamic Groupへ含めないPrincipal
 
@@ -134,6 +143,14 @@ Deploy to Oracle Cloudを実行する担当者はOCI IAMの通常グループへ
 ## 社外ユーザー環境
 
 社外ユーザーが自分のOCIテナンシへJetUseをデプロイする場合は、そのユーザーのJetUse専用コンパートメントを対象とするDynamic Groupを1個作成する。社外ユーザー側のDynamic Groupは相手のテナンシに作られるため、JetUse管理側テナンシのDynamic Group上限は消費しない。
+
+デプロイ担当がテナンシ管理権限を持たない（専用コンパートメントの`manage all-resources`だけを持つ）場合、
+テナンシ管理者が用意するのは**このcompact Dynamic Group 1本と、デプロイ担当グループへの
+`inspect tenancies in tenancy` の1文だけ**でよい。それで認証・ホスト型エージェントを含めて
+フル機能でデプロイできる（2026-07-30 実機検証）。
+Dynamic Group向けの`read objectstorage-namespaces in tenancy`は**不要**（実測）。
+手順とコピペ用のPolicy文は
+[専用コンパートメント管理者向けガイド](./public-deploy-dedicated-compartment.md)を参照する。
 
 ## Terraform実装との関係
 
