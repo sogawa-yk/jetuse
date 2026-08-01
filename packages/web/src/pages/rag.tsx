@@ -7,6 +7,7 @@ import { readSse } from '../lib/sse'
 import { usePrefs } from '../prefs'
 import { BackendCapabilityPanel } from './rag/BackendCapabilities'
 import { BackendStatusBadges } from './rag/BackendStatusBadges'
+import { hasSendableFile } from './rag/sendReadiness'
 import { UPLOAD_ACCEPT } from './rag/uploadFormats'
 import {
   pickRagBackendCapabilities,
@@ -179,7 +180,9 @@ export default function Rag() {
     }
   }
 
-  const ready = files.some((f) => f.status === 'completed')
+  // 送信可否は**選択中のバックエンド**の取り込み状態で決める(RAGM-04)。
+  // マネージド側の完了だけで見ると、ADB を選んでいても送信可に見える(RAGM03-005)。
+  const ready = hasSendableFile(files, backend)
 
   return (
     <PageContainer wide icon="rag" title={t('nav.rag')} subtitle={t('rag.lead')} helpKey="rag">

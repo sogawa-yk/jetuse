@@ -1,0 +1,47 @@
+{
+  "review_n": 2,
+  "timestamp": "2026-07-31T10:18:30+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-2.input.diff",
+  "raw_output_path": "reviews/review-2.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "主要な変更は仕様と整合し、添付 E2E も2シナリオを十分に裏づけています。現在の API では顕在化しない前方互換上の判定漏れと、不正 Unicode に対するエラー処理の境界条件を minor として指摘します。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 0,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "RAGM04-001",
+      "severity": "minor",
+      "file": "packages/web/src/pages/rag/sendReadiness.ts",
+      "line": 19,
+      "issue": "`backends` は `Partial<Record<...>>` ですが、vector_store の状態が省略された部分応答では、トップレベルの `status === 'completed'` が利用可能でも送信不可になります。現在の API は全キーを返すものの、既存の型とバッジ実装が許容している前方互換応答を正しく扱えていません。",
+      "suggestion": "まず `file.backends?.[backend]` を確認し、値が存在すれば `indexed` 判定を使用してください。値が存在しない場合に限り、vector_store はトップレベルの `status` へフォールバックしてください。vector_store キーを欠く部分応答のテストも追加してください。"
+    },
+    {
+      "id": "RAGM04-002",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/rag_metadata.py",
+      "line": 84,
+      "issue": "JSON のエスケープで lone surrogate（例: `\\ud800`）を渡すと `encode('utf-8')` が `UnicodeEncodeError` を送出します。取り込みルートは `MetadataError` だけを 422 に正規化するため、この不正入力が 500 になる可能性があります。",
+      "suggestion": "UTF-8 エンコードを `try/except UnicodeEncodeError` で囲み、`MetadataError` に変換してください。multipart の attributes に lone surrogate を含め、422 になる API テストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 2,
+    "adequacy": "sufficient",
+    "notes": "シナリオ1は `runs/2026-07-31T0204_RAGM-04/e2e/scenario-1.md`、`scenario-1.raw.log`、`scenario-1.adb.log` により、取り込みの数値・真偽 kind と4バックエンドの検索フィルタが422になること、文字列 kind が実 ADB に格納されることを確認できる。シナリオ2は `scenario-2.md`、`snapshot-2a-vector_store.yml`〜`snapshot-2d-select_ai.yml` および `docs/verification/e2e-screenshots/` により、選択バックエンドの indexed/pending に応じて送信可否が切り替わることを裏づけている。マネージド側の正常アップロードと公開 URL 配備は未実施だが、ACTIVE な GenerativeAI project がなく、その作成には人間ゲートが必要であることなどが `SKIPPED.md` に明記されており、今回の差分に対する未実施理由として妥当。検証用 ADB スキーマの削除も `teardown.md` に記録されている。OCID・認証情報・実エンドポイント値の差分への混入、および IAM や既存 OCI リソースの無断変更は確認されなかった。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲット URL が提供されておらず、指示に従いブラウザツールは使用していない。"
+    }
+  }
+}
