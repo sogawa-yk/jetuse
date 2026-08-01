@@ -339,13 +339,26 @@ def _build_agent_tools(
     mcp_servers: list[dict] | None,
     auto_tools: bool,
     rag_store: str | None,
+    http_tools: list[Any] | None = None,
 ) -> list[dict]:
-    """このターンで使用可能なツール仕様を構築(custom + MCP + rag_search/file_search)。"""
+    """このターンで使用可能なツール仕様を構築(custom + MCP + 外部HTTP + rag_search)。
+
+    http_tools は外部HTTPツール(TOOL-01)の `ToolDef`。呼び出し側が owner 所有の
+    ものだけを解決済みで渡す = 明示選択なので enabled_tools では絞らない。
+    """
     from .mcp_servers import mcp_tool_spec
     from .tools import RAG_SEARCH, tool_specs
 
     custom_enabled = [t for t in (enabled_tools or []) if t != RAG_SEARCH]
     all_tools = tool_specs(custom_enabled if enabled_tools is not None else None) + [
+        {
+            "type": "function",
+            "name": t.name,
+            "description": t.description,
+            "parameters": t.parameters,
+        }
+        for t in (http_tools or [])
+    ] + [
         mcp_tool_spec(srv, auto_tools) for srv in (mcp_servers or [])
     ]
     if enabled_tools and RAG_SEARCH in enabled_tools and rag_store:
@@ -427,14 +440,20 @@ def _emit_pending_approval(call_dicts: list[dict], tools: dict) -> Iterator[Chat
     """function_callバッチをUIへ承認待ちとして通知(混在バッチは全件承認制)。"""
     for cd in call_dicts:
         tool = tools.get(cd["name"])
-        yield {"tool_call": {
+        event = {
             "name": cd["name"],
             "label": tool.label if tool else cd["name"],
             "arguments": cd.get("arguments", "{}"),
             "call_id": cd.get("call_id"),
             "item": cd,
             "status": "pending_approval",
-        }}
+        }
+        if tool and tool.tool_id:
+            # 外部HTTPツール(TOOL-01): 承認したその1件を id で名指しできるようにする。
+            # 名前だけで再解決すると、承認待ちの間に同名で別 URL のツールを作り直された
+            # 場合に「利用者が確認したのと違う HTTP 操作」が実行されうる
+            event["http_tool_id"] = tool.tool_id
+        yield {"tool_call": event}
 
 
 def _run_tool_calls(
@@ -486,6 +505,7 @@ def stream_agent(
     instructions: str | None = None,
     project_ocid: str | None = None,
     rag_store: str | None = None,
+    http_tools: list[Any] | None = None,
 ) -> Iterator[ChatEvent]:
     """エージェントモード(AGT-01)。ツール付きResponses呼び出しをループする。
 
@@ -493,9 +513,14 @@ def stream_agent(
     - auto_tools=False: function_callを {"tool_call"} イベントで通知してストリーム終了
       (UIが承認後、tool_results付きで再呼び出しして継続する)
     - auto_tools=True: サーバー側で実行し最大MAX_TOOL_HOPSホップまで自動継続
+    - http_tools: owner 所有の外部HTTPツール(TOOL-01)の ToolDef。組込ツールと同じ
+      レジストリに載せ、JetUse がサーバー側で代理実行する
     """
-    from .tools import TOOLS, ToolError, execute_tool
+    from .tools import TOOLS, ToolError, execute_with
 
+    # そのターン限りのレジストリ。組込を後勝ちにして外部ツールの名前衝突を無害化する
+    # (登録時にも予約名を弾いているが、実行段でも組込が上書きされないようにする)
+    registry = {**{t.name: t for t in (http_tools or [])}, **TOOLS}
     model = MODELS[model_key]
     if model.api != "responses":
         yield {"error": "エージェントモードはResponses系モデルのみ対応です"}
@@ -506,7 +531,9 @@ def stream_agent(
     extra = _extra_responses_params(model, params or GenParams())
     # ターン内ツール総数の安全弁(AGT-01d): 累積16件以上はツールを外し最終回答を強制
     force_answer = len(tool_results or []) >= 16
-    all_tools = _build_agent_tools(enabled_tools, mcp_servers, auto_tools, rag_store)
+    all_tools = _build_agent_tools(
+        enabled_tools, mcp_servers, auto_tools, rag_store, http_tools
+    )
     if force_answer:
         all_tools = []
         base_input.append(_force_answer_message())
@@ -541,15 +568,18 @@ def stream_agent(
         ]
         needs_approval = [
             cd for cd in call_dicts
-            if not (TOOLS.get(cd["name"]) and not TOOLS[cd["name"]].requires_approval)
+            if not (registry.get(cd["name"]) and not registry[cd["name"]].requires_approval)
         ]
         if not auto_tools and needs_approval:
             # 混在バッチは全件承認制(ステートレス継続で安全側の結果が失われるのを防ぐ)
-            yield from _emit_pending_approval(call_dicts, TOOLS)
+            yield from _emit_pending_approval(call_dicts, registry)
             return  # UIの承認待ち
         # 全件が承認不要(requires_approval=False)の場合は承認モードでも自動実行して継続
 
-        yield from _run_tool_calls(call_dicts, base_input, user, TOOLS, execute_tool, ToolError)
+        yield from _run_tool_calls(
+            call_dicts, base_input, user, registry,
+            lambda n, a: execute_with(registry, n, a), ToolError,
+        )
 
     # ホップ上限: エラーではなくツールなしで最終回答を強制する(AGT-01d)
     yield {"delta": ""}

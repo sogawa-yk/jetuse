@@ -1,0 +1,47 @@
+{
+  "review_n": 5,
+  "timestamp": "2026-08-01T21:01:35+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-5.input.diff",
+  "raw_output_path": "reviews/review-5.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "外部ツールの承認後実行に名前解決へのフォールバックが残り、人間が承認した定義とは異なる URL を実行できるため FAIL です。また、応答サイズ制限は巨大な単一チャンクや圧縮爆弾に対してメモリ上限として機能しません。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 1,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "TOOL-01-001",
+      "severity": "blocker",
+      "file": "packages/api/service/routes/agents.py",
+      "line": 174,
+      "issue": "`http_tool_id` が省略されると、承認時の定義ではなく実行時点の同名ツールを `get_tool_by_name` で解決します。承認待ち中にツールを削除・同名再作成すれば、別 URL・別認証先を実行でき、実装が主張する TOCTOU 防止が成立しません。追加された ID は optional であり、既存クライアントも承認イベントの `http_tool_id` を実行要求へ渡していません。",
+      "suggestion": "組込以外のツール実行では `http_tool_id` を必須にし、名前によるフォールバックを削除してください。クライアントも承認イベントの `http_tool_id` を `/api/agent/execute-tool` へそのまま渡し、ID 不明は 404、ID と名前の不一致は 409 としてください。ID 省略時の拒否と、承認後の削除・同名再作成を含むテストを追加してください。"
+    },
+    {
+      "id": "TOOL-01-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/http_tools.py",
+      "line": 452,
+      "issue": "サイズ確認より先に `body += chunk` しているため、単一の巨大チャンク全体をメモリへ取り込みます。`iter_bytes()` は Content-Encoding 展開後のデータを扱うため、小さい gzip/br 応答から巨大な展開結果を生成する圧縮爆弾でも、128KB の上限を確認する前に大きなメモリを消費し得ます。現在の E2E は非圧縮の300KB応答だけで、この境界を検証していません。",
+      "suggestion": "取得・展開ともチャンクサイズを明示して、残り許容量を超えるデータを連結前に拒否してください。圧縮応答は bounded decompression を使うか、許容する Content-Encoding を制限してください。巨大な単一チャンクと高圧縮率応答で、保持メモリが上限付近に収まるテストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-08-01T2002_TOOL-01/e2e/` の5シナリオはいずれも PASS で、登録→モデル呼出し→回答反映、Vault、SSRF、timeout、通常のサイズ超過を裏づけています。一方、SKIPPED.md §3 の承認往復は UI がなくても TestClient で検証可能であり、実際に ID 省略時の名前再解決という blocker を見逃しています。また圧縮・単一巨大チャンクのサイズ境界も未検証です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザ E2E は実施していません。"
+    }
+  }
+}

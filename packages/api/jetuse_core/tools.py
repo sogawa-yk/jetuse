@@ -6,6 +6,7 @@ web_search built-inはOCI不可(SPIKE-09)のためDuckDuckGo HTMLで自前実装
 
 import json
 import logging
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -61,6 +62,9 @@ class ToolDef:
     parameters: dict
     handler: Callable[[dict], str] | None  # Noneはbuilt-in(OCI側実行)
     requires_approval: bool = True
+    # 登録済み外部HTTPツール(TOOL-01)の id。組込ツールは空。
+    # 承認往復で「承認したその1件」を名前でなく id で名指しするために使う
+    tool_id: str = ""
 
 
 TOOLS: dict[str, ToolDef] = {
@@ -168,13 +172,32 @@ def _validate_args(tool: ToolDef, args: dict) -> None:
     for k, v in args.items():
         if k not in props:
             raise ToolError(f"未知の引数: {k}")
-        if props[k].get("type") == "string" and not isinstance(v, str):
+        t = props[k].get("type")
+        # 外部HTTPツール(TOOL-01)は利用者定義スキーマなので string 以外も検証する。
+        # bool は int の派生なので number/integer からは除く
+        if t == "string" and not isinstance(v, str):
+            raise ToolError(f"引数の型が不正: {k}")
+        if t == "number":
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                raise ToolError(f"引数の型が不正: {k}")
+            # NaN / Infinity は JSON の標準にも無く、相手の業務APIへ送る値としても不正。
+            # int には isfinite を呼ばない(巨大整数で OverflowError になる)
+            if isinstance(v, float) and not math.isfinite(v):
+                raise ToolError(f"引数の型が不正: {k}")
+        # integer に 1.5 を通すとスキーマの主張と実際の入力保証がずれる
+        if t == "integer" and (isinstance(v, bool) or not isinstance(v, int)):
+            raise ToolError(f"引数の型が不正: {k}")
+        if t == "boolean" and not isinstance(v, bool):
             raise ToolError(f"引数の型が不正: {k}")
 
 
-def execute_tool(name: str, arguments: str | dict) -> str:
-    """レジストリのツールを検証付きで実行する(AGT-01ガード)"""
-    tool = TOOLS.get(name)
+def execute_with(registry: dict[str, ToolDef], name: str, arguments: str | dict) -> str:
+    """指定レジストリのツールを検証付きで実行する(AGT-01ガード)。
+
+    エージェント実行では組込 `TOOLS` に owner の外部HTTPツール(TOOL-01)を重ねた
+    「そのターン限りのレジストリ」を渡す。
+    """
+    tool = registry.get(name)
     if not tool or tool.handler is None:
         raise ToolError(f"未知のツール: {name}")
     args = json.loads(arguments) if isinstance(arguments, str) else arguments
@@ -190,3 +213,8 @@ def execute_tool(name: str, arguments: str | dict) -> str:
         return json.dumps(
             {"error": f"ツール実行に失敗しました: {str(e)[:200]}"}, ensure_ascii=False
         )
+
+
+def execute_tool(name: str, arguments: str | dict) -> str:
+    """組込レジストリ(TOOLS)のツールを実行する。"""
+    return execute_with(TOOLS, name, arguments)

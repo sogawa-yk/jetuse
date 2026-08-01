@@ -45,6 +45,8 @@ def test_execute_tool_endpoint(monkeypatch):
                       json={"name": "web_search", "arguments": '{"query": "oci"}'})
     assert res.status_code == 200
     assert "results" in res.json()["output"]
+    # 未知の名前は 400。外部HTTPツール(TOOL-01)は http_tool_id 必須なので、
+    # id なしの実行要求は DB を引くまでもなくここで断られる
     res2 = client.post("/api/agent/execute-tool", json={"name": "nope", "arguments": "{}"})
     assert res2.status_code == 400
 
@@ -53,7 +55,8 @@ def test_agent_stream_approval_mode(monkeypatch):
     def fake_agent(model_key, messages, temperature=None, user="",
                    auto_tools=False, tool_results=None, params=None,
                    enabled_tools=None, mcp_servers=None,
-                   instructions=None, project_ocid=None, rag_store=None):
+                   instructions=None, project_ocid=None, rag_store=None,
+                   http_tools=None):
         yield {"delta": "調べます。"}
         yield {"tool_call": {"name": "web_search", "label": "Web検索",
                              "arguments": '{"query": "x"}', "call_id": "c1",

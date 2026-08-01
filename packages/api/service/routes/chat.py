@@ -20,6 +20,7 @@ from jetuse_core import (
     rag_select_ai,
 )
 from jetuse_core import conversations as conv_repo
+from jetuse_core import http_tools as http_tools_repo
 from jetuse_core import mcp_servers as mcp_repo
 from jetuse_core.auth import AuthContext, require_user
 from jetuse_core.chat import GenParams, create_oci_conversation
@@ -301,6 +302,20 @@ async def stream_chat_response(  # noqa: ANN202
     if agent_def:
         return await agent_dispatch.hosted_agent_stream_response(req, user, agent_def)
 
+    # 外部HTTPツール(TOOL-01): owner所有のものだけ解決してエージェントループへ配線する。
+    # 1件でも解決できなければ 404 で止める。黙って外すと、業務APIを参照しないまま
+    # もっともらしい回答を返してしまう(削除済み・他人所有・不正idのいずれも同じ)
+    http_tool_defs: list = []
+    if req.agent and req.http_tool_ids:
+        wanted = list(dict.fromkeys(req.http_tool_ids))
+        rows = await asyncio.to_thread(http_tools_repo.get_tools, user.subject, wanted)
+        if len(rows) != len(wanted):
+            missing = sorted(set(wanted) - {r["id"] for r in rows})
+            raise HTTPException(
+                status_code=404, detail=f"http tool not found: {', '.join(missing)}"
+            )
+        http_tool_defs = [http_tools_repo.to_tooldef(r) for r in rows]
+
     mcp_defs: list[dict] = []
     if req.agent and req.mcp_server_ids:
         # owner所有のサーバーのみ解決(AGT-02)
@@ -422,6 +437,7 @@ async def stream_chat_response(  # noqa: ANN202
                     instructions=agent_def["instructions"] if agent_def else None,
                     project_ocid=agent_def.get("project_ocid") if agent_def else None,
                     rag_store=agent_rag_store,
+                    http_tools=http_tool_defs,
                 )
             elif agent_def:
                 # ツールなしエージェント: instructionsをsystemとして付与(AGT-03)

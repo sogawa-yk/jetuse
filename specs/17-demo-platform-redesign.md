@@ -73,7 +73,7 @@ SP1 = 下流（SP2/SP3）を動かすために JetUse API が提供すべき 3 �
 | `chat` | LLM 対話（ストリーミング） | `routes/chat.py` |
 | `rag.search` | 文書検索Q&A（引用付き） | `routes/rag.py` |
 | `dbchat` | 自然言語→SQL でデータ照会 | `routes/dbchat.py` |
-| `agents` | エージェント/ツール実行 | `routes/agents.py` |
+| `agents` | エージェント/ツール実行（**デモ固有の外部 HTTP API をツールとして渡せる** — 下記） | `routes/agents.py` |
 | `voice` | STT/TTS・文字起こし | `routes/voice.py` |
 | `minutes` | 議事録（文字起こし+要約） | `routes/minutes.py` |
 | `translate` | 翻訳 | `jetuse_core/translate.py` |
@@ -82,8 +82,35 @@ SP1 = 下流（SP2/SP3）を動かすために JetUse API が提供すべき 3 �
 **裏方（カタログに載せない）**: admin / conversations（履歴CRUD）/ tools / mcp_servers / datasets / embeddings /
 moderation / guardrails（自動適用の横断機能）。
 
-**将来足す能力**: `connector.invoke`（秘密・外部接続。顧客業務デモの説得力の要。早期に1本）／
-`demo データのプロビジョニング`（デモ専用スキーマ作成 + データ投入。SP3 のデータ生成の着地先・SP2 寄り）。
+### `agents` の外部ツール（TOOL-01・2026-08-01 実装済み）
+
+デモ側が持つ**素の HTTP エンドポイント**を、名前・説明・JSON Schema つきで登録し、エージェント実行時に
+組込ツールと同列に配線できる。**デモ専用のサーバコードを JetUse 側に持たない**（§1）を守ったまま、
+業務ロジックを AI に使わせるための「渡す口」だけを一級機能にしたもの。
+
+```
+POST /api/agent/http-tools   name / description / parameters(JSON Schema) / url / method / 認証
+POST /api/chat/stream        agent=true + http_tool_ids=[...] で実行に配線
+```
+
+- モデルが呼ぶと **JetUse がサーバ側で HTTP を代理実行**して結果を返す（ブラウザから直接叩かせない）。
+- 秘密は **Vault に置き OCID で参照**する（`mcp_servers.auth_secret_ocid` と同じ流儀。新方式を作らない）。
+  ヘッダ名だけ選べる（既定 `Authorization`）。DB にも API 応答にも平文は現れない。
+  **使える秘密は、本アプリのコンパートメントにあり freeform タグ `jetuse_tool_owner` が登録者と
+  一致するものだけ**。これが無いと「サービスの権限で読める任意の秘密を、利用者が指定した外部 URL へ
+  送らせる」経路（confused deputy）になる。
+- **SSRF は fail-closed**: https 必須／内部メタデータ・ループバック・私有レンジ・URL 埋め込み認証情報を
+  登録時と実行時の両方で拒否／リダイレクトを追わない。
+- タイムアウト 15 秒・応答 128KB・リトライ 0・1 エージェント 8 ツールまで。上限超過は黙って切り詰めず
+  「ツール実行が失敗した」としてモデルへ返す。
+- **MCP サーバー登録とは別経路として共存**する（MCP は OCI 側でサーバーサイド実行）。
+
+検証: `docs/verification/TOOL-01.md`。能力カタログ（`/api/capabilities` の `agents.external_tools`）には
+実測できた範囲だけを載せる。
+
+**将来足す能力**: `demo データのプロビジョニング`（デモ専用スキーマ作成 + データ投入。
+SP3 のデータ生成の着地先・SP2 寄り）。
+※ `connector.invoke`（秘密・外部接続）は上記 `agents` の外部 HTTP ツール（TOOL-01）で満たした。
 
 **既存 usecases の扱い = A（存続）**: usecases（fields+template の自作ミニアプリ）は **Public 版のショーケース
 機能として存続**する。Internal のビルダーとはペルソナ・用途が別物であり、統合しない。
