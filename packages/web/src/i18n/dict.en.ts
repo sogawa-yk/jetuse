@@ -154,7 +154,8 @@ export const en: Record<keyof typeof ja, string> = {
   'rag.files': 'Documents',
   'rag.upload': 'Upload',
   'rag.uploading': 'Uploading...',
-  'rag.supported': 'Supported: PDF / text / Markdown / Excel (.xlsx, max 20MB)',
+  'rag.supported':
+    'Supported: PDF / text / Markdown / Excel (.xlsx) up to 20MB, images (.png .jpg) up to 8MB. Scanned PDFs and images are OCRed on ingest',
   'rag.empty': 'No documents yet. Upload one to start',
   'rag.needFiles': 'Upload a document to start asking (after processing)',
   'rag.chatHint': 'Ask about the documents on the left',

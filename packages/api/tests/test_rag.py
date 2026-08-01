@@ -28,7 +28,7 @@ class FakeRag:
     def refresh_statuses(self, owner, files):
         return files
 
-    def add_file(self, owner, filename, content, attributes=None):
+    def add_file(self, owner, filename, content, attributes=None, ocr_engine=None):
         self.last_attributes = attributes
         fid = f"f{len(self.files) + 1}"
         self.files[fid] = {
@@ -79,7 +79,7 @@ def test_upload_rejects_bad_files():
 
 
 def test_upload_returns_503_when_store_not_ready(monkeypatch):
-    def not_ready(owner, filename, content, attributes=None):
+    def not_ready(owner, filename, content, attributes=None, ocr_engine=None):
         raise service_main.rag.StoreNotReadyError("dp propagation timeout")
 
     monkeypatch.setattr(service_main.rag, "add_file", not_ready)
@@ -350,7 +350,7 @@ def test_upload_rejects_overlong_filename_with_422(monkeypatch):
 
     calls = {"n": 0}
 
-    def add_file(owner, filename, content, attributes=None):
+    def add_file(owner, filename, content, attributes=None, ocr_engine=None):
         calls["n"] += 1
         # 実物と同じ順序: 属性の組み立て(検証)が OCI 呼び出しより前に走る
         rag_metadata.normalize_attributes({"file": filename, **(attributes or {})})
@@ -472,7 +472,11 @@ def test_upload_rejects_broken_xlsx_with_422(monkeypatch):
 
 def test_unsupported_type_message_lists_xlsx():
     res = client.post("/api/rag/files", files={"file": ("a.pptx", b"x", "x")})
-    assert res.status_code == 422 and "pdf/txt/md/xlsx" in res.json()["detail"]
+    detail = res.json()["detail"]
+    # 受け口(rag.ALLOWED_EXTENSIONS)の全形式が出る。PREP-03 で画像を足したので列挙も伸びる
+    assert res.status_code == 422
+    for ext in ("pdf", "txt", "md", "xlsx", "png", "jpg", "jpeg"):
+        assert ext in detail, ext
 
 
 def test_extract_returns_chunks_without_ingesting(fake_rag):
@@ -627,7 +631,8 @@ def test_kind_is_passed_to_the_adb_backend(monkeypatch):
     monkeypatch.setattr(rag_module, "make_inference_client", lambda **kw: _FakeDp(sent))
     monkeypatch.setattr(rag_adb, "availability", lambda: rag_adb.READY)
     monkeypatch.setattr(rag_adb, "ingest",
-                        lambda owner, fid, name, body, *, kind="doc": seen.update(kind=kind))
+                        lambda owner, fid, name, body, *, kind="doc", **kw:
+                        seen.update(kind=kind))
     _use_real_add_file(monkeypatch)
     res = client.post(
         "/api/rag/files",
@@ -732,3 +737,215 @@ def test_opensearch_extracts_xlsx_instead_of_decoding_bytes():
     text = rag_opensearch._extract_text("spec.xlsx", _workbook())
     assert "600 req/min" in text and "[制約 C5:E5]" in text
     assert "�" not in text
+
+
+# --- PREP-03: スキャン PDF / 画像の結線 ----------------------------------------
+
+
+@pytest.fixture
+def scan(monkeypatch):
+    """OCR をモックし、記憶をクリアした `extract_scan`(OCI は呼ばない)。"""
+    from test_extract_scan import FakeOcr, build_pdf, build_png
+
+    from jetuse_core import docunderstand, extract_scan
+
+    fake = FakeOcr()
+    monkeypatch.setattr(docunderstand, "ocr", fake)
+    monkeypatch.setattr(docunderstand, "ocr_vlm", FakeOcr("VLM"))
+    memos = (extract_scan._native, extract_scan._result, extract_scan._flags)
+    for memo in memos:
+        memo.clear()
+    yield SimpleNamespace(ocr=fake, pdf=build_pdf, png=build_png())
+    for memo in memos:
+        memo.clear()
+
+
+def test_extract_returns_page_numbers_for_a_scanned_pdf(scan):
+    """層1(`POST /api/extract`)がスキャン PDF を通し、出典に頁が載る。"""
+    res = client.post(
+        "/api/extract", files={"file": ("scan.pdf", scan.pdf(["", ""]), "application/pdf")}
+    )
+    assert res.status_code == 200
+    chunks = res.json()["chunks"]
+    assert [c["sheet"] for c in chunks] == ["p.1", "p.2"]
+    assert chunks[0]["text"] == "OCR1行目"
+
+
+def test_extract_accepts_images(scan):
+    res = client.post("/api/extract", files={"file": ("photo.png", scan.png, "image/png")})
+    assert res.status_code == 200
+    assert res.json()["chunks"][0]["sheet"] == "p.1"
+
+
+def test_extract_does_not_ocr_a_pdf_that_has_a_text_layer(scan):
+    """対照: 従来どおりテキスト層から取り、OCI を呼ばない(無駄な課金をしない)。"""
+    res = client.post(
+        "/api/extract",
+        files={"file": ("born-digital.pdf", scan.pdf(["Rate limit 600 rpm"]), "x")},
+    )
+    assert res.status_code == 200
+    assert "600 rpm" in res.json()["chunks"][0]["text"]
+    assert scan.ocr.calls == []
+
+
+def test_extract_rejects_an_unknown_ocr_engine_with_422(scan):
+    res = client.post(
+        "/api/extract", files={"file": ("scan.pdf", scan.pdf([""]), "x")},
+        data={"ocr_engine": "vlmm"},
+    )
+    assert res.status_code == 422 and "vlmm" in res.json()["detail"]
+    assert scan.ocr.calls == []
+
+
+def test_extract_lets_the_caller_choose_the_vlm_engine(scan):
+    res = client.post(
+        "/api/extract", files={"file": ("scan.pdf", scan.pdf([""]), "x")},
+        data={"ocr_engine": "vlm"},
+    )
+    assert res.status_code == 200
+    assert res.json()["chunks"][0]["text"] == "VLM1行目"
+    assert scan.ocr.calls == []          # DU は呼ばれない
+
+
+def test_extract_rejects_over_the_page_limit_without_truncating(scan, monkeypatch):
+    from jetuse_core import extract_scan
+
+    monkeypatch.setattr(extract_scan, "MAX_OCR_PAGES", 1)
+    res = client.post(
+        "/api/extract", files={"file": ("scan.pdf", scan.pdf(["", ""]), "x")}
+    )
+    assert res.status_code == 422
+    assert "limit=ocr_pages" in res.json()["detail"]
+    assert scan.ocr.calls == []
+
+
+def test_extract_reports_an_ocr_service_failure_as_503(scan, monkeypatch):
+    """IAM 未整備は利用者の入力の問題ではない(422 にしない)。"""
+    from jetuse_core import docunderstand
+
+    def boom(content, **kw):
+        raise docunderstand.OcrError("OCRサービスにアクセスできません(IAM未整備の可能性)")
+
+    monkeypatch.setattr(docunderstand, "ocr", boom)
+    res = client.post("/api/extract", files={"file": ("scan.pdf", scan.pdf([""]), "x")})
+    assert res.status_code == 503 and "IAM" in res.json()["detail"]
+
+
+def test_upload_accepts_images(scan, fake_rag):
+    res = client.post("/api/rag/files", files={"file": ("photo.jpg", scan.png, "image/jpeg")})
+    assert res.status_code == 200 and res.json()["filename"] == "photo.jpg"
+
+
+def test_prepare_upload_converts_a_scan_to_text_with_the_page_range(scan):
+    """マネージド Vector Store には OCR したテキストを渡す(属性はファイル単位)。"""
+    from jetuse_core import rag as rag_module
+
+    name, body, attrs = rag_module.prepare_upload("scan.pdf", scan.pdf(["", "", ""]))
+    assert name == "scan.pdf.txt"
+    assert body.decode().startswith("[p.1]\nOCR1行目")
+    assert attrs == {"sheet": "p.1-p.3"}
+
+
+def test_prepare_upload_passes_through_a_pdf_with_a_text_layer(scan):
+    """テキスト層のある PDF は原本のまま渡す(従来どおり。変換も OCR もしない)。"""
+    from jetuse_core import rag as rag_module
+
+    pdf = scan.pdf(["Rate limit 600 rpm"])
+    assert rag_module.prepare_upload("spec.pdf", pdf) == ("spec.pdf", pdf, {})
+    assert scan.ocr.calls == []
+
+
+def test_upload_ocrs_the_document_once_for_both_backends(scan, monkeypatch):
+    """1 回のアップロードで OCR は 1 回(マネージド変換と ADB 取り込みで二重課金しない)。"""
+    from jetuse_core import rag as rag_module
+    from jetuse_core import rag_adb
+
+    sent: dict = {}
+    units: dict = {}
+    monkeypatch.setattr(rag_module, "ensure_store", lambda owner: "vs_fake")
+    monkeypatch.setattr(rag_module, "_backup_original", lambda *a: None)
+    monkeypatch.setattr(rag_module, "_insert_file", lambda *a: None)
+    monkeypatch.setattr(rag_module, "make_inference_client", lambda **kw: _FakeDp(sent))
+    monkeypatch.setattr(rag_adb, "availability", lambda: rag_adb.READY)
+    monkeypatch.setattr(
+        rag_adb, "ingest",
+        lambda o, fid, name, body, **kw: units.update(
+            chunks=rag_adb.chunk_units(name, body, ocr_engine=kw.get("ocr_engine"))),
+    )
+    _use_real_add_file(monkeypatch)
+    res = client.post(
+        "/api/rag/files", files={"file": ("scan.pdf", scan.pdf(["", ""]), "application/pdf")}
+    )
+    assert res.status_code == 200
+    assert len(scan.ocr.calls) == 1
+    assert sent["upload_name"] == "scan.pdf.txt"
+    assert sent["attributes"]["sheet"] == "p.1-p.2"
+    assert [c["sheet"] for c in units["chunks"]] == ["p.1", "p.2"]   # 出典は頁ごと
+
+
+def test_opensearch_ocrs_images_instead_of_indexing_mojibake(scan):
+    """画像を UTF-8 デコードして化けた本文を "indexed" にしない。"""
+    from jetuse_core import rag_opensearch
+
+    assert rag_opensearch._extract_text("photo.png", scan.png) == "OCR1行目"
+
+
+def test_upload_propagates_the_chosen_engine_to_every_backend(scan, monkeypatch):
+    """`ocr_engine=vlm` は取り込み口からも効き、**全バックエンドが同じエンジンで読む**。
+
+    片方だけ既定の DU に落ちると、同じファイルの本文がバックエンドごとに違う経路で
+    起こされ、検索結果が選んだバックエンドで変わる（RAGM-04 で `kind` について直したのと
+    同じ種類のズレ）。
+    """
+    from test_extract_scan import FakeOcr
+
+    from jetuse_core import docunderstand, rag_adb, rag_opensearch
+    from jetuse_core import rag as rag_module
+
+    vlm = FakeOcr("VLM")
+    monkeypatch.setattr(docunderstand, "ocr_vlm", vlm)
+    sent: dict = {}
+    seen: dict = {}
+    monkeypatch.setattr(rag_module, "ensure_store", lambda owner: "vs_fake")
+    monkeypatch.setattr(rag_module, "_backup_original", lambda *a: None)
+    monkeypatch.setattr(rag_module, "_insert_file", lambda *a: None)
+    monkeypatch.setattr(rag_module, "make_inference_client", lambda **kw: _FakeDp(sent))
+    monkeypatch.setattr(rag_adb, "availability", lambda: rag_adb.READY)
+    monkeypatch.setattr(
+        rag_adb, "ingest",
+        lambda o, fid, name, body, **kw: seen.update(
+            adb=[c["sheet"] for c in rag_adb.chunk_units(name, body,
+                                                         ocr_engine=kw.get("ocr_engine"))]),
+    )
+    monkeypatch.setattr(rag_opensearch, "enabled", lambda: True)
+    monkeypatch.setattr(
+        rag_opensearch, "ingest",
+        lambda o, fid, name, body, **kw: seen.update(
+            opensearch=rag_opensearch._extract_text(name, body,
+                                                    ocr_engine=kw.get("ocr_engine"))),
+    )
+    _use_real_add_file(monkeypatch)
+    res = client.post(
+        "/api/rag/files",
+        files={"file": ("scan.pdf", scan.pdf(["", ""]), "application/pdf")},
+        data={"ocr_engine": "vlm"},
+    )
+    assert res.status_code == 200
+    assert scan.ocr.calls == []                 # 既定の DU は呼ばれない
+    assert len(vlm.calls) == 1                  # VLM が 1 回だけ（経路ごとに呼ばない）
+    assert sent["upload_bytes"].decode().startswith("[p.1]\nVLM1行目")
+    assert seen["adb"] == ["p.1", "p.2"]
+    assert seen["opensearch"] == "VLM1行目\nVLM2行目"
+
+
+def test_conflicting_attributes_are_rejected_before_paying_for_ocr(scan, monkeypatch):
+    """どうせ 422 になる要求のために OCR（課金）を先に走らせない（review-4 PREP03-002）。"""
+    _use_real_add_file(monkeypatch)
+    for name, body in (("photo.png", scan.png), ("scan.pdf", scan.pdf([""]))):
+        res = client.post(
+            "/api/rag/files", files={"file": (name, body, "application/octet-stream")},
+            data={"attributes": json.dumps({"sheet": "p.9"})},
+        )
+        assert res.status_code == 422, name
+        assert "sheet" in res.json()["detail"]
+    assert scan.ocr.calls == []      # OCI を 1 回も呼んでいない

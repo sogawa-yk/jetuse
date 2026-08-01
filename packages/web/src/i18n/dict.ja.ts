@@ -152,7 +152,8 @@ export const ja = {
   'rag.files': '文書ファイル',
   'rag.upload': 'アップロード',
   'rag.uploading': 'アップロード中...',
-  'rag.supported': '対応形式: PDF / テキスト / Markdown / Excel（.xlsx。20MBまで）',
+  'rag.supported':
+    '対応形式: PDF / テキスト / Markdown / Excel（.xlsx）は20MBまで、画像（.png .jpg）は8MBまで。スキャンPDFと画像はOCRで本文を取り込みます',
   'rag.empty': 'まだ文書がありません。アップロードしてください',
   'rag.needFiles': '文書をアップロードすると質問できます（取り込み完了後）',
   'rag.chatHint': '左の文書について質問してください',

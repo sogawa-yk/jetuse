@@ -1,0 +1,1 @@
+tasks/PREP-03.md の受け入れ条件をすべて満たし、pytest 全件パス・ruff クリーン・STATE.md の review_verdict が PASS・実環境 E2E 3本（スキャンPDFの本文が検索でヒットしページ番号が引用に載る / 画像で同様 / テキスト層のあるPDFはOCRを通らない対照）の証跡込みで Codex レビュー PASS であること。docunderstand.py の OCR 実装を作り直さない（結線するだけ）。IAM を変更しない。顧客名を書かない。架空のスキャン文書のみ。未承認のコミット・PR・push を行わない。

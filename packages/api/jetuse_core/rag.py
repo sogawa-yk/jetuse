@@ -15,14 +15,16 @@ from typing import Any
 import oracledb
 from openai import NotFoundError
 
-from . import extract_xlsx, rag_metadata
+from . import extract_scan, extract_xlsx, rag_metadata
 from .db import connect
 from .genai import make_cp_client, make_inference_client, resolve_project_ocid
 from .settings import get_settings
 
 logger = logging.getLogger("jetuse.rag")
 
-ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md", extract_xlsx.XLSX_EXT}
+# 画像(png/jpg/jpeg)は OCR を通して取り込む(PREP-03)。画面側の選択肢
+# `packages/web/src/pages/rag/uploadFormats.ts` と揃える(狭いと画面から試せない)。
+ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md", extract_xlsx.XLSX_EXT} | extract_scan.IMAGE_EXTENSIONS
 MAX_BYTES = 20 * 1024 * 1024
 
 
@@ -292,12 +294,30 @@ def build_attributes(
     return rag_metadata.normalize_attributes({**base, **(attributes or {})})
 
 
-def prepare_upload(filename: str, content: bytes) -> tuple[str, bytes, dict[str, str]]:
+def derived_keys(filename: str, content: bytes) -> set[str]:
+    """この形式で**抽出結果から決まる**属性キー(利用者は指定できない)。
+
+    OCR も抽出も呼ばずに答える(判定に使うのはファイル名とテキスト層の有無だけ)。
+    `add_file` はこれを使って、課金される抽出の**前に**属性の競合を 422 で断る。
+    """
+    if extract_scan.needs_ocr(filename, content):
+        return {"sheet"}          # ページ範囲(`p.1-p.3`)
+    if extract_xlsx.is_xlsx(filename):
+        return {"sheet", "cells"}  # シート名 + セル範囲
+    return set()
+
+
+def prepare_upload(filename: str, content: bytes, *,
+                   ocr_engine: str | None = None) -> tuple[str, bytes, dict[str, str]]:
     """マネージド Vector Store へ渡す `(ファイル名, 本文, ファイル単位の属性)`(PREP-01)。
 
-    xlsx だけ変換する。マネージド側は Office 形式を受け付けない(SPIKE-03: docx は
+    変換するのは 2 つだけ。マネージド側は Office 形式を受け付けない(SPIKE-03: docx は
     `Unsupported file type`。xlsx も同じであることは PREP-01 の E2E で実測した)ので、
     抽出したテキストを渡す。
+
+    - **xlsx**: シート名 + セル範囲つきの抽出テキスト(PREP-01)。
+    - **画像 / テキスト層の無い頁を含む PDF**: OCR したページ順のテキスト(PREP-03)。
+      テキスト層の揃った PDF は**素通し**する(従来どおり。OCR を呼ばない = 課金しない)。
 
     **属性はファイル単位にしかできない**(SPIKE-M1 ①-a: 1 ファイルが複数チャンクに割れても
     属性は 1 種類)。したがって返す `sheet` / `cells` は「そのファイル全体」を表す値であり、
@@ -305,6 +325,16 @@ def prepare_upload(filename: str, content: bytes) -> tuple[str, bytes, dict[str,
     (この能力差が ADR-0020 の決定内容。1 チャンク = 1 ファイルに割って
     「セル単位で返る」ように見せる細工はしない)。
     """
+    if extract_scan.needs_ocr(filename, content):
+        pages = extract_scan.page_texts(filename, content, engine=ocr_engine)
+        text = extract_scan.render_text(pages)
+        if not text:
+            # 空の本文を送らない(送ると「取り込めたのに何も引けない」になる)
+            raise extract_scan.ScanUnsupported(
+                "OCR で本文を抽出できませんでした(白紙 / 判読できない画像)"
+            )
+        return (f"{filename}.txt", text.encode("utf-8"),
+                extract_scan.file_attributes(pages))
     if not extract_xlsx.is_xlsx(filename):
         return filename, content, {}
     chunks = extract_xlsx.extract(filename, content)
@@ -317,7 +347,8 @@ def prepare_upload(filename: str, content: bytes) -> tuple[str, bytes, dict[str,
 
 
 def add_file(
-    owner: str, filename: str, content: bytes, attributes: dict[str, Any] | None = None
+    owner: str, filename: str, content: bytes, attributes: dict[str, Any] | None = None,
+    ocr_engine: str | None = None,
 ) -> dict[str, Any]:
     """Files APIへアップロードしVector Storeへ登録(status=processingで返す)。
 
@@ -325,17 +356,28 @@ def add_file(
     不正な属性は `rag_metadata.MetadataError`(ルート側で 422)で、OCI を呼ぶ前に弾く。
     xlsx は抽出を通してから渡す(PREP-01)。上限超過は `extract_xlsx.ExtractionLimitError`
     (ルート側で 422)で、こちらも OCI を呼ぶ前に弾く。
+    スキャン PDF・画像は OCR を通してから渡す(PREP-03)。`ocr_engine` は利用者の明示指定
+    (省略時は `extract_scan.DEFAULT_ENGINE`)。
     """
-    # 台帳・原本バックアップ・sha256 は**元のファイル**のまま(変換するのは送信する本文だけ)
-    upload_name, upload_bytes, derived = prepare_upload(filename, content)
-    conflicting = sorted(set(derived) & set(attributes or {}))
+    # 属性の競合は**抽出より前に**弾く。あとで見ると、どうせ 422 になる要求のために
+    # OCR(課金される)を先に走らせてしまう。判定に使う `derived_keys` は OCR を呼ばない
+    conflicting = sorted(derived_keys(filename, content) & set(attributes or {}))
     if conflicting:
+        raise rag_metadata.MetadataError(
+            f"この形式では {', '.join(conflicting)} は抽出結果から決まります(指定できません)。"
+            "チャンク単位のセル範囲・頁が要るなら adb バックエンドを使ってください"
+        )
+    # 台帳・原本バックアップ・sha256 は**元のファイル**のまま(変換するのは送信する本文だけ)
+    upload_name, upload_bytes, derived = prepare_upload(filename, content,
+                                                        ocr_engine=ocr_engine)
+    conflicting = sorted(set(derived) & set(attributes or {}))
+    if conflicting:  # 念のための二重の網(上で弾けているはず)
         # 導出値を利用者指定で上書きさせない。上書きを許すと、複数シートのブックに
         # 特定のセル範囲を付けて「マネージドでもセル単位で返る」ように見せられてしまう
         # (ADR-0020 が隠すなと決めた能力差そのもの)。黙って捨てずに 422 で断る
         raise rag_metadata.MetadataError(
-            f"xlsx では {', '.join(conflicting)} は抽出結果から決まります(指定できません)。"
-            "チャンク単位のセル範囲が要るなら adb バックエンドを使ってください"
+            f"この形式では {', '.join(conflicting)} は抽出結果から決まります(指定できません)。"
+            "チャンク単位のセル範囲・頁が要るなら adb バックエンドを使ってください"
         )
     attrs = build_attributes(filename, content, {**(attributes or {}), **derived})
     vs_id = ensure_store(owner)
@@ -371,7 +413,7 @@ def add_file(
         from . import rag_opensearch
 
         if rag_opensearch.enabled():
-            rag_opensearch.ingest(owner, file_id, filename, content)
+            rag_opensearch.ingest(owner, file_id, filename, content, ocr_engine=ocr_engine)
     except Exception:
         logger.exception("opensearch ingest failed (ignored)")
     # ADB自前索引(RAGM-02)にも取り込む(表がある環境のみ)。
@@ -387,7 +429,7 @@ def add_file(
             # 同じファイルがマネージド側では kind='spec'、ADB 側では kind='doc' になり、
             # 分類での絞り込みがバックエンドを変えた瞬間に結果を変える(review-2 PREP01-004)。
             # 値は rag_metadata が文字列に限っているので、ここで変換はしない(RAGM-04)
-            rag_adb.ingest(owner, file_id, filename, content,
+            rag_adb.ingest(owner, file_id, filename, content, ocr_engine=ocr_engine,
                            **({"kind": attrs["kind"]} if "kind" in attrs else {}))
         elif state == rag_adb.UNAVAILABLE:
             # 「表が無い(未導入)」と「今つながらない」を区別する。後者を黙って飛ばすと、

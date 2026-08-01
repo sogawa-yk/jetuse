@@ -16,7 +16,7 @@
 
 - **ベクトルストアはユーザーごとに1つ**を遅延作成（`RAG_STORES(owner_sub PK, vector_store_id)`、migration 005）。共有ナレッジベースはPhase 4出口で要否判断
 - `RAG_FILES(id PK, owner_sub, filename, oci_file_id, status, bytes, error, created_at)` — 表示名と状態の正はADB
-- アップロードフロー: multipart受信（**20MB上限、拡張子 pdf/txt/md/xlsx のみ**。docxは「未対応(SPIKE-03)」を明示エラー）→ Object Storageへ原本バックアップ（`{RAG_BUCKET}/rag/{owner}/{file_id}_{filename}`、ベストエフォート）→ Files API（purpose=assistants）→ `vector_stores.files.create`（ファイル単位）→ ADB記録（status=processing）
+- アップロードフロー: multipart受信（**20MB上限、拡張子 pdf/txt/md/xlsx/png/jpg/jpeg のみ**。docxは「未対応(SPIKE-03)」を明示エラー。画像とテキスト層の無い PDF は OCR を通す — [PREP-03]）→ Object Storageへ原本バックアップ（`{RAG_BUCKET}/rag/{owner}/{file_id}_{filename}`、ベストエフォート）→ Files API（purpose=assistants）→ `vector_stores.files.create`（ファイル単位）→ ADB記録（status=processing）
 - 状態: 一覧取得時にprocessingの行だけDPへ `files.retrieve` して completed/failed を反映
 - 削除: VSから除去→Files API削除→OS原本削除（ベストエフォート）→ADB削除
 
@@ -47,6 +47,7 @@
 | txt / md | チャンク単位（行範囲 `L12:L20`） | **ファイル単位**（1 ファイル 1 種類） |
 | pdf | チャンク単位（`p.3` + 行範囲） | **ファイル単位** |
 | **xlsx** | **チャンク単位（シート名 + セル範囲 `C5:E5`）** | **ファイル単位**（`sheet` / `cells` は「そのファイル全体」を表す値） |
+| **png / jpg / jpeg**、**テキスト層の無い pdf** | **チャンク単位（ページ `p.2` + 行範囲）** | **ファイル単位**（`sheet` は `p.1-p.3` = そのファイル全体の範囲） |
 
 - 抽出は `jetuse_core/extract_xlsx.py`。**openpyxl を `read_only=True, data_only=True`** で開く
   （大きなブックを一度に展開しない／数式ではなく値を取る。キャッシュの無い数式セルは空扱い）。
@@ -81,6 +82,34 @@
 - `POST /api/extract`（新規）: ファイルを渡すと**取り込まずに**抽出結果
   `{filename, chunk_count, chunks:[{sheet, cells, text}]}` を返す。案件側が独自の構造化を挟むための口。
   認証・拡張子・サイズ上限はアップロードと同じ。返るチャンクは `adb` へ投入されるものと同一。
+
+### [PREP-03] スキャン PDF・画像の前処理（OCR）2026-08-01追記
+
+OCR 本体は `jetuse_core/docunderstand.py`（ENH-07）。PREP-03 が足したのは**取り込み経路との結線**
+（`jetuse_core/extract_scan.py`）だけで、OCR 実装は作り直していない。検証は
+`docs/verification/PREP-03.md`。
+
+- **OCR を通す判定はページ単位**で、`pypdf` の `extract_text()` が空白以外を返すか**だけ**で決める。
+  テキスト層のあるページは**そのまま**（OCR を呼ばない = 課金しない）。テキスト層の無いページ**だけ**を
+  1 本のサブ PDF にまとめて OCR へ出す（一部だけスキャンの混在 PDF でも読める分は課金しない）。
+  画像は常に OCR（1 ページ扱い）。
+- **出典はページ番号**。`adb` は `sheet="p.2"` + 行範囲（PDF は RAGM-02 から同じ語彙）、
+  マネージドは**ファイル単位**で `sheet="p.1-p.3"`。**属性キーは増やしていない**
+  （`page` を足すと同じ位置情報が 2 通りになる。判断は検証レポート §4）。
+- **既定エンジンは `document_understanding`**。切り替えは利用者の明示指定
+  （`POST /api/rag/files` と `POST /api/extract` の `ocr_engine`）のみで、**自動判定はしない**
+  （何を根拠に切るかを OCR 前に持てないため）。未知のエンジン名は 422（黙って既定へ落とさない）。
+  判断根拠は検証レポート §3（要旨: 本文検索が目的・厳密 OCR・ページ単価。VLM の優位点である
+  日本語の表は本タスクの非ゴール）。表抽出は要求しない（`tables=False`）。
+- **上限は切り詰めず 422**。`limit=ocr_pages`（OCR に出すページ数 100）/ `limit=ocr_bytes`（1 画像 8MB）/
+  `limit=ocr_input`（`docunderstand` 側の総バイト 60MB・総ページ 100）。
+  **OCR サービス側の失敗（IAM 未整備・障害）は 503**（利用者の入力の問題ではない）。
+- 1 回のアップロードで OCR は**1 回**（マネージド変換 / `adb` / `opensearch` の 3 経路が同じ本文を
+  読むため、内容ハッシュ + エンジン + 形式で結果を覚える）。**この重複排除はプロセス内まで**で、
+  worker / コンテナが複数ある構成で同じ文書が同時に来た場合は防がない（分散ロックは入れていない）。
+- **`select_ai` は対象外**: DB 側が原本を読む方式なのでアプリの OCR を通らず、
+  スキャン PDF・画像は索引に入らない（バッジは `pending` のまま）。扱いの決定は実測待ち
+  （PREP-01 → PREP-02 の経緯があるため、実測なしに恒久 `error` にしない）。
 
 ### [PREP-02] バックエンドごとの xlsx の扱い（実測）2026-07-30追記
 
