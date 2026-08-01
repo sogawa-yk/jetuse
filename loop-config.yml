@@ -29,30 +29,24 @@ stage_runner:
 # 中身と証跡（runs/）だけ。置き場の解決は各自のホーム側（~/.claude）スキルに委ねる。
 # 接点の契約は docs/guides/report-pipe.md（入力=完成済みHTML+topic / 出力=絶対パス+埋め込み記法）。
 report:
-  # 原本の生成先。証跡と同じ run 配下に置き、git 追跡はしない（.gitignore で塞いである）。
-  build_dir: "runs/<run-id>/report"
-  pipe: personal_skill        # personal_skill | repo_local（repo_local は build_dir に置くだけ）
-  skill: preview              # ホーム側 ~/.claude/skills/<name>。LOOP_REPORT_SKILL で上書き可。
-  mode: place_only            # 完成済み HTML をそのまま配置させる（スキル側で再生成・改変させない）
-  # 置き場と命名（2026-08-01 改定）。目的で分け、日付を先頭に、タイトルは内容を書く。
-  # 「読むもの(reports)」と「決めるもの(decisions)」を混ぜると未処理の判断が埋もれる。
-  # タスクIDをファイル名にしない（<TASK>.html では中身が分からない。IDは本文の脚注へ）。
+  # **報告書はオーケストレータが書く**（2026-08-01 変更）。ループは HTML を作らない。
+  # 理由: 双方が作って二重になり、かつ実装の文脈に近すぎて実装者視点（判定・差分・findings の
+  # 羅列）になりやすかった。施主の評価は「オーケストレータが書いたものの方が読みやすい」。
+  writer: orchestrator        # orchestrator | loop（loop は 2026-08-01 に廃止）
+  # ループは停止時に「構造化した事実」を最終メッセージで返すだけ（loop-protocol の
+  # 「完了ゲートで人間へ返すもの」）。HTML 生成・レンダリング確認・配置は行わない＝その分の
+  # トークンを使わない。STATE.md には従来どおり全部書く（ローカル・完了時に runs/ へ写す）。
+
+  # 以下はオーケストレータが報告書を書くときの規約（ループは読まなくてよい）。
+  style_guide: ".claude/skills/loop-protocol/references/report-style.md"
   naming: "<YYYY-MM-DD>_<内容がわかるタイトル>.html"
   purpose:
-    task_report: reports      # 完了報告 → _renders/reports/
-    decision:    decisions    # 承認を問うもの → _renders/decisions/
-  topic:
-    # <TITLE> はタスクIDではなく「何をしたか」を日本語で。例: Excelをセル位置つきで取り込む
-    task: "<YYYY-MM-DD>_<TITLE>"
-    stage: "<YYYY-MM-DD>_<stage>ステージの報告"
-  # パイプ未設定（個人スキル未導入 / .obsidian-dir 未設定）のときの退避。ループは止めない。
-  fallback: artifact          # artifact | none。build_dir の HTML を Artifact 化して提示＋1行警告。
-  # 「読めない報告書は失敗」（2026-07-28 の差し戻しを受けて明文化）。書き方の正本と様式・検証。
-  style_guide: ".claude/skills/loop-protocol/references/report-style.md"
-  templates:
-    task: ".claude/skills/loop-protocol/references/task-packet-template.html"        # 実装タスクの完了報告
-    decision: ".claude/skills/loop-protocol/references/decision-packet-template.html" # 方式・設計の判断を仰ぐ
-  render_check: ".claude/skills/loop-protocol/scripts/check_report_render.sh"  # 提示前に実行し PNG を目視（省略不可）
+    report:   reports         # 読み物（完了報告・調査結果・説明）→ _renders/reports/
+    decision: decisions       # 承認を問うもの → _renders/decisions/
+  pipe: personal_skill        # ホーム側 ~/.claude/skills/preview（配置先の解決）
+  mode: place_only            # 完成済み HTML をそのまま配置させる
+  fallback: artifact          # 配置できないときの退避。作業は止めない
+  render_check: ".claude/skills/loop-protocol/scripts/check_report_render.sh"  # 提示前に PNG を目視
 
 review:
   reviewer: codex
