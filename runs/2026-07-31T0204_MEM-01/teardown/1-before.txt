@@ -1,0 +1,7 @@
+schema(ledger): JETUSE_MEM01_EFC2EA
+  接続先確認: jetuse-loop-adb / compartment=dev（承認済み）/ DB_NAME=G912A29DFC5DE89_JETUSELOOP2 / DSN=jetuseloop2_low
+all_users count: 1
+all_objects count: 28
+host ACEs: 3
+scheduler jobs: 1
+JETUSE* users: ['JETUSE_APP', 'JETUSE_APP_Q', 'JETUSE_MEM01_EFC2EA', 'JETUSE_SP1_02', 'JETUSE_SP1_03', 'JETUSE_SP2_01', 'JETUSE_SP2_02', 'JETUSE_SP2_02_Q']

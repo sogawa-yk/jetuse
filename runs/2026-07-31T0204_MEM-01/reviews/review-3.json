@@ -1,0 +1,55 @@
+{
+  "review_n": 3,
+  "timestamp": "2026-08-01T09:52:54+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-3.input.diff",
+  "raw_output_path": "reviews/review-3.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker はありません。実環境証跡は保留中の方式調査を十分に裏づけていますが、検証スクリプトには中心的な結論を誤って通し得る判定条件が2か所あります。認証情報、OCID、実エンドポイントのコミットは差分内に確認できません。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 2,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "MEM01-001",
+      "severity": "major",
+      "file": "spikes/mem01/probe_agent_memory.py",
+      "line": 84,
+      "issue": "否定的結論の sanity check が「source_lines_available に1行以上あること」しか確認していません。DBMS_CLOUD_AI と DBMS_CLOUD_AI_AGENT の片方だけが参照できる場合や、必須パッケージ・サブプログラムの問い合わせ結果が空の場合も終了コード0となり、「両パッケージの仕様全文に記憶APIがない」という文書の根拠を満たさない実行を成功扱いできます。",
+      "suggestion": "source_lines_available に両パッケージ名が存在し、それぞれの行数が非ゼロであることを検証してください。packages_ai と必須サブプログラム一覧にも期待するパッケージの存在確認を追加し、満たさなければ errors に記録して非ゼロ終了してください。"
+    },
+    {
+      "id": "MEM01-002",
+      "severity": "major",
+      "file": "spikes/mem01/probe_sdk.py",
+      "line": 241,
+      "issue": "会話A由来であることの判定が prov in (thread_a, None) となっており、SDKレスポンスから thread_id を取得できない場合もPASSします。これでは文書の「thread_id が会話Aであることまで確認」という中心的な主張を、出所不明のヒットでも通せます。",
+      "suggestion": "prov == thread_a のみを成功条件にしてください。thread_id が取得できない場合は明示的にFAILとし、必要ならSDKレスポンスの別フィールドから確実に provenance を抽出してください。"
+    },
+    {
+      "id": "MEM01-003",
+      "severity": "minor",
+      "file": "spikes/mem01/probe_sdk.py",
+      "line": 261,
+      "issue": "subject分離では user_b のスレッドや記憶を一度も作らず、存在しないuser_idの検索が0件になることだけを確認しています。user_b自身の記憶検索が正常に機能するという正の対照がなく、実在する2 subject 間の分離シナリオとしては網羅が弱いです。",
+      "suggestion": "user_b用の別スレッドに識別可能な記憶を登録し、user_b検索では自分の記憶が取得できる一方でuser_a由来の記憶が含まれないことを確認してください。可能なら逆方向の漏洩も検証してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "sufficient",
+    "notes": "runs/2026-07-31T0204_MEM-01/e2e/research-run.log と research/probe3-sdk-e2e.json の参照から、抽出、別スレッドからの想起、subject分離、スレッド削除の伝播がすべてPASSしたことを確認しました。最低2シナリオを満たし、今回のdiffが実装ではなくProposed ADRと調査スパイクを保留状態で残すものだという主張を裏づけています。JetUse API経由のE2E未実施についても、実装を人間ゲートで停止している旨がSKIPPED.mdに明記されており、現時点では正当です。ただし provenance とsubject分離のテスト強度には findings 記載の不足があります。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されていないため、指示どおりブラウザE2Eは実施していません。"
+    }
+  }
+}

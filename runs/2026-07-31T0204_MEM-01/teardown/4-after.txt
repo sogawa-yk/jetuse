@@ -1,0 +1,7 @@
+  接続先確認: jetuse-loop-adb / compartment=dev（承認済み）/ DB_NAME=G912A29DFC5DE89_JETUSELOOP2 / DSN=jetuseloop2_low
+all_users: 0  OK(不在)
+all_objects: 0  OK(不在)
+dba_host_aces: 0  OK(不在)
+scheduler_jobs: 0  OK(不在)
+recyclebin: 0  OK(不在)
+JETUSE* users: ['JETUSE_APP', 'JETUSE_APP_Q', 'JETUSE_SP1_02', 'JETUSE_SP1_03', 'JETUSE_SP2_01', 'JETUSE_SP2_02', 'JETUSE_SP2_02_Q']

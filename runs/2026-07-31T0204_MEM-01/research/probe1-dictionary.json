@@ -1,0 +1,1415 @@
+{
+  "version": [
+    {
+      "banner_full": "Oracle AI Database 26ai Enterprise Edition Release 23.26.3.1.0 - Production\nVersion 23.26.3.1.0"
+    }
+  ],
+  "compatible": [
+    {
+      "name": "compatible",
+      "value": "23.5.0"
+    }
+  ],
+  "objects_memory": [
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_OCI_CONTAINER_ENGINE_SHAPE_MEMORY_OPTIONS_T",
+      "object_type": "TYPE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_OCI_CONTAINER_ENGINE_SHAPE_MEMORY_OPTIONS_TBL",
+      "object_type": "TYPE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_OCI_CONTAINER_INSTANCES_SHAPE_MEMORY_OPTIONS_T",
+      "object_type": "TYPE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_OCI_CORE_IMAGE_MEMORY_CONSTRAINTS_T",
+      "object_type": "TYPE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_OCI_CORE_SHAPE_INPUT_OUTPUT_MEMORY_MANAGEMENT_UNIT_ENABLED_PLATFORM_OPTIONS_T",
+      "object_type": "TYPE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_OCI_CORE_SHAPE_MEMORY_ENCRYPTION_OPTIONS_T",
+      "object_type": "TYPE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_OCI_CORE_SHAPE_MEMORY_OPTIONS_T",
+      "object_type": "TYPE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_OCI_DATABASE_MANAGEMENT_MEMORY_AGGREGATE_METRICS_T",
+      "object_type": "TYPE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_OCI_MS_DB_SYSTEM_GENERATE_HEAT_WAVE_CLUSTER_MEMORY_ESTIMATE_RESPONSE_T",
+      "object_type": "TYPE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_OCI_MS_DB_SYSTEM_GET_HEAT_WAVE_CLUSTER_MEMORY_ESTIMATE_RESPONSE_T",
+      "object_type": "TYPE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_OCI_MYSQL_HEAT_WAVE_CLUSTER_MEMORY_ESTIMATE_T",
+      "object_type": "TYPE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_OCI_MYSQL_HEAT_WAVE_CLUSTER_SCHEMA_MEMORY_ESTIMATE_T",
+      "object_type": "TYPE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_OCI_MYSQL_HEAT_WAVE_CLUSTER_SCHEMA_MEMORY_ESTIMATE_TBL",
+      "object_type": "TYPE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_OCI_MYSQL_HEAT_WAVE_CLUSTER_TABLE_MEMORY_ESTIMATE_T",
+      "object_type": "TYPE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_OCI_MYSQL_HEAT_WAVE_CLUSTER_TABLE_MEMORY_ESTIMATE_TBL",
+      "object_type": "TYPE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_OCI_OPSI_HOST_MEMORY_CONFIGURATION_T",
+      "object_type": "TYPE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_OCI_OPSI_HOST_MEMORY_STATISTICS_T",
+      "object_type": "TYPE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_OCI_OPSI_HOST_MEMORY_USAGE_T",
+      "object_type": "TYPE"
+    },
+    {
+      "owner": "JETUSE_MEM01_EFC2EA",
+      "object_name": "MEM01MEMORY",
+      "object_type": "TABLE"
+    },
+    {
+      "owner": "JETUSE_MEM01_EFC2EA",
+      "object_name": "MEM01ORACLEAGENTMEMORY_SCHEMA_META",
+      "object_type": "TABLE"
+    },
+    {
+      "owner": "JETUSE_MEM01_EFC2EA",
+      "object_name": "MEM01_MEMORY",
+      "object_type": "TABLE"
+    },
+    {
+      "owner": "JETUSE_MEM01_EFC2EA",
+      "object_name": "MEM01_ORACLEAGENTMEMORY_SCHEMA_META",
+      "object_type": "TABLE"
+    },
+    {
+      "owner": "MDSYS",
+      "object_name": "SDO_MEMORY",
+      "object_type": "PACKAGE"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "AWR_BASE_DATA_MEMORY_AREA",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "AWR_CDB_DATA_MEMORY_AREA",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "AWR_CDB_MEMORY_RESIZE_OPS",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "AWR_CDB_MEMORY_TARGET_ADVICE",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "AWR_PDB_DATA_MEMORY_AREA",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "AWR_PDB_MEMORY_RESIZE_OPS",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "AWR_PDB_MEMORY_TARGET_ADVICE",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "AWR_ROOT_DATA_MEMORY_AREA",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "AWR_ROOT_MEMORY_RESIZE_OPS",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "AWR_ROOT_MEMORY_TARGET_ADVICE",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "CDB_HIST_DATA_MEMORY_AREA",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "CDB_HIST_MEMORY_RESIZE_OPS",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "CDB_HIST_MEMORY_TARGET_ADVICE",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "CDB_INMEMORY_AIMTASKDETAILS",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "CDB_INMEMORY_AIMTASKS",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBA_HIST_DATA_MEMORY_AREA",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBA_HIST_MEMORY_RESIZE_OPS",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBA_HIST_MEMORY_TARGET_ADVICE",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBA_INMEMORY_ADVISOR_RECOMMENDATION",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBA_INMEMORY_AIMTASKDETAILS",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBA_INMEMORY_AIMTASKS",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBA_SCHEDULER_IN_MEMORY_TRACE",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_CLOUD_OCI_CONTAINER_ENGINE_SHAPE_MEMORY_OPTIONS_T",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_CLOUD_OCI_CONTAINER_ENGINE_SHAPE_MEMORY_OPTIONS_TBL",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_CLOUD_OCI_CONTAINER_INSTANCES_SHAPE_MEMORY_OPTIONS_T",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_CLOUD_OCI_CORE_IMAGE_MEMORY_CONSTRAINTS_T",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_CLOUD_OCI_CORE_SHAPE_INPUT_OUTPUT_MEMORY_MANAGEMENT_UNIT_ENABLED_PLATFORM_OPTIONS_T",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_CLOUD_OCI_CORE_SHAPE_MEMORY_ENCRYPTION_OPTIONS_T",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_CLOUD_OCI_CORE_SHAPE_MEMORY_OPTIONS_T",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_CLOUD_OCI_DATABASE_MANAGEMENT_MEMORY_AGGREGATE_METRICS_T",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_CLOUD_OCI_MS_DB_SYSTEM_GENERATE_HEAT_WAVE_CLUSTER_MEMORY_ESTIMATE_RESPONSE_T",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_CLOUD_OCI_MS_DB_SYSTEM_GET_HEAT_WAVE_CLUSTER_MEMORY_ESTIMATE_RESPONSE_T",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_CLOUD_OCI_MYSQL_HEAT_WAVE_CLUSTER_MEMORY_ESTIMATE_T",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_CLOUD_OCI_MYSQL_HEAT_WAVE_CLUSTER_SCHEMA_MEMORY_ESTIMATE_T",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_CLOUD_OCI_MYSQL_HEAT_WAVE_CLUSTER_SCHEMA_MEMORY_ESTIMATE_TBL",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_CLOUD_OCI_MYSQL_HEAT_WAVE_CLUSTER_TABLE_MEMORY_ESTIMATE_T",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_CLOUD_OCI_MYSQL_HEAT_WAVE_CLUSTER_TABLE_MEMORY_ESTIMATE_TBL",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_CLOUD_OCI_OPSI_HOST_MEMORY_CONFIGURATION_T",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_CLOUD_OCI_OPSI_HOST_MEMORY_STATISTICS_T",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_CLOUD_OCI_OPSI_HOST_MEMORY_USAGE_T",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_INMEMORY",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_INMEMORY_ADMIN",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_INMEMORY_ADVISE",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$DATA_MEMORY_AREA",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$INMEMORY_AREA",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$INMEMORY_FASTSTART_AREA",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$INMEMORY_OBJECT_ADVICE",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$INMEMORY_OBJECT_ADVICE_PDB",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$INMEMORY_SIZE_ADVICE",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$INMEMORY_SIZE_ADVICE_PDB",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$INMEMORY_XMEM_AREA",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$JAVA_LIBRARY_CACHE_MEMORY",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$LIBRARY_CACHE_MEMORY",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$MEMORY_CURRENT_RESIZE_OPS",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$MEMORY_DYNAMIC_COMPONENTS",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$MEMORY_RESIZE_OPS",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$MEMORY_TARGET_ADVICE",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$PROCESS_MEMORY",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$PROCESS_MEMORY_DETAIL",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$PROCESS_MEMORY_DETAIL_PROG",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$RESULT_CACHE_MEMORY",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$SCHEDULER_IN_MEMORY_TRACE",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$SGA_DYNAMIC_FREE_MEMORY",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$SQL_SHARED_MEMORY",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "GV$VECTOR_MEMORY_POOL",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "V$DATA_MEMORY_AREA",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "V$INMEMORY_AREA",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "V$INMEMORY_FASTSTART_AREA",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "V$INMEMORY_OBJECT_ADVICE",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "V$INMEMORY_OBJECT_ADVICE_PDB",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "V$INMEMORY_SIZE_ADVICE",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "V$INMEMORY_SIZE_ADVICE_PDB",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "V$INMEMORY_XMEM_AREA",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "V$JAVA_LIBRARY_CACHE_MEMORY",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "V$LIBRARY_CACHE_MEMORY",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "V$MEMORY_CURRENT_RESIZE_OPS",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "V$MEMORY_DYNAMIC_COMPONENTS",
+      "object_type": "SYNONYM"
+    }
+  ],
+  "objects_agent": [
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBA_AI_AGENTS",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBA_AI_AGENT_ATTRIBUTES",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBA_AI_AGENT_TASKS",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBA_AI_AGENT_TASK_ATTRIBUTES",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBA_AI_AGENT_TASK_HISTORY",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBA_AI_AGENT_TEAMS",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBA_AI_AGENT_TEAM_ATTRIBUTES",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBA_AI_AGENT_TEAM_HISTORY",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBA_AI_AGENT_TOOLS",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBA_AI_AGENT_TOOL_ATTRIBUTES",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBA_AI_AGENT_TOOL_HISTORY",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_AI_AGENT$",
+      "object_type": "TABLE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_AI_AGENT_ATTR$",
+      "object_type": "TABLE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_AI_AGENT_TASK$",
+      "object_type": "TABLE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_AI_AGENT_TASK_ATTR$",
+      "object_type": "TABLE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_AI_AGENT_TASK_HIST$",
+      "object_type": "TABLE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_AI_AGENT_TASK_HISTORY$",
+      "object_type": "TABLE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_AI_AGENT_TASK_STATE$",
+      "object_type": "TABLE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_AI_AGENT_TEAM$",
+      "object_type": "TABLE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_AI_AGENT_TEAM_ATTR$",
+      "object_type": "TABLE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_AI_AGENT_TEAM_HIST$",
+      "object_type": "TABLE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_AI_AGENT_TEAM_HISTORY$",
+      "object_type": "TABLE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_AI_AGENT_TOOL$",
+      "object_type": "TABLE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_AI_AGENT_TOOL_ATTR$",
+      "object_type": "TABLE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_AI_AGENT_TOOL_HIST$",
+      "object_type": "TABLE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_AI_AGENT_TOOL_HISTORY$",
+      "object_type": "TABLE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_AI_AGENT",
+      "object_type": "PACKAGE"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_AI_AGENT",
+      "object_type": "PACKAGE BODY"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "USER_AI_AGENTS",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "USER_AI_AGENT_ATTRIBUTES",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "USER_AI_AGENT_TASKS",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "USER_AI_AGENT_TASK_ATTRIBUTES",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "USER_AI_AGENT_TASK_HISTORY",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "USER_AI_AGENT_TEAMS",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "USER_AI_AGENT_TEAM_ATTRIBUTES",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "USER_AI_AGENT_TEAM_HISTORY",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "USER_AI_AGENT_TOOLS",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "USER_AI_AGENT_TOOL_ATTRIBUTES",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "USER_AI_AGENT_TOOL_HISTORY",
+      "object_type": "VIEW"
+    },
+    {
+      "owner": "JETUSE_APP",
+      "object_name": "AI$AGENT$SAI_35DABD28_TM_D6AC6C",
+      "object_type": "SQL TRANSLATION PROFILE"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBA_AI_AGENTS",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBA_AI_AGENT_ATTRIBUTES",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBA_AI_AGENT_TASKS",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBA_AI_AGENT_TASK_ATTRIBUTES",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBA_AI_AGENT_TASK_HISTORY",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBA_AI_AGENT_TEAMS",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBA_AI_AGENT_TEAM_ATTRIBUTES",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBA_AI_AGENT_TEAM_HISTORY",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBA_AI_AGENT_TOOLS",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBA_AI_AGENT_TOOL_ATTRIBUTES",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBA_AI_AGENT_TOOL_HISTORY",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_CLOUD_AI_AGENT",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "USER_AI_AGENTS",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "USER_AI_AGENT_ATTRIBUTES",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "USER_AI_AGENT_TASKS",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "USER_AI_AGENT_TASK_ATTRIBUTES",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "USER_AI_AGENT_TASK_HISTORY",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "USER_AI_AGENT_TEAMS",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "USER_AI_AGENT_TEAM_ATTRIBUTES",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "USER_AI_AGENT_TEAM_HISTORY",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "USER_AI_AGENT_TOOLS",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "USER_AI_AGENT_TOOL_ATTRIBUTES",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "USER_AI_AGENT_TOOL_HISTORY",
+      "object_type": "SYNONYM"
+    }
+  ],
+  "packages_ai": [
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_AI",
+      "object_type": "PACKAGE"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_CLOUD_AI",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "C##CLOUD$SERVICE",
+      "object_name": "DBMS_CLOUD_AI_AGENT",
+      "object_type": "PACKAGE"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_CLOUD_AI_AGENT",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_VECTOR",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "SYS",
+      "object_name": "DBMS_VECTOR",
+      "object_type": "PACKAGE"
+    },
+    {
+      "owner": "SYS",
+      "object_name": "DBMS_VECTOR_ADMIN",
+      "object_type": "PACKAGE"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_VECTOR_ADMIN",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "CTXSYS",
+      "object_name": "DBMS_VECTOR_CHAIN",
+      "object_type": "PACKAGE"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_VECTOR_CHAIN",
+      "object_type": "SYNONYM"
+    },
+    {
+      "owner": "SYS",
+      "object_name": "DBMS_VECTOR_DATABASE",
+      "object_type": "PACKAGE"
+    },
+    {
+      "owner": "PUBLIC",
+      "object_name": "DBMS_VECTOR_DATABASE",
+      "object_type": "SYNONYM"
+    }
+  ],
+  "dbms_cloud_ai_agent_subprograms": [
+    {
+      "procedure_name": "AGENT_TASK_EXECUTE_CHAIN_JOB"
+    },
+    {
+      "procedure_name": "AGENT_TASK_EXECUTE_SEQUENTIAL_JOB"
+    },
+    {
+      "procedure_name": "AGENT_TASK_EXECUTE_SUPERVISED_JOB"
+    },
+    {
+      "procedure_name": "CLEAR_TEAM"
+    },
+    {
+      "procedure_name": "CREATE_AGENT"
+    },
+    {
+      "procedure_name": "CREATE_TASK"
+    },
+    {
+      "procedure_name": "CREATE_TEAM"
+    },
+    {
+      "procedure_name": "CREATE_TOOL"
+    },
+    {
+      "procedure_name": "DELEGATE_TOOL"
+    },
+    {
+      "procedure_name": "DESCRIBE_TEAM"
+    },
+    {
+      "procedure_name": "DESCRIBE_TOOL"
+    },
+    {
+      "procedure_name": "DISABLE_AGENT"
+    },
+    {
+      "procedure_name": "DISABLE_TASK"
+    },
+    {
+      "procedure_name": "DISABLE_TEAM"
+    },
+    {
+      "procedure_name": "DISABLE_TOOL"
+    },
+    {
+      "procedure_name": "DROP_AGENT"
+    },
+    {
+      "procedure_name": "DROP_TASK"
+    },
+    {
+      "procedure_name": "DROP_TEAM"
+    },
+    {
+      "procedure_name": "DROP_TOOL"
+    },
+    {
+      "procedure_name": "ENABLE_AGENT"
+    },
+    {
+      "procedure_name": "ENABLE_TASK"
+    },
+    {
+      "procedure_name": "ENABLE_TEAM"
+    },
+    {
+      "procedure_name": "ENABLE_TOOL"
+    },
+    {
+      "procedure_name": "EXPORT_TEAM"
+    },
+    {
+      "procedure_name": "GET_DEFINITION"
+    },
+    {
+      "procedure_name": "GET_TEAM"
+    },
+    {
+      "procedure_name": "GET_TEAM_STATE"
+    },
+    {
+      "procedure_name": "GET_VARIABLE"
+    },
+    {
+      "procedure_name": "GRANT_TEAM_ACCESS"
+    },
+    {
+      "procedure_name": "HUMAN_TOOL"
+    },
+    {
+      "procedure_name": "IMPORT_TEAM"
+    },
+    {
+      "procedure_name": "LIST_TEAMS"
+    },
+    {
+      "procedure_name": "LIST_TOOLS"
+    },
+    {
+      "procedure_name": "RAG_TOOL"
+    },
+    {
+      "procedure_name": "REVOKE_TEAM_ACCESS"
+    },
+    {
+      "procedure_name": "RUN_TEAM"
+    },
+    {
+      "procedure_name": "RUN_TOOL"
+    },
+    {
+      "procedure_name": "SEND_EMAIL_TOOL"
+    },
+    {
+      "procedure_name": "SET_ATTRIBUTE"
+    },
+    {
+      "procedure_name": "SET_ATTRIBUTES"
+    },
+    {
+      "procedure_name": "SET_EXECUTION_STATE"
+    },
+    {
+      "procedure_name": "SET_TEAM"
+    },
+    {
+      "procedure_name": "SET_VARIABLE"
+    },
+    {
+      "procedure_name": "SHOW_AGENT_PROMPT"
+    },
+    {
+      "procedure_name": "SLACK_TOOL"
+    },
+    {
+      "procedure_name": "SQL_TOOL"
+    },
+    {
+      "procedure_name": "WEB_SEARCH_TOOL"
+    },
+    {
+      "procedure_name": null
+    }
+  ],
+  "dbms_cloud_ai_subprograms": [
+    {
+      "procedure_name": "ADD_CONVERSATION_TAG"
+    },
+    {
+      "procedure_name": "CLEAR_CONVERSATION_ID"
+    },
+    {
+      "procedure_name": "CLEAR_PROFILE"
+    },
+    {
+      "procedure_name": "CREATE_CONVERSATION"
+    },
+    {
+      "procedure_name": "CREATE_PROFILE"
+    },
+    {
+      "procedure_name": "CREATE_VECTOR_INDEX"
+    },
+    {
+      "procedure_name": "DELETE_CONVERSATION_PROMPT"
+    },
+    {
+      "procedure_name": "DISABLE_DATA_ACCESS"
+    },
+    {
+      "procedure_name": "DISABLE_PROFILE"
+    },
+    {
+      "procedure_name": "DISABLE_VECTOR_INDEX"
+    },
+    {
+      "procedure_name": "DROP_CONVERSATION"
+    },
+    {
+      "procedure_name": "DROP_PROFILE"
+    },
+    {
+      "procedure_name": "DROP_VECTOR_INDEX"
+    },
+    {
+      "procedure_name": "ENABLE_DATA_ACCESS"
+    },
+    {
+      "procedure_name": "ENABLE_PROFILE"
+    },
+    {
+      "procedure_name": "ENABLE_VECTOR_INDEX"
+    },
+    {
+      "procedure_name": "FEEDBACK"
+    },
+    {
+      "procedure_name": "GENERATE"
+    },
+    {
+      "procedure_name": "GENERATE_SQL"
+    },
+    {
+      "procedure_name": "GENERATE_SYNTHETIC_DATA"
+    },
+    {
+      "procedure_name": "GENERATE_SYNTHETIC_DATA_ONCE"
+    },
+    {
+      "procedure_name": "GET_CONVERSATION_ID"
+    },
+    {
+      "procedure_name": "GET_DEFINITION"
+    },
+    {
+      "procedure_name": "GET_PROFILE"
+    },
+    {
+      "procedure_name": "GRANT_PROFILE_ACCESS"
+    },
+    {
+      "procedure_name": "GRANT_VECTOR_INDEX_ACCESS"
+    },
+    {
+      "procedure_name": "REMOVE_CONVERSATION_TAG"
+    },
+    {
+      "procedure_name": "REVOKE_PROFILE_ACCESS"
+    },
+    {
+      "procedure_name": "REVOKE_VECTOR_INDEX_ACCESS"
+    },
+    {
+      "procedure_name": "SET_ATTRIBUTE"
+    },
+    {
+      "procedure_name": "SET_ATTRIBUTES"
+    },
+    {
+      "procedure_name": "SET_CONVERSATION_ID"
+    },
+    {
+      "procedure_name": "SET_PROFILE"
+    },
+    {
+      "procedure_name": "SUMMARIZE"
+    },
+    {
+      "procedure_name": "TRANSLATE"
+    },
+    {
+      "procedure_name": "TRANSLATE_ERROR"
+    },
+    {
+      "procedure_name": "TRANSLATE_SQL"
+    },
+    {
+      "procedure_name": "UPDATE_CONVERSATION"
+    },
+    {
+      "procedure_name": "UPDATE_VECTOR_INDEX"
+    },
+    {
+      "procedure_name": null
+    }
+  ],
+  "dbms_vector_chain_subprograms": [
+    {
+      "procedure_name": "CREATE_CREDENTIAL"
+    },
+    {
+      "procedure_name": "CREATE_LANG_DATA"
+    },
+    {
+      "procedure_name": "CREATE_PREFERENCE"
+    },
+    {
+      "procedure_name": "CREATE_VOCABULARY"
+    },
+    {
+      "procedure_name": "DROP_CREDENTIAL"
+    },
+    {
+      "procedure_name": "DROP_LANG_DATA"
+    },
+    {
+      "procedure_name": "DROP_PREFERENCE"
+    },
+    {
+      "procedure_name": "DROP_VOCABULARY"
+    },
+    {
+      "procedure_name": "GET_PATH_ID"
+    },
+    {
+      "procedure_name": "GET_PATH_NAME"
+    },
+    {
+      "procedure_name": "HYBRID_SEARCH"
+    },
+    {
+      "procedure_name": "LIST_MODELS"
+    },
+    {
+      "procedure_name": "LIST_PROVIDERS"
+    },
+    {
+      "procedure_name": "RERANK"
+    },
+    {
+      "procedure_name": "SIMILAR"
+    },
+    {
+      "procedure_name": "UTL_TO_CHUNKS"
+    },
+    {
+      "procedure_name": "UTL_TO_EMBEDDING"
+    },
+    {
+      "procedure_name": "UTL_TO_EMBEDDINGS"
+    },
+    {
+      "procedure_name": "UTL_TO_GENERATE_TEXT"
+    },
+    {
+      "procedure_name": "UTL_TO_RERANK"
+    },
+    {
+      "procedure_name": "UTL_TO_SUMMARY"
+    },
+    {
+      "procedure_name": "UTL_TO_TEXT"
+    },
+    {
+      "procedure_name": null
+    }
+  ],
+  "dict_views_ai": [
+    {
+      "table_name": "CDB_HIST_DATA_MEMORY_AREA"
+    },
+    {
+      "table_name": "CDB_HIST_MEMORY_RESIZE_OPS"
+    },
+    {
+      "table_name": "CDB_HIST_MEMORY_TARGET_ADVICE"
+    },
+    {
+      "table_name": "CDB_INMEMORY_AIMTASKDETAILS"
+    },
+    {
+      "table_name": "CDB_INMEMORY_AIMTASKS"
+    },
+    {
+      "table_name": "DBA_HIST_DATA_MEMORY_AREA"
+    },
+    {
+      "table_name": "DBA_HIST_MEMORY_RESIZE_OPS"
+    },
+    {
+      "table_name": "DBA_HIST_MEMORY_TARGET_ADVICE"
+    },
+    {
+      "table_name": "DBA_INMEMORY_ADVISOR_RECOMMENDATION"
+    },
+    {
+      "table_name": "DBA_INMEMORY_AIMTASKDETAILS"
+    },
+    {
+      "table_name": "DBA_INMEMORY_AIMTASKS"
+    },
+    {
+      "table_name": "DBA_SCHEDULER_IN_MEMORY_TRACE"
+    },
+    {
+      "table_name": "GV$DATA_MEMORY_AREA"
+    },
+    {
+      "table_name": "GV$INMEMORY_AREA"
+    },
+    {
+      "table_name": "GV$INMEMORY_FASTSTART_AREA"
+    },
+    {
+      "table_name": "GV$INMEMORY_OBJECT_ADVICE"
+    },
+    {
+      "table_name": "GV$INMEMORY_OBJECT_ADVICE_PDB"
+    },
+    {
+      "table_name": "GV$INMEMORY_SIZE_ADVICE"
+    },
+    {
+      "table_name": "GV$INMEMORY_SIZE_ADVICE_PDB"
+    },
+    {
+      "table_name": "GV$INMEMORY_XMEM_AREA"
+    },
+    {
+      "table_name": "GV$JAVA_LIBRARY_CACHE_MEMORY"
+    },
+    {
+      "table_name": "GV$LIBRARY_CACHE_MEMORY"
+    },
+    {
+      "table_name": "GV$MEMORY_CURRENT_RESIZE_OPS"
+    },
+    {
+      "table_name": "GV$MEMORY_DYNAMIC_COMPONENTS"
+    },
+    {
+      "table_name": "GV$MEMORY_RESIZE_OPS"
+    },
+    {
+      "table_name": "GV$MEMORY_TARGET_ADVICE"
+    },
+    {
+      "table_name": "GV$PROCESS_MEMORY"
+    },
+    {
+      "table_name": "GV$PROCESS_MEMORY_DETAIL"
+    },
+    {
+      "table_name": "GV$PROCESS_MEMORY_DETAIL_PROG"
+    },
+    {
+      "table_name": "GV$RESULT_CACHE_MEMORY"
+    },
+    {
+      "table_name": "GV$SCHEDULER_IN_MEMORY_TRACE"
+    },
+    {
+      "table_name": "GV$SGA_DYNAMIC_FREE_MEMORY"
+    },
+    {
+      "table_name": "GV$SQL_SHARED_MEMORY"
+    },
+    {
+      "table_name": "GV$VECTOR_MEMORY_POOL"
+    },
+    {
+      "table_name": "V$DATA_MEMORY_AREA"
+    },
+    {
+      "table_name": "V$INMEMORY_AREA"
+    },
+    {
+      "table_name": "V$INMEMORY_FASTSTART_AREA"
+    },
+    {
+      "table_name": "V$INMEMORY_OBJECT_ADVICE"
+    },
+    {
+      "table_name": "V$INMEMORY_OBJECT_ADVICE_PDB"
+    },
+    {
+      "table_name": "V$INMEMORY_SIZE_ADVICE"
+    },
+    {
+      "table_name": "V$INMEMORY_SIZE_ADVICE_PDB"
+    },
+    {
+      "table_name": "V$INMEMORY_XMEM_AREA"
+    },
+    {
+      "table_name": "V$JAVA_LIBRARY_CACHE_MEMORY"
+    },
+    {
+      "table_name": "V$LIBRARY_CACHE_MEMORY"
+    },
+    {
+      "table_name": "V$MEMORY_CURRENT_RESIZE_OPS"
+    },
+    {
+      "table_name": "V$MEMORY_DYNAMIC_COMPONENTS"
+    },
+    {
+      "table_name": "V$MEMORY_RESIZE_OPS"
+    },
+    {
+      "table_name": "V$MEMORY_TARGET_ADVICE"
+    },
+    {
+      "table_name": "V$PROCESS_MEMORY"
+    },
+    {
+      "table_name": "V$PROCESS_MEMORY_DETAIL"
+    },
+    {
+      "table_name": "V$PROCESS_MEMORY_DETAIL_PROG"
+    },
+    {
+      "table_name": "V$RESULT_CACHE_MEMORY"
+    },
+    {
+      "table_name": "V$SCHEDULER_IN_MEMORY_TRACE"
+    },
+    {
+      "table_name": "V$SGA_DYNAMIC_FREE_MEMORY"
+    },
+    {
+      "table_name": "V$SQL_SHARED_MEMORY"
+    },
+    {
+      "table_name": "V$VECTOR_MEMORY_POOL"
+    }
+  ],
+  "source_lines_available": [
+    {
+      "name": "DBMS_CLOUD_AI",
+      "lines": 1613
+    },
+    {
+      "name": "DBMS_CLOUD_AI_AGENT",
+      "lines": 1593
+    }
+  ],
+  "source_memory_grep": [],
+  "errors": []
+}
