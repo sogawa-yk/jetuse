@@ -126,6 +126,15 @@ areas:
     # E2E は実 ADB への CRUD 往復・冪等再適用など。具体は tasks/<id>.md の「E2E シナリオ」に従う。
     e2e_cmd: ""
 
+# **`deploy_cmd` / `test_cmd` / `lint_cmd` / `e2e_cmd` に定義された操作は人間ゲートではない**
+# （2026-08-01 追記・PREP-03 の実害を受けて）。これらは本設定が実行を指示している通常フローで、
+# その実行に個別の承認証跡を求めない。求めると、実環境 E2E をするタスクは毎回同じ blocker で
+# 止まる（PREP-03 は `ops/start-adb-if-stopped.sh` による共有 ADB の起動を「既存リソースの
+# 状態変更＝人間ゲート」と判定され、**10 ラウンド一貫して同じ blocker**のまま停止した）。
+# 人間ゲートは下記 `stage_runner.hard_gates`（push / PR / apply / 課金 / IAM / ADR 承認）と
+# コミットに限る。**ここに無い操作を新たにゲート扱いしない。**
+# ただし `deploy_cmd` 等に**書かれていない**破壊的操作（DROP・destroy・削除）は従来どおりゲート。
+
 # 実環境 E2E（jetuse-dev の実リソースを使った End-to-End 検証）。
 # Codex はコードを実行できない（read-only sandbox）。よって Claude が deploy+E2E を実施して
 # 証跡を runs/<run-id>/e2e/ に残し、Codex はその「証跡＋diff」を評価する。
