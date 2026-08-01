@@ -6,6 +6,8 @@
 3. 以上で GET /api/capabilities に自動で載る(routes の乖離は tests/test_capabilities.py が検出)。
 """
 
+from . import http_tools
+
 # --- RAG バックエンドの能力差(RAGM-03 / ADR-0020 §3) ---------------------------
 # 「Oracle AI Database を選ぶと何が増えるか」を機械可読で示す。軸は比較ドキュメント
 # docs/comparison/rag-metadata-backends.md と揃える(ここを増やすときは向こうも直す)。
@@ -254,9 +256,12 @@ CAPABILITIES: list[dict] = [
     },
     {
         "capability": "agents",
-        "summary": "ツール(Web検索・RAG検索・DB照会・MCP)を自律的に使うエージェントを実行する",
+        "summary": "ツール(Web検索・RAG検索・DB照会・MCP・デモ側の外部HTTP API)を"
+                   "自律的に使うエージェントを実行する",
         "when_to_use": "複数ステップの調査・ツール連携を見せるデモ。"
-                       "定義済みエージェントを選んで対話させる。",
+                       "定義済みエージェントを選んで対話させる。"
+                       "デモ固有の業務APIを使わせたい場合は "
+                       "/api/agent/http-tools に登録し、実行時に http_tool_ids で渡す。",
         "example": {
             "input": {"model": "gpt-oss-120b", "agent_id": "<GET /api/agents のid>",
                       "messages": [
@@ -264,10 +269,34 @@ CAPABILITIES: list[dict] = [
             "output": "ツール呼び出しの経過と最終回答が SSE で届く。",
         },
         "demo_safe": True,
+        # TOOL-01: 実測で確認できた範囲だけを書く(未実証を「できる」と書かない)
+        "external_tools": {
+            "how": "name/description/JSON Schema/URL/メソッドを /api/agent/http-tools に"
+                   "登録し、POST /api/chat/stream に agent=true と http_tool_ids を渡す。"
+                   "モデルが呼ぶと JetUse がサーバー側で HTTP を代理実行して結果を返す"
+                   "(ブラウザからは叩かせない)。",
+            "methods": ["GET", "POST"],
+            "max_tools_per_agent": http_tools.MAX_TOOLS_PER_AGENT,
+            "auth": "秘密は Vault に置き auth_secret_ocid で参照する。任意のヘッダ名"
+                    "(既定 Authorization)に載せて送る。秘密は DB にも API 応答にも現れない。"
+                    "使えるのは freeform タグ jetuse_tool_owner が登録者と一致し、"
+                    "本アプリのコンパートメントにある秘密だけ(他人・運用用の秘密は登録できない)。",
+            "url_policy": "https のみ。ループバック・内部レンジ・リンクローカル"
+                          "(169.254.169.254 等)は登録時と実行時の両方で拒否する。",
+            "limits": {
+                "timeout_seconds": http_tools.TIMEOUT_SECONDS,
+                "max_response_bytes": http_tools.MAX_RESPONSE_BYTES,
+                "retries": 0,
+                "redirects": "追わない(3xx は失敗)",
+                "on_limit_exceeded": "黙って切り詰めず、ツール実行失敗としてモデルへ返す",
+            },
+        },
         "routes": [
             {"path": "/api/agents", "method": "get"},
             {"path": "/api/chat/stream", "method": "post"},
             {"path": "/api/agent/execute-tool", "method": "post"},
+            {"path": "/api/agent/http-tools", "method": "get"},
+            {"path": "/api/agent/http-tools", "method": "post"},
         ],
     },
     {

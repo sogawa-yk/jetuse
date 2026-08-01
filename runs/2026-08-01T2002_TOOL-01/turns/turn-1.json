@@ -1,0 +1,9 @@
+{
+  "turn": 1,
+  "timestamp": "2026-08-01T21:17:29+09:00",
+  "action_summary": "(loop-protocol 側で追記可)",
+  "files_changed": ["docs/verification/TOOL-01.md", "packages/api/jetuse_core/capabilities.py", "packages/api/jetuse_core/chat.py", "packages/api/jetuse_core/http_tools.py", "packages/api/jetuse_core/migrations/020_http_tools.sql", "packages/api/jetuse_core/tools.py", "packages/api/service/main.py", "packages/api/service/routes/agents.py", "packages/api/service/routes/chat.py", "packages/api/service/schemas.py", "packages/api/tests/test_agent.py", "packages/api/tests/test_http_tools.py", "specs/17-demo-platform-redesign.md", "spikes/tool01/deploy.py", "spikes/tool01/e2e.py", "spikes/tool01/fixtures.py", "spikes/tool01/teardown.py"],
+  "diff_path": "diffs/turn-1.diff",
+  "review_ref": "reviews/review-8.json",
+  "goal_checker": { "verdict": "(/goal 判定モデルが記録)", "reason": "" }
+}

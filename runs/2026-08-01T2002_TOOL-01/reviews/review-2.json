@@ -1,0 +1,63 @@
+{
+  "review_n": 2,
+  "timestamp": "2026-08-01T20:38:04+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-2.input.diff",
+  "raw_output_path": "reviews/review-2.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "外部 HTTP ツールの主要フローと5本の実環境 E2E は十分に裏づけられています。一方、Vault 秘密が上流応答を経由して API 利用者へ露出する経路と、コンパートメント未設定時に認可が fail-open になる問題があり、セキュリティ上マージ不可です。",
+  "severity_counts": {
+    "blocker": 2,
+    "major": 2,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "TOOL-01-001",
+      "severity": "blocker",
+      "file": "packages/api/jetuse_core/http_tools.py",
+      "line": 365,
+      "issue": "認証ヘッダに注入した Vault 秘密を上流が応答本文へ反射すると、その本文を無加工でモデルおよび `/api/agent/execute-tool` の呼び出し元へ返します。実際、scenario-2 は `got.json()[\"output\"]` から `x-api-key` の平文を取得しており、「秘密は API 応答にも現れない」という主張に反します。タグが秘密の「利用」だけを許し Vault の値を読む権限を与えない設計なら、任意の echo URL を登録するだけで秘密を読み出せます。",
+      "suggestion": "読み出した秘密の値を応答本文とエラー本文から必ず除去またはマスクしてから返してください。成功応答、HTTP 4xx/5xx、tool_result preview の全経路を対象にし、秘密を反射する MockTransport を使って `/api/agent/execute-tool` と agent stream の双方に平文が出ないテストを追加してください。"
+    },
+    {
+      "id": "TOOL-01-002",
+      "severity": "blocker",
+      "file": "packages/api/jetuse_core/http_tools.py",
+      "line": 151,
+      "issue": "`COMPARTMENT_OCID` が空の場合、コンパートメント照合を丸ごと省略します。Settings の既定値は空文字なので、設定漏れ時にはサービス権限で参照でき、所有者タグだけ一致する別コンパートメントの秘密を登録できてしまい、「設定コンパートメント内だけ」「fail-closed」という認可境界を破ります。",
+      "suggestion": "認証付きツール登録では `compartment_ocid` が空なら必ず拒否し、設定済みの場合も `meta.compartment_id` との完全一致を必須にしてください。未設定、別コンパートメント、一致の3ケースをテストしてください。"
+    },
+    {
+      "id": "TOOL-01-003",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/http_tools.py",
+      "line": 324,
+      "issue": "所有者タグとコンパートメントによる秘密の認可は登録時にしか確認されません。登録後に `jetuse_tool_owner` を削除・変更しても、保存済みツールはサービス権限で秘密を読み続けます。このタグをアクセス制御として文書化している以上、運用上の権限剥奪が反映されません。SKIPPED.md でも未検証ではなく未実装であることが確認できます。",
+      "suggestion": "owner を実行コンテキストまで保持し、秘密を読む直前に `assert_secret_usable` 相当のメタデータ認可を再実行してください。タグ削除、所有者変更、コンパートメント移動後に実行が拒否されるテストを追加してください。登録時だけの永続的な利用許可を仕様とするなら、その権限モデルと明示的な revoke 操作を定義してください。"
+    },
+    {
+      "id": "TOOL-01-004",
+      "severity": "major",
+      "file": "packages/api/service/routes/agents.py",
+      "line": 165,
+      "issue": "承認後の外部ツール検索で DB/Vault 周辺の任意例外を握り潰し、存在しないツールと同じ 400 に変換します。DB 障害や接続枯渇までクライアント入力エラーとして扱われるため、利用者は再試行判断ができず、監視でもサービス障害を正しく識別できません。",
+      "suggestion": "検索結果が `None` の場合だけ 404 または既存仕様の 400 を返し、DB 接続などの予期しない例外は 5xx として伝播させてください。DB 例外が成功・400に変換されないルートテストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "sufficient",
+    "notes": "`runs/2026-08-01T2002_TOOL-01/e2e/` の deploy.log、scenario-1〜5、SKIPPED.md、summary.md を確認しました。外部ツール登録・モデル呼び出し・回答反映、Vault ヘッダ注入、危険 URL 拒否、タイムアウト、サイズ上限の5シナリオがあり、最低2本の要件を満たします。未実施範囲の理由も記載されています。ただし scenario-2 は `/api/agent/execute-tool` の応答から秘密ヘッダ値を取得できることを実質的に示しており、API 応答に秘密が出ないという主張を裏づけず、TOOL-01-001 の再現証跡になっています。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲット URL が提供されていないため、指示どおりブラウザ E2E は実施していません。"
+    }
+  }
+}

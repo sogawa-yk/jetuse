@@ -9,7 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from jetuse_core import rag_metadata, tts
+from jetuse_core import http_tools, rag_metadata, tts
 
 from .validators import validate_agent_definition, validate_usecase_definition
 
@@ -41,6 +41,11 @@ class ChatRequest(BaseModel):
     tool_results: list[dict] | None = Field(default=None, max_length=24)
     enabled_tools: list[str] | None = Field(default=None, max_length=20)  # AGT-01b
     mcp_server_ids: list[str] | None = Field(default=None, max_length=5)  # AGT-02
+    # TOOL-01: 登録済み外部HTTPツールのid。1エージェントに渡せる数はモデルの選択精度の
+    # ためMAX_TOOLS_PER_AGENTで頭打ちにする
+    http_tool_ids: list[str] | None = Field(
+        default=None, max_length=http_tools.MAX_TOOLS_PER_AGENT
+    )
     agent_id: str | None = None  # AGT-03: エージェント定義の適用
     # 画像入力(MM-01): data URI。最終userメッセージに適用(当該ターンのみ・永続化なし)
     # 上限10枚=映像分析のフレーム数を許容(チャットUIは4枚に制限)
@@ -144,9 +149,28 @@ class McpServerCreate(BaseModel):
     auth_token: str | None = Field(default=None, max_length=2000)
 
 
+class HttpToolCreate(BaseModel):
+    """外部HTTPツールの登録(TOOL-01)。
+
+    秘密そのものは受け取らない。Vault に置いた秘密の OCID だけを受け取る
+    (`mcp_servers.auth_secret_ocid` と同じ流儀)。
+    """
+
+    name: str = Field(min_length=3, max_length=48)
+    description: str = Field(min_length=1, max_length=1000)
+    parameters: dict = Field(default_factory=lambda: {"type": "object", "properties": {}})
+    url: str = Field(min_length=12, max_length=1000)
+    method: Literal["GET", "POST"] = "GET"
+    auth_header: str | None = Field(default=None, max_length=63)
+    auth_secret_ocid: str | None = Field(default=None, max_length=255)
+
+
 class ToolExecuteRequest(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     arguments: str = Field(default="{}", max_length=10000)
+    # TOOL-01: 承認イベントが返した外部HTTPツールの id。指定時はこの id で解決する
+    # (名前だけだと承認待ちの間に同名で別 URL のツールへ差し替えられる)
+    http_tool_id: str | None = Field(default=None, max_length=36)
 
 
 class ChartSuggestRequest(BaseModel):
