@@ -37,7 +37,7 @@ class NsFakeRag:
     def refresh_statuses(self, ns, files):
         return files
 
-    def add_file(self, ns, filename, content, attributes=None):
+    def add_file(self, ns, filename, content, attributes=None, ocr_engine=None):
         box = self.files.setdefault(ns, {})
         fid = f"{ns}-f{len(box) + 1}"
         box[fid] = {
@@ -130,7 +130,7 @@ def test_demo_upload_same_validation_as_user_route():
 
 
 def test_demo_upload_returns_503_when_store_not_ready(monkeypatch):
-    def not_ready(ns, filename, content, attributes=None):
+    def not_ready(ns, filename, content, attributes=None, ocr_engine=None):
         raise service_main.rag.StoreNotReadyError("dp propagation timeout")
 
     monkeypatch.setattr(service_main.rag, "add_file", not_ready)

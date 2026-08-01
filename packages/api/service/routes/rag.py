@@ -13,7 +13,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from openai import APIStatusError
 
-from jetuse_core import extract_xlsx, rag, rag_adb, rag_metadata
+from jetuse_core import extract_scan, extract_xlsx, rag, rag_adb, rag_metadata
 from jetuse_core.auth import AuthContext, require_user
 from jetuse_core.genai import ProjectResolutionError
 
@@ -35,6 +35,14 @@ async def _rag_call(fn, *args):
     except rag_metadata.MetadataError as e:
         # 取り込み側で補完する属性(長すぎるファイル名由来の file 等)も 422 に正規化する。
         # 500 のまま漏らすと API 契約(不正な属性は 422)が破れる — レビュー F-002
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except extract_scan.OcrUnavailable as e:
+        # OCR サービス側の失敗(IAM 未整備・障害)。利用者の入力の問題ではないので 422 にしない
+        logger.warning("rag: ocr unavailable: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except extract_scan.ScanExtractError as e:
+        # スキャン PDF / 画像の上限超過・読めない入力(PREP-03)。**切り詰めない**ので、
+        # どの上限に当たったかを detail に載せて 422 で返す
         raise HTTPException(status_code=422, detail=str(e)) from e
     except (rag_adb.TooLarge, rag_adb.UnsupportedDocument) as e:
         # 抽出口(POST /api/extract)で本文を取り出せない・上限を超えた場合。
@@ -85,12 +93,23 @@ def _parse_attributes(raw: str | None) -> dict:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
 
+_ALLOWED_HINT = "/".join(sorted(e.lstrip(".") for e in rag.ALLOWED_EXTENSIONS))
+
+
+def _parse_ocr_engine(raw: str | None) -> str | None:
+    """OCR エンジンの明示指定(PREP-03)。未知の名前は 422(黙って既定へ落とさない)。"""
+    try:
+        return extract_scan.resolve_engine(raw)
+    except extract_scan.ScanExtractError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+
 async def _read_upload(file: UploadFile) -> tuple[str, bytes]:
     """アップロード共通の入口(拡張子・サイズ・空)。取り込みと抽出で同じ条件にする。"""
     name = pathlib.Path(file.filename or "untitled").name
     ext = pathlib.Path(name).suffix.lower()
     if ext not in rag.ALLOWED_EXTENSIONS:
-        detail = f"unsupported file type '{ext}'. allowed: pdf/txt/md/xlsx"
+        detail = f"unsupported file type '{ext}'. allowed: {_ALLOWED_HINT}"
         if ext == ".docx":
             detail += " (docxはVector Store非対応 — SPIKE-03)"
         raise HTTPException(status_code=422, detail=detail)
@@ -103,25 +122,29 @@ async def _read_upload(file: UploadFile) -> tuple[str, bytes]:
 
 
 async def upload_file_response(
-    ns: str, file: UploadFile, attributes: str | None = None
+    ns: str, file: UploadFile, attributes: str | None = None,
+    ocr_engine: str | None = None,
 ) -> dict:
     attrs = _parse_attributes(attributes)  # 読み込み前に弾く(不正なら OCI を呼ばない)
+    engine = _parse_ocr_engine(ocr_engine)
     name, content = await _read_upload(file)
-    return await _rag_call(rag.add_file, ns, name, content, attrs)
+    return await _rag_call(rag.add_file, ns, name, content, attrs, engine)
 
 
-async def extract_response(file: UploadFile) -> dict:
+async def extract_response(file: UploadFile, ocr_engine: str | None = None) -> dict:
     """取り込まずに抽出結果だけ返す(PREP-01 層1 の公開)。
 
     投入されるチャンクそのもの(`adb` バックエンドが作るのと同じ `{sheet, cells, text}`)を
     返す。案件側が独自の構造化を挟みたいときの口で、**このエンドポイントは何も保存しない**。
+    スキャン PDF・画像は OCR を通した本文が返り、`sheet` に頁(`p.3`)が載る(PREP-03)。
     """
+    engine = _parse_ocr_engine(ocr_engine)
     name, content = await _read_upload(file)
-    return await _rag_call(_extract, name, content)
+    return await _rag_call(_extract, name, content, engine)
 
 
-def _extract(name: str, content: bytes) -> dict:
-    chunks = rag_adb.chunk_units(name, content)
+def _extract(name: str, content: bytes, ocr_engine: str | None) -> dict:
+    chunks = rag_adb.chunk_units(name, content, ocr_engine=ocr_engine)
     return {"filename": name, "chunk_count": len(chunks), "chunks": chunks}
 
 
@@ -154,16 +177,20 @@ async def upload_rag_file(
     user: Annotated[AuthContext, Depends(require_user)],
     # RAGM-01: 出典メタデータ(JSONオブジェクト文字列)。省略可 — 既存クライアントは無変更で動く
     attributes: Annotated[str | None, Form()] = None,
+    # PREP-03: OCR エンジンの明示指定(document_understanding | vlm)。
+    # 省略時は既定(DU)。**自動では切り替えない**(切り替え根拠を OCR 前に持てないため)
+    ocr_engine: Annotated[str | None, Form()] = None,
 ):
-    return await upload_file_response(user.subject, file, attributes)
+    return await upload_file_response(user.subject, file, attributes, ocr_engine)
 
 
 @router.post("/api/extract")
 async def extract_document(
-    file: UploadFile, user: Annotated[AuthContext, Depends(require_user)]
+    file: UploadFile, user: Annotated[AuthContext, Depends(require_user)],
+    ocr_engine: Annotated[str | None, Form()] = None,
 ):
     """抽出だけ行い、取り込みはしない(PREP-01)。認証・サイズ上限はアップロードと同じ。"""
-    return await extract_response(file)
+    return await extract_response(file, ocr_engine)
 
 
 @router.delete("/api/rag/files/{file_id}")

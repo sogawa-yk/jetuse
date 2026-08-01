@@ -1,0 +1,47 @@
+{
+  "review_n": 11,
+  "timestamp": "2026-08-01T13:32:44+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-11.input.diff",
+  "raw_output_path": "reviews/review-11.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "主要な OCR 結線とページ出典は十分なテスト・実環境証跡で裏づけられています。ただし、画像のサイズ検査順序にメモリ枯渇リスクがあり、LRU キャッシュ方式では「1リクエスト1回」の OCR 保証が高並行時に崩れます。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 2,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "PREP03-010",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/extract_scan.py",
+      "line": 384,
+      "issue": "画像のバイト数上限を確認する前に `_check_image()` が `fitz.Pixmap(content)` で全体をデコードします。20MB のアップロード上限内でも、圧縮率や画素数の大きい画像を展開して worker のメモリを枯渇させる可能性があります。また `derived_keys()` の `needs_ocr()` と `page_texts()` の双方でデコードされます。",
+      "suggestion": "画像拡張子を検出した直後、デコードより先に `len(content) > MAX_IMAGE_BYTES` を検査してください。可能なら画像寸法・総画素数にも上限を設け、検証済みという結果を同一リクエスト内で再利用して二重デコードを避けてください。圧縮率の高い巨大画像に対する回帰テストも追加してください。"
+    },
+    {
+      "id": "PREP03-011",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/extract_scan.py",
+      "line": 258,
+      "issue": "OCR 結果を総文字数8,000,000のプロセス共通 LRU にだけ保持しているため、`prepare_upload()` と後続の ADB/OpenSearch 取り込みの間に他リクエストが大きな結果を格納すると、自リクエストの結果が退避されて再度 OCR されます。したがって文書化された「1リクエスト内では1回」の課金保証は、高並行時には成立しません。",
+      "suggestion": "抽出結果を `rag.add_file()` のリクエストスコープで保持し、ADB/OpenSearch へ明示的に渡してください。プロセス共通 LRU は異なるリクエスト間の最適化としてのみ利用し、リクエスト進行中の値は退避されない構造にしてください。小さいメモリ予算と複数の並行文書を使い、同一アップロードの OCR 回数が1回であることを固定するテストも追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "sufficient",
+    "notes": "`runs/2026-08-01T1033_PREP-03/e2e/` のシナリオ0〜4を確認。スキャンPDFの抽出・検索・p.2引用、PNGの検索・p.1引用、テキスト層PDFのOCR呼び出し0回、VLM明示指定、422境界が実OCI相手に確認されています。Resource Principal認可とOpenSearch実機経路は未検証ですが、SKIPPED.mdにIAM人間ゲートおよび環境無効という理由と再実施条件が明記されています。ADB起動は事後承認証跡があります。ただし、高並行時のLRU退避と画像デコード時のメモリ境界は証跡・テストの対象外です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されておらず、指示に従いブラウザ検証は実施していません。"
+    }
+  }
+}

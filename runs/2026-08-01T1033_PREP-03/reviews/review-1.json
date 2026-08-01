@@ -1,0 +1,71 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-08-01T11:14:36+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "`extract_scan` 実装が差分に含まれず、クリーンな checkout では import 不能になる可能性があります。また、E2E は共有 ADB の状態変更を人間ゲートの証跡なしで行い、主要シナリオでも型番を誤回答したまま PASS としています。",
+  "severity_counts": {
+    "blocker": 2,
+    "major": 2,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "PREP03-001",
+      "severity": "blocker",
+      "file": "packages/api/jetuse_core/rag.py",
+      "line": 18,
+      "issue": "新たに必須 import された `jetuse_core.extract_scan` と、そのテスト `test_extract_scan.py` が提示差分にありません。E2E はローカル作業ツリー上の未追跡ファイルを使用した可能性があり、このパッチだけを適用したクリーン環境では API 起動時に ImportError となります。",
+      "suggestion": "`packages/api/jetuse_core/extract_scan.py` と必要なテスト・依存関係を git 管理下の差分に含め、クリーン checkout から import・単体テスト・E2E が通ることを確認してください。既存コミットに含まれる場合は、その基準コミットを明示してください。"
+    },
+    {
+      "id": "PREP03-002",
+      "severity": "blocker",
+      "file": "runs/2026-08-01T1033_PREP-03/e2e/deploy.log",
+      "line": 1,
+      "issue": "STOPPED だった共有既存リソース `jetuse-loop-adb` を起動しています。本リポジトリの規則では既存リソース変更は人間ゲート対象ですが、承認証跡がありません。「破壊的でない」ことはゲート省略の根拠になりません。",
+      "suggestion": "当該 ADB の起動について事前の人間承認を証跡へ添付してください。承認がない場合は、承認済みの隔離された run 専用 dev リソースで再実施し、共有リソースを変更しないでください。"
+    },
+    {
+      "id": "PREP03-003",
+      "severity": "major",
+      "file": "runs/2026-08-01T1033_PREP-03/e2e/scenario-1.md",
+      "line": 31,
+      "issue": "質問は交換部品コードを求めていますが、原文 `BRG-7781` に対して生成回答は `BRG-778` と末尾の `1` を欠落させています。型番を判定対象から意図的に外して PASS としており、「検索・生成回答が正しい」という主張を裏づけていません。",
+      "suggestion": "期待値として型番と期限の両方を検証し、誤った型番ならシナリオを FAIL にしてください。OCR 空白を保持する場合でも、LLM に識別子を改変せず引用させる、または比較・検索用の正規化値を別途保持する対策を実装して再実行してください。"
+    },
+    {
+      "id": "PREP03-004",
+      "severity": "major",
+      "file": "runs/2026-08-01T1033_PREP-03/e2e/SKIPPED.md",
+      "line": 15,
+      "issue": "E2E はプロセス内 ASGI とローカル `config_file` 認証であり、実配備先の Resource Principal による Document Understanding 呼び出しを確認していません。しかも OCR 用 IAM 権限が配備先に必要で未確認と明記されているため、jetuse-dev の実配備経路で本機能が動作する証拠としては不十分です。IAM 変更を人間ゲートにする理由は正当ですが、未検証のまま完了を主張する根拠にはなりません。",
+      "suggestion": "必要な IAM ポリシーを人間が承認・適用した後、配備済み API を Resource Principal 認証で呼び、少なくともスキャン PDF と画像の2シナリオを再実施してください。それまでは「コード検証済み・配備経路は人間ゲート待ち」と明示してください。"
+    },
+    {
+      "id": "PREP03-005",
+      "severity": "minor",
+      "file": "packages/api/tests/test_rag.py",
+      "line": 781,
+      "issue": "`ocr_engine=vlm` のテストは `/api/extract` だけで、同時に追加された `/api/rag/files` から `rag.add_file`、ADB/OpenSearch 各経路へのエンジン伝播を検証していません。E2E の VLM シナリオも抽出 API のみです。",
+      "suggestion": "アップロード API に `ocr_engine=vlm` を渡し、DU が呼ばれず VLM が1回だけ呼ばれること、および各有効バックエンドへ同じエンジン指定が伝播することをテストしてください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-08-01T1033_PREP-03/e2e/` の scenario-0〜4 を確認しました。抽出、スキャンPDF検索、PNG検索、テキスト層PDFのOCR非呼び出し、VLM明示指定という複数経路はありますが、scenario-1 の生成回答は型番を誤っています。また、配備先 Resource Principal と OpenSearch は未検証で、前者は主要な実運用経路です。SKIPPED.md は未実施理由を明記していますが、Resource Principal 未検証は完了主張を支えるには不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲット URL が提供されておらず、指示に従いブラウザ検証は実施していません。"
+    }
+  }
+}

@@ -18,7 +18,6 @@ API キーの資格証明を DB に作る必要があり、それは ADR-0021 �
 """
 
 import hashlib
-import io
 import json
 import logging
 import re
@@ -26,7 +25,7 @@ from typing import Any
 
 import oracledb
 
-from . import extract_xlsx
+from . import extract_scan, extract_xlsx
 from .db import connect
 from .embeddings import embed
 from .genai import make_inference_client
@@ -128,42 +127,30 @@ class TooLarge(ValueError):
     """抽出後の分量が上限を超えた。**途中で打ち切る**ので全量は展開しない。"""
 
 
-def _segments(filename: str, content: bytes):
-    """(出典の見出し, 本文) を**逐次**返す。PDF は頁ごと、テキストは 1 本。
+def _segments(filename: str, content: bytes, *, ocr_engine: str | None = None):
+    """(出典の見出し, 本文) を**逐次**返す。PDF と画像は頁ごと、テキストは 1 本。
 
     **対応拡張子を明示する**。何でも UTF-8 として読むと、DOCX / 画像が
     文字化けした本文として "indexed" になり、利用者には正常に見えてしまう。
     xlsx はここへ来ない(`chunk_units` が `extract_xlsx` へ振り分ける)。
-    PDF は頁を 1 つずつ読み、抽出済みの総文字数が上限を超えたらそこで打ち切る
-    （圧縮 PDF は 20MB でも展開後に桁違いに膨らみうるため、全頁を先に展開しない）。
+    PDF / 画像は `extract_scan` が頁ごとの本文にする(テキスト層の無い頁だけ OCR。
+    PREP-03)。抽出済みの総文字数が上限を超えたらそこで打ち切る。
     """
     name = (filename or "").lower()
     ext = "." + name.rsplit(".", 1)[-1] if "." in name else ""
-    if ext == ".pdf":
-        from pypdf import PdfReader
-        from pypdf.errors import PyPdfError
-
-        # 壊れた PDF(xref 破損・別形式)は pypdf から複数の型で上がる。500 として漏らすと、
-        # 抽出口(POST /api/extract)が利用者入力で 500 を返してしまう
-        broken = (PyPdfError, ValueError, KeyError, TypeError, OSError, RecursionError)
+    if ext == extract_scan.PDF_EXT or extract_scan.is_image(name):
         try:
-            reader = PdfReader(io.BytesIO(content))
-            count = len(reader.pages)
-        except broken as e:
-            raise UnsupportedDocument(f"PDF として読めませんでした: {type(e).__name__}") from e
+            pages = extract_scan.page_texts(filename, content, engine=ocr_engine)
+        except extract_scan.ScanLimitError as e:
+            raise TooLarge(str(e)) from e
+        except extract_scan.ScanUnsupported as e:
+            raise UnsupportedDocument(str(e)) from e
         total = 0
-        # **頁は 1 つずつ読む**（全頁を先に展開しない = 頁数の多い PDF でメモリを食わない）
-        for i in range(count):
-            try:
-                text = reader.pages[i].extract_text() or ""
-            except broken as e:
-                raise UnsupportedDocument(
-                    f"PDF の {i + 1} ページ目を読めませんでした: {type(e).__name__}"
-                ) from e
+        for i, text in enumerate(pages):
             total += len(text)
             if total > MAX_EXTRACT_CHARS:
                 raise TooLarge(f"抽出後の文字数が上限を超えました(> {MAX_EXTRACT_CHARS} 文字)")
-            yield (f"p.{i + 1}", text)
+            yield (extract_scan.source_label(i), text)
         return
     if ext not in TEXT_EXTENSIONS:
         raise UnsupportedDocument(
@@ -192,13 +179,16 @@ def _split_line(sheet: str, no: int, line: str) -> list[dict[str, Any]]:
     return out
 
 
-def chunk_units(filename: str, content: bytes) -> list[dict[str, Any]]:
+def chunk_units(filename: str, content: bytes, *,
+                ocr_engine: str | None = None) -> list[dict[str, Any]]:
     """チャンクへ割り、**チャンクごとの出典**(見出し + 行範囲)を付けて返す。
 
     通常は行を跨いで切らない(行番号で出典を示すため)。1 行が上限を超えるときだけ
     その行を文字オフセットで分割する(`L12c1-800`)。本文は切り詰めない。
     xlsx は `extract_xlsx` が担当し、出典は行番号ではなく**シート名 + セル範囲**になる
     (PREP-01)。返す形は同じ `{sheet, cells, text}`。
+    スキャン PDF・画像は `extract_scan` が OCR して頁ごとの本文にする(PREP-03)。
+    出典の `sheet` は頁(`p.3`)なので、引用に何頁目かが構造化された値で載る。
     """
     if extract_xlsx.is_xlsx(filename):
         # xlsx はシート名 + セル範囲つきで抽出する(PREP-01)。行番号ではなく実際の
@@ -210,7 +200,7 @@ def chunk_units(filename: str, content: bytes) -> list[dict[str, Any]]:
         except extract_xlsx.XlsxExtractError as e:
             raise UnsupportedDocument(str(e)) from e
     units: list[dict[str, Any]] = []
-    for sheet, text in _segments(filename, content):
+    for sheet, text in _segments(filename, content, ocr_engine=ocr_engine):
         if len(units) > MAX_CHUNKS:
             # 上限を超えた時点で打ち切る（全チャンクを展開しきってから判定しない）
             raise TooLarge(f"チャンク数が上限を超えました(> {MAX_CHUNKS})。"
@@ -345,7 +335,7 @@ def _record_ingest_state(cur: oracledb.Cursor, owner: str, file_id: str, doc_fil
 
 
 def ingest(owner: str, file_id: str, filename: str, content: bytes,
-           *, kind: str = "doc") -> int:
+           *, kind: str = "doc", ocr_engine: str | None = None) -> int:
     """1 ファイルをチャンク化 → 埋め込み → 投入する。投入チャンク数を返す。
 
     同名ファイルの再取り込みでは旧チャンクを `current_version='N'` にして版を上げる
@@ -354,8 +344,10 @@ def ingest(owner: str, file_id: str, filename: str, content: bytes,
     # 版の検索・旧版化・INSERT で**同じ値**を使う（ずれると複数の版が同時に現行版になる）。
     doc_file = doc_key(filename)
     try:
-        units = chunk_units(filename, content)
-    except (UnsupportedDocument, TooLarge) as e:
+        units = chunk_units(filename, content, ocr_engine=ocr_engine)
+    except (UnsupportedDocument, TooLarge, extract_scan.OcrUnavailable) as e:
+        # OCR サービス側の失敗も**状態として残す**(PREP-03)。握り潰すとバッジが永久に
+        # "pending" のままで、IAM 未整備が誰にも伝わらない
         _mark_failed(owner, doc_file, file_id, str(e))
         return 0
     if len(units) > MAX_CHUNKS:
