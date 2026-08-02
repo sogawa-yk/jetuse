@@ -122,12 +122,83 @@ def test_chunk_count_limit_is_rejected(monkeypatch):
     assert e.value.limit == "chunks"
 
 
-def test_chunk_chars_limit_is_rejected(monkeypatch):
-    monkeypatch.setattr(extract_xlsx, "MAX_CHUNK_CHARS", 100)
+# --- 1 セルが上限を超える(PREP-04: セルの中で分割する) ------------------------
+
+
+def _giant_cell_text(length: int) -> str:
+    """**架空**の「1 セルに丸ごと入った API リクエスト例」(実データと同じ形)。"""
+    block = ('{\n  "endpoint": "/v1/inventory",\n  "method": "POST",\n'
+             '  "body": {"sku": "SKU-0001", "qty": 10}\n}\n')
+    return (block * (length // len(block) + 1))[:length].strip()
+
+
+def test_single_cell_over_limit_is_split_inside_the_cell():
+    """1 セルに 13,000 文字級。**セル境界でも行境界でも割れない**ので、セルの中で割る。
+
+    実案件では 13,728 文字 / 非空セル 1 個という形で、ファイル全体が 422 になっていた。
+    """
+    text = _giant_cell_text(13_000)
+    chunks = extract_xlsx.extract("spec.xlsx", build({"サンプル": [("A53", text)]}))
+    assert len(chunks) > 1
+    assert all(len(c["text"]) <= extract_xlsx.MAX_CHUNK_CHARS for c in chunks)
+    # 断片はどれも「そのセルが根拠」= 出典は元のセルのまま(精度は落ちない)
+    assert {(c["sheet"], c["cells"]) for c in chunks} == {("サンプル", "A53")}
+    assert "".join(c["text"] for c in chunks) == text        # 1 文字も落ちていない
+
+
+def test_split_fragments_are_marked_so_the_split_is_not_silent():
+    """黙って分割しない。断片には `part`(何分割の何番目か)が付く。分割していなければ無い。"""
+    chunks = extract_xlsx.extract("spec.xlsx",
+                                  build({"S": [("A1", _giant_cell_text(5_000))]}))
+    n = len(chunks)
+    assert [c["part"] for c in chunks] == [f"{i}/{n}" for i in range(1, n + 1)]
+    assert all("part" not in c for c in extract_xlsx.extract("spec.xlsx", build(SPEC)))
+
+
+def test_long_cell_is_split_at_newline_boundaries(monkeypatch):
+    """切る位置は**意味の切れ目**が先(改行)。文字数で機械的に切らない。"""
+    monkeypatch.setattr(extract_xlsx, "MAX_CHUNK_CHARS", 50)
+    lines = [f'"field{n}": "値{n}",' for n in range(1, 30)]
+    chunks = extract_xlsx.extract("spec.xlsx", build({"S": [("A1", "\n".join(lines))]}))
+    assert len(chunks) > 1
+    for c in chunks:
+        assert all(line in lines for line in c["text"].splitlines())   # 行の途中で切らない
+
+
+def test_long_cell_without_newlines_falls_back_to_separators(monkeypatch):
+    """改行が無ければ区切り文字で切る(最後の手段が文字数)。"""
+    monkeypatch.setattr(extract_xlsx, "MAX_CHUNK_CHARS", 50)
+    text = "".join(f"項目{n}は必須である。" for n in range(1, 20))
+    chunks = extract_xlsx.extract("spec.xlsx", build({"S": [("A1", text)]}))
+    assert len(chunks) > 1
+    assert all(c["text"].endswith("。") for c in chunks)
+    assert "".join(c["text"] for c in chunks) == text
+
+
+def test_long_cell_without_any_boundary_is_split_by_length(monkeypatch):
+    """切れ目が 1 つも無い塊は、最後の手段として文字数で切る(拒否も切り詰めもしない)。"""
+    monkeypatch.setattr(extract_xlsx, "MAX_CHUNK_CHARS", 50)
+    chunks = extract_xlsx.extract("spec.xlsx", build({"S": [("A1", "あ" * 200)]}))
+    assert [len(c["text"]) for c in chunks] == [50, 50, 50, 50]
+    assert all(c["cells"] == "A1" for c in chunks)
+
+
+def test_wide_row_over_limit_is_split_at_cell_boundaries(monkeypatch):
+    """行が上限を超えても**各セルは収まる**なら、セル境界で割る(セルの中は切らない)。"""
+    monkeypatch.setattr(extract_xlsx, "MAX_CHUNK_CHARS", 50)
+    content = build({"S": [("A1", "あ" * 20), ("B1", "い" * 20), ("C1", "う" * 20)]})
+    chunks = extract_xlsx.extract("wide.xlsx", content)
+    assert [c["cells"] for c in chunks] == ["A1:B1", "C1"]
+    assert [c["text"] for c in chunks] == ["あ" * 20 + "\t" + "い" * 20, "う" * 20]
+    assert all("part" not in c for c in chunks)      # セル境界で足りた = 分割していない
+
+
+def test_chunk_count_limit_still_applies_to_split_cells(monkeypatch):
+    """セル内分割でも**総チャンク数の上限は据え置き**(超えたら従来どおり 422 相当)。"""
+    monkeypatch.setattr(extract_xlsx, "MAX_CHUNKS", 3)
     with pytest.raises(extract_xlsx.ExtractionLimitError) as e:
-        extract_xlsx.extract("wide.xlsx", build({"S": [("A1", "あ" * 200)]}))
-    assert e.value.limit == "chunk_chars"
-    assert "1 行" in str(e.value) and "S" in str(e.value)
+        extract_xlsx.extract("spec.xlsx", build({"S": [("A1", _giant_cell_text(13_000))]}))
+    assert e.value.limit == "chunks"
 
 
 def test_long_block_is_split_at_row_boundary_not_truncated(monkeypatch):

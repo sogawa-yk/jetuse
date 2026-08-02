@@ -515,17 +515,28 @@ def test_extract_requires_supported_extension():
     ).status_code == 422
 
 
-def test_upload_rejects_xlsx_over_chunk_char_limit(monkeypatch):
-    from jetuse_core import extract_xlsx
-    from tests.test_extract_xlsx import build
+def test_upload_accepts_xlsx_with_a_cell_over_the_chunk_char_limit():
+    """1 セルが上限を超えるブックは**セルの中で分割して取り込む**(PREP-04)。
 
-    monkeypatch.setattr(extract_xlsx, "MAX_CHUNK_CHARS", 50)
-    _use_real_add_file(monkeypatch)
-    res = client.post(
-        "/api/rag/files",
-        files={"file": ("wide.xlsx", build({"制約": [("A1", "あ" * 100)]}), "x")},
-    )
-    assert res.status_code == 422 and "limit=chunk_chars" in res.json()["detail"]
+    以前はここで `422 limit=chunk_chars` を返していた。1 行 = 1 セルだと分ける場所が
+    無く、ファイル全体が入らなかった(実案件で 8 冊中 2 冊)。
+    """
+    from jetuse_core import rag
+    from tests.test_extract_xlsx import _giant_cell_text, build
+
+    text = _giant_cell_text(13_000)
+    content = build({"制約": [("A53", text)]})
+    # 取り込み経路が投入するチャンクそのもの(`/api/extract` は保存しない = OCI を呼ばない)
+    res = client.post("/api/extract", files={"file": ("spec.xlsx", content, "x")})
+    assert res.status_code == 200
+    chunks = res.json()["chunks"]
+    assert len(chunks) > 1
+    assert {(c["sheet"], c["cells"]) for c in chunks} == {("制約", "A53")}
+    assert "".join(c["text"] for c in chunks) == text
+    # マネージド側へ渡す本文も 422 にならず、断片が全部載る
+    _, body, attrs = rag.prepare_upload("spec.xlsx", content)
+    assert attrs == {"sheet": "制約", "cells": "A53"}
+    assert all(c["text"] in body.decode("utf-8") for c in chunks)
 
 
 # --- マネージド側へ渡す形(ファイル単位の属性)。実 OCI は E2E で確認する -------
