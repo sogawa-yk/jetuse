@@ -126,6 +126,7 @@ def create_http_tool(
             user.subject, req.name, req.description, req.parameters, req.url,
             method=req.method, auth_header=req.auth_header,
             auth_secret_ocid=req.auth_secret_ocid,
+            headers=req.headers, idempotency_header=req.idempotency_header,
         )
     except (SsrfBlockedError, http_tools_repo.HttpToolDefError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

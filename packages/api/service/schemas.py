@@ -163,6 +163,11 @@ class HttpToolCreate(BaseModel):
     method: Literal["GET", "POST"] = "GET"
     auth_header: str | None = Field(default=None, max_length=63)
     auth_secret_ocid: str | None = Field(default=None, max_length=255)
+    # TOOL-02: 認証以外に必須ヘッダを持つ相手のための固定ヘッダと、冪等キーのヘッダ名。
+    # 値は平文で保存されるので**秘密を入れない**(秘密は auth_secret_ocid = Vault 参照)。
+    # 冪等キーの値は登録しない。ヘッダ名だけ登録すれば JetUse が呼び出しごとに発行する
+    headers: dict[str, str] | None = Field(default=None)
+    idempotency_header: str | None = Field(default=None, max_length=63)
 
 
 class ToolExecuteRequest(BaseModel):

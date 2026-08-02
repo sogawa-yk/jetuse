@@ -7,6 +7,7 @@ HTTP は httpx.MockTransport で差し替え、代理実行の境界(タイム�
 
 import contextlib
 import json
+import uuid
 
 import httpx
 import pytest
@@ -40,6 +41,13 @@ def tool_row(**over) -> dict:
 
 # --- DB fake -----------------------------------------------------------------
 
+def _raw_headers(value):
+    """`extra_headers` 列の中身。str はそのまま = 壊れた CLOB の再現に使える。"""
+    if not value:
+        return None
+    return value if isinstance(value, str) else json.dumps(value)
+
+
 class FakeCursor:
     def __init__(self, store: list[dict]):
         self.store = store
@@ -55,6 +63,10 @@ class FakeCursor:
                     t["id"], t["name"], t["description"], json.dumps(t["parameters"]),
                     t["url"], t["method"], t["auth_header"], t["auth_secret_ocid"],
                     t["owner"],
+                    # TOOL-02: 既存行は両方 NULL（列を足す前に登録されたツール）。
+                    # str をそのまま置けるのは「DB の CLOB を直接書き換えられた」状態の再現
+                    _raw_headers(t.get("headers")),
+                    t.get("idempotency_header"),
                 )
                 for t in self.store
                 if t["owner"] == binds["o"]
@@ -76,6 +88,8 @@ class FakeCursor:
                 "description": binds["d"], "parameters": json.loads(binds["p"]),
                 "url": binds["u"], "method": binds["m"], "auth_header": binds["h"],
                 "auth_secret_ocid": binds["a"],
+                "headers": json.loads(binds["x"]) if binds["x"] else None,
+                "idempotency_header": binds["i"],
             })
         elif sql.strip().startswith("DELETE"):
             before = len(self.store)
@@ -825,3 +839,273 @@ def test_execute_tool_requires_the_approved_tool_id(store, monkeypatch):
     res = client.post("/api/agent/execute-tool", json={
         "name": "lookup_stock", "arguments": '{"part_number": "JX-7742"}'})
     assert res.status_code == 400 and "http_tool_id" in res.json()["detail"]
+
+
+# --- 8. 固定ヘッダと冪等キー(TOOL-02) ------------------------------------------
+
+def _seen_headers(monkeypatch) -> dict:
+    """相手が受け取ったヘッダを覚えるモック。実際に送られた値だけを見る。"""
+    seen: dict = {"all": []}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["all"].append(dict(request.headers))
+        seen.update(dict(request.headers))
+        return httpx.Response(200, json={"ok": True})
+
+    _mock(monkeypatch, handler)
+    return seen
+
+
+def test_fixed_headers_reach_the_remote(monkeypatch):
+    """認証以外に必須ヘッダを持つ API を呼べる(このタスクの主目的)。"""
+    seen = _seen_headers(monkeypatch)
+    http_tools.call_tool(
+        tool_row(headers={"X-Correlation-Id": "corr-123", "X-Tenant": "acme"}),
+        {"part_number": "X"},
+    )
+    assert seen["x-correlation-id"] == "corr-123" and seen["x-tenant"] == "acme"
+
+
+def test_idempotency_key_is_new_on_every_call(monkeypatch):
+    """冪等キーは呼び出しごとに JetUse が発行する(モデルに作らせない=使い回させない)。"""
+    seen = _seen_headers(monkeypatch)
+    tool = tool_row(idempotency_header="X-Idempotency-Key")
+    http_tools.call_tool(tool, {"part_number": "A"})
+    http_tools.call_tool(tool, {"part_number": "B"})
+    keys = [h["x-idempotency-key"] for h in seen["all"]]
+    assert len(keys) == 2 and keys[0] != keys[1]
+    for k in keys:
+        uuid.UUID(k)  # 推測されにくい形式であること
+
+
+def test_fixed_headers_cannot_override_auth_or_host_at_registration():
+    """登録時に禁止する(そのツール自身の認証ヘッダ名も含む)。"""
+    for bad in ({"Host": "evil.example"}, {"Authorization": "Bearer x"},
+                {"Cookie": "a=b"}, {"Proxy-Authorization": "x"},
+                {"Content-Length": "0"}, {"Accept-Encoding": "gzip"},
+                {"X-Api-Key": "attacker"}):
+        with pytest.raises(http_tools.HttpToolDefError):
+            http_tools.validate_extra_headers(bad, None, "X-Api-Key")
+    with pytest.raises(http_tools.HttpToolDefError):
+        http_tools.validate_extra_headers(None, "Host", "X-Api-Key")
+    with pytest.raises(http_tools.HttpToolDefError):
+        http_tools.validate_extra_headers(None, "X-Api-Key", "X-Api-Key")
+    # 大小無視で判定する
+    with pytest.raises(http_tools.HttpToolDefError):
+        http_tools.validate_extra_headers({"x-api-KEY": "attacker"}, None, "X-Api-Key")
+    with pytest.raises(http_tools.HttpToolDefError):
+        http_tools.validate_extra_headers({"HOST": "evil.example"}, None, None)
+
+
+def test_fixed_headers_are_rejected_at_execution_too(monkeypatch):
+    """登録後に DB を直接書き換えられても素通りさせない(fail-closed)。"""
+    _mock(monkeypatch, lambda req: httpx.Response(200, json={"ok": True}))
+    for bad in ({"Host": "evil.example"}, {"X-Bad": "a\r\nX-Injected: b"},
+                {f"X-H{i}": "v" for i in range(http_tools.MAX_EXTRA_HEADERS + 1)}):
+        with pytest.raises(http_tools.HttpToolCallError) as e:
+            http_tools.call_tool(tool_row(headers=bad), {"part_number": "X"})
+        assert "ヘッダ" in str(e.value)
+
+
+def test_legit_values_win_over_fixed_headers(monkeypatch):
+    """検証をすり抜けても、後から入る認証・Host が必ず勝つ(組み立て順の担保)。"""
+    monkeypatch.setattr(http_tools, "_read_secret", lambda ocid: "tok-abc")
+    allow_secret(monkeypatch)
+    # 検証は通ったことにして、組み立て順そのものを確かめる
+    monkeypatch.setattr(
+        http_tools, "validate_extra_headers",
+        lambda h, i, a: ({"Host": "evil.example", "X-Api-Key": "attacker",
+                          "X-Idempotency-Key": "fixed-by-attacker"}, "X-Idempotency-Key"),
+    )
+    seen = _seen_headers(monkeypatch)
+    http_tools.call_tool(
+        tool_row(auth_header="X-Api-Key", auth_secret_ocid="ocid1.vaultsecret.oc1..x"),
+        {"part_number": "X"},
+    )
+    assert seen["host"] == "example.com"
+    assert seen["x-api-key"] == "tok-abc"
+    assert seen["x-idempotency-key"] != "fixed-by-attacker"
+    uuid.UUID(seen["x-idempotency-key"])
+
+
+@pytest.mark.parametrize("headers", [
+    {"X-Bad": "line1\r\nX-Injected: yes"},          # CRLF インジェクション
+    {"X-Bad": "line1\nX-Injected: yes"},
+    {"X-Bad": "tab\tseparated"},                    # 制御文字
+    {"X-Bad": "日本語"},                             # 非 ASCII
+    {"X-Bad": ""},                                  # 空値
+    {"X-Bad": "x" * (http_tools.MAX_HEADER_VALUE_LENGTH + 1)},
+    {"X-Bad": 1},                                   # 文字列でない
+    {"bad header": "v"},                            # ヘッダ名にトークン外文字
+    {"X-Dup": "a", "x-dup": "b"},                   # 大小違いの重複
+    {f"X-H{i}": "v" for i in range(http_tools.MAX_EXTRA_HEADERS + 1)},  # 個数上限
+    "not-a-dict",
+])
+def test_bad_fixed_headers_rejected(headers):
+    with pytest.raises(http_tools.HttpToolDefError):
+        http_tools.validate_extra_headers(headers, None, None)
+
+
+@pytest.mark.parametrize("name", ["bad header", "x" * 64, 5, "X-A\r\nX-B"])
+def test_bad_idempotency_header_rejected(name):
+    with pytest.raises(http_tools.HttpToolDefError):
+        http_tools.validate_extra_headers(None, name, None)
+
+
+@pytest.mark.parametrize("empty", [None, ""])
+def test_unset_idempotency_header_means_no_key(empty):
+    assert http_tools.validate_extra_headers(None, empty, None) == ({}, None)
+
+
+@pytest.mark.parametrize("falsy", [[], False, 0, ""])
+def test_falsy_non_dict_headers_are_rejected_not_ignored(falsy):
+    """DB を書き換えられたとき、型違いを「未指定」として黙って通さない(fail-closed)。"""
+    with pytest.raises(http_tools.HttpToolDefError):
+        http_tools.validate_extra_headers(falsy, None, None)
+
+
+def test_idempotency_header_cannot_duplicate_a_fixed_header():
+    with pytest.raises(http_tools.HttpToolDefError):
+        http_tools.validate_extra_headers(
+            {"X-Idem": "fixed"}, "x-idem", None)
+
+
+def test_existing_tools_without_the_new_columns_are_unchanged(monkeypatch):
+    """両方 NULL の既存ツールは送るヘッダが1つも増えない(回帰)。"""
+    seen = _seen_headers(monkeypatch)
+    http_tools.call_tool(tool_row(), {"part_number": "X"})
+    before = set(seen["all"][0])
+    http_tools.call_tool(
+        tool_row(headers=None, idempotency_header=None), {"part_number": "X"})
+    assert set(seen["all"][1]) == before
+    # 冪等キーらしきヘッダが勝手に付かない
+    assert not [h for h in before if "idempot" in h]
+
+
+def test_registration_round_trip_and_values_not_listed(store, monkeypatch):
+    """登録 → 保存 → 実行までヘッダが運ばれる。一覧は名前だけ返す(値を返さない)。"""
+    created = client.post("/api/agent/http-tools", json={
+        "name": "create_order", "description": "発注する", "parameters": SCHEMA,
+        "url": "https://example.com/orders", "method": "POST",
+        "headers": {"X-Correlation-Id": "corr-123"},
+        "idempotency_header": "X-Idempotency-Key",
+    }).json()
+    assert created["header_names"] == ["X-Correlation-Id"]
+    assert created["idempotency_header"] == "X-Idempotency-Key"
+    assert "corr-123" not in json.dumps(created, ensure_ascii=False)
+    listed = client.get("/api/agent/http-tools").json()["tools"][0]
+    assert listed["header_names"] == ["X-Correlation-Id"]
+    assert "corr-123" not in json.dumps(listed, ensure_ascii=False)
+    # DB から読み直した行では実行に使える
+    seen = _seen_headers(monkeypatch)
+    row = http_tools.get_tools(store[0]["owner"], [created["id"]])[0]
+    http_tools.call_tool(row, {"part_number": "X"})
+    assert seen["x-correlation-id"] == "corr-123"
+    uuid.UUID(seen["x-idempotency-key"])
+
+
+def test_route_rejects_forbidden_header_at_registration(store):
+    res = client.post("/api/agent/http-tools", json={
+        "name": "bad_tool", "description": "x", "parameters": SCHEMA,
+        "url": "https://example.com/x",
+        "headers": {"Host": "evil.example"},
+    })
+    assert res.status_code == 400 and store == []
+
+
+def test_route_rejects_crlf_in_header_value(store):
+    res = client.post("/api/agent/http-tools", json={
+        "name": "bad_tool", "description": "x", "parameters": SCHEMA,
+        "url": "https://example.com/x",
+        "headers": {"X-Trace": "a\r\nX-Injected: b"},
+    })
+    assert res.status_code == 400 and store == []
+
+
+# --- 9. ヘッダ名の受理範囲と、DB 値が壊れている場合(TOOL-02 review-2) ------------
+
+@pytest.mark.parametrize("name", [
+    "X-Trace", "X_Trace", "api.version", "x-trace-9", "1st-header", "X+Y", "a",
+])
+def test_http_token_header_names_accepted(name):
+    """相手の API は `_` や `.`、数字始まりのヘッダ名を要求することがある(RFC 9110 token)。"""
+    clean, idem = http_tools.validate_extra_headers({name: "v"}, None, None)
+    assert clean == {name: "v"}
+
+
+@pytest.mark.parametrize("name", [
+    "bad header", "X:Trace", "X,Trace", "X\r\nY", "X\x00", "", "x" * 64, "X/Y", '"X"',
+])
+def test_non_token_header_names_rejected(name):
+    with pytest.raises(http_tools.HttpToolDefError):
+        http_tools.validate_extra_headers({name: "v"}, None, None)
+
+
+@pytest.mark.parametrize("raw", [
+    "not-json", '{"X-A": "v"', '["X-A"]', "5", '"str"', "null",
+    '{"X-A": "' + "v" * http_tools.MAX_HEADERS_JSON_CHARS + '"}',  # 過大な CLOB
+])
+def test_broken_db_headers_do_not_crash_list_and_block_execution(
+        store, monkeypatch, raw):
+    """壊れた 1 行で一覧 API が 500 にならず、その行の実行は拒否される(fail-closed)。"""
+    seen = _seen_headers(monkeypatch)
+    client.post("/api/agent/http-tools", json={
+        "name": "lookup_stock", "description": "在庫を引く", "parameters": SCHEMA,
+        "url": "https://example.com/stock"})
+    store[0]["headers"] = raw       # DB を直接書き換えられた状態(JSON として壊れている)
+
+    listed = client.get("/api/agent/http-tools")
+    assert listed.status_code == 200
+    assert listed.json()["tools"][0]["header_names"] == []
+
+    row = http_tools.get_tools(store[0]["owner"], [store[0]["id"]])[0]
+    with pytest.raises(http_tools.HttpToolCallError) as e:
+        http_tools.call_tool(row, {"part_number": "X"})
+    assert "ヘッダ" in str(e.value)
+    assert seen["all"] == []        # 1 バイトも送っていない
+
+
+def test_broken_db_headers_are_flagged_not_hidden(store, monkeypatch):
+    client.post("/api/agent/http-tools", json={
+        "name": "lookup_stock", "description": "在庫を引く", "parameters": SCHEMA,
+        "url": "https://example.com/stock"})
+    store[0]["headers"] = "not-json"
+    listed = client.get("/api/agent/http-tools").json()["tools"][0]
+    assert listed["headers_invalid"] is True
+    store[0]["headers"] = {"X-Correlation-Id": "corr"}
+    ok = client.get("/api/agent/http-tools").json()["tools"][0]
+    assert ok["headers_invalid"] is False and ok["header_names"] == ["X-Correlation-Id"]
+
+
+# --- 10. 入力境界(TOOL-02 review-3) --------------------------------------------
+
+@pytest.mark.parametrize("value", ["value\n", "value\r", "value\r\n"])
+def test_trailing_newline_in_header_value_rejected(value):
+    """`$` は末尾 LF の直前にも一致する。CR/LF は「途中」だけでなく「末尾」も拒否する。"""
+    with pytest.raises(http_tools.HttpToolDefError):
+        http_tools.validate_extra_headers({"X-Trace": value}, None, None)
+
+
+@pytest.mark.parametrize("name", ["X-Trace\n", "X-Trace\r\n"])
+def test_trailing_newline_in_header_name_rejected(name):
+    with pytest.raises(http_tools.HttpToolDefError):
+        http_tools.validate_extra_headers({name: "v"}, None, None)
+    with pytest.raises(http_tools.HttpToolDefError):
+        http_tools.validate_extra_headers(None, name, None)
+
+
+def test_max_sized_headers_survive_the_db_round_trip(store, monkeypatch):
+    """登録を通った**最大構成**が、DB 読み直しで「壊れた値」にならない。"""
+    limit = http_tools.MAX_HEADER_VALUE_LENGTH
+    # JSON で最も膨らむ値(引用符とバックスラッシュはエスケープされる)
+    worst = ('"\\' * (limit // 2))[:limit]
+    headers = {f"X-H{i}-{'x' * 55}": worst for i in range(http_tools.MAX_EXTRA_HEADERS)}
+    created = http_tools.create_tool(
+        "u1", "lookup_stock", "在庫を引く", SCHEMA, "https://example.com/stock",
+        headers=headers)
+    assert len(created["header_names"]) == http_tools.MAX_EXTRA_HEADERS
+    row = http_tools.get_tools("u1", [created["id"]])[0]
+    assert row["headers"] == headers          # 読み直しても壊れた印にならない
+    seen = _seen_headers(monkeypatch)
+    http_tools.call_tool(row, {"part_number": "X"})
+    assert seen[next(iter(headers)).lower()] == worst

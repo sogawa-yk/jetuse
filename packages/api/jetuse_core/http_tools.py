@@ -60,6 +60,17 @@ USER_AGENT = "jetuse/0.1 (agent tool proxy)"
 # 相手が認証ヘッダを応答へ反射したときの伏せ字
 REDACTED = "<redacted>"
 
+# 固定ヘッダ(TOOL-02)。相手が認証以外にも必須ヘッダを持つことは珍しくないので数個だけ許す。
+# 増やしすぎるとリクエストの中身を利用者に握らせることになるため、上限は小さく保つ
+MAX_EXTRA_HEADERS = 5
+MAX_HEADER_VALUE_LENGTH = 200
+# DB の `extra_headers`(CLOB)として読む上限。上限内の JSON しか parse しない。
+# **登録を通った最大構成が必ず収まる**大きさにする(1 文字が JSON で最大 6 文字 `\uXXXX` に
+# 膨らむ。ここを詰めすぎると、正しく登録できたツールが読み直しで壊れた扱いになる)
+MAX_HEADERS_JSON_CHARS = MAX_EXTRA_HEADERS * (MAX_HEADER_VALUE_LENGTH * 6 + 512) + 64
+# DB の値が壊れていたときの印(dict でない = 実行時検証で必ず弾かれる)
+INVALID_HEADERS = "<invalid>"
+
 ALLOWED_METHODS = ("GET", "POST")
 DEFAULT_AUTH_HEADER = "Authorization"
 # この秘密を使ってよい所有者を示す Vault の freeform タグ(値 = AuthContext.subject)
@@ -76,6 +87,20 @@ FORBIDDEN_AUTH_HEADERS = frozenset({
     "expect", "upgrade", "te", "trailer", "keep-alive", "proxy-authorization",
     "proxy-connection",
 })
+# 固定ヘッダ/冪等キーに使わせないもの。上に加えて **認証と資格情報の経路**を塞ぐ
+# (`authorization` / `cookie` を自由に書けると Vault 参照を迂回して秘密を平文で載せられる)
+FORBIDDEN_EXTRA_HEADERS = FORBIDDEN_AUTH_HEADERS | frozenset({
+    "authorization", "cookie", "set-cookie", "accept-encoding",
+})
+# `proxy-*` は前方一致で塞ぐ(個別列挙だと将来のヘッダを取りこぼす)
+FORBIDDEN_HEADER_PREFIX = "proxy-"
+# ヘッダ値は印字可能 ASCII のみ。CR/LF を混ぜられるとヘッダ/リクエストの偽装になる。
+# 終端は `$` ではなく `\Z`(`$` は**末尾の LF の直前にも**一致するので "value\n" が通る)
+HEADER_VALUE_RE = re.compile(r"\A[\x20-\x7e]+\Z")
+# 固定ヘッダ/冪等キーのヘッダ名は RFC 9110 の token(tchar)。認証ヘッダ名の `HEADER_RE` より
+# 広い(相手の API が `X_Trace` や `api.version` のような名前を要求することがある)。
+# 区切り文字(`:` `,` 空白等)と制御文字は入らないので、これ自体がインジェクション対策になる
+HEADER_NAME_RE = re.compile(r"\A[!#$%&'*+\-.^_`|~0-9A-Za-z]{1,63}\Z")
 ALLOWED_PARAM_TYPES = ("string", "number", "integer", "boolean")
 
 # 組込ツールと同名を登録させない(モデルから見て同じ名前空間)
@@ -155,6 +180,59 @@ def validate_parameters(parameters: Any) -> dict:
     return {"type": "object", "properties": clean, "required": list(required)}
 
 
+def _assert_extra_header_name(name: Any, auth_lower: str) -> None:
+    low = name.lower() if isinstance(name, str) else ""
+    if not isinstance(name, str) or not HEADER_NAME_RE.match(name):
+        raise HttpToolDefError(f"ヘッダ名が不正です: {name}")
+    if low in FORBIDDEN_EXTRA_HEADERS or low.startswith(FORBIDDEN_HEADER_PREFIX):
+        raise HttpToolDefError(f"このヘッダは指定できません: {name}")
+    if low == auth_lower:
+        # 認証ヘッダを固定ヘッダ側から書けると、Vault 参照を平文で上書きする経路になる
+        raise HttpToolDefError(f"認証ヘッダと同じ名前は指定できません: {name}")
+
+
+def validate_extra_headers(
+    headers: Any, idempotency_header: Any, auth_header: str | None
+) -> tuple[dict[str, str], str | None]:
+    """固定ヘッダと冪等キーのヘッダ名を検証し、(固定ヘッダ, 冪等キー名) を返す(TOOL-02)。
+
+    **登録時と実行時の両方**で通す。登録時だけだと、後から DB を直接書き換えられたときに
+    禁止ヘッダや CR/LF が素通りする(秘密の認可を実行時に取り直すのと同じ理由)。
+    """
+    auth_lower = (auth_header or DEFAULT_AUTH_HEADER).lower()
+    clean: dict[str, str] = {}
+    if headers is not None:
+        # 空の list / False / 0 を「未指定」として素通りさせない(DB を書き換えられた場合に
+        # 型の違いが黙って無視されると、fail-closed の契約が崩れる)
+        if not isinstance(headers, dict):
+            raise HttpToolDefError("headers はヘッダ名と値のオブジェクトである必要があります")
+        if len(headers) > MAX_EXTRA_HEADERS:
+            raise HttpToolDefError(f"固定ヘッダは{MAX_EXTRA_HEADERS}個までです")
+        for name, value in headers.items():
+            _assert_extra_header_name(name, auth_lower)
+            if name.lower() in {k.lower() for k in clean}:
+                # 大小違いの重複を許すと、どちらが送られるかが実装依存になる
+                raise HttpToolDefError(f"同じヘッダ名が重複しています: {name}")
+            if not isinstance(value, str) or not HEADER_VALUE_RE.match(value):
+                raise HttpToolDefError(
+                    f"ヘッダ値は CR/LF を含まない印字可能 ASCII である必要があります: {name}"
+                )
+            if len(value) > MAX_HEADER_VALUE_LENGTH:
+                raise HttpToolDefError(
+                    f"ヘッダ値は{MAX_HEADER_VALUE_LENGTH}文字までです: {name}"
+                )
+            clean[name] = value
+    if not idempotency_header:
+        return clean, None
+    _assert_extra_header_name(idempotency_header, auth_lower)
+    if idempotency_header.lower() in {k.lower() for k in clean}:
+        # 固定値と毎回変わる値が同じヘッダ名で競合する。どちらの意図か決められない
+        raise HttpToolDefError(
+            f"冪等キーのヘッダ名が固定ヘッダと重複しています: {idempotency_header}"
+        )
+    return clean, idempotency_header
+
+
 def assert_secret_usable(owner: str, secret_ocid: str) -> None:
     """登録者がその Vault 秘密を使ってよいかを **Vault のメタデータ**で確かめる(値は読まない)。
 
@@ -215,6 +293,29 @@ def validate_definition(
 
 # --- レジストリ(所有者強制は SQL の WHERE 句) ---------------------------
 
+def _load_headers(raw: Any) -> Any:
+    """DB の `extra_headers` を読む。**壊れていても例外を投げない**。
+
+    ここで `JSONDecodeError` を上げると、壊れた 1 行で一覧 API 全体が 500 になる
+    (DB を直接触られた場合の実行時拒否が、拒否ではなく障害になる)。壊れていたら
+    dict でない印を返し、`validate_extra_headers` の実行時検証で必ず弾かれるようにする。
+    """
+    if not raw:
+        return None
+    if len(raw) > MAX_HEADERS_JSON_CHARS:
+        # 巨大な CLOB を parse しに行かない(壊れた行 1 つでメモリを使い切らせない)
+        logger.warning("http tool extra_headers too large: %d chars", len(raw))
+        return INVALID_HEADERS
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        logger.warning("http tool has unparsable extra_headers")
+        return INVALID_HEADERS
+    # 列が「未設定」なら DB は NULL(上で弾いている)。JSON の null が入っているのは
+    # 直接書き換えられた印なので、未設定として扱わず壊れた値として拒否する
+    return INVALID_HEADERS if parsed is None else parsed
+
+
 def _row_to_tool(r) -> dict[str, Any]:
     return {
         "id": r[0],
@@ -227,21 +328,33 @@ def _row_to_tool(r) -> dict[str, Any]:
         "auth_secret_ocid": r[7],
         # 実行時に秘密の認可を取り直すために持つ(API 応答には出さない)
         "owner_sub": r[8],
+        # TOOL-02。列を足す前に登録されたツールは両方 NULL(挙動は従来どおり)
+        "headers": _load_headers(r[9]),
+        "idempotency_header": r[10],
     }
 
 
 def _public(tool: dict[str, Any]) -> dict[str, Any]:
-    """API 応答用。Vault の OCID・秘密は返さない(has_auth のみ — mcp_servers と同じ)。"""
+    """API 応答用。Vault の OCID・秘密は返さない(has_auth のみ — mcp_servers と同じ)。
+
+    固定ヘッダは**名前だけ**返す(値は返さない)。値は DB に平文で載るため、一覧・履歴・
+    スクリーンショットへ広げる面を狭くしておく(ADR-0023。秘密は従来どおり Vault 参照)。
+    """
+    headers = tool.get("headers")
     return {
         "id": tool["id"], "name": tool["name"], "description": tool["description"],
         "parameters": tool["parameters"], "url": tool["url"], "method": tool["method"],
         "auth_header": tool["auth_header"], "has_auth": tool["auth_secret_ocid"] is not None,
+        "header_names": list(headers) if isinstance(headers, dict) else [],
+        # DB の値が壊れている(直接書き換えられた等)ことを黙って隠さない。実行は必ず失敗する
+        "headers_invalid": headers is not None and not isinstance(headers, dict),
+        "idempotency_header": tool.get("idempotency_header"),
     }
 
 
 _SELECT = (
     "SELECT id, name, description, parameters, url, method, auth_header, "
-    "auth_secret_ocid, owner_sub FROM http_tools"
+    "auth_secret_ocid, owner_sub, extra_headers, idempotency_header FROM http_tools"
 )
 
 
@@ -278,9 +391,12 @@ def create_tool(
     method: str = "GET",
     auth_header: str | None = None,
     auth_secret_ocid: str | None = None,
+    headers: dict[str, str] | None = None,
+    idempotency_header: str | None = None,
 ) -> dict[str, Any]:
     m, h = validate_definition(name, url, method, auth_header)
     schema = validate_parameters(parameters)
+    extra, idem = validate_extra_headers(headers, idempotency_header, h)
     if auth_secret_ocid:
         assert_secret_usable(owner, auth_secret_ocid)
     tid = _uid()
@@ -290,12 +406,13 @@ def create_tool(
                 """
                 INSERT INTO http_tools(
                   id, owner_sub, name, description, parameters, url, method,
-                  auth_header, auth_secret_ocid)
-                VALUES (:id, :o, :n, :d, :p, :u, :m, :h, :a)
+                  auth_header, auth_secret_ocid, extra_headers, idempotency_header)
+                VALUES (:id, :o, :n, :d, :p, :u, :m, :h, :a, :x, :i)
                 """,
                 id=tid, o=owner, n=name, d=description[:1000],
                 p=json.dumps(schema, ensure_ascii=False), u=url[:1000], m=m,
                 h=h, a=auth_secret_ocid,
+                x=json.dumps(extra, ensure_ascii=False) if extra else None, i=idem,
             )
             conn.commit()
     except oracledb.IntegrityError as e:
@@ -303,6 +420,7 @@ def create_tool(
     return _public({
         "id": tid, "name": name, "description": description, "parameters": schema,
         "url": url, "method": m, "auth_header": h, "auth_secret_ocid": auth_secret_ocid,
+        "headers": extra, "idempotency_header": idem,
     })
 
 
@@ -420,6 +538,21 @@ def call_tool(tool: dict, args: dict) -> str:
         # 巨大に展開される)を上限判定の前に読み込む余地を減らす
         "Accept-Encoding": "identity",
     }
+    # 固定ヘッダと冪等キー(TOOL-02)。**実行時にも検証する**(登録後に DB を書き換えられて
+    # も禁止ヘッダ・CR/LF を素通りさせない)。組み立て順は 固定 → 冪等 → 認証 → Host で、
+    # 後から入るものが必ず勝つ = 固定ヘッダで認証・宛先を上書きできない
+    try:
+        extra, idem = validate_extra_headers(
+            tool.get("headers"), tool.get("idempotency_header"), tool.get("auth_header")
+        )
+    except HttpToolDefError as e:
+        raise HttpToolCallError(
+            f"ツール実行に失敗しました: ヘッダ定義が不正です({e})"
+        ) from e
+    headers.update(extra)
+    if idem:
+        # **呼び出しごとに JetUse が発行する**(モデルに作らせない = 使い回させない。ADR-0023)
+        headers[idem] = _uid()
     try:
         auth, secret_value = _auth_headers(tool)
     except HttpToolDefError as e:
