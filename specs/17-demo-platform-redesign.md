@@ -90,6 +90,7 @@ moderation / guardrails（自動適用の横断機能）。
 
 ```
 POST /api/agent/http-tools   name / description / parameters(JSON Schema) / url / method / 認証
+                             / headers(固定ヘッダ) / idempotency_header（TOOL-02）
 POST /api/chat/stream        agent=true + http_tool_ids=[...] で実行に配線
 ```
 
@@ -99,6 +100,21 @@ POST /api/chat/stream        agent=true + http_tool_ids=[...] で実行に配線
   **使える秘密は、本アプリのコンパートメントにあり freeform タグ `jetuse_tool_owner` が登録者と
   一致するものだけ**。これが無いと「サービスの権限で読める任意の秘密を、利用者が指定した外部 URL へ
   送らせる」経路（confused deputy）になる。
+- **認証以外の必須ヘッダ（TOOL-02・2026-08-02 実装済み）**: `headers` に「毎回この値を付ける」
+  固定ヘッダを最大 5 個（値は印字可能 ASCII 200 文字まで）。`idempotency_header` は**ヘッダ名だけ**
+  登録すれば、**呼び出しのたびに JetUse が新しい値（uuid4）を発行**して送る（モデルには作らせない
+  ＝使い回しによる二重実行防止の無効化を避ける。ADR-0023）。動的な値の一般テンプレート機構は持たない。
+  - 組み立て順は **固定 → 冪等 → 認証 → Host** で、後から入るものが勝つ＝固定ヘッダで認証・宛先を
+    上書きできない。禁止ヘッダ（`host` / `authorization` / `proxy-*` / `cookie` / `set-cookie` /
+    `content-length` / `content-type` / `transfer-encoding` / `accept-encoding` / `connection` /
+    `upgrade` / `expect` / `te` / `trailer` / `keep-alive`
+    ＋そのツール自身の `auth_header`）・CR/LF 混入・個数/長さ超過は**登録時と実行時の両方で拒否**。
+    ※ `content-encoding` など上記以外の `content-*` は禁止していない（枠組みを決めるのは長さと型なので、
+    そこだけを塞ぐ。応答の圧縮は `accept-encoding: identity` 固定で別途扱う）。
+  - ヘッダ名は RFC 9110 の token（`X_Trace` / `api.version` のような名前も可。区切り文字・制御文字は不可）。
+  - **固定ヘッダの値は DB に平文で保存される。秘密を入れないこと**（認証は Vault 参照を使う）。
+    一覧 API は値を返さず**名前だけ**返す（`header_names`）。DB の値が壊れている行は
+    `headers_invalid: true` で示し（隠さない）、**一覧は 200 のまま・その行の実行だけが 400** になる。
 - **SSRF は fail-closed**: https 必須／内部メタデータ・ループバック・私有レンジ・URL 埋め込み認証情報を
   登録時と実行時の両方で拒否／リダイレクトを追わない。
 - タイムアウト 15 秒・応答 128KB・リトライ 0・1 エージェント 8 ツールまで。上限超過は黙って切り詰めず
