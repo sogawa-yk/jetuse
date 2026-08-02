@@ -52,8 +52,17 @@ class ChatRequest(BaseModel):
     auto_tools: bool = False
     # AGT-04: 承認往復の継続で送り返すツール結果。ホップ上限の天井まで受ける
     # (ここが天井より小さいと、上限を上げても承認モードだけ 422 で継続できない)
+    # AGT-05: 文書検索はホップの予算から外れたので、ここを 48 のままにすると
+    # 検索を挟む承認往復が予算判定に届く前に 422 で詰まる(review-2 の指摘)。
+    # **これは予算の上界ではなく要求ボディの安全弁**である —— 1 往復から複数の
+    # function_call が返りうるので、件数はホップ数からは決まらない(AGT-01d からの既存の
+    # 性質で、従来の 48 も上界ではなかった)。検索を別枠にしたぶん枠を広げただけで、
+    # 実際の歯止めは stream_agent 側の 2 つの予算が持つ。
     tool_results: list[dict] | None = Field(
-        default=None, max_length=settings.AGENT_MAX_TOOL_HOPS_CEILING
+        default=None,
+        max_length=(
+            settings.AGENT_MAX_TOOL_HOPS_CEILING + settings.AGENT_MAX_DOC_SEARCHES_CEILING
+        ),
     )
     enabled_tools: list[str] | None = Field(default=None, max_length=20)  # AGT-01b
     mcp_server_ids: list[str] | None = Field(default=None, max_length=5)  # AGT-02
