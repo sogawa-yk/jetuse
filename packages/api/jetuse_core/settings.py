@@ -4,6 +4,16 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# エージェントのツール往復(ホップ)上限(AGT-04・ADR-0025)。1 ホップ = モデル 1 往復。
+# **この 2 つの数値は 2026-08-02 の人間ゲートで承認済み**(ADR-0025 は Accepted)。
+# 値を変えるのはこの 2 行だけ。機構(設定で変えられる / 天井超過は拒否 / 打ち切りを通知)は
+# tasks/AGT-04.md で承認済みの決定。
+# 天井は「モデルが同じツールを呼び続けても必ず止まる」ための硬い上限で、既定値ともども
+# 根拠は ADR-0025。天井を超える値はクランプせず**拒否**する
+# (黙って下げると「上げたのに効かない」が起きる — 解決は chat.resolve_max_tool_hops)。
+AGENT_MAX_TOOL_HOPS_CEILING = 48
+AGENT_MAX_TOOL_HOPS_DEFAULT = 24
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -22,6 +32,14 @@ class Settings(BaseSettings):
 
     # OpenSearch RAG(ENH-05)。例 http://10.1.1.x:9200。空ならOpenSearchバックエンド無効
     opensearch_endpoint: str = ""
+
+    # AGT-04: エージェントのツール往復上限(env AGENT_MAX_TOOL_HOPS)。天井は
+    # AGENT_MAX_TOOL_HOPS_CEILING。**あえて文字列で持ち、検証は
+    # chat.resolve_max_tool_hops で行う**(空文字は未設定 = 既定値)。
+    # int 宣言にすると `AGENT_MAX_TOOL_HOPS=abc` で Settings 生成そのものが失敗し、
+    # get_settings() を呼ぶ**全 API**(チャット・RAG・認証依存)が 500 になる。
+    # エージェント専用の設定ミスで壊すのは当該機能だけに閉じる。
+    agent_max_tool_hops: str = ""
 
     # feature flags
     auth_required: bool = False  # INFRA-02(OIDC)完了までの暫定。本番はtrue必須

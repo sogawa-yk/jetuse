@@ -126,6 +126,69 @@ RAG_SEARCH = "rag_search"  # 実体はfile_search built-in(ユーザーのVector
 
 CODE_INTERPRETER = "code_interpreter"
 
+# エージェントの文書検索を adb バックエンドで行うときの取得件数(AGT-04)。
+# 非エージェント経路(`rag_adb.generate`)の TOP_K と同じ 5 件に揃える
+ADB_RAG_TOP_K = 5
+
+
+def _adb_result(hit: dict) -> dict:
+    """検索ヒットをツール出力の1件にする。**本文は切り詰めない**(根拠が欠ける)。
+
+    `source` に file / sheet / cells / version / chunk_id が入る(`rag_adb._hit`)ので、
+    モデルは「どのシートのどのセルか」を答えに書ける。
+    """
+    return {
+        "file_id": hit["file_id"],
+        "filename": hit["filename"],
+        "score": hit["score"],
+        "source": hit["source"],
+        "text": hit["text"],
+    }
+
+
+def adb_rag_search_tool(owner: str) -> ToolDef:
+    """`rag_search` を Oracle AI Database 検索の function tool として作る(AGT-04)。
+
+    Vector Store の `file_search` built-in は属性が**ファイル単位**なので、出典は
+    「どの仕様書か」までしか返らない(ADR-0020)。チャンク単位の出典(シート名・セル範囲)を
+    返すこちらを選べるようにする。built-in 経路は**置き換えない**(要求で選ぶ。既定は現行のまま)。
+
+    起票時は「出典が粗いから同じ文書を何度も引き直す」と見立てていたが、**実測では検索回数は
+    減らなかった**(ADR-0025 §5)。この tool の value は根拠がセルまで辿れることであって、
+    検索回数の削減ではない。
+
+    読み取り専用なので `requires_approval=False`。承認を要ると、承認モードでは
+    文書検索のたびにストリームが止まり、多段の手続きが進まなくなる。
+    """
+    def handler(args: dict) -> str:
+        from . import rag_adb
+
+        hits = rag_adb.search(
+            owner, args["query"], k=ADB_RAG_TOP_K, filters={"current_version": "Y"}
+        )
+        return json.dumps(
+            {"results": [_adb_result(h) for h in hits]}, ensure_ascii=False
+        )
+
+    return ToolDef(
+        name=RAG_SEARCH,
+        label="文書検索(RAG)",
+        description=(
+            "アップロード済み文書を検索し、該当箇所の本文と出典(ファイル名・"
+            "シート名/頁・セル範囲)を返す。返った出典をそのまま根拠として使い、"
+            "同じ内容を何度も検索し直さないこと"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "検索したい内容(日本語可)"}
+            },
+            "required": ["query"],
+        },
+        handler=handler,
+        requires_approval=False,
+    )
+
 
 def list_tools() -> list[dict]:
     """UIのツール選択リスト用(AGT-01b/01c)"""
