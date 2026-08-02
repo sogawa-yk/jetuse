@@ -22,6 +22,12 @@ from jetuse_shared.webtools import (
 
 logger = logging.getLogger("jetuse.tools")
 
+# 実行時の配列要素数の上限(TOOL-03・ADR-0024)。宣言時ではなく**呼び出しごと**に効く。
+# 業務 API の配列(明細行・サービス項目)はデモの操作で数件〜十数件。100 件はその十倍で、
+# 「モデルが暴走して巨大な配列を組み立てた」を相手へ送る前に止めるための天井。
+# 超過は切り詰めずに失敗させる(切り詰めると相手には成功に見えて中身が欠ける)
+MAX_ARRAY_ITEMS = 100
+
 
 def web_search_handler(args: dict) -> str:
     return _wt.web_search_json(
@@ -164,31 +170,94 @@ class ToolError(ValueError):
     pass
 
 
-def _validate_args(tool: ToolDef, args: dict) -> None:
-    props = tool.parameters.get("properties", {})
-    for req in tool.parameters.get("required", []):
-        if req not in args:
-            raise ToolError(f"必須引数がありません: {req}")
-    for k, v in args.items():
+SCALAR_TYPES = ("string", "number", "integer", "boolean")
+
+
+def _validate_scalar(t: str | None, v, path: str) -> None:
+    if t not in SCALAR_TYPES:
+        # 宣言できる型は object/array + 上記スカラだけ(`http_tools.ALLOWED_PARAM_TYPES`)。
+        # ここに来るのは type の欠落・未知の型 = DB を直接書き換えられた印なので、
+        # 「検証できないものは通さない」に倒す(素通しすると未検証値が相手の業務APIへ飛ぶ)
+        raise ToolError(f"引数スキーマが不正です(検証できない type): {path}")
+    # 外部HTTPツール(TOOL-01)は利用者定義スキーマなので string 以外も検証する。
+    # bool は int の派生なので number/integer からは除く
+    if t == "string" and not isinstance(v, str):
+        raise ToolError(f"引数の型が不正: {path}")
+    if t == "number":
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise ToolError(f"引数の型が不正: {path}")
+        # NaN / Infinity は JSON の標準にも無く、相手の業務APIへ送る値としても不正。
+        # int には isfinite を呼ばない(巨大整数で OverflowError になる)
+        if isinstance(v, float) and not math.isfinite(v):
+            raise ToolError(f"引数の型が不正: {path}")
+    # integer に 1.5 を通すとスキーマの主張と実際の入力保証がずれる
+    if t == "integer" and (isinstance(v, bool) or not isinstance(v, int)):
+        raise ToolError(f"引数の型が不正: {path}")
+    if t == "boolean" and not isinstance(v, bool):
+        raise ToolError(f"引数の型が不正: {path}")
+
+
+def _validate_object(spec: dict, value: dict, path: str) -> None:
+    """object の中身を検査する。未知キー拒否・required は**各階層で**同じ強さで効かせる。"""
+    props = spec.get("properties", {})
+    required = spec.get("required", [])
+    if not isinstance(props, dict) or not isinstance(required, list):
+        # 宣言側(`http_tools.validate_parameters`)を通ればこの形になる。ならないのは
+        # DB を直接書き換えられた印なので、検証できないまま実行しない
+        raise ToolError(f"引数スキーマが不正です(properties/required): {path or 'parameters'}")
+    for req in required:
+        if not isinstance(req, str):
+            # 文字列でない required は dict の照合で TypeError(unhashable)になる。
+            # 500 ではなく「拒否」として返す(ADR-0023 §_load_headers と同じ扱い)
+            raise ToolError(f"引数スキーマが不正です(required): {path or 'parameters'}")
+        if req not in value:
+            raise ToolError(f"必須引数がありません: {f'{path}.{req}' if path else req}")
+    for k, v in value.items():
         if k not in props:
-            raise ToolError(f"未知の引数: {k}")
-        t = props[k].get("type")
-        # 外部HTTPツール(TOOL-01)は利用者定義スキーマなので string 以外も検証する。
-        # bool は int の派生なので number/integer からは除く
-        if t == "string" and not isinstance(v, str):
-            raise ToolError(f"引数の型が不正: {k}")
-        if t == "number":
-            if isinstance(v, bool) or not isinstance(v, (int, float)):
-                raise ToolError(f"引数の型が不正: {k}")
-            # NaN / Infinity は JSON の標準にも無く、相手の業務APIへ送る値としても不正。
-            # int には isfinite を呼ばない(巨大整数で OverflowError になる)
-            if isinstance(v, float) and not math.isfinite(v):
-                raise ToolError(f"引数の型が不正: {k}")
-        # integer に 1.5 を通すとスキーマの主張と実際の入力保証がずれる
-        if t == "integer" and (isinstance(v, bool) or not isinstance(v, int)):
-            raise ToolError(f"引数の型が不正: {k}")
-        if t == "boolean" and not isinstance(v, bool):
-            raise ToolError(f"引数の型が不正: {k}")
+            raise ToolError(f"未知の引数: {f'{path}.{k}' if path else k}")
+        _validate_value(props[k], v, f"{path}.{k}" if path else k)
+
+
+def _validate_value(spec: dict, value, path: str) -> None:
+    """宣言された1ノードに対して実際の入力を検査する(TOOL-03: 入れ子・配列を再帰で)。
+
+    宣言(`http_tools.validate_parameters`)と同じ強さで検査する。宣言側が
+    「検証しきれる形しか通さない」ので、ここに `properties` の無い object や
+    `items` の無い array は来ない。来たら(DB を直接書き換えられた等)**通さない**。
+    """
+    if not isinstance(spec, dict):
+        # 子スキーマが dict でない(文字列・配列・null)。宣言側を通ればこうはならないので
+        # DB を直接書き換えられた印。AttributeError で 500 にせず、拒否として返す
+        raise ToolError(f"引数スキーマが不正です: {path or 'parameters'}")
+    t = spec.get("type")
+    if t == "object":
+        if not isinstance(value, dict):
+            raise ToolError(f"引数の型が不正: {path}")
+        _validate_object(spec, value, path)
+    elif t == "array":
+        if not isinstance(value, list):
+            raise ToolError(f"引数の型が不正: {path}")
+        if len(value) > MAX_ARRAY_ITEMS:
+            # 切り詰めない。切り詰めると相手の業務APIへ「送ったつもりより少ない」注文が届く
+            raise ToolError(
+                f"配列 {path} の要素数が上限({MAX_ARRAY_ITEMS}件)を超えています: {len(value)}件"
+            )
+        items = spec.get("items")
+        if not isinstance(items, dict):
+            raise ToolError(f"引数スキーマが不正です(items がありません): {path}")
+        for i, v in enumerate(value):
+            _validate_value(items, v, f"{path}[{i}]")
+    else:
+        _validate_scalar(t, value, path)
+
+
+def _validate_args(tool: ToolDef, args: dict) -> None:
+    # ルートも子と**同じ強さ**で検査する。ここを `_validate_object` へ直接渡すと、
+    # PARAMETERS を `type=array` / 未知 type / type 欠落 へ書き換えられたときに
+    # properties さえ整っていれば handler へ到達する(子だけ fail-closed にしても意味がない)
+    if not isinstance(tool.parameters, dict) or tool.parameters.get("type") != "object":
+        raise ToolError("引数スキーマが不正です: parameters")
+    _validate_object(tool.parameters, args, "")
 
 
 def execute_with(registry: dict[str, ToolDef], name: str, arguments: str | dict) -> str:
