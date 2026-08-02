@@ -1,0 +1,47 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-08-02T09:59:13+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "セル内分割の主要動作は正しく、4本の実環境 E2E も差分の主張を十分に裏づけています。ただし、最大サイズのセルでは分割断片を全件先行生成するため、逐次処理と早期上限判定が崩れる問題があります。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 1,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "PREP04-001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/extract_xlsx.py",
+      "line": 394,
+      "issue": "`_split_text()` が全断片を `list[str]` として生成し終えてから yield するため、最大100MB近いセルでは文字列の複製と数万断片の確保が先に発生します。`MAX_CHUNKS` の判定も `_cell_chunks()` が返った後なので、上限1,000件で拒否できる入力でも全分割を終えるまでメモリとCPUを消費し、「1件作るたびに上限を見る」「塊を丸ごとメモリに溜めない」という既存の防御を満たしません。13,000文字のテスト/E2Eではこの境界条件を検出できません。",
+      "suggestion": "分割位置だけを軽量に先行計算して断片文字列は逐次生成するか、抽出全体の残りチャンク予算を `_cell_chunks` に渡して1,001件目が必要と判明した時点で `ExtractionLimitError(limit=\"chunks\")` を送出してください。上限付近の巨大セルで、早期に拒否される回帰テストも追加してください。"
+    },
+    {
+      "id": "PREP04-002",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/extract_xlsx.py",
+      "line": 400,
+      "issue": "公開される `/api/extract` のチャンクに新しい `part` キーを追加している一方、コメントと仕様は「既存の鍵は増減しない」「API契約は変えない」と説明しています。追加フィールドは一般には後方互換ですが、未知フィールドを拒否する厳格なクライアントや完全一致テストには影響します。",
+      "suggestion": "公開レスポンスへの追加フィールドであることを仕様に明記し、必要なら OpenAPI のレスポンスモデルまたは契約テストで optional `part` を正式に定義してください。「既存の鍵は増減しない」という記述は「既存キーは維持し、optionalキーを追加」に修正してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "sufficient",
+    "notes": "`runs/2026-08-02T0934_PREP-04/e2e/` の4シナリオを確認しました。巨大セルの取込・内容保存・検索・実API回答・元セル引用、同一セル断片の一意なchunk_idと復元、通常xlsxの回帰、chunks/workbook_bytesの422を網羅し、全694テストとruffも成功しています。未実施範囲はSKIPPED.mdに理由があり妥当です。ただし、100MB級セルに対するメモリ使用量と早期打切りは未検証です。認証情報、OCID、実エンドポイント値のコミットは差分内に見当たりません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されておらず、指示に従いブラウザ検証は実施していません。"
+    }
+  }
+}

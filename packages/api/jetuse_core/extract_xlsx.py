@@ -23,15 +23,23 @@ RAGM-01 / RAGM-02 で完成しているので、ここは抽出だけを担う�
 上限を超えたら**切り詰めずに拒否する**(`ExtractionLimitError` → ルート側で 422)。
 黙って一部だけ取り込むと、利用者からは「取り込めたのに根拠が出ない」と区別が付かない
 (RAGM-01 で属性の切り詰めを禁じたのと同じ理由)。
+
+ただし**1 チャンクの文字数**(`chunk_chars`)は拒否の理由にしない(PREP-04)。分ける場所が
+無いなら作る — 行境界 → セル境界 → **セルの中**の順に割り、どの断片も元のセルを出典に持つ。
+拒否していた頃は「1 セルに巨大なテキスト」というだけでファイル全体が入らなかった
+(実案件で 8 冊中 2 冊)。総チャンク数・バイト数の上限は据え置きで、超えれば従来どおり 422。
 """
 
 import contextlib
 import datetime
 import io
+import logging
 import re
 import zipfile
 from typing import Any
 from xml.etree import ElementTree
+
+logger = logging.getLogger("jetuse.extract_xlsx")
 
 # 上限(超過は切り詰めずに拒否する)。
 # xlsx は zip なので、生バイト数より展開後(共有文字列 + シート XML)が桁で大きい。
@@ -50,6 +58,9 @@ MAX_CHUNKS = 1_000
 # 1 チャンクの文字数。埋め込み API は先頭 2,000 文字で切るので、保存本文もそこで揃える
 # (超える塊を作ると、本文と検索表現が食い違う)。
 MAX_CHUNK_CHARS = 2_000
+# 1 セルが上限を超えたときに、セルの中を切ってよい位置(PREP-04)。改行が最優先で、
+# 無ければこれらの**直後**で切る。無ければ文字数で切る。構造の解析はしない(非ゴール)。
+_SEPARATORS = ("。", "、", "，", "；", "！", "？", ".", ",", ";", " ", "\t")
 
 # ファイル単位の属性(マネージド Vector Store 用)で「ブック全体」を表す値。
 WORKBOOK_SHEET = "(ブック全体: {n} シート)"
@@ -91,7 +102,9 @@ def extract(filename: str, content: bytes) -> list[dict[str, Any]]:
     シートごとに**連続する非空セルの矩形**(空行 / 行の飛びで区切られる塊)を 1 チャンクに
     まとめ、`sheet`(シート名)と `cells`(A1 形式。例 `B12:F48`)を付ける。
     1 チャンクが上限文字数に収まらないときは**行境界で分割**する(切り詰めない。
-    分割した各チャンクは自分の行範囲を `cells` に持つ)。
+    分割した各チャンクは自分の行範囲を `cells` に持つ)。1 行だけで超えるときは
+    **セル境界**で、1 セルだけで超えるときは**セルの中**で割る(PREP-04)。セル内で
+    割った断片は `part`(`2/7`)を持ち、`cells` は元のセルのまま。
 
     **行もチャンクも逐次処理し、上限は 1 件作るたびに見る**。塊を丸ごとメモリに溜めてから
     数えると、上限内のファイルでも(密なシート 1 枚で数十万行)worker を落とせる。
@@ -312,13 +325,14 @@ def _sheet_chunks(sheet, budget: _Budget):
         new_min = row_min if not buffer else min_col
         line_length = len(_line(new_min, values))
         if line_length > MAX_CHUNK_CHARS:
-            # 1 行だけで上限を超える。行を切ると出典(セル範囲)が本文と対応しなくなるので、
-            # 切り詰めずに拒否する
-            raise ExtractionLimitError(
-                "chunk_chars",
-                f"1 行が上限文字数を超えました(シート '{sheet.title}' の {index} 行目: "
-                f"{line_length} > {MAX_CHUNK_CHARS} 文字)",
-            )
+            # 1 行だけで上限を超える(PREP-04)。**セル境界で割り、それでも収まらないセルは
+            # その中で割る**。拒否するとファイル全体が入らず、読み飛ばすと黙って欠ける
+            if buffer:
+                yield _chunk(sheet.title, buffer, min_col)
+                buffer, min_col, size = [], None, 0
+            yield from _long_row_chunks(sheet.title, index, values)
+            previous = index
+            continue
         if buffer and size + 1 + line_length > MAX_CHUNK_CHARS:
             yield _chunk(sheet.title, buffer, min_col)
             buffer, min_col, size = [], None, 0
@@ -330,6 +344,83 @@ def _sheet_chunks(sheet, budget: _Budget):
         previous = index
     if buffer:
         yield _chunk(sheet.title, buffer, min_col)
+
+
+def _long_row_chunks(sheet: str, row: int, values: dict[int, str]):
+    """上限を超える 1 行を**セル境界**で割る。1 セルで超えるならそのセルの中で割る。
+
+    実データは「非空セル 1 個・13,728 文字」だったので、セル境界だけでは割れない
+    (PREP-04)。表構造の復元はしない — 割った断片は元のセルを出典に持つだけ。
+    """
+    group: list[int] = []          # 同じチャンクに入れる列
+    size = 0
+    for col in sorted(values):
+        text = values[col]
+        if len(text) > MAX_CHUNK_CHARS:
+            if group:
+                yield _row_chunk(sheet, row, group, values)
+                group, size = [], 0
+            yield from _cell_chunks(sheet, row, col, text)
+            continue
+        # `_line` は間の空セルもタブで埋めるので、列の飛びの分を足して測る
+        added = len(text) + (col - group[-1] if group else 0)
+        if group and size + added > MAX_CHUNK_CHARS:
+            yield _row_chunk(sheet, row, group, values)
+            group, size = [], 0
+            added = len(text)
+        group.append(col)
+        size += added
+    if group:
+        yield _row_chunk(sheet, row, group, values)
+
+
+def _row_chunk(sheet: str, row: int, group: list[int], values: dict[int, str]) -> dict:
+    """行の一部(連続した列の並び)を 1 チャンクにする。出典はその列範囲。"""
+    subset = {col: values[col] for col in group}
+    return {
+        "sheet": sheet,
+        "cells": _a1_range(group[0], row, group[-1], row),
+        "text": _line(group[0], subset),
+    }
+
+
+def _cell_chunks(sheet: str, row: int, col: int, text: str):
+    """1 セルの中を割る。**どの断片も出典は元のセル**(そのセルが根拠なので精度は落ちない)。
+
+    分割したことは `part`(`2/7`)で分かるようにする(黙って分割して終わりにしない)。
+    既存の鍵は増減しないので、`part` を見ない取り込み経路は従来どおり動く。
+    """
+    cells = _a1_range(col, row, col, row)
+    pieces = _split_text(text)
+    logger.warning(
+        "extract_xlsx: 1 セルが上限を超えたのでセル内で分割しました "
+        "(sheet=%r cells=%s chars=%d parts=%d)", sheet, cells, len(text), len(pieces),
+    )
+    for i, piece in enumerate(pieces, start=1):
+        yield {"sheet": sheet, "cells": cells, "text": piece,
+               "part": f"{i}/{len(pieces)}"}
+
+
+def _split_text(text: str) -> list[str]:
+    """上限に収まる断片へ切る。**意味の切れ目を優先**(改行 → 区切り文字 → 文字数)。
+
+    断片をつなぐと元の文字列に戻る(切り詰めない)。構造の解析はしない — JSON として
+    妥当な位置で切ることは目指さない(非ゴール)。
+    """
+    pieces: list[str] = []
+    start = 0
+    while len(text) - start > MAX_CHUNK_CHARS:
+        window = text[start:start + MAX_CHUNK_CHARS]
+        cut = window.rfind("\n") + 1
+        if cut <= 0:
+            # 区切り文字は**その直後**で切る(区切り自体は前の断片に残す)
+            cut = max(window.rfind(s) + len(s) for s in _SEPARATORS)
+        if cut <= 0:
+            cut = MAX_CHUNK_CHARS      # 切れ目が無い塊は文字数で切る(最後の手段)
+        pieces.append(text[start:start + cut])
+        start += cut
+    pieces.append(text[start:])
+    return pieces
 
 
 def _chunk(sheet: str, buffer: list[tuple[int, dict[int, str]]], min_col: int | None) -> dict:

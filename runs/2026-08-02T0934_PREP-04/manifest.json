@@ -1,0 +1,12 @@
+{
+  "run_id": "2026-08-02T0934_PREP-04",
+  "task_file": "tasks/PREP-04.md",
+  "goal_condition_path": "runs/2026-08-02T0934_PREP-04/goal.txt",
+  "loop_config_snapshot": { "stage": "report-only" },
+  "isolation": { "worktree": true, "working_tree": "/Users/sogawa/Documents/GitHub/jetuse-loops/PREP-04" },
+  "tool_versions": { "claude_code": "2.1.220", "codex": "0.144.1" },
+  "started_at": "2026-08-02T09:34:59+09:00",
+  "ended_at": null,
+  "outcome": "in_progress",
+  "totals": { "turns": 0, "tokens": 0, "reviews": 0, "review_fail": 0 }
+}
