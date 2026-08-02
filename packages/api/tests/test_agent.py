@@ -56,7 +56,7 @@ def test_agent_stream_approval_mode(monkeypatch):
                    auto_tools=False, tool_results=None, params=None,
                    enabled_tools=None, mcp_servers=None,
                    instructions=None, project_ocid=None, rag_store=None,
-                   http_tools=None):
+                   http_tools=None, **kw):
         yield {"delta": "調べます。"}
         yield {"tool_call": {"name": "web_search", "label": "Web検索",
                              "arguments": '{"query": "x"}', "call_id": "c1",

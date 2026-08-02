@@ -15,6 +15,11 @@ from openai import APIConnectionError, APIStatusError, OpenAI
 from .genai import make_inference_client
 from .logging import log_with
 from .models import MODELS, ModelDef, mark_unavailable
+from .settings import (
+    AGENT_MAX_TOOL_HOPS_CEILING,
+    AGENT_MAX_TOOL_HOPS_DEFAULT,
+    get_settings,
+)
 
 logger = logging.getLogger("jetuse.chat")
 
@@ -288,13 +293,70 @@ def complete_once(model_key: str, messages: list[dict], max_chars: int = 200) ->
     return (r.choices[0].message.content or "")[:max_chars]
 
 
-MAX_TOOL_HOPS = 5
+def _configured_max_tool_hops() -> int:
+    """設定(env `AGENT_MAX_TOOL_HOPS`)の値。空なら既定値。整数でなければ拒否。
+
+    `Settings` 側でレンジ検証も型変換もしないのは意図的(settings.py のコメント)。
+    ここで解釈すれば、設定ミスで壊れるのはエージェント実行だけになる。
+    """
+    raw = (get_settings().agent_max_tool_hops or "").strip()
+    if not raw:
+        return AGENT_MAX_TOOL_HOPS_DEFAULT
+    try:
+        return int(raw)
+    except ValueError as e:
+        raise ValueError(f"AGENT_MAX_TOOL_HOPS must be an integer: {raw!r}") from e
+
+
+def resolve_max_tool_hops(requested: int | None = None) -> int:
+    """このターンのホップ上限を決める(AGT-04)。要求 > 設定(env)の順。
+
+    1 ホップ = モデル 1 往復。天井(`AGENT_MAX_TOOL_HOPS_CEILING`)を超える値は
+    **クランプせず拒否**する — 黙って下げると「上げたのに効かない」が起き、
+    利用者は上限に当たった理由を設定値から追えなくなる。既定値と天井の根拠は ADR-0025。
+    """
+    value = requested if requested is not None else _configured_max_tool_hops()
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"max_tool_hops must be an integer >= 1: {value!r}")
+    if value > AGENT_MAX_TOOL_HOPS_CEILING:
+        raise ValueError(
+            f"max_tool_hops exceeds the ceiling "
+            f"({AGENT_MAX_TOOL_HOPS_CEILING}): {value}"
+        )
+    return value
+
+
+# 承認往復をまたいだツール結果の累計上限(AGT-01d)。ホップ上限より下だと、上限を上げても
+# 承認モードだけ先に打ち切られるため、ホップ上限を上げたときは連動して上がる(AGT-04)。
+MIN_TOOL_RESULTS_CAP = 16
 
 # ツール使用回数の上限に達したときの最終回答強制プロンプト(AGT-01d)
 _FORCE_ANSWER_TEXT = (
     "ツール使用回数の上限に達しました。これまでに得た情報だけで"
     "最終的な回答をまとめてください。"
 )
+
+# 上限に当たったことを利用者へ伝える文面(AGT-04)。**黙って打ち切らない**:
+# 途中で力尽きたのか答え切ったのかが外から区別できないと、失敗の説明ができない。
+_LIMIT_TEXTS = {
+    "max_tool_hops": "ツール使用の上限({limit} ホップ)に達したため、"
+                     "ここまでに得た情報で回答します（手続きは未完了の可能性があります）。",
+    "max_tool_results": "ツール実行の累計が上限({limit} 件)に達したため、"
+                        "ここまでに得た情報で回答します（手続きは未完了の可能性があります）。",
+}
+
+
+def _limit_reached_events(reason: str, limit: int) -> Iterator[ChatEvent]:
+    """上限到達を通知する。構造化イベントと、現行 UI にそのまま出る本文の両方を出す。
+
+    `notice` は機械可読(将来 UI が専用表示にできる)。ただし現行のチャット UI は
+    `delta` / `tool_call` / `error` しか描かないので、それだけだと画面には何も出ない。
+    デモで「なぜ途中で止まったか」を出せることが要件なので、既存の警告表記に合わせた
+    本文も流す(会話履歴にも残り、後から打ち切りだったと分かる)。
+    """
+    text = _LIMIT_TEXTS[reason].format(limit=limit)
+    yield {"notice": text, "limit_reached": {"reason": reason, "limit": limit}}
+    yield {"delta": f"\n\n> ⚠ {text}\n\n"}
 
 
 def _force_answer_message() -> dict:
@@ -334,34 +396,43 @@ def _build_agent_input(
     return base_input
 
 
+def _function_spec(tool: Any) -> dict:
+    return {
+        "type": "function",
+        "name": tool.name,
+        "description": tool.description,
+        "parameters": tool.parameters,
+    }
+
+
 def _build_agent_tools(
     enabled_tools: list[str] | None,
     mcp_servers: list[dict] | None,
     auto_tools: bool,
     rag_store: str | None,
     http_tools: list[Any] | None = None,
+    rag_tool: Any | None = None,
 ) -> list[dict]:
     """このターンで使用可能なツール仕様を構築(custom + MCP + 外部HTTP + rag_search)。
 
     http_tools は外部HTTPツール(TOOL-01)の `ToolDef`。呼び出し側が owner 所有の
     ものだけを解決済みで渡す = 明示選択なので enabled_tools では絞らない。
+    rag_tool は adb バックエンドの `rag_search`(AGT-04)。指定時は file_search built-in
+    ではなくこちらを載せる(**増やすだけ**で built-in 経路は置き換えない)。
     """
     from .mcp_servers import mcp_tool_spec
     from .tools import RAG_SEARCH, tool_specs
 
     custom_enabled = [t for t in (enabled_tools or []) if t != RAG_SEARCH]
     all_tools = tool_specs(custom_enabled if enabled_tools is not None else None) + [
-        {
-            "type": "function",
-            "name": t.name,
-            "description": t.description,
-            "parameters": t.parameters,
-        }
-        for t in (http_tools or [])
+        _function_spec(t) for t in (http_tools or [])
     ] + [
         mcp_tool_spec(srv, auto_tools) for srv in (mcp_servers or [])
     ]
-    if enabled_tools and RAG_SEARCH in enabled_tools and rag_store:
+    if rag_tool is not None:
+        # adb バックエンド(AGT-04): チャンク単位の出典(シート名・セル範囲)を結果に載せる
+        all_tools.append(_function_spec(rag_tool))
+    elif enabled_tools and RAG_SEARCH in enabled_tools and rag_store:
         # rag_searchの実体はfile_search built-in(ユーザーのVector Store) — AGT-01c
         # 絞り込み(RAGM-01)はこの経路では未対応。ルート側が rag_filters を 400 で断る
         all_tools.append(file_search_tool(rag_store))
@@ -456,6 +527,33 @@ def _emit_pending_approval(call_dicts: list[dict], tools: dict) -> Iterator[Chat
         yield {"tool_call": event}
 
 
+def _rag_search_citations(output: str) -> Iterator[ChatEvent]:
+    """adb バックエンドの `rag_search` の結果を引用イベントにする(AGT-04)。
+
+    file_search built-in は `response.completed` から引用を取れる(`_extract_citations`)が、
+    function tool の結果はサーバー側で実行するこちらにしか無い。出さないと、
+    せっかくのチャンク単位の出典が UI の出典欄に出ないままになる。
+    """
+    try:
+        results = json.loads(output).get("results")
+    except (ValueError, AttributeError):
+        return
+    if not isinstance(results, list):
+        return
+    cites = [
+        {
+            "file_id": r.get("file_id", ""),
+            "filename": r.get("filename", ""),
+            "score": r.get("score"),
+            "source": r.get("source"),
+            "text": str(r.get("text") or "")[:CITATION_TEXT_CHARS],
+        }
+        for r in results if isinstance(r, dict)
+    ]
+    if cites:
+        yield {"citations": cites}
+
+
 def _run_tool_calls(
     call_dicts: list[dict],
     base_input: list[dict],
@@ -465,6 +563,8 @@ def _run_tool_calls(
     tool_error: type[Exception],
 ) -> Iterator[ChatEvent]:
     """function_callを実行し結果を base_input へ追記(自動実行ホップ)。"""
+    from .tools import RAG_SEARCH
+
     for cd in call_dicts:
         tool = tools.get(cd["name"])
         yield {"tool_call": {
@@ -484,6 +584,8 @@ def _run_tool_calls(
             "call_id": cd.get("call_id"), "name": cd["name"],
             "preview": output[:500],
         }}
+        if cd["name"] == RAG_SEARCH:
+            yield from _rag_search_citations(output)
         base_input.append(cd)
         base_input.append({
             "type": "function_call_output",
@@ -506,21 +608,37 @@ def stream_agent(
     project_ocid: str | None = None,
     rag_store: str | None = None,
     http_tools: list[Any] | None = None,
+    rag_backend: str = "vector_store",
+    rag_owner: str = "",
+    max_tool_hops: int | None = None,
 ) -> Iterator[ChatEvent]:
     """エージェントモード(AGT-01)。ツール付きResponses呼び出しをループする。
 
     - ステートレス(全履歴再送)。Responses系モデルのみ
     - auto_tools=False: function_callを {"tool_call"} イベントで通知してストリーム終了
       (UIが承認後、tool_results付きで再呼び出しして継続する)
-    - auto_tools=True: サーバー側で実行し最大MAX_TOOL_HOPSホップまで自動継続
+    - auto_tools=True: サーバー側で実行し、ホップ上限(AGT-04: 設定 or 要求。既定は
+      `AGENT_MAX_TOOL_HOPS_DEFAULT`)まで自動継続する
     - http_tools: owner 所有の外部HTTPツール(TOOL-01)の ToolDef。組込ツールと同じ
       レジストリに載せ、JetUse がサーバー側で代理実行する
+    - rag_backend='adb': 文書検索を Vector Store の file_search built-in ではなく
+      `rag_adb` の検索(チャンク単位の出典)で行う。既定は現行どおり vector_store
     """
-    from .tools import TOOLS, ToolError, execute_with
+    from .tools import RAG_SEARCH, TOOLS, ToolError, adb_rag_search_tool, execute_with
 
+    max_hops = resolve_max_tool_hops(max_tool_hops)
+    # adb バックエンドの rag_search は built-in ではなく **function tool**(AGT-04)。
+    # 読み取り専用なので承認は要らない(要ると検索のたびにストリームが止まる)
+    rag_tool = (
+        adb_rag_search_tool(rag_owner)
+        if rag_backend == "adb" and enabled_tools and RAG_SEARCH in enabled_tools
+        else None
+    )
     # そのターン限りのレジストリ。組込を後勝ちにして外部ツールの名前衝突を無害化する
     # (登録時にも予約名を弾いているが、実行段でも組込が上書きされないようにする)
     registry = {**{t.name: t for t in (http_tools or [])}, **TOOLS}
+    if rag_tool is not None:
+        registry[rag_tool.name] = rag_tool
     model = MODELS[model_key]
     if model.api != "responses":
         yield {"error": "エージェントモードはResponses系モデルのみ対応です"}
@@ -529,16 +647,19 @@ def stream_agent(
     client = make_inference_client(with_project=True, project_ocid=project_ocid)
     base_input = _build_agent_input(messages, instructions, tool_results)
     extra = _extra_responses_params(model, params or GenParams())
-    # ターン内ツール総数の安全弁(AGT-01d): 累積16件以上はツールを外し最終回答を強制
-    force_answer = len(tool_results or []) >= 16
+    # ターン内ツール総数の安全弁(AGT-01d): 累積がこの数に達したらツールを外し最終回答を強制。
+    # ホップ上限を上げても承認モードだけ先に打ち切られないよう連動させる(AGT-04)
+    results_cap = max(MIN_TOOL_RESULTS_CAP, max_hops)
+    force_answer = len(tool_results or []) >= results_cap
     all_tools = _build_agent_tools(
-        enabled_tools, mcp_servers, auto_tools, rag_store, http_tools
+        enabled_tools, mcp_servers, auto_tools, rag_store, http_tools, rag_tool
     )
     if force_answer:
         all_tools = []
         base_input.append(_force_answer_message())
+        yield from _limit_reached_events("max_tool_results", results_cap)
 
-    for _hop in range(MAX_TOOL_HOPS):
+    for _hop in range(max_hops):
         stream = client.responses.create(
             model=model.oci_id,
             input=base_input,
@@ -581,8 +702,14 @@ def stream_agent(
             lambda n, a: execute_with(registry, n, a), ToolError,
         )
 
-    # ホップ上限: エラーではなくツールなしで最終回答を強制する(AGT-01d)
-    yield {"delta": ""}
+    # ホップ上限: エラーではなくツールなしで最終回答を強制する(AGT-01d)。
+    # **黙って打ち切らない**(AGT-04): 上限に当たったことを通知してから最終回答へ移る。
+    # この最終回答は**ツールを外した 1 往復**で、上限とは別に加算される
+    # (= 1 ターンの最大往復数は max_hops + 1)。usage も必ず出す — 出さないと
+    # 打ち切ったターンだけコストが記録から漏れる
+    log_with(logger, logging.INFO, "agent_hop_limit_reached",
+             model=model_key, user=user, max_hops=max_hops)
+    yield from _limit_reached_events("max_tool_hops", max_hops)
     final_input = base_input + [_force_answer_message()]
     stream = client.responses.create(
         model=model.oci_id, input=final_input, temperature=temp,
@@ -590,8 +717,16 @@ def stream_agent(
     )
     try:
         for event in stream:
-            if getattr(event, "type", "") == "response.output_text.delta":
+            etype = getattr(event, "type", "")
+            if etype == "response.output_text.delta":
                 yield {"delta": event.delta}
+            elif etype == "response.completed":
+                usage = getattr(event.response, "usage", None)
+                if usage:
+                    yield {"usage": {
+                        "input_tokens": usage.input_tokens,
+                        "output_tokens": usage.output_tokens,
+                    }}
     finally:
         stream.close()
 

@@ -19,8 +19,26 @@
 `/api/chat/stream` 拡張: `agent: bool`（ツール有効化）+ `auto_tools: bool`（自動実行）
 
 - **都度承認モード（既定）**: モデルがfunction_callを出したらSSEで `{"tool_call": {name, label, arguments, call_id}}` を送ってストリーム終了。UIが承認カードを表示 → 承認時 `POST /api/agent/execute-tool` で実行し結果を受領 → UIが履歴+`tool_results`（function_call+output のペア）付きで再度 `/api/chat/stream` を呼ぶ → 続きが streaming される（さらにツール呼び出しがあれば繰り返し）
-- **自動実行モード**: サーバー側で function_call → handler実行 → output提出 を**最大5ホップ**ループ。途中経過をSSEイベント（tool_call / tool_result）で逐次通知
+- **自動実行モード**: サーバー側で function_call → handler実行 → output提出 を**ホップ上限**までループ。途中経過をSSEイベント（tool_call / tool_result）で逐次通知。上限は設定可能（AGT-04。下記「ツール往復の上限」）
 - 拒否時: UIが `function_call_output` に「ユーザーがツール実行を拒否しました」を入れて継続（モデルがツールなしで回答）
+
+### ツール往復の上限（AGT-04・ADR-0025）
+
+1 ホップ = モデル 1 往復。業務 API を順に呼ぶ手続き（実案件のデモは API 8 本）は固定 5 ホップでは
+入口にも届かなかったため、上限を設定可能にする。
+
+- 既定は `AGENT_MAX_TOOL_HOPS`（既定値 `AGENT_MAX_TOOL_HOPS_DEFAULT`）。要求ごとに
+  `max_tool_hops` で上書きできる（エージェント要求以外で指定したら 400。保存済み
+  エージェント `agent_id` は別ディスパッチなので 400）
+- 上限は**ツールを渡した往復の数**。上限到達時の「ツールなしの最終回答」は上限の外側の
+  1 往復（1 要求の最大往復数は上限 + 1）。この往復の `usage` も流す
+- **天井** `AGENT_MAX_TOOL_HOPS_CEILING` を超える値は**拒否**する（要求は 422 / 設定値は 400）。
+  クランプしない＝「上げたのに効かない」を作らない
+- 承認モードの累計ツール結果の上限は `max(16, ホップ上限)`（ホップ上限だけ上げても
+  承認モードが先に打ち切られないように連動する）
+- **上限に当たったら黙って打ち切らない**: `{"notice": …, "limit_reached": {"reason", "limit"}}`
+  を流し、同じ文面を `delta` にも出す（現行 UI は `notice` を描かないため）。
+  `reason` は `max_tool_hops` / `max_tool_results`
 
 ### 制約・ガード
 
@@ -43,7 +61,9 @@
 
 「ツールが少なくエージェント感がない」フィードバックへの対応。アプリ既存機能をツール化する。
 
-- **rag_search**: ユーザーのRAG文書検索。実体は**file_search built-in**（ユーザーのVector Storeを接続）— 選択時のみtools配列に注入。文書未アップロード時は注入しない（UIに注記）
+- **rag_search**: ユーザーのRAG文書検索。既定の実体は**file_search built-in**（ユーザーのVector Storeを接続）— 選択時のみtools配列に注入。文書未アップロード時は注入しない（UIに注記）
+  - **バックエンド選択（AGT-04・ADR-0025）**: 要求の `agent_rag_backend`（既定 `vector_store` ＝挙動不変 / `adb`）。`vector_store` 以外を指定するときは `enabled_tools` に `rag_search` が要る（無いと検索自体が行われないので 400）。`adb` では `rag_search` を **function tool** として実装し `rag_adb.search`（現行版のみ）を呼ぶ。結果に**チャンク単位の出典**（`source.sheet` / `source.cells` / `version` / `chunk_id`）が載り、`citations` イベントとしても流れる。読み取り専用なので承認は不要（`requires_approval=False`）。adb が使えないときは要求を 400 で断る。built-in 経路は置き換えない（増やすだけ）
+  - built-in はホップを消費しないが、`adb` の function tool は**1 回の検索が 1 ホップを消費する**（ホップ上限の既定値はこれを織り込んだ値 — ADR-0025 §1）
 - **query_database**: NL2SQL（SQL Search生成→JETUSE_QUERY読取専用実行、既存の多層ガード再利用）。結果は最大20行をJSONで返す。生成に30秒程度かかる旨をdescriptionに明記
 - **get_current_time**: 現在日時(JST)。LLMの日付誤りを防ぐ
 - **承認パーティション**: `requires_approval=False` のツール（get_current_time/query_database — 読取専用でガード済み）は**都度承認モードでもサーバー側で自動実行**。外部送信を伴うweb_search/web_fetchは従来どおり承認制。安全/要承認が同一バッチに混在した場合は全件承認制にフォールバック（ステートレス継続で安全側の結果が失われるのを防ぐ）

@@ -7,9 +7,9 @@ import される。`validated()` は service/validators.py 側の純粋関数へ
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StrictInt, field_validator
 
-from jetuse_core import http_tools, rag_metadata, tts
+from jetuse_core import http_tools, rag_metadata, settings, tts
 
 from .validators import validate_agent_definition, validate_usecase_definition
 
@@ -37,8 +37,24 @@ class ChatRequest(BaseModel):
     rag_filters: dict | None = None
     # エージェントモード(AGT-01)。tool_resultsは承認フローの継続時に使用
     agent: bool = False
+    # AGT-04: エージェントの文書検索(rag_search)のバックエンド。既定は現行と同じ
+    # file_search built-in(出典はファイル単位)。adb はチャンク単位の出典
+    # (シート名・セル範囲)を返す。`rag=true` との併用禁止は据え置き(別タスク)
+    agent_rag_backend: Literal["vector_store", "adb"] = "vector_store"
+    # AGT-04: このターンのツール往復上限。未指定は設定値(AGENT_MAX_TOOL_HOPS)。
+    # 天井を超える値は 422(クランプしない — ADR-0025)
+    # bool は int の派生なので、素の int だと JSON の `true` が 1 として通る。
+    # 上限の指定に真偽値が来るのは誤りなので API 境界で断る(resolve_max_tool_hops の
+    # bool 拒否と挙動を揃える — 片方だけ厳しいと、どちらが正か読めなくなる)
+    max_tool_hops: StrictInt | None = Field(
+        default=None, ge=1, le=settings.AGENT_MAX_TOOL_HOPS_CEILING
+    )
     auto_tools: bool = False
-    tool_results: list[dict] | None = Field(default=None, max_length=24)
+    # AGT-04: 承認往復の継続で送り返すツール結果。ホップ上限の天井まで受ける
+    # (ここが天井より小さいと、上限を上げても承認モードだけ 422 で継続できない)
+    tool_results: list[dict] | None = Field(
+        default=None, max_length=settings.AGENT_MAX_TOOL_HOPS_CEILING
+    )
     enabled_tools: list[str] | None = Field(default=None, max_length=20)  # AGT-01b
     mcp_server_ids: list[str] | None = Field(default=None, max_length=5)  # AGT-02
     # TOOL-01: 登録済み外部HTTPツールのid。1エージェントに渡せる数はモデルの選択精度の
