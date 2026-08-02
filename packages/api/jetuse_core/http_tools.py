@@ -101,7 +101,17 @@ HEADER_VALUE_RE = re.compile(r"\A[\x20-\x7e]+\Z")
 # 広い(相手の API が `X_Trace` や `api.version` のような名前を要求することがある)。
 # 区切り文字(`:` `,` 空白等)と制御文字は入らないので、これ自体がインジェクション対策になる
 HEADER_NAME_RE = re.compile(r"\A[!#$%&'*+\-.^_`|~0-9A-Za-z]{1,63}\Z")
-ALLOWED_PARAM_TYPES = ("string", "number", "integer", "boolean")
+ALLOWED_PARAM_TYPES = ("string", "number", "integer", "boolean", "object", "array")
+SCALAR_PARAM_TYPES = ("string", "number", "integer", "boolean")
+CONTAINER_PARAM_TYPES = ("object", "array")
+# 入れ子の上限(TOOL-03・ADR-0024)。実在する業務 API の最深構成
+# 「配列の中に配列」= root(1) → 配列(2) → 要素オブジェクト(3) → 配列(4) → 要素オブジェクト(5)
+# を通し、そこへ 1 段だけ余裕を持たせた値。スカラの葉は段数に数えない。
+MAX_SCHEMA_DEPTH = 6
+# スキーマ全体のノード数(型宣言の総数)の上限。深さだけでは MAX_PROPERTIES の掛け算で
+# 20^6 まで広がるので、実際の広がりはこちらで抑える。実在する業務 API の最大構成が
+# 30 ノード程度なので、その 3 倍強を上限にする
+MAX_SCHEMA_NODES = 100
 
 # 組込ツールと同名を登録させない(モデルから見て同じ名前空間)
 RESERVED_NAMES = frozenset(TOOLS) | {CODE_INTERPRETER, RAG_SEARCH}
@@ -143,41 +153,102 @@ def validate_url(url: str) -> None:
     _assert_public_host(p.hostname)
 
 
+def _count_node(counter: list[int]) -> None:
+    counter[0] += 1
+    if counter[0] > MAX_SCHEMA_NODES:
+        raise HttpToolDefError(f"引数スキーマの要素数は{MAX_SCHEMA_NODES}個までです")
+
+
+def _clean_node(spec: Any, path: str, depth: int, counter: list[int]) -> dict:
+    """1 ノード(スカラ / object / array)を検証し、検証できるキーだけの写しを返す。
+
+    `depth` はこのノードが container だった場合に占める段数(root object = 1)。
+    スカラの葉は段数に数えない(業務 API の「配列の中に配列 = 2 段」を素直に数えるため)。
+    """
+    _count_node(counter)
+    if not isinstance(spec, dict) or spec.get("type") not in ALLOWED_PARAM_TYPES:
+        raise HttpToolDefError(
+            f"引数 {path} の type は {'/'.join(ALLOWED_PARAM_TYPES)} のいずれかです"
+        )
+    t = spec["type"]
+    if t in CONTAINER_PARAM_TYPES and depth > MAX_SCHEMA_DEPTH:
+        raise HttpToolDefError(
+            f"引数スキーマの入れ子は{MAX_SCHEMA_DEPTH}段までです: {path}"
+        )
+    # 検証できるキーだけを残す。未対応の JSON Schema キーワード(enum・pattern 等)を
+    # そのまま通すと「モデルには制約に見えるが実行前検証は素通し」になる
+    clean: dict[str, Any] = {"type": t}
+    desc = spec.get("description")
+    if isinstance(desc, str) and desc:
+        clean["description"] = desc[:300]
+    if t == "object":
+        # 自由形式の object は受理しない(何が来ても検証できない)。root と違い省略も不可
+        if not isinstance(spec.get("properties"), dict):
+            raise HttpToolDefError(
+                f"object の引数 {path} には properties が必要です(自由形式は受理しません)"
+            )
+        clean.update(_clean_object(spec, path, depth, counter))
+    elif t == "array":
+        items = spec.get("items")
+        if not isinstance(items, dict):
+            raise HttpToolDefError(
+                f"array の引数 {path} には items(単一スキーマ)が必要です"
+                "(タプル形式の items は受理しません)"
+            )
+        clean["items"] = _clean_node(items, f"{path}[]", depth + 1, counter)
+    return clean
+
+
+def _clean_object(spec: dict, path: str, depth: int, counter: list[int]) -> dict:
+    """object ノードの properties / required を検証して返す(各階層で同じ強さで効かせる)。"""
+    props = spec.get("properties")
+    if props is None:
+        props = {}
+    if not isinstance(props, dict):
+        raise HttpToolDefError(
+            f"{path or 'parameters'}.properties はオブジェクトである必要があります"
+        )
+    if len(props) > MAX_PROPERTIES:
+        raise HttpToolDefError(f"{path or 'parameters'} の引数は{MAX_PROPERTIES}個までです")
+    clean: dict[str, dict] = {}
+    for key, sub in props.items():
+        if not isinstance(key, str) or not ARG_NAME_RE.match(key):
+            raise HttpToolDefError(f"引数名が不正です: {key}")
+        clean[key] = _clean_node(sub, f"{path}.{key}" if path else key, depth + 1, counter)
+    required = spec.get("required", [])
+    if not isinstance(required, list) or any(
+        not isinstance(r, str) or r not in clean for r in required
+    ):
+        raise HttpToolDefError("required は properties に存在するキーの配列である必要があります")
+    return {"properties": clean, "required": list(required)}
+
+
 def validate_parameters(parameters: Any) -> dict:
     """引数スキーマ(JSON Schema のサブセット)を検証して返す。
 
     モデルに渡す仕様であり、`tools._validate_args` が実行前検証に使う。表現力より
     「検証しきれる形だけ通す」を優先する(未知の構成を素通しさせない = fail-closed)。
+    入れ子オブジェクトと配列を受理するが(TOOL-03)、**実行時に同じ強さで検証できる形**
+    ——`properties` を持つ object と、単一スキーマの `items` を持つ array——に限る。
     """
     if not isinstance(parameters, dict) or parameters.get("type") != "object":
         raise HttpToolDefError("parameters は type=object の JSON Schema である必要があります")
-    props = parameters.get("properties")
-    if props is None:
-        props = {}
-    if not isinstance(props, dict):
-        raise HttpToolDefError("parameters.properties はオブジェクトである必要があります")
-    if len(props) > MAX_PROPERTIES:
-        raise HttpToolDefError(f"引数は{MAX_PROPERTIES}個までです")
-    clean: dict[str, dict] = {}
-    for key, spec in props.items():
-        if not isinstance(key, str) or not ARG_NAME_RE.match(key):
-            raise HttpToolDefError(f"引数名が不正です: {key}")
-        if not isinstance(spec, dict) or spec.get("type") not in ALLOWED_PARAM_TYPES:
+    counter = [1]  # root 自身を 1 ノードとして数える
+    return {"type": "object", **_clean_object(parameters, "", 1, counter)}
+
+
+def assert_query_serializable(schema: dict) -> None:
+    """GET ツールのスキーマがクエリ文字列にできる形か確かめる(TOOL-03)。
+
+    GET にはボディが無く、入れ子・配列をクエリ文字列へ載せる標準の書き方は無い
+    (`a[0].b=` / `a=<JSON>` 等は相手の実装次第)。JetUse が勝手な符号化を決めると
+    「送ったつもりの形と相手が読む形が違う」になるので、**登録時に断る**。
+    """
+    for key, spec in (schema.get("properties") or {}).items():
+        if spec.get("type") in CONTAINER_PARAM_TYPES:
             raise HttpToolDefError(
-                f"引数 {key} の type は {'/'.join(ALLOWED_PARAM_TYPES)} のいずれかです"
+                f"GET ツールの引数に入れ子・配列は使えません(クエリ文字列に載せられません): {key}"
             )
-        # 検証できるキーだけを残す。未対応の JSON Schema キーワード(enum・pattern 等)を
-        # そのまま通すと「モデルには制約に見えるが実行前検証は素通し」になる
-        clean[key] = {"type": spec["type"]}
-        desc = spec.get("description")
-        if isinstance(desc, str) and desc:
-            clean[key]["description"] = desc[:300]
-    required = parameters.get("required", [])
-    if not isinstance(required, list) or any(
-        not isinstance(r, str) or r not in clean for r in required
-    ):
-        raise HttpToolDefError("required は properties に存在するキーの配列である必要があります")
-    return {"type": "object", "properties": clean, "required": list(required)}
 
 
 def _assert_extra_header_name(name: Any, auth_lower: str) -> None:
@@ -396,6 +467,8 @@ def create_tool(
 ) -> dict[str, Any]:
     m, h = validate_definition(name, url, method, auth_header)
     schema = validate_parameters(parameters)
+    if m == "GET":
+        assert_query_serializable(schema)
     extra, idem = validate_extra_headers(headers, idempotency_header, h)
     if auth_secret_ocid:
         assert_secret_usable(owner, auth_secret_ocid)
@@ -437,9 +510,19 @@ def delete_tool(owner: str, tid: str) -> bool:
 # --- 代理実行 -----------------------------------------------------------
 
 def _query_params(args: dict) -> dict[str, str]:
-    """GET のクエリ文字列へ。値はスカラのみ(スキーマで担保済み)。"""
-    return {k: ("true" if v is True else "false" if v is False else str(v))
-            for k, v in args.items()}
+    """GET のクエリ文字列へ。値はスカラのみ(登録時の `assert_query_serializable` で担保)。
+
+    DB を直接書き換えられて入れ子が入り込んだ場合に `str(dict)` を送らない
+    (Python の repr が相手へ飛ぶ = 黙って壊れた値を送る)。ここでも fail-closed。
+    """
+    out: dict[str, str] = {}
+    for k, v in args.items():
+        if isinstance(v, (dict, list)):
+            raise HttpToolCallError(
+                f"ツール実行に失敗しました: GET の引数に入れ子・配列は使えません({k})"
+            )
+        out[k] = "true" if v is True else "false" if v is False else str(v)
+    return out
 
 
 def _auth_headers(tool: dict) -> tuple[dict[str, str], str]:

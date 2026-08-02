@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import jetuse_core.chat as chat_mod
+import jetuse_core.tools as tools_mod
 from jetuse_core import http_tools
 from jetuse_core.tools import TOOLS, ToolError, execute_with
 from jetuse_core.webtools import SsrfBlockedError
@@ -1109,3 +1110,292 @@ def test_max_sized_headers_survive_the_db_round_trip(store, monkeypatch):
     seen = _seen_headers(monkeypatch)
     http_tools.call_tool(row, {"part_number": "X"})
     assert seen[next(iter(headers)).lower()] == worst
+
+
+# --- 9. 入れ子オブジェクトと配列(TOOL-03) --------------------------------------
+#
+# 業務 API は入れ子と配列が普通で、平坦なスカラーしか宣言できないと登録すらできない
+# (実案件で 8 本中 6 本が不可)。ただし「検証しきれる形しか通さない」方針は変えない。
+
+# 実在する業務 API の最深構成(配列の中に配列 = 2 段)を写した形
+NESTED_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "order_id": {"type": "string"},
+        "contractor": {
+            "type": "object",
+            "description": "契約者情報",
+            "properties": {
+                "name": {"type": "string"},
+                "age": {"type": "integer"},
+            },
+            "required": ["name"],
+        },
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "sku": {"type": "string"},
+                    "qty": {"type": "integer"},
+                    "options": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {"code": {"type": "string"}},
+                            "required": ["code"],
+                        },
+                    },
+                },
+                "required": ["sku"],
+            },
+        },
+    },
+    "required": ["order_id"],
+}
+
+
+def _post_row(**over) -> dict:
+    row = tool_row(name="set_order", method="POST", parameters=NESTED_SCHEMA)
+    row.update(over)
+    return row
+
+
+def _seen_body(monkeypatch) -> dict:
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content.decode())
+        return httpx.Response(200, json={"ok": True})
+
+    _mock(monkeypatch, handler)
+    return seen
+
+
+def test_nested_schema_is_accepted_and_preserved():
+    """入れ子・配列がそのまま(検証できるキーだけ残して)保持される。"""
+    out = http_tools.validate_parameters(NESTED_SCHEMA)
+    assert out["properties"]["contractor"]["properties"]["age"] == {"type": "integer"}
+    assert out["properties"]["contractor"]["required"] == ["name"]
+    inner = out["properties"]["items"]["items"]["properties"]["options"]["items"]
+    assert inner == {"type": "object", "properties": {"code": {"type": "string"}},
+                     "required": ["code"]}
+
+
+def test_nested_object_reaches_the_remote_unchanged(monkeypatch):
+    """シナリオ1: 1 段の入れ子が**その形のまま**相手へ届く。"""
+    seen = _seen_body(monkeypatch)
+    registry = {"set_order": http_tools.to_tooldef(_post_row())}
+    args = {"order_id": "A1", "contractor": {"name": "山田", "age": 42}}
+    assert json.loads(
+        execute_with(registry, "set_order", json.dumps(args)))["status"] == 200
+    assert seen["body"] == args
+
+
+def test_array_of_objects_reaches_the_remote(monkeypatch):
+    """シナリオ2: オブジェクトの配列が要素 2 個以上でも届く。"""
+    seen = _seen_body(monkeypatch)
+    registry = {"set_order": http_tools.to_tooldef(_post_row())}
+    args = {"order_id": "A1", "items": [
+        {"sku": "X", "qty": 1}, {"sku": "Y", "qty": 2}]}
+    execute_with(registry, "set_order", json.dumps(args))
+    assert seen["body"]["items"] == args["items"]
+
+
+def test_two_level_nesting_reaches_the_remote(monkeypatch):
+    """シナリオ3: 配列の中の配列(2 段)が届く。"""
+    seen = _seen_body(monkeypatch)
+    registry = {"set_order": http_tools.to_tooldef(_post_row())}
+    args = {"order_id": "A1", "items": [
+        {"sku": "X", "options": [{"code": "OP1"}, {"code": "OP2"}]}]}
+    execute_with(registry, "set_order", json.dumps(args))
+    assert seen["body"] == args
+
+
+@pytest.mark.parametrize("args", [
+    {"order_id": "A1", "contractor": {"name": "山田", "unknown": 1}},   # 内側の未知キー
+    {"order_id": "A1", "contractor": {"name": 1}},                      # 内側の型違い
+    {"order_id": "A1", "contractor": {"age": 42}},                      # 内側の必須欠落
+    {"order_id": "A1", "items": [{"sku": "X"}, {"qty": 1}]},            # 配列要素の必須欠落
+    {"order_id": "A1", "items": [{"sku": "X", "options": [{"c": 1}]}]},  # 2 段目の未知キー
+    {"order_id": "A1", "contractor": ["x"]},                            # object にリスト
+    {"order_id": "A1", "items": {"sku": "X"}},                          # array にオブジェクト
+])
+def test_inner_violations_rejected_before_sending(monkeypatch, args):
+    """内側の未知キー・型違い・必須欠落は**相手へ送る前に**拒否される。"""
+    called = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        called["n"] += 1
+        return httpx.Response(200, json={"ok": True})
+
+    _mock(monkeypatch, handler)
+    registry = {"set_order": http_tools.to_tooldef(_post_row())}
+    with pytest.raises(ToolError):
+        execute_with(registry, "set_order", json.dumps(args))
+    assert called["n"] == 0
+
+
+@pytest.mark.parametrize("params", [
+    # properties の無い object は受理しない(自由形式 = 検証できない)
+    {"type": "object", "properties": {"a": {"type": "object"}}},
+    {"type": "object", "properties": {"a": {"type": "object", "properties": []}}},
+    # items の無い array / タプル形式の items も受理しない
+    {"type": "object", "properties": {"a": {"type": "array"}}},
+    {"type": "object", "properties": {"a": {"type": "array",
+                                            "items": [{"type": "string"}]}}},
+    # 入れ子の内側でも同じ強さで検証する
+    {"type": "object", "properties": {"a": {
+        "type": "object", "properties": {"b": {"type": "unknown"}}}}},
+    {"type": "object", "properties": {"a": {
+        "type": "object", "properties": {"has space": {"type": "string"}}}}},
+    {"type": "object", "properties": {"a": {
+        "type": "object", "properties": {}, "required": ["missing"]}}},
+])
+def test_unvalidatable_nested_schema_rejected(params):
+    with pytest.raises(http_tools.HttpToolDefError):
+        http_tools.validate_parameters(params)
+
+
+def _deep(levels: int) -> dict:
+    """`levels` 段の入れ子を作る(root object を 1 段目と数える)。"""
+    node = {"type": "object", "properties": {"leaf": {"type": "string"}}}
+    for _ in range(levels - 1):
+        node = {"type": "object", "properties": {"n": node}}
+    return node
+
+
+def test_depth_limit_enforced():
+    http_tools.validate_parameters(_deep(http_tools.MAX_SCHEMA_DEPTH))
+    with pytest.raises(http_tools.HttpToolDefError) as e:
+        http_tools.validate_parameters(_deep(http_tools.MAX_SCHEMA_DEPTH + 1))
+    assert "入れ子" in str(e.value)
+
+
+def test_node_count_limit_enforced():
+    """深さが浅くてもノード数で断る(MAX_PROPERTIES の掛け算で広がるため)。"""
+    wide = {"type": "object", "properties": {
+        f"o{i}": {"type": "object", "properties": {
+            f"p{j}": {"type": "string"} for j in range(http_tools.MAX_PROPERTIES)}}
+        for i in range(http_tools.MAX_PROPERTIES)}}
+    with pytest.raises(http_tools.HttpToolDefError) as e:
+        http_tools.validate_parameters(wide)
+    assert "要素数" in str(e.value)
+
+
+def test_max_properties_applies_to_each_level():
+    over = {"type": "object", "properties": {"a": {"type": "object", "properties": {
+        f"p{j}": {"type": "string"} for j in range(http_tools.MAX_PROPERTIES + 1)}}}}
+    with pytest.raises(http_tools.HttpToolDefError) as e:
+        http_tools.validate_parameters(over)
+    assert str(http_tools.MAX_PROPERTIES) in str(e.value)
+
+
+def test_array_element_count_limit_is_a_runtime_failure(monkeypatch):
+    """実行時の要素数超過は**切り詰めず**失敗にする(相手に欠けた注文を届けない)。"""
+    called = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        called["n"] += 1
+        return httpx.Response(200, json={"ok": True})
+
+    _mock(monkeypatch, handler)
+    registry = {"set_order": http_tools.to_tooldef(_post_row())}
+    over = {"order_id": "A1", "items": [
+        {"sku": f"S{i}"} for i in range(tools_mod.MAX_ARRAY_ITEMS + 1)]}
+    with pytest.raises(ToolError) as e:
+        execute_with(registry, "set_order", json.dumps(over))
+    assert str(tools_mod.MAX_ARRAY_ITEMS) in str(e.value) and called["n"] == 0
+    ok = {"order_id": "A1", "items": [
+        {"sku": f"S{i}"} for i in range(tools_mod.MAX_ARRAY_ITEMS)]}
+    assert json.loads(
+        execute_with(registry, "set_order", json.dumps(ok)))["status"] == 200
+
+
+def test_get_tools_cannot_declare_nested_args(store):
+    """GET にはボディが無く、入れ子をクエリ文字列へ載せる標準の書き方が無い。"""
+    with pytest.raises(http_tools.HttpToolDefError) as e:
+        http_tools.create_tool(
+            "u1", "get_order", "取得", NESTED_SCHEMA, "https://example.com/o",
+            method="GET")
+    assert "GET" in str(e.value) and store == []
+    created = http_tools.create_tool(
+        "u1", "set_order", "設定", NESTED_SCHEMA, "https://example.com/o", method="POST")
+    assert created["parameters"]["properties"]["items"]["type"] == "array"
+
+
+def test_get_execution_refuses_nested_values_from_a_tampered_row(monkeypatch):
+    """DB を直接書き換えられて GET に入れ子が入っても `str(dict)` を送らない。"""
+    _mock(monkeypatch, lambda req: httpx.Response(200, json={"ok": True}))
+    with pytest.raises(http_tools.HttpToolCallError):
+        http_tools.call_tool(tool_row(), {"part_number": {"a": 1}})
+
+
+def test_flat_tools_are_unchanged(store):
+    """回帰: 平坦なツールの登録結果は従来どおり(入れ子対応で形が変わらない)。"""
+    assert http_tools.validate_parameters(SCHEMA) == {
+        "type": "object",
+        "properties": {"part_number": {"type": "string", "description": "品番"}},
+        "required": ["part_number"],
+    }
+    created = http_tools.create_tool(
+        "u1", "lookup_stock", "在庫を引く", SCHEMA, "https://example.com/stock")
+    assert created["parameters"] == SCHEMA
+
+
+@pytest.mark.parametrize("schema", [
+    # DB を直接書き換えられた行(宣言側を通ればこの形にはならない)。
+    # 検証できないまま handler を呼ばない = fail-closed
+    {"type": "object", "properties": {"a": {"type": "unknown"}}},
+    {"type": "object", "properties": {"a": {}}},                      # type 欠落
+    {"type": "object", "properties": {"a": {"type": "object"}}},      # properties 欠落
+    {"type": "object", "properties": {"a": {"type": "object", "properties": "x"}}},
+    {"type": "object", "properties": {"a": {"type": "object", "properties": {},
+                                            "required": "b"}}},
+    {"type": "object", "properties": {"a": {"type": "array"}}},       # items 欠落
+    # 子スキーマが dict でない / required の要素が文字列でない(F-001)。
+    # ここを素通しすると AttributeError / TypeError で 500 になり、「拒否」が「障害」に見える
+    {"type": "object", "properties": {"a": "not-a-dict"}},
+    {"type": "object", "properties": {"a": ["x"]}},
+    {"type": "object", "properties": {"a": None}},
+    {"type": "object", "properties": {"a": {"type": "array", "items": "not-a-dict"}}},
+    {"type": "object", "properties": {"a": {"type": "object", "properties": {},
+                                            "required": [["b"]]}}},
+])
+def test_tampered_schema_never_reaches_the_handler(monkeypatch, schema):
+    called = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        called["n"] += 1
+        return httpx.Response(200, json={"ok": True})
+
+    _mock(monkeypatch, handler)
+    registry = {"t": http_tools.to_tooldef(
+        tool_row(name="t", method="POST", parameters=schema))}
+    for value in ("x", 1, {"b": 1}, [{"b": 1}]):
+        with pytest.raises(ToolError):
+            execute_with(registry, "t", json.dumps({"a": value}))
+    assert called["n"] == 0
+
+
+@pytest.mark.parametrize("schema", [
+    # ルート自身が改ざんされた場合(F-001 review-3)。子だけ fail-closed にしても、
+    # ルートが素通りすれば properties が整っているだけで handler へ到達してしまう
+    {"type": "array", "items": {"type": "string"}, "properties": {"a": {"type": "string"}}},
+    {"type": "unknown", "properties": {"a": {"type": "string"}}},
+    {"properties": {"a": {"type": "string"}}},                        # type 欠落
+    "not-a-dict",
+])
+def test_tampered_root_schema_never_reaches_the_handler(monkeypatch, schema):
+    called = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        called["n"] += 1
+        return httpx.Response(200, json={"ok": True})
+
+    _mock(monkeypatch, handler)
+    tool = http_tools.to_tooldef(tool_row(name="t", method="POST"))
+    object.__setattr__(tool, "parameters", schema)  # DB 改ざん相当
+    with pytest.raises(ToolError):
+        execute_with({"t": tool}, "t", json.dumps({"a": "x"}))
+    assert called["n"] == 0
