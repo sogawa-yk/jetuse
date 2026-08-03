@@ -1,6 +1,7 @@
 variable "region" {
-  type    = string
-  default = "ap-osaka-1"
+  type = string
+  # AGT-06: 既定はシカゴ(GenAI のモデル品揃えが厚い)。大阪も値を渡せば使える。
+  default = "us-chicago-1"
 }
 
 variable "home_region" {

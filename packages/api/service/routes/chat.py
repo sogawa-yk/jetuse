@@ -30,6 +30,7 @@ from jetuse_core.chat import (
     resolve_max_tool_hops,
 )
 from jetuse_core.logging import log_with
+from jetuse_core.model_compat import agent_refusal
 from jetuse_core.models import DEFAULT_MODEL, MODELS, model_status
 from jetuse_core.settings import get_settings
 
@@ -385,10 +386,12 @@ async def stream_chat_response(  # noqa: ANN202
         mcp_defs += await asyncio.to_thread(
             mcp_repo.get_servers, user.subject, agent_def["mcp_server_ids"]
         )
-    if req.agent and MODELS[req.model].api != "responses":
-        raise HTTPException(
-            status_code=400, detail="agent mode requires a responses-family model"
-        )
+    if req.agent:
+        # AGT-06: Responses 系かどうかだけでは足りない(ツールを渡せない Responses 系がある)。
+        # 断る理由は登録簿が持ち、そのまま利用者に見える文言で返す
+        refusal = agent_refusal(req.model)
+        if refusal:
+            raise HTTPException(status_code=400, detail=refusal)
 
     rag_store: str | None = None
     if req.rag:
@@ -617,7 +620,12 @@ def _model_entry(k: str, m) -> dict:
         "vision": m.vision,  # 画像添付UIの出し分け(MM-01)
         "multi_image": m.multi_image,  # 複数画像可否(ENH-09)
         "available": ok,  # PORT-02: リージョン/テナンシで利用不可と判明したものはfalse
+        # AGT-06: エージェントモードの可否。UIが選ばせる前に出し分けられるようにする
+        # (選ばせてから 400 で断るより、選べないほうがよい)
+        "agent": m.agent,
     }
+    if m.agent_blocked_reason:
+        entry["agent_blocked_reason"] = m.agent_blocked_reason
     if not ok and hint:
         entry["unavailable_reason"] = hint
     return entry

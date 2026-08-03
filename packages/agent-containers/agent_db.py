@@ -28,7 +28,7 @@ import agent_env  # noqa: F401  (import 副作用が目的)
 # 旧 _sanitize の ValueError catch 経路(run_tool の except Exception)は挙動不変。
 from jetuse_shared.sqlguard import sanitize_sql as _sanitize
 
-REGION = os.environ.get("OCI_REGION", "ap-osaka-1")
+REGION = os.environ.get("OCI_REGION", "us-chicago-1")
 SEMSTORE = os.environ.get("SEMSTORE_OCID", "")
 WALLET_CACHE = "/tmp/adb_wallet"
 

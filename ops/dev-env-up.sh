@@ -17,11 +17,27 @@ APPDIR=infra/terraform/environments/app
 TFVARS="$APPDIR/${DEV}.tfvars"
 [ -f "$TFVARS" ] || { echo "missing $TFVARS (copy alice.tfvars.example)"; exit 1; }
 
-NS=$(grep '^OS_NAMESPACE=' .env | cut -d= -f2- || true)
-NS="${NS:-idqcucnenh88}"
+# OCIR の名前空間はテナンシ固有なので**リポジトリに埋めない**（規約）。
+# Object Storage の名前空間と同じ値なので、.env の OS_NAMESPACE を既定に使う。
+# **.env は source していない**（shell 変数として export されない）ので、
+# 環境変数ではなくファイルから読む。優先順: 環境変数 > .env の OCIR_NAMESPACE > .env の OS_NAMESPACE。
+_ns_from_env_file() { grep "^$1=" .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r'; }
+NS="${OCIR_NAMESPACE:-$(_ns_from_env_file OCIR_NAMESPACE)}"
+[ -n "$NS" ] || NS="$(_ns_from_env_file OS_NAMESPACE)"
+# どちらも無いなら止める（誤ったテナンシの repository を掴まないため）
+[ -n "$NS" ] || { echo "OCIR_NAMESPACE か OS_NAMESPACE を .env に設定してください" >&2; exit 1; }
 SHA=$(git rev-parse --short HEAD)
 TAG="dev-${DEV}-${SHA}"
-IMAGE="kix.ocir.io/${NS}/jetuse-dev-api:${TAG}"
+# イメージの置き場は**このスタックの配備先リージョン**に合わせる(AGT-06)。
+# 正は <dev>.tfvars の region(terraform がそれで配備するため)。無ければ .env / 既定。
+# kix.ocir.io を直書きしていたときは、region=us-chicago-1 にしても
+# **イメージだけ大阪へ push され**、シカゴのコンテナが pull できなかった。
+. "$(dirname "$0")/_region.sh"
+REGION=$(jetuse_region_from_tfvars "$TFVARS")
+REGION="${REGION:-$(jetuse_region)}"
+jetuse_use_cli_region "$REGION"
+IMAGE="$(jetuse_ocir_host "$REGION")/${NS}/jetuse-dev-api:${TAG}"
+echo "== region=${REGION} (tfvars 由来) / image registry=$(jetuse_ocir_host "$REGION")"
 
 echo "== build & push ${IMAGE}"
 # ビルドコンテキストはリポジトリルート(Containerfile が packages/jetuse_shared を取り込むため。P1b)
