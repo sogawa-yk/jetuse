@@ -11,7 +11,7 @@ import json
 import re
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse
 
 from jetuse_core import app_session, bundles, datasets, demo_cleanup, demo_lease, demos, nl2sql
@@ -320,9 +320,19 @@ async def demo_list_rag_files(ctx: AppCtx):
 
 
 @router.post("/rag/files")
-async def demo_upload_rag_file(file: UploadFile, ctx: AppOwnerCtx):
+async def demo_upload_rag_file(
+    file: UploadFile, ctx: AppOwnerCtx,
+    # RAGM-01: 出典メタデータ。PREP-03: OCR エンジンの明示指定。
+    # user 経路(/api/rag/files)と同じ口を開ける — 片方だけ指定できないと、デモの箱では
+    # 常に既定エンジンになり「同じ指定を全バックエンドへ伝播する」経路が使えない
+    attributes: Annotated[str | None, Form()] = None,
+    ocr_engine: Annotated[str | None, Form()] = None,
+):
     # demo_id 指定で demo 単位の排他リースを保持(specs/18 §3.2.1)
-    return await rag_routes.upload_file_response(ctx.namespace, file, demo_id=ctx.demo_id)
+    return await rag_routes.upload_file_response(
+        ctx.namespace, file, demo_id=ctx.demo_id,
+        attributes=attributes, ocr_engine=ocr_engine,
+    )
 
 
 @router.delete("/rag/files/{file_id}")

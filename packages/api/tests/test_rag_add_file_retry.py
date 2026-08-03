@@ -543,3 +543,68 @@ def test_plain_file_keeps_the_same_ext_on_both_sides(monkeypatch, ledger):
 
     assert sent["name"].endswith(".md")
     assert ledger.upload_ext == {}   # 同値なので更新しない（予約時の値のまま）
+
+
+def test_reconcile_finds_a_crashed_xlsx_by_its_upload_name(monkeypatch):
+    """set_external 前に停止した xlsx を、reconcile が **.txt 名**で見つけて消す。
+
+    これが upload_ext を台帳に持つ理由そのもの。照合を原本の ext(.xlsx)で行うと、
+    実際に置かれている `<owner hash>/<予約 id>.txt` に一致せず、迷子の File が
+    OCI 側に残り続ける（台帳からは解放されるので誰も気づけない）。
+    """
+    from jetuse_core import rag_ledger as L
+    from jetuse_core.owner_keys import file_key
+
+    rid = "11111111-1111-4111-8111-111111111111"
+    owner = "u1"
+    stale_row = {
+        "id": rid, "owner_key": owner, "ext": "xlsx", "upload_ext": "txt",
+        "external_file_id": None,          # set_external の直前で落ちた
+        "locator": {},
+    }
+    monkeypatch.setattr(L, "_stale_pending", lambda cur: [stale_row])
+    monkeypatch.setattr(L, "_ensure_ledger", lambda cur: None)
+    monkeypatch.setattr(L, "release", lambda r: None)
+    # 行の locator と現在設定の locator を同じキーに揃える(File 一覧の引き当て先)
+    monkeypatch.setattr(L, "current_locator", lambda: {})
+
+    class _Cur:
+        _q = ""
+
+        def execute(self, sql, **kw):
+            self._q = sql
+
+        def fetchone(self):
+            return (0,)
+
+        def fetchall(self):
+            return []
+
+    class _Conn:
+        def cursor(self):
+            return _Cur()
+
+        def commit(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(L, "connect", lambda: _Conn())
+
+    # OCI 側には**送信名**で置かれている
+    listed = [{"id": "file-orphan", "filename": file_key(owner, rid, "txt")}]
+    deleted: list[str] = []
+    originals: list[tuple] = []
+    L.reconcile(
+        lambda loc=None: listed,
+        lambda ext_id, loc=None: deleted.append(ext_id),
+        lambda o, r, ext, loc=None: originals.append((r, ext)),
+        lambda row, has_file: None,
+    )
+
+    assert deleted == ["file-orphan"]        # .txt 名で照合できた
+    assert originals == [(rid, "xlsx")]      # 原本の削除は元の拡張子で行う
