@@ -15,9 +15,10 @@ test:   ## web + api の単体テスト
 	npm --prefix packages/web run test
 	$(PY)/pytest packages/api/tests
 
-lint:   ## web + api の lint
+lint:   ## web + api + infra の lint（CI と同じものを見る）
 	npm --prefix packages/web run lint
 	$(PY)/ruff check packages/api
+	ops/check-infra.sh
 
 e2e:    ## 実OCIへの E2E smoke（DB migrate 冪等）。scenario は tasks/<id>.md の「E2E シナリオ」参照
 	$(PY)/python -m jetuse_core.migrate
