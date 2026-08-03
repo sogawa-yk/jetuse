@@ -23,7 +23,12 @@ from jetuse_core import conversations as conv_repo
 from jetuse_core import http_tools as http_tools_repo
 from jetuse_core import mcp_servers as mcp_repo
 from jetuse_core.auth import AuthContext, require_user
-from jetuse_core.chat import GenParams, create_oci_conversation, resolve_max_tool_hops
+from jetuse_core.chat import (
+    GenParams,
+    create_oci_conversation,
+    resolve_max_doc_searches,
+    resolve_max_tool_hops,
+)
 from jetuse_core.logging import log_with
 from jetuse_core.models import DEFAULT_MODEL, MODELS, model_status
 from jetuse_core.settings import get_settings
@@ -343,6 +348,11 @@ async def stream_chat_response(  # noqa: ANN202
     if req.agent:
         try:
             max_tool_hops = resolve_max_tool_hops(req.max_tool_hops)
+            if req.agent_rag_backend == "adb":
+                # AGT-05: 文書検索の上限も入口で検証する（設定が壊れていると
+                # ストリームの途中で落ち、打ち切りとの区別がつかなくなる）。
+                # 数えるのは adb 経路の function tool だけなので、そこに限る
+                resolve_max_doc_searches()
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 

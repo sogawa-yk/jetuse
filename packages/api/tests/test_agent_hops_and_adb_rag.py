@@ -455,3 +455,33 @@ def test_route_still_rejects_agent_with_rag():
                       json=_agent_body(rag=True, agent_rag_backend="adb"))
     assert res.status_code == 400
     assert res.json()["detail"] == "agent and rag cannot be combined"
+
+
+# --- 同じ検索の繰り返しの検知（ADR-0026 §4 案 B・人間ゲートで承認） -------------------
+
+def test_normalized_query_ignores_case_and_spacing():
+    """表記ゆれだけの違いは「同じ検索」とみなす。"""
+    a = chat_mod._normalized_query(json.dumps({"query": "  受付可否  API "}))
+    b = chat_mod._normalized_query(json.dumps({"query": "受付可否 API"}))
+    assert a == b
+
+
+def test_normalized_query_returns_none_when_undecidable():
+    """判定できないものを「同じ」と決めつけない（握り潰さないため）。"""
+    assert chat_mod._normalized_query("not-json") is None
+    assert chat_mod._normalized_query(json.dumps({"query": "   "})) is None
+    assert chat_mod._normalized_query(json.dumps({})) is None
+
+
+def test_repeated_search_event_keeps_the_result():
+    """通知するだけ。**結果を空にしたり実行を止めたりしない**（案 C を却下した理由）。"""
+    ev = chat_mod._repeated_search_event("受付可否 api")
+    assert "repeated_search" in ev
+    assert "notice" in ev
+    # 「返さない」「中止」等の握り潰しを示す語を含めない
+    assert "中止" not in ev["notice"]
+
+
+def test_repeated_search_event_truncates_long_query():
+    ev = chat_mod._repeated_search_event("あ" * 200)
+    assert len(ev["repeated_search"]["query"]) <= 61

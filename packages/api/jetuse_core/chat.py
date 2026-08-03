@@ -16,6 +16,8 @@ from .genai import make_inference_client
 from .logging import log_with
 from .models import MODELS, ModelDef, mark_unavailable
 from .settings import (
+    AGENT_MAX_DOC_SEARCHES_CEILING,
+    AGENT_MAX_DOC_SEARCHES_DEFAULT,
     AGENT_MAX_TOOL_HOPS_CEILING,
     AGENT_MAX_TOOL_HOPS_DEFAULT,
     get_settings,
@@ -326,6 +328,31 @@ def resolve_max_tool_hops(requested: int | None = None) -> int:
     return value
 
 
+def resolve_max_doc_searches() -> int:
+    """このターンの文書検索の上限(AGT-05)。設定(env `AGENT_MAX_DOC_SEARCHES`)か既定値。
+
+    **ホップとは別枠**の予算。要求から指定する口は設けていないが、天井
+    (`AGENT_MAX_DOC_SEARCHES_CEILING`)は持つ —— 承認往復で送り返せる `tool_results` の
+    件数上限を静的に決めるため(ADR-0026 §2)。ホップ上限と同じくクランプせず**拒否**し、
+    不正な設定で壊れるのはエージェント実行だけに閉じる。
+    """
+    raw = (get_settings().agent_max_doc_searches or "").strip()
+    if not raw:
+        return AGENT_MAX_DOC_SEARCHES_DEFAULT
+    try:
+        value = int(raw)
+    except ValueError as e:
+        raise ValueError(f"AGENT_MAX_DOC_SEARCHES must be an integer: {raw!r}") from e
+    if value < 1:
+        raise ValueError(f"AGENT_MAX_DOC_SEARCHES must be >= 1: {value}")
+    if value > AGENT_MAX_DOC_SEARCHES_CEILING:
+        raise ValueError(
+            f"AGENT_MAX_DOC_SEARCHES exceeds the ceiling "
+            f"({AGENT_MAX_DOC_SEARCHES_CEILING}): {value}"
+        )
+    return value
+
+
 # 承認往復をまたいだツール結果の累計上限(AGT-01d)。ホップ上限より下だと、上限を上げても
 # 承認モードだけ先に打ち切られるため、ホップ上限を上げたときは連動して上がる(AGT-04)。
 MIN_TOOL_RESULTS_CAP = 16
@@ -339,11 +366,46 @@ _FORCE_ANSWER_TEXT = (
 # 上限に当たったことを利用者へ伝える文面(AGT-04)。**黙って打ち切らない**:
 # 途中で力尽きたのか答え切ったのかが外から区別できないと、失敗の説明ができない。
 _LIMIT_TEXTS = {
-    "max_tool_hops": "ツール使用の上限({limit} ホップ)に達したため、"
+    "max_tool_hops": "ツール使用の上限({limit} ホップ・文書検索は別枠)に達したため、"
                      "ここまでに得た情報で回答します（手続きは未完了の可能性があります）。",
     "max_tool_results": "ツール実行の累計が上限({limit} 件)に達したため、"
                         "ここまでに得た情報で回答します（手続きは未完了の可能性があります）。",
+    # AGT-05: 検索の予算だけが尽きた状態。**手続きは打ち切らない**(検索ツールを外して続ける)
+    # ので、他の 2 つとは伝えることが違う
+    "max_doc_searches": "文書検索の回数が上限({limit} 回)に達したため、"
+                        "これ以降は検索せず、ここまでに得た情報で手続きを続けます。",
 }
+
+
+def _normalized_query(arguments: str | None) -> str | None:
+    """文書検索の問い合わせ文を、比較用に正規化する(AGT-05・ADR-0026 §4 案 B)。
+
+    表記ゆれ(前後の空白・大小・連続空白)だけの違いは「同じ検索」とみなす。
+    解析できない引数は None を返す = 反復判定の対象にしない(**握り潰さないため**、
+    判定できないものを「同じ」と決めつけない)。
+    """
+    try:
+        args = json.loads(arguments or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return None
+    q = args.get("query") if isinstance(args, dict) else None
+    if not isinstance(q, str) or not q.strip():
+        return None
+    return " ".join(q.lower().split())
+
+
+def _repeated_search_event(query: str) -> ChatEvent:
+    """同じ検索の繰り返しを知らせる(ADR-0026 §4 案 B)。
+
+    **結果はそのまま返す。**握り潰すと、モデルは「調べた」と思ったまま結果を得られず、
+    記憶で埋めるか同じ検索を繰り返す(案 C を却下した理由)。
+    ここで知らせておくと、反復が起きていることが応答と証跡に残り、
+    上限値の見直しや instructions の改善の材料になる。
+    """
+    shown = query if len(query) <= 60 else query[:60] + "…"
+    return {"notice": f"同じ内容の文書検索が繰り返されています（「{shown}」）。"
+                      "結果はそのまま返します。",
+            "repeated_search": {"query": shown}}
 
 
 def _limit_reached_events(reason: str, limit: int) -> Iterator[ChatEvent]:
@@ -396,6 +458,20 @@ def _build_agent_input(
     return base_input
 
 
+def _is_doc_search_result(tool_result: dict, rag_tool: Any | None) -> bool:
+    """承認往復で送り返された結果が adb 経路の文書検索かどうか(AGT-05)。
+
+    `rag_tool` が無い(＝ built-in 経路)ときは常に False。built-in の検索は
+    function_call として往復しないので、同名の結果が来ても検索由来とは言えない。
+    """
+    from .tools import RAG_SEARCH
+
+    if rag_tool is None:
+        return False
+    call = tool_result.get("call")
+    return isinstance(call, dict) and call.get("name") == RAG_SEARCH
+
+
 def _function_spec(tool: Any) -> dict:
     return {
         "type": "function",
@@ -440,11 +516,17 @@ def _build_agent_tools(
 
 
 def _collect_hop_events(
-    stream: Any, calls: list[Any], mcp_approvals: list[Any]
+    stream: Any, calls: list[Any], mcp_approvals: list[Any],
+    server_side: list[str] | None = None,
 ) -> Iterator[ChatEvent]:
     """1ホップのResponseストリームを消費。delta/tool_call/citations/usageを
     passthroughで yield し、function_call / mcp_approval_request を渡された
-    リストへ収集する(呼び出し側で承認/実行を判断)。"""
+    リストへ収集する(呼び出し側で承認/実行を判断)。
+
+    `server_side` を渡すと、**この往復で OCI 側が実行した業務の操作**
+    (MCP / コード実行)の名前を追記する。これらは `function_call` として返らないので、
+    `calls` だけを見るとホップの計上から漏れる(AGT-05 review-7 のすり抜け)。
+    file_search built-in は**業務の操作ではない**ので数えない(検索は別枠)。"""
     try:
         for event in stream:
             etype = getattr(event, "type", "")
@@ -453,6 +535,8 @@ def _collect_hop_events(
             elif etype == "response.output_item.added":
                 itype = getattr(event.item, "type", "")
                 if itype == "code_interpreter_call":
+                    if server_side is not None:
+                        server_side.append("code_interpreter_call")
                     # built-in: OCI側サンドボックスで実行される(承認対象外・通知のみ)
                     yield {"tool_call": {
                         "name": "code_interpreter", "label": "コード実行",
@@ -464,6 +548,8 @@ def _collect_hop_events(
                         "builtin": True, "status": "running",
                     }}
                 elif itype == "mcp_call":
+                    if server_side is not None:
+                        server_side.append("mcp_call")
                     # MCPはサーバーサイド実行(通知のみ — AGT-02)
                     label = (f"MCP: {getattr(event.item, 'server_label', '')}/"
                              f"{getattr(event.item, 'name', '')}")
@@ -623,6 +709,9 @@ def stream_agent(
       レジストリに載せ、JetUse がサーバー側で代理実行する
     - rag_backend='adb': 文書検索を Vector Store の file_search built-in ではなく
       `rag_adb` の検索(チャンク単位の出典)で行う。既定は現行どおり vector_store
+    - 文書検索(AGT-05)は**ホップを消費しない**。別枠の上限
+      (`AGENT_MAX_DOC_SEARCHES`)で数え、そちらに達したら検索ツールだけ外して
+      業務の手続きは続ける。built-in 経路はもともと消費しないので挙動不変
     """
     from .tools import RAG_SEARCH, TOOLS, ToolError, adb_rag_search_tool, execute_with
 
@@ -650,7 +739,11 @@ def stream_agent(
     # ターン内ツール総数の安全弁(AGT-01d): 累積がこの数に達したらツールを外し最終回答を強制。
     # ホップ上限を上げても承認モードだけ先に打ち切られないよう連動させる(AGT-04)
     results_cap = max(MIN_TOOL_RESULTS_CAP, max_hops)
-    force_answer = len(tool_results or []) >= results_cap
+    # 文書検索は業務の予算を食わない(AGT-05)。承認往復をまたぐ累計でも同じ扱いにしないと、
+    # 検索を挟むほど承認モードだけ先に打ち切られる — ホップ側だけ直しても不整合が残る
+    force_answer = sum(
+        1 for tr in (tool_results or []) if not _is_doc_search_result(tr, rag_tool)
+    ) >= results_cap
     all_tools = _build_agent_tools(
         enabled_tools, mcp_servers, auto_tools, rag_store, http_tools, rag_tool
     )
@@ -659,7 +752,62 @@ def stream_agent(
         base_input.append(_force_answer_message())
         yield from _limit_reached_events("max_tool_results", results_cap)
 
-    for _hop in range(max_hops):
+    # 予算は 2 本立て(AGT-05)。ホップは**業務の操作**(外部HTTPツール・MCP・組込ツール)を
+    # 含む往復でだけ減り、文書検索は別枠で数える。検索の上限に達したら検索ツールを外して
+    # 続ける(手続きごと打ち切ると、この不整合を別の形で作り直すことになる)。
+    # 終了は保証される: 1 往復ごとに hops_used か doc_searches のどちらかが必ず増え、
+    # doc_searches が上限に達すると検索ツールが消えて以降は数えなくなる。
+    max_doc_searches = resolve_max_doc_searches() if rag_tool is not None else 0
+    hops_used = 0
+    # 承認往復で送り返された分を引き継ぐ。0 から数え直すと、承認のたびに検索の予算が
+    # 復活して上限が効かない(累計上限からも検索を外したので、ここで数えないと歯止めが無い)
+    doc_searches = sum(
+        1 for tr in (tool_results or []) if _is_doc_search_result(tr, rag_tool)
+    )
+    searches_open = rag_tool is not None
+    # 反復検知用(ADR-0026 §4 案 B)。承認往復で送り返された検索は引き継がない
+    # (どの問い合わせだったかは tool_results から復元できない。既知の限界)
+    seen_queries: set[str] = set()
+
+    def run_tool(name: str, arguments: str) -> str:
+        """ツール実行。検索の予算が尽きたあとの `rag_search` は**実行せず**理由を返す。
+
+        ツール一覧から外してもモデルが名前を出してくることはある。そのとき実行して
+        しまうと上限が上限でなくなるので、ここで断る(黙って空を返さない —— 理由が
+        モデルに届けば、記憶で埋めずに手続きへ戻れる)。
+        """
+        if not searches_open and rag_tool is not None and name == RAG_SEARCH:
+            raise ToolError(
+                f"文書検索の回数が上限({max_doc_searches} 回)に達したため実行できません"
+            )
+        return execute_with(registry, name, arguments)
+
+    def close_searches_if_exhausted() -> Iterator[ChatEvent]:
+        """検索の予算が尽きたら検索ツールを外して通知する(AGT-05)。
+
+        **手続きは止めない** —— 業務の操作は続けさせる。ここで打ち切ると
+        「検索が業務の予算を潰す」という直したはずの不整合を別の入口で作り直すことになる。
+
+        **ループの先頭だけでなく、予算を数えた直後にも呼ぶ。** 混在バッチで検索とホップの
+        上限に**同時に**達すると、次の周回に入らずループを抜けてしまい、先頭のチェックだけでは
+        `reason=max_doc_searches` の通知が出ない(公開契約を満たさない — review-6)。
+        `searches_open` を落としてから通知するので、二度呼んでも二重には出ない。
+        """
+        nonlocal searches_open, all_tools
+        if not (searches_open and doc_searches >= max_doc_searches):
+            return
+        searches_open = False
+        all_tools = [
+            t for t in all_tools
+            if not (t.get("type") == "function" and t.get("name") == RAG_SEARCH)
+        ]
+        log_with(logger, logging.INFO, "agent_doc_search_limit_reached",
+                 model=model_key, user=user, max_doc_searches=max_doc_searches)
+        yield from _limit_reached_events("max_doc_searches", max_doc_searches)
+
+    while hops_used < max_hops:
+        yield from close_searches_if_exhausted()
+
         stream = client.responses.create(
             model=model.oci_id,
             input=base_input,
@@ -671,7 +819,10 @@ def stream_agent(
         )
         calls: list[Any] = []
         mcp_approvals: list[Any] = []
-        yield from _collect_hop_events(stream, calls, mcp_approvals)
+        # OCI 側で実行された業務の操作(MCP / コード実行)。function_call として返らないので
+        # 別に受け取らないとホップの計上から漏れる(review-7)
+        server_side: list[str] = []
+        yield from _collect_hop_events(stream, calls, mcp_approvals, server_side)
 
         if mcp_approvals:
             # MCP承認要求(AGT-02): UIへ通知してストリーム終了(承認モードのみ発生)
@@ -687,6 +838,29 @@ def stream_agent(
              if k in ("type", "name", "arguments", "call_id", "id")}
             for c in calls
         ]
+        # 予算の計上(AGT-05)。検索は別枠。混在バッチはホップを 1 回だけ消費する。
+        # **バッチは切り詰めない** — 出した function_call には必ず結果を返す必要があり、
+        # 上限超過分を捨てると「調べたのに結果が来ない」状態を作る
+        doc_calls = sum(1 for cd in call_dicts
+                        if searches_open and cd["name"] == RAG_SEARCH)
+        # 同じ検索の繰り返しを知らせる(実行は止めない — ADR-0026 §4 案 B)
+        for cd in call_dicts:
+            if not searches_open or cd["name"] != RAG_SEARCH:
+                continue
+            q = _normalized_query(cd.get("arguments"))
+            if q is None:
+                continue
+            if q in seen_queries:
+                yield _repeated_search_event(q)
+            else:
+                seen_queries.add(q)
+        # **サーバー側で実行された業務の操作も勘定に入れる。** `call_dicts` だけで見ると、
+        # 検索と MCP / コード実行が同じ往復に混ざったときに `doc_calls == len(call_dicts)` と
+        # なり、業務の操作が走ったのにホップが減らない(= 上限を迂回できる — review-7)
+        if doc_calls < len(call_dicts) or server_side:
+            hops_used += 1
+        doc_searches += doc_calls
+
         needs_approval = [
             cd for cd in call_dicts
             if not (registry.get(cd["name"]) and not registry[cd["name"]].requires_approval)
@@ -698,14 +872,18 @@ def stream_agent(
         # 全件が承認不要(requires_approval=False)の場合は承認モードでも自動実行して継続
 
         yield from _run_tool_calls(
-            call_dicts, base_input, user, registry,
-            lambda n, a: execute_with(registry, n, a), ToolError,
+            call_dicts, base_input, user, registry, run_tool, ToolError,
         )
+        # **実行したあとに**見る。ホップも同時に尽きると次の周回に入らないので、
+        # ループ先頭のチェックだけでは `reason=max_doc_searches` が出ない(review-6)。
+        # 計上直後に置くと、いま数えたバッチ自身が「上限超過」で断られてしまう
+        yield from close_searches_if_exhausted()
 
     # ホップ上限: エラーではなくツールなしで最終回答を強制する(AGT-01d)。
     # **黙って打ち切らない**(AGT-04): 上限に当たったことを通知してから最終回答へ移る。
     # この最終回答は**ツールを外した 1 往復**で、上限とは別に加算される
-    # (= 1 ターンの最大往復数は max_hops + 1)。usage も必ず出す — 出さないと
+    # (= 1 ターンの最大往復数は max_hops + 文書検索の上限 + 1。検索は別枠なので
+    # ホップだけでは往復数の上界にならない — AGT-05)。usage も必ず出す — 出さないと
     # 打ち切ったターンだけコストが記録から漏れる
     log_with(logger, logging.INFO, "agent_hop_limit_reached",
              model=model_key, user=user, max_hops=max_hops)
