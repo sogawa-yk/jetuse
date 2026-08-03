@@ -21,10 +21,27 @@ mkdir -p "${source_tree}" "${app_stage}"
 
 # Copy only tracked Terraform files. This prevents local .terraform directories
 # and other ignored build artifacts from leaking into the public archives.
-git -C "${repo_root}" archive --format=tar HEAD \
-  infra/orm \
-  infra/terraform/modules \
-  | tar -xf - -C "${source_tree}"
+#
+# 既定は HEAD（配布物は必ずコミット済みの内容から作る）。
+# `PACKAGE_FROM_WORKTREE=1` のときだけ**作業ツリー**から作る。
+# これは手元の検査（ops/check-infra.sh）専用で、未コミットの変更でも
+# 「梱包すると壊れる」を検出できるようにするため。**配布には使わない。**
+if [[ "${PACKAGE_FROM_WORKTREE:-0}" == "1" ]]; then
+  echo "[package] 作業ツリーから梱包します（検査用。配布には使わないこと）" >&2
+  # 追跡ファイル + 未追跡(ignore されていない)ファイル。無視対象は入れない
+  # `--cached` は**作業ツリーで削除済みの追跡ファイル**も並べるので、
+  # 削除・rename があると tar が存在しないパスを読んで失敗する。実在するものだけに絞る。
+  git -C "${repo_root}" ls-files --cached --others --exclude-standard --deduplicate \
+    -- infra/orm infra/terraform/modules \
+    | ( cd "${repo_root}" && while IFS= read -r f; do [ -f "$f" ] && printf '%s\n' "$f"; done ) \
+    | tar -cf - -C "${repo_root}" -T - \
+    | tar -xf - -C "${source_tree}"
+else
+  git -C "${repo_root}" archive --format=tar HEAD \
+    infra/orm \
+    infra/terraform/modules \
+    | tar -xf - -C "${source_tree}"
+fi
 
 # Resource Manager runs from the root of a Deploy to Oracle Cloud archive.
 # Relocate each entry point and rewrite its repository-relative module paths.

@@ -120,6 +120,19 @@ areas:
     # E2E は実 ADB への CRUD 往復・冪等再適用など。具体は tasks/<id>.md の「E2E シナリオ」に従う。
     e2e_cmd: ""
 
+  infra:
+    path: infra
+    # **CI の terraform ジョブと同じものを 1 本にまとめてある**（fmt / validate /
+    # modules の terraform test / hosted-agent の CLI smoke）。いずれも mock を使い
+    # 資格情報も課金も発生しない。`terraform validate` は構文と整合性を見るが
+    # **書式は見ない**ので fmt と両方要る（AGT-06 で fmt だけが CI で落ちた）。
+    # 検査は lint_cmd に集約しているので test_cmd は空。
+    test_cmd: ""
+    lint_cmd: "ops/check-infra.sh"
+    # infra の配備は terraform apply ＝ 人間ゲート。ループは実行しない
+    deploy_cmd: ""
+    e2e_cmd: ""
+
 # **`deploy_cmd` / `test_cmd` / `lint_cmd` / `e2e_cmd` に定義された操作は人間ゲートではない**
 # （2026-08-01 追記・PREP-03 の実害を受けて）。これらは本設定が実行を指示している通常フローで、
 # その実行に個別の承認証跡を求めない。求めると、実環境 E2E をするタスクは毎回同じ blocker で
