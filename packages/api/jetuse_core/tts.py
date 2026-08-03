@@ -184,11 +184,24 @@ def synthesize(text: str, voice: str) -> bytes:
                 )
             )
         except oci.exceptions.ServiceError as e:
-            if e.status in (401, 403, 404):
-                # 未購読/未提供。次の候補があれば試す
+            # 401/403/404 = そのリージョンでは未購読/未提供。5xx = リージョン側の障害。
+            # どちらも「この候補では合成できない」だけなので、次の候補を試す。
+            #
+            # 5xx を打ち切りにしていたのが 2026-08-03 の実害(jetuse:test / シカゴ配備):
+            # us-chicago-1 が 500 "Connection refused: speech-tts-engine-service..." を返す一方、
+            # us-phoenix-1 では同じ呼び出しが成功していた。/api/tts は **Functions** が処理し、
+            # そのプロセスは _resolved_region を持たないためデプロイリージョン(シカゴ)から試す。
+            # 5xx で即座に諦めると、動く Phoenix に到達せず TTS が常に 503 になる。
+            # /api/health は Container Instance が処理し、プローブが Phoenix を掴んで
+            # ok を返すため、「health は緑なのに合成だけ失敗する」食い違いにもなっていた。
+            if e.status in (401, 403, 404) or e.status >= 500:
                 last_unavailable = e
-                logger.info("TTS unavailable in %s (HTTP %s); trying next region", region, e.status)
+                logger.info(
+                    "TTS unavailable in %s (HTTP %s %s); trying next region",
+                    region, e.status, e.code,
+                )
                 continue
+            # 残りの 4xx(400 等)はリクエスト自体の誤りで、リージョンを変えても直らない。
             hint = f"音声合成に失敗しました: {e.code} {e.message}"
             _last_result = {"ok": False, "region": region, "hint": hint, "at": time.monotonic()}
             _probe_cache = None  # 実失敗を観測したら古い成功キャッシュを捨てる
@@ -197,9 +210,16 @@ def synthesize(text: str, voice: str) -> bytes:
         _last_result = {"ok": True, "region": region, "hint": None, "at": time.monotonic()}
         return r.data.content
 
+    # 未購読(4xx)とリージョン側の障害(5xx)は対処が違うので、直近の理由を必ず添える。
+    # 「未購読の可能性」だけを出すと、実際は 500 の一時障害なのに購読設定を疑わせてしまう。
+    last_seen = (
+        f" / 直近 HTTP {last_unavailable.status} {last_unavailable.code}"
+        if last_unavailable is not None else ""
+    )
     hint = (
-        f"TTSにアクセスできません(試行: {', '.join(regions)})。"
-        "テナンシがこれらのリージョンを未購読か、TTSが未提供の可能性があります。"
+        f"TTSにアクセスできません(試行: {', '.join(regions)}{last_seen})。"
+        "テナンシがこれらのリージョンを未購読か、TTSが未提供か、"
+        "リージョン側の一時障害の可能性があります。"
         "TTS_REGION で提供リージョンを明示できます"
     )
     _last_result = {"ok": False, "region": None, "hint": hint, "at": time.monotonic()}

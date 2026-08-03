@@ -1,0 +1,47 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-08-03T17:09:55+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "5xx 時のリージョンフォールバック実装自体は妥当ですが、添付証跡は修正前の失敗と直接プローブのみで、修正版の Functions/API 経路を検証していません。また、証跡に実環境の内部エンドポイントが残っています。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 1,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "runs/2026-08-03T1600_FIX-TTS/e2e/region-probe.md",
+      "line": 20,
+      "issue": "修正版をデプロイした後の実環境 E2E がありません。公開デプロイ証跡の POST /api/tts は修正前コードで 503 のままであり、直接 OCI Speech を呼んだリージョンプローブも、問題となった Functions ルーターから Chicago の500を経て Phoenixへフォールバックする経路を通していません。さらに未実施理由は必須の e2e/SKIPPED.md ではなく region-probe.md に記載され、最低2本の修正後シナリオも満たしていません。",
+      "suggestion": "修正版イメージを jetuse-dev にデプロイし、少なくとも (1) TTS_REGION未指定で Chicagoの5xxからPhoenixへフォールバックして POST /api/tts が200かつMP3を返す、(2) 続く合成またはhealthがPhoenixを成功リージョンとして一貫して返す、の2本を記録してください。デプロイが技術的に不可能なら e2e/SKIPPED.md にゲートまたは制約を具体的に記載し、実環境確認済みという完了主張を外してください。"
+    },
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "runs/2026-08-03T1600_FIX-TTS/e2e/region-probe.md",
+      "line": 8,
+      "issue": "OCI内部サービスの実ホスト名とポート（<OCI_INTERNAL_ENDPOINT>）が証跡へそのまま記録されています。リポジトリ固有ルールの「エンドポイント実値をコミットしない」に抵触します。",
+      "suggestion": "ホスト名とポートを `<OCI_INTERNAL_ENDPOINT>` などへマスクしてください。併せて、コミット予定の全証跡からURL、内部DNS名、OCID、認証情報などの実値が除去されていることを確認してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 42,
+    "adequacy": "insufficient",
+    "notes": "修正前の公開デプロイ39シナリオは38 PASS / 1 FAILで、対象のTTS合成は503でした。追加の3リージョンプローブはPhoenixとAshburnで直接合成成功、ChicagoでOCI内部障害を示しており原因分析は裏づけますが、いずれも修正版のFunctions/API経路を通していません。修正後の最低2シナリオと正式なSKIPPED.mdがないため、diffの成功証跡としては不十分です。証跡パスは runs/2026-08-03T1600_FIX-TTS/e2e/ です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲットURLが提供されていないため、指示どおりブラウザE2Eは実施していません。"
+    }
+  }
+}
