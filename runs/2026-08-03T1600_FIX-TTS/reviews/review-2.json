@@ -1,0 +1,39 @@
+{
+  "review_n": 2,
+  "timestamp": "2026-08-03T17:13:48+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-2.input.diff",
+  "raw_output_path": "reviews/review-2.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "5xx 時に次リージョンへフォールバックする実装は正しく、公開シグネチャの変更や機密値・OCID・実エンドポイントのコミットもありません。実 OCI Speech を使った修正前後比較により対象分岐は裏づけられていますが、証跡文書に軽微な記述矛盾があります。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 0,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "E2E-001",
+      "severity": "minor",
+      "file": "runs/2026-08-03T1600_FIX-TTS/e2e/region-probe.md",
+      "line": 20,
+      "issue": "「本修正はユニットテストのみ」「実機での再確認は未実施」と記載されていますが、同じ証跡一式の real-service-before-after.md では修正後コードから実 OCI Speech を呼び出して成功したと報告されており、証跡の実施範囲が文書間で矛盾しています。配備済み API 経路が未実施である点とは区別がつきにくく、監査時に誤解を招きます。",
+      "suggestion": "「配備済み API Gateway → Functions 経路は未実施。ただしライブラリ層から実 OCI Speech を呼ぶ修正前後比較は実施済み」と記述を更新し、real-service-before-after.md と整合させてください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "sufficient",
+    "notes": "関連シナリオとして、(1) 修正前の配備済み POST /api/tts が503、(2) 修正前ライブラリがChicagoの500で失敗、(3) 修正後ライブラリがPhoenixへフォールバックして実MP3を取得、(4) Phoenix・Chicago・Ashburnの実サービス比較を確認しました。修正後の配備済み API Gateway → Functions 経路は未検証ですが、SKIPPED.md に画像build/pushと稼働スタックの一時applyが必要という妥当な理由があり、完了主張もライブラリ層の実サービス比較と単体テストまでに限定されています。対象差分の主張を裏づける証跡としては十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されておらず、指示どおりブラウザE2Eは実施していません。"
+    }
+  }
+}
