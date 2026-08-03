@@ -14,6 +14,7 @@ from openai import APIConnectionError, APIStatusError, OpenAI
 
 from .genai import make_inference_client
 from .logging import log_with
+from .model_compat import agent_refusal, responses_input
 from .models import MODELS, ModelDef, mark_unavailable
 from .settings import (
     AGENT_MAX_DOC_SEARCHES_CEILING,
@@ -200,7 +201,7 @@ def _stream_responses(
         stream = client.responses.create(
             model=model.oci_id,
             conversation=oci_conversation_id,
-            input=_to_responses_input(sendable),
+            input=responses_input(model, _to_responses_input(sendable)),
             temperature=temperature,
             stream=True,
             **extra,
@@ -208,7 +209,7 @@ def _stream_responses(
     else:
         stream = client.responses.create(
             model=model.oci_id,
-            input=_to_responses_input(messages),
+            input=responses_input(model, _to_responses_input(messages)),
             temperature=temperature,
             stream=True,
             # 既定はサーバー側に保存される(store=true相当 — 実機確定)。
@@ -288,7 +289,9 @@ def complete_once(model_key: str, messages: list[dict], max_chars: int = 200) ->
     client = make_inference_client(with_project=model.api == "responses")
     if model.api == "responses":
         r = client.responses.create(
-            model=model.oci_id, input=_to_responses_input(messages), store=False
+            model=model.oci_id,
+            input=responses_input(model, _to_responses_input(messages)),
+            store=False,
         )
         return (r.output_text or "")[:max_chars]
     r = client.chat.completions.create(model=model.oci_id, messages=messages)
@@ -729,8 +732,13 @@ def stream_agent(
     if rag_tool is not None:
         registry[rag_tool.name] = rag_tool
     model = MODELS[model_key]
-    if model.api != "responses":
-        yield {"error": "エージェントモードはResponses系モデルのみ対応です"}
+    # エージェント不可のモデルは**理由をつけて断る**(AGT-06)。Responses 系でも
+    # ツールを渡せないもの(grok-4.20-multi-agent)があり、api 属性だけでは足りない。
+    # 黙って動かないより断るほうがよい — 断らないと「同じ検索を繰り返して
+    # 架空のコードを作る」ような失敗が、モデルの都合だと分からないまま出る
+    refusal = agent_refusal(model_key)
+    if refusal:
+        yield {"error": refusal}
         return
     temp = model.default_temperature if temperature is None else temperature
     client = make_inference_client(with_project=True, project_ocid=project_ocid)
@@ -810,7 +818,7 @@ def stream_agent(
 
         stream = client.responses.create(
             model=model.oci_id,
-            input=base_input,
+            input=responses_input(model, base_input),
             temperature=temp,
             tools=all_tools,
             stream=True,
@@ -890,7 +898,7 @@ def stream_agent(
     yield from _limit_reached_events("max_tool_hops", max_hops)
     final_input = base_input + [_force_answer_message()]
     stream = client.responses.create(
-        model=model.oci_id, input=final_input, temperature=temp,
+        model=model.oci_id, input=responses_input(model, final_input), temperature=temp,
         stream=True, store=False, **extra,
     )
     try:
