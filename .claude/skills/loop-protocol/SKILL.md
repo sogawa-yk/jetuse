@@ -22,13 +22,13 @@ description: goal ループの毎ターンの手順。実装→Codexレビュー
 6. **PASS に達したら停止する（停止規律）。** `review_verdict=PASS` かつ area の test/lint 緑
    かつ実環境 E2E 済で、完了ゲートは満たされている。求められたものを、意図された範囲で
    仕上げたら、そこで止める。PASS の下に残る major / minor は非 blocker の助言であり、
-   修正せず STATE.md とタスクパケットの「判断が要る事項」バナーに residual
+   修正せず STATE.md と最終メッセージの `residual` に
    （後続/人間トリアージ）として file:line 付きで列挙する。磨き込みの反復は各修正が新たな
    助言を生んで止まらなくなる（実例: EXB-03 が PASS 後に12ラウンド・約220kトークン）。
    PASS 後にコードを変えるのは (a) 受け入れ条件の未達を埋める場合、
    (b) 人間/オーケストレータの明示指示がある場合のみ。
 7. **人間ゲートで停止する。** コミット / PR / push は人間の承認後（CLAUDE.md）。
-   停止時は terse なテキストではなく HTML タスクパケット（下記）を提示する。
+   停止時は**構造化した事実**（下記「完了ゲートで人間へ返すもの」）を返す。**HTML は作らない**。
 
 ## 実装規律（手順2の中身）
 - `ponytail:ponytail` スキル（既定強度は `loop-config.yml` の `ponytail.intensity`）を適用し、
@@ -69,52 +69,55 @@ Codex はコードを実行できない（read-only）。だから Claude がデ
 5. **人間ゲート**: jetuse-dev へのデプロイ（Terraform apply 含む）は承認済み。ただし IAM/テナンシ変更、
    既存リソース（VCN develop / インスタンス dev / バケット）変更、コミット/PR/push は引き続き人間ゲート。
 
-## 人間ゲートに出すタスクパケット（HTML・完了ゲートで1回）
-**書き方の正本は `references/report-style.md`（様式の選び方・図の描き方・提示前のレンダリング確認）。
-報告書を書く前に必ず読む。** 要点:
-- 実装タスクの完了報告は `references/task-packet-template.html`、**方式・設計の判断を仰ぐ報告
-  （ADR 承認・やり方の変更・選択肢の提示）は `references/decision-packet-template.html`**（前提→なぜ→
-  どのように→承認）。判断を仰ぐ報告に完了報告の様式を使わない（読み手は文脈を共有していない）。
-- 図は HTML+CSS で描く（SVG で座標を手置きしない＝テキストが伸びると重なる）。詳細は `<details>` に畳む。
-- **提示前に `scripts/check_report_render.sh <html>` でレンダリングし、出力 PNG を Read で見て
-  重なり・見切れが無いことを確認する**（省略不可。Chrome 不在でスキップした場合は報告に明記）。
+## 完了ゲートで人間へ返すもの（**HTML は作らない**）
 
-完了ゲート（`review_verdict=PASS` かつ test/lint 緑 かつ実環境 E2E 通過）に達したら、人間ゲートに出す
-タスクパケットを `references/task-packet-template.html` からコピーして埋め、`loop-config.yml` の
-`report.build_dir`（＝`runs/<run-id>/report/<TASK>.html`）に書き出す。これが per-task の唯一の
-レビュー成果物（従来の 5〜20KB の密な散文レポートを置き換える）。
+**報告書はオーケストレータが書く。ループは HTML を作らない**（2026-08-01 変更）。
+理由: ループと オーケストレータの双方が報告書を作って二重になり、かつ実装の文脈に近すぎて
+実装者視点（判定・差分・findings の羅列）になりやすかった。施主の評価は
+「オーケストレータが書いたものの方が読みやすい」。**様式の正本は `references/report-style.md`**
+だが、それを使うのはオーケストレータ側であり、ループは読まなくてよい。
 
-書き出したら**報告パイプで人間の閲覧場所へ配置する**（`loop-config.yml` の `report`・契約は
-`docs/guides/report-pipe.md`）。報告書は仕様でも証跡でもないのでリポジトリに閉じない:
-- `report.pipe: personal_skill`（既定）: ホーム側の個人スキル（既定 `preview`・env `LOOP_REPORT_SKILL`
-  で上書き）を**配置モード**（`report.mode: place_only`）で呼ぶ。**完成済み HTML のパスを渡し、
-  再生成・改変をさせない**（様式はリポジトリ側が持つ）。返る絶対パスと `![[<topic>.html]]` を
-  ターンの最終メッセージに載せる。topic は `report.topic.task`。
-- 個人スキル未導入 / `.obsidian-dir` 未設定で配置できないときは `report.fallback`（既定 `artifact`）:
-  `build_dir` の HTML をそのまま Artifact 化して提示し（`artifact-design` skill を読んでから）、
-  「報告パイプ未設定（docs/guides/report-pipe.md）」を1行添える。**ループは止めない。**
+完了ゲート（`review_verdict=PASS` かつ test/lint 緑 かつ実環境 E2E 通過）または人間ゲートで
+停止したら、**最終メッセージに次を構造化して返す**。HTML 生成・レンダリング確認・報告パイプへの
+配置は**行わない**（その分のトークンを使わない）。
 
-HTML はリポジトリにコミットしない（`.gitignore` で `runs/**/*.html` を塞いである）。
+| 返すもの | 中身 |
+| --- | --- |
+| `task` | タスク ID |
+| `verdict` | `review_verdict` と最終 review 番号（例 `PASS (review-7)`） |
+| `checks` | test / lint / build の結果（件数つき） |
+| `e2e` | シナリオごとに「何を確かめて / 結果 / 証跡パス」。未実施は `SKIPPED.md` の理由も |
+| `residual` | 非 blocker の指摘を severity・`file:line`・内容で列挙（**要約しない**） |
+| `human_gates` | 残る人間ゲート（コミット / PR / push / 判断が要る点） |
+| `decisions_needed` | 判断が要る点があれば、**選択肢と各々の影響**まで（オーケストレータが施主へ出す材料） |
+| `surprises` | 想定と違ったこと・自分の誤りに気づいた箇所（あれば）。**隠さない** |
 
-設計思想＝「例外だけ露出」。施主に読ませる面積を最小化し、判断が要る箇所だけ立てる:
-- **何を・なぜ**: 製品/デモ目線で 3〜5 行。専門語（`§`参照・HTTP コード・内部識別子）は展開して、
-  施主が読んで分かる言葉にする。「このデモにとって何が変わり、なぜ必要か」を書く（実装の羅列にしない）。
-- **判断が要る事項バナー**（テンプレの `<div class="banner">`）: override / 未対応 residual / 後続未起票が
-  あるときだけ残す。無ければブロックごと削除し、ヘッダ判定バッジを緑 PASS にする。例外があればバッジは琥珀「要判断」。
-  override 時は迂回する具体 findings（id/severity/file:line）と理由をここに inline（codex-review 参照）。
-- **Codex 判定**: clean PASS は判定1行のみ（`PASS (review-N) / blocker0 major0`）。全 findings は
-  `<details class="aud">` に畳む＝監査用・人間の必読ではない（チェッカーを信頼する。信頼できないならチェッカーを直す）。
-- **差分**: このタスク1件分の `git diff --stat` と「必読ファイル」1〜数点。
-- **E2E**: 実施シナリオ数・結果・証跡パス。
+`STATE.md` には従来どおり全部書く（ローカル・git 追跡外。完了時に `runs/<run-id>/STATE.md` へ写す）。
+オーケストレータはこの構造化された事実と `STATE.md` / `runs/` を材料に報告書を書く。
 
-> 原則: 人間の仕事は ①何を・なぜを読む ②例外だけ判断する ③挙動を E2E で確認する、の3点。
-> clean PASS の findings 全読は求めない。プレースホルダ `{{...}}` はすべて埋めてから提示する。
+## STATE.md の扱い（git 追跡外）
+`STATE.md` は**この worktree のローカル状態**であり、コミットしない（`.gitignore` 済み）。
+タスクごとの worktree が同じパスを全面上書きするため、追跡すると並列ループを統合するたびに
+必ず衝突する。停止（手順6）の直前に **`runs/<run-id>/STATE.md` へ写しを残す**こと。
+写しは run 配下なのでタスク間で衝突せず、後から状態を辿れる。
 
 ## goal 完了条件との関係
 完了条件は起動時の `GOAL` env（`runs/<run-id>/goal.txt` に記録）と `loop-config.yml` の
 `goal_template` で与えられる。ループを止めてよいのは、STATE.md の `review_verdict == PASS` かつ
 該当 area のテスト・lint がクリーン かつ実環境 E2E 通過のとき（手順6）。実装者が「できた」と
 思っても、Codex が PASS を出すまで完了にはならない。
+
+**「該当 area」は、チケットが宣言した area ではなく、実際に変更したパスが属する area 全部。**
+`git status` で変更したパスを見て、`loop-config.yml` の `areas.*.path` に当たるものを
+**すべて**回す。宣言だけで判定すると、宣言外の領域を触ったときに
+**ループは緑・CI は赤**になる（AGT-06 の実害: `area: api` の宣言で `infra/` を変更し、
+`terraform fmt` が CI で落ちた。`terraform validate` は書式を見ないので気づけなかった）。
+どの area にも当たらないパスだけを変更した場合は、その旨を STATE.md に書く。
+
+**検査の仕組みそのもの**（`Makefile` / `loop-config.yml` / `ops/check-*.sh` / `.claude/`）を
+変えたときは、**`make lint && make test` を丸ごと回す**。これらはどの area の `path` にも
+属さないので、area 単位の判定では**自分自身を検査せずに緑にできてしまう**
+（検査を壊す変更ほど検知されない）。回した結果を STATE.md に書く。
 
 ## なぜこの順番か
 採点を実装者と分けることで「完了」が主張ではなく証明に近づく。履歴を残すのは、

@@ -32,7 +32,7 @@ from typing import Any
 import oracledb
 from openai import NotFoundError
 
-from . import demo_targets, rag_ledger, rag_metadata
+from . import demo_targets, extract_scan, extract_xlsx, rag_ledger, rag_metadata
 from .db import connect
 from .demo_lease import DemoLease, require_lease_for
 from .genai import make_cp_client, make_inference_client, resolve_project_ocid
@@ -53,7 +53,9 @@ from .settings import get_settings
 
 logger = logging.getLogger("jetuse.rag")
 
-ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md"}
+# 画像(png/jpg/jpeg)は OCR を通して取り込む(PREP-03)。画面側の選択肢
+# `packages/web/src/pages/rag/uploadFormats.ts` と揃える(狭いと画面から試せない)。
+ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md", extract_xlsx.XLSX_EXT} | extract_scan.IMAGE_EXTENSIONS
 MAX_BYTES = 20 * 1024 * 1024
 MAX_FILENAME_CHARS = 400  # rag_files.filename / ledger.filename は VARCHAR2(400 CHAR)
 
@@ -135,15 +137,21 @@ def list_files(owner: str) -> list[dict[str, Any]]:
 
 
 def _fit(text: str, limit: int = 400) -> str:
-    """VARCHAR2(400) へ収まる長さに**バイト境界で**切る。
+    """VARCHAR2(400) へ収まる長さに**バイト境界で**切る(拡張子は残す)。
 
     文字数で切ると、日本語ファイル名(1 文字 3 バイト)は BYTE セマンティクスの列で
     ORA-12899 になる(実運用で長い名前を上げた瞬間にアップロードが落ちる)。
+    末尾だけを落とすと**拡張子が消える**ので、形式で分岐する判定(xlsx を抽出へ回すか —
+    `extract_xlsx.is_xlsx`)が長い名前で誤る。拡張子は残す。
     """
     raw = text.encode("utf-8")
     if len(raw) <= limit:
         return text
-    return raw[:limit].decode("utf-8", errors="ignore")
+    stem, dot, ext = text.rpartition(".")
+    suffix = f".{ext}" if dot and len(ext.encode("utf-8")) <= 16 else ""
+    keep = limit - len(suffix.encode("utf-8"))
+    head = (stem if dot else text).encode("utf-8")[:keep]
+    return head.decode("utf-8", errors="ignore") + suffix
 
 
 def _insert_file_confirmed(owner: str, file_id: str, filename: str,
@@ -542,8 +550,61 @@ def build_attributes(
     return rag_metadata.normalize_attributes({**base, **(attributes or {})})
 
 
+def derived_keys(filename: str, content: bytes) -> set[str]:
+    """この形式で**抽出結果から決まる**属性キー(利用者は指定できない)。
+
+    OCR も抽出も呼ばずに答える(判定に使うのはファイル名とテキスト層の有無だけ)。
+    `add_file` はこれを使って、課金される抽出の**前に**属性の競合を 422 で断る。
+    """
+    if extract_scan.needs_ocr(filename, content):
+        return {"sheet"}          # ページ範囲(`p.1-p.3`)
+    if extract_xlsx.is_xlsx(filename):
+        return {"sheet", "cells"}  # シート名 + セル範囲
+    return set()
+
+
+def prepare_upload(filename: str, content: bytes, *,
+                   ocr_engine: str | None = None) -> tuple[str, bytes, dict[str, str]]:
+    """マネージド Vector Store へ渡す `(ファイル名, 本文, ファイル単位の属性)`(PREP-01)。
+
+    変換するのは 2 つだけ。マネージド側は Office 形式を受け付けない(SPIKE-03: docx は
+    `Unsupported file type`。xlsx も同じであることは PREP-01 の E2E で実測した)ので、
+    抽出したテキストを渡す。
+
+    - **xlsx**: シート名 + セル範囲つきの抽出テキスト(PREP-01)。
+    - **画像 / テキスト層の無い頁を含む PDF**: OCR したページ順のテキスト(PREP-03)。
+      テキスト層の揃った PDF は**素通し**する(従来どおり。OCR を呼ばない = 課金しない)。
+
+    **属性はファイル単位にしかできない**(SPIKE-M1 ①-a: 1 ファイルが複数チャンクに割れても
+    属性は 1 種類)。したがって返す `sheet` / `cells` は「そのファイル全体」を表す値であり、
+    チャンクごとのセル範囲ではない。セル単位の出典が要るなら `adb` バックエンドを使う
+    (この能力差が ADR-0020 の決定内容。1 チャンク = 1 ファイルに割って
+    「セル単位で返る」ように見せる細工はしない)。
+    """
+    if extract_scan.needs_ocr(filename, content):
+        pages = extract_scan.page_texts(filename, content, engine=ocr_engine)
+        text = extract_scan.render_text(pages)
+        if not text:
+            # 空の本文を送らない(送ると「取り込めたのに何も引けない」になる)
+            raise extract_scan.ScanUnsupported(
+                "OCR で本文を抽出できませんでした(白紙 / 判読できない画像)"
+            )
+        return (f"{filename}.txt", text.encode("utf-8"),
+                extract_scan.file_attributes(pages))
+    if not extract_xlsx.is_xlsx(filename):
+        return filename, content, {}
+    chunks = extract_xlsx.extract(filename, content)
+    if not chunks:
+        raise extract_xlsx.EmptyWorkbook(
+            "シートから本文を抽出できませんでした(空のブック)"
+        )
+    return (f"{filename}.txt", extract_xlsx.render_text(chunks).encode("utf-8"),
+            extract_xlsx.file_attributes(chunks))
+
+
 def add_file(owner: str, filename: str, content: bytes,
              attributes: dict[str, Any] | None = None,
+             ocr_engine: str | None = None,
              *, lease: DemoLease | None = None) -> dict[str, Any]:
     """Files APIへアップロードしVector Storeへ登録(status=processingで返す)。
 
@@ -556,6 +617,13 @@ def add_file(owner: str, filename: str, content: bytes,
     第4位置引数は RAGM-01 の `attributes`(main 側が位置で渡す)。SP2-02 の `lease` は
     **キーワード専用**にしてある — 位置引数のまま両方を並べると
     `add_file(o, n, c, lease)` が DemoLease を attributes として展開して壊れる(review-1 F-002)。
+
+    xlsx は抽出を通してから渡す(PREP-01)。上限超過は `extract_xlsx.ExtractionLimitError`
+    (ルート側で 422)で、こちらも OCI を呼ぶ前に弾く。スキャン PDF・画像は OCR を通してから
+    渡す(PREP-03)。`ocr_engine` は利用者の明示指定(省略時は `extract_scan.DEFAULT_ENGINE`)。
+
+    台帳・原本・sha256 は**元のファイル**のまま。変換するのは送信する本文だけで、送信名の
+    拡張子は台帳の `upload_ext` に持つ(SYNC-02 案 A)。
     """
     owner_key_gate()
     rag_ledger.upload_gate()
@@ -564,6 +632,23 @@ def add_file(owner: str, filename: str, content: bytes,
         raise ValueError(f"ファイル名が長すぎます(最大{MAX_FILENAME_CHARS}文字)")
     # 属性の検証は**あらゆる副作用より前**(予約・demo_targets の記録・OCI 呼び出しの前)。
     # 不正な属性で 422 になるときに、外部資産も台帳行も作らないため(RAGM-01)。
+    # 導出属性との競合も**抽出より前に**弾く。あとで見ると、どうせ 422 になる要求のために
+    # OCR(課金される)を先に走らせてしまう。判定に使う `derived_keys` は OCR を呼ばない(PREP-03)
+    conflicting = sorted(derived_keys(filename, content) & set(attributes or {}))
+    if conflicting:
+        raise rag_metadata.MetadataError(
+            f"この形式では {', '.join(conflicting)} は抽出結果から決まります(指定できません)。"
+            "チャンク単位のセル範囲・頁が要るなら adb バックエンドを使ってください"
+        )
+    # 抽出の位置は**課金されるかどうか**で分ける(SYNC-02)。
+    #  - OCR を要さない変換(xlsx / 素通し)は無料で副作用も無い。予約より**前**に済ませて、
+    #    壊れたブックを DB も OCI も触らずに 422 で弾く(PREP-01 の受け入れ条件)。
+    #  - OCR は課金される。quota 満杯で 422 になる要求のために払わないよう、予約の**後**に回す。
+    needs_ocr = extract_scan.needs_ocr(filename, content)
+    upload_name, upload_bytes, derived = (
+        (filename, content, {}) if needs_ocr
+        else prepare_upload(filename, content, ocr_engine=ocr_engine)
+    )
     attrs = build_attributes(filename, content, attributes)
     if is_demo_namespace(owner):
         limit = get_settings().demo_max_rag_files
@@ -585,6 +670,31 @@ def add_file(owner: str, filename: str, content: bytes,
     # 予約(quota gate)を全外部作成より先に行う(M001 — quota 満杯で 422 になる前に
     # 外部 Vector Store を作ってテナンシ枠を空消費しない)。File 作成前の失敗は予約を戻す。
     rid = rag_ledger.reserve(owner, filename, ext)
+    if needs_ocr:
+        try:
+            upload_name, upload_bytes, derived = prepare_upload(filename, content,
+                                                               ocr_engine=ocr_engine)
+        except Exception:
+            # 外部資産はまだ無い(store も原本も作っていない)ので予約は戻して良い
+            rag_ledger.release(rid)
+            raise
+    conflicting = sorted(set(derived) & set(attributes or {}))
+    if conflicting:  # 念のための二重の網(上の derived_keys で弾けているはず)
+        # 導出値を利用者指定で上書きさせない。上書きを許すと、複数シートのブックに特定の
+        # セル範囲を付けて「マネージドでもセル単位で返る」ように見せられてしまう
+        # (ADR-0020 が隠すなと決めた能力差そのもの)。黙って捨てずに 422 で断る
+        rag_ledger.release(rid)
+        raise rag_metadata.MetadataError(
+            f"この形式では {', '.join(conflicting)} は抽出結果から決まります(指定できません)。"
+            "チャンク単位のセル範囲・頁が要るなら adb バックエンドを使ってください"
+        )
+    if derived:
+        attrs = build_attributes(filename, content, {**(attributes or {}), **derived})
+    upload_ext = normalize_ext(upload_name)
+    if upload_ext != ext:
+        # 送信名は原本と拡張子が違う(xlsx / スキャン PDF → .txt)。**外部 File を作る前に**
+        # 台帳へ記録しないと、set_external 前に落ちた行を reconcile が照合できない
+        rag_ledger.set_upload_ext(rid, upload_ext)
     try:
         vs_id = ensure_store(owner, lease=lease)
     except Exception as e:
@@ -611,7 +721,8 @@ def add_file(owner: str, filename: str, content: bytes,
         rag_ledger.release(rid)
         raise StoreNotReadyError(f"original put failed (retryable): {e}") from e
     dp = make_inference_client(with_project=True)
-    f = dp.files.create(file=(file_key(owner, rid, ext), content), purpose="assistants")
+    f = dp.files.create(file=(file_key(owner, rid, upload_ext), upload_bytes),
+                        purpose="assistants")
     rag_ledger.set_external(rid, f.id)
     # CP completed直後はDP側にstoreが未伝播で404になる(SPIKE-03)。デモは箱ごとに新規store
     # なので初回uploadが通常経路 — 有界リトライで吸収する(SP1-03 REV-005)。
@@ -659,7 +770,8 @@ def add_file(owner: str, filename: str, content: bytes,
                 demo_targets.record_target(owner, "opensearch", {
                     "endpoint": get_settings().opensearch_endpoint,
                 })
-            rag_opensearch.ingest(owner, rid, filename, content, lease=lease)
+            rag_opensearch.ingest(owner, rid, filename, content, lease=lease,
+                                  ocr_engine=ocr_engine)
     except Exception:
         logger.exception("opensearch ingest failed (ignored)")
     # ADB自前索引(RAGM-02)にも取り込む(表がある環境のみ)。
@@ -672,7 +784,12 @@ def add_file(owner: str, filename: str, content: bytes,
 
         state = rag_adb.availability()
         if state == rag_adb.READY:
-            rag_adb.ingest(owner, rid, filename, content)
+            # `kind` は**両バックエンドで同じ値**にする。ここを既定値のままにすると、
+            # 同じファイルがマネージド側では kind='spec'、ADB 側では kind='doc' になり、
+            # 分類での絞り込みがバックエンドを変えた瞬間に結果を変える(review-2 PREP01-004)。
+            # 値は rag_metadata が文字列に限っているので、ここで変換はしない(RAGM-04)
+            rag_adb.ingest(owner, rid, filename, content, ocr_engine=ocr_engine,
+                           **({"kind": attrs["kind"]} if "kind" in attrs else {}))
         elif state == rag_adb.UNAVAILABLE:
             # 「表が無い(未導入)」と「今つながらない」を区別する。後者を黙って飛ばすと、
             # 復旧後もそのファイルだけ取り込まれないまま誰も気づけない。
@@ -712,7 +829,6 @@ def refresh_statuses(owner: str, files: list[dict[str, Any]]) -> list[dict[str, 
 # Vector Storeのファイル状態をバックエンド共通の語彙へ
 _VS_MAP = {"completed": "indexed", "processing": "pending", "failed": "error"}
 
-
 def resolve_citation_filenames(owner: str, citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """引用のファイル名を、こちらで保持する元のファイル名に置換する。
 
@@ -742,7 +858,11 @@ def attach_backend_status(owner: str, files: list[dict[str, Any]]) -> list[dict[
 
     backends[*] = "indexed" | "pending" | "error" | "disabled"
     - vector_store: Files API/Vector Storeの処理状態
-    - select_ai: ベクトル索引($VECTAB)に存在するか(refresh_rate間隔で同期=反映が遅い)
+    - select_ai: ベクトル索引($VECTAB)に存在するか(refresh_rate間隔で同期=反映が遅い)。
+      **原本をDB側(DBMS_CLOUD_AI)が読む方式**なので、アプリ側の抽出(PREP-01)を通らない。
+      それでも xlsx は DB 側パイプライン(Oracle Text)がテキスト化して取り込む
+      (PREP-02 で実測。docs/verification/PREP-02.md)。よって形式では分岐せず、
+      **索引に在るかどうかだけ**で決める。未反映は同期待ちの "pending"
     - opensearch: indexに存在するか(取り込みは同期=即時)。無効時は disabled
     - adb: 自前チャンク表に存在するか(取り込みは同期=即時)。取り込みに失敗した/本文を
       取り出せなかったファイルは error。表が無い環境は disabled(RAGM-02)

@@ -1,0 +1,28 @@
+# スタックが作成した Policy（制限ユーザーの apply で作成。enable_runtime_policy=true）
+# 取得日 2026-07-30 / prefix=jetuse3 / enable_semantic_store=true / enable_project_autocreate=true / enable_hosted_agents=true
+
+## jetuse3-runtime-policy  (24 statements)
+Allow dynamic-group <DG_NAME> to use generative-ai-family in compartment id <COMPARTMENT_OCID>
+Allow dynamic-group <DG_NAME> to manage generative-ai-vector-store in compartment id <COMPARTMENT_OCID>
+Allow dynamic-group <DG_NAME> to manage generative-ai-vectorstore-file in compartment id <COMPARTMENT_OCID>
+Allow dynamic-group <DG_NAME> to manage generative-ai-file in compartment id <COMPARTMENT_OCID>
+Allow dynamic-group <DG_NAME> to manage generative-ai-response in compartment id <COMPARTMENT_OCID>
+Allow dynamic-group <DG_NAME> to manage generative-ai-conversation in compartment id <COMPARTMENT_OCID>
+Allow dynamic-group <DG_NAME> to use autonomous-database-family in compartment id <COMPARTMENT_OCID>
+Allow dynamic-group <DG_NAME> to manage objects in compartment id <COMPARTMENT_OCID>
+Allow dynamic-group <DG_NAME> to read buckets in compartment id <COMPARTMENT_OCID>
+Allow dynamic-group <DG_NAME> to manage ai-service-speech-family in compartment id <COMPARTMENT_OCID>
+Allow dynamic-group <DG_NAME> to use ai-service-document-family in compartment id <COMPARTMENT_OCID>
+Allow dynamic-group <DG_NAME> to use ai-service-language-family in compartment id <COMPARTMENT_OCID>
+Allow dynamic-group <DG_NAME> to read tag-namespaces in compartment id <COMPARTMENT_OCID>
+Allow dynamic-group <DG_NAME> to use log-content in compartment id <COMPARTMENT_OCID>
+Allow dynamic-group <DG_NAME> to use metrics in compartment id <COMPARTMENT_OCID>
+Allow dynamic-group <DG_NAME> to read secret-family in compartment id <COMPARTMENT_OCID>
+Allow any-user to use functions-family in compartment id <COMPARTMENT_OCID> where ALL {request.principal.type = 'ApiGateway', request.resource.compartment.id = '<COMPARTMENT_OCID>'}
+Allow dynamic-group <DG_NAME> to manage generative-ai-project in compartment id <COMPARTMENT_OCID>
+Allow dynamic-group <DG_NAME> to read repos in compartment id <COMPARTMENT_OCID>
+Allow dynamic-group <DG_NAME> to read vss-family in compartment id <COMPARTMENT_OCID>
+Allow dynamic-group <DG_NAME> to read objects in compartment id <COMPARTMENT_OCID>
+Allow dynamic-group <DG_NAME> to use database-tools-family in compartment id <COMPARTMENT_OCID>
+Allow dynamic-group <DG_NAME> to read database-family in compartment id <COMPARTMENT_OCID>
+Allow dynamic-group <DG_NAME> to read autonomous-database-family in compartment id <COMPARTMENT_OCID>

@@ -33,7 +33,7 @@ import agent_env  # noqa: F401  (import 副作用が目的)
 from jetuse_shared.sqlguard import enforce_sql_boundary
 from jetuse_shared.sqlguard import sanitize_sql as _sanitize
 
-REGION = os.environ.get("OCI_REGION", "ap-osaka-1")
+REGION = os.environ.get("OCI_REGION", "us-chicago-1")
 SEMSTORE = os.environ.get("SEMSTORE_OCID", "")
 WALLET_CACHE = "/tmp/adb_wallet"
 

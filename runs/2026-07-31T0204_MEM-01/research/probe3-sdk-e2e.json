@@ -1,0 +1,208 @@
+{
+  "schema": "JETUSE_MEM01_EFC2EA",
+  "auth_mode": "config_file",
+  "llm_model": "meta.llama-3.3-70b-instruct",
+  "embed_model": "cohere.embed-multilingual-v3.0",
+  "after_init": {
+    "objects": [
+      "INDEX: MEM01_RECORD_CHUNKS_EMBEDDING_VEC_I",
+      "INDEX: SYS_C0039934",
+      "INDEX: SYS_C0039984",
+      "INDEX: SYS_C0039991",
+      "INDEX: SYS_C0039994",
+      "INDEX: SYS_C0039999",
+      "INDEX: SYS_C0040005",
+      "INDEX: SYS_C0040012",
+      "INDEX: SYS_IL0000150020C00005$$",
+      "INDEX: SYS_IL0000150020C00006$$",
+      "INDEX: SYS_IL0000150027C00005$$",
+      "INDEX: SYS_IL0000150027C00006$$",
+      "INDEX: SYS_IL0000150027C00007$$",
+      "INDEX: SYS_IL0000150035C00008$$",
+      "INDEX: SYS_IL0000150035C00010$$",
+      "INDEX: SYS_IL0000150042C00008$$",
+      "INDEX: SYS_IL0000150042C00010$$",
+      "INDEX: SYS_IL0000150049C00006$$",
+      "INDEX: SYS_IL0000150049C00011$$",
+      "INDEX: SYS_IL0000150062C00007$$",
+      "INDEX: SYS_IL0000150071C00005$$",
+      "INDEX: VECTOR$MEM01_RECORD_CHUNKS_EMBEDDING_VEC_I$150049_150056_0$HNSW_ROWID_VID_IDX",
+      "INDEX: VECTOR$MEM01_RECORD_CHUNKS_EMBEDDING_VEC_I$150049_150056_0$HNSW_SHARED_JOURNAL_IDX",
+      "INDEX PARTITION: SYS_IL0000150062C00007$$",
+      "INDEX PARTITION: VECTOR$MEM01_RECORD_CHUNKS_EMBEDDING_VEC_I$150049_150056_0$HNSW_SHARED_JOURNAL_IDX",
+      "JOB: MEM01_PURGE_EXPIRED_RECORDS_J",
+      "LOB: SYS_LOB0000150020C00005$$",
+      "LOB: SYS_LOB0000150020C00006$$",
+      "LOB: SYS_LOB0000150027C00005$$",
+      "LOB: SYS_LOB0000150027C00006$$",
+      "LOB: SYS_LOB0000150027C00007$$",
+      "LOB: SYS_LOB0000150035C00008$$",
+      "LOB: SYS_LOB0000150035C00010$$",
+      "LOB: SYS_LOB0000150042C00008$$",
+      "LOB: SYS_LOB0000150042C00010$$",
+      "LOB: SYS_LOB0000150049C00006$$",
+      "LOB: SYS_LOB0000150049C00011$$",
+      "LOB: SYS_LOB0000150062C00007$$",
+      "LOB: SYS_LOB0000150071C00005$$",
+      "LOB PARTITION: SYS_LOB0000150062C00007$$",
+      "SEQUENCE: ISEQ$$_150020",
+      "SEQUENCE: ISEQ$$_150035",
+      "SEQUENCE: ISEQ$$_150042",
+      "SEQUENCE: ISEQ$$_150049",
+      "TABLE: MEM01_ACTOR_PROFILE",
+      "TABLE: MEM01_MEMORY",
+      "TABLE: MEM01_MESSAGE",
+      "TABLE: MEM01_ORACLEAGENTMEMORY_SCHEMA_META",
+      "TABLE: MEM01_RECORD_CHUNKS",
+      "TABLE: MEM01_THREAD",
+      "TABLE: RAGM02_OWNER_MARKER",
+      "TABLE: VECTOR$MEM01_RECORD_CHUNKS_EMBEDDING_VEC_I$150049_150056_0$HNSW_CHECKPOINTS",
+      "TABLE: VECTOR$MEM01_RECORD_CHUNKS_EMBEDDING_VEC_I$150049_150056_0$HNSW_ROWID_VID_MAP",
+      "TABLE: VECTOR$MEM01_RECORD_CHUNKS_EMBEDDING_VEC_I$150049_150056_0$HNSW_SHARED_JOURNAL_CHANGE_LOG",
+      "TABLE PARTITION: VECTOR$MEM01_RECORD_CHUNKS_EMBEDDING_VEC_I$150049_150056_0$HNSW_SHARED_JOURNAL_CHANGE_LOG"
+    ],
+    "scheduler_jobs": [
+      [
+        "MEM01_PURGE_EXPIRED_RECORDS_J",
+        "FREQ=DAILY;INTERVAL=1",
+        "SCHEDULED"
+      ]
+    ],
+    "columns": {
+      "MEM01_ACTOR_PROFILE": [
+        "ACTOR_ID:VARCHAR2",
+        "ACTOR_TYPE:VARCHAR2",
+        "SPACE_ID:VARCHAR2",
+        "ORDER_SEQ:NUMBER",
+        "INFORMATION:CLOB",
+        "METADATA:JSON",
+        "CREATED_AT:TIMESTAMP(6) WITH TIME ZONE"
+      ],
+      "MEM01_MEMORY": [
+        "RECORD_ID:VARCHAR2",
+        "ORDER_SEQ:NUMBER",
+        "THREAD_ID:VARCHAR2",
+        "USER_ID:VARCHAR2",
+        "AGENT_ID:VARCHAR2",
+        "SPACE_ID:VARCHAR2",
+        "MEMORY_TYPE:VARCHAR2",
+        "CONTENT:CLOB",
+        "TIMESTAMP:VARCHAR2",
+        "METADATA:JSON",
+        "EXPIRES_AT:TIMESTAMP(6) WITH TIME ZONE",
+        "CREATED_AT:TIMESTAMP(6) WITH TIME ZONE"
+      ],
+      "MEM01_MESSAGE": [
+        "RECORD_ID:VARCHAR2",
+        "ORDER_SEQ:NUMBER",
+        "THREAD_ID:VARCHAR2",
+        "USER_ID:VARCHAR2",
+        "AGENT_ID:VARCHAR2",
+        "SPACE_ID:VARCHAR2",
+        "MESSAGE_ROLE:VARCHAR2",
+        "CONTENT:CLOB",
+        "TIMESTAMP:VARCHAR2",
+        "METADATA:JSON",
+        "EXPIRES_AT:TIMESTAMP(6) WITH TIME ZONE",
+        "CREATED_AT:TIMESTAMP(6) WITH TIME ZONE"
+      ],
+      "MEM01_ORACLEAGENTMEMORY_SCHEMA_META": [
+        "METADATA_KEY:VARCHAR2",
+        "METADATA_VALUE:VARCHAR2",
+        "UPDATED_AT:TIMESTAMP(6) WITH TIME ZONE"
+      ],
+      "MEM01_RECORD_CHUNKS": [
+        "CHUNK_ID:NUMBER",
+        "SOURCE_ID:VARCHAR2",
+        "SOURCE_RECORD_TYPE:VARCHAR2",
+        "SOURCE_EMB_COLUMN:VARCHAR2",
+        "CHUNK_SEQ:NUMBER",
+        "CHUNK_TEXT:CLOB",
+        "THREAD_ID:VARCHAR2",
+        "USER_ID:VARCHAR2",
+        "AGENT_ID:VARCHAR2",
+        "SPACE_ID:VARCHAR2",
+        "EMBEDDING:VECTOR"
+      ],
+      "MEM01_THREAD": [
+        "RECORD_ID:VARCHAR2",
+        "USER_ID:VARCHAR2",
+        "AGENT_ID:VARCHAR2",
+        "SPACE_ID:VARCHAR2",
+        "METADATA:JSON",
+        "RUNTIME_CONFIG:JSON",
+        "RUNTIME_STATE:JSON",
+        "CREATED_AT:TIMESTAMP(6) WITH TIME ZONE"
+      ]
+    }
+  },
+  "counts_after_thread_a": {
+    "MEM01_ACTOR_PROFILE": 0,
+    "MEM01_MEMORY": 3,
+    "MEM01_MESSAGE": 4,
+    "MEM01_ORACLEAGENTMEMORY_SCHEMA_META": 4,
+    "MEM01_RECORD_CHUNKS": 7,
+    "MEM01_THREAD": 1
+  },
+  "recall_user_scope": [
+    {
+      "content": "User prefers reports in bullet points",
+      "thread_id": "mem01-thread-a",
+      "user_id": "spike-user-a",
+      "record_type": "preference",
+      "id": "32584d13-d850-425a-8b4b-3c3999cd4d69"
+    },
+    {
+      "content": "User needs to decide on report summary method",
+      "thread_id": "mem01-thread-b",
+      "user_id": "spike-user-a",
+      "record_type": "memory",
+      "id": "88b3239c-1ce6-4dbc-9da3-2882ae11992a"
+    },
+    {
+      "content": "User prefers coffee in the morning",
+      "thread_id": "mem01-thread-a",
+      "user_id": "spike-user-a",
+      "record_type": "preference",
+      "id": "7e271821-4fdc-45e0-8efa-4681cc932149"
+    },
+    {
+      "content": "User is in charge of data infrastructure",
+      "thread_id": "mem01-thread-a",
+      "user_id": "spike-user-a",
+      "record_type": "fact",
+      "id": "9bcfe094-d83c-44ad-accf-6ddcff2e3087"
+    }
+  ],
+  "context_card_from_thread_b": {
+    "default": {
+      "includes_thread_a_memory": false,
+      "text": ""
+    },
+    "widened": {
+      "includes_thread_a_memory": false,
+      "text": ""
+    }
+  },
+  "recall_other_user": [],
+  "delete_threads": {
+    "before": {
+      "MEM01_ACTOR_PROFILE": 0,
+      "MEM01_MEMORY": 4,
+      "MEM01_MESSAGE": 5,
+      "MEM01_ORACLEAGENTMEMORY_SCHEMA_META": 4,
+      "MEM01_RECORD_CHUNKS": 9,
+      "MEM01_THREAD": 2
+    },
+    "after": {
+      "MEM01_ACTOR_PROFILE": 0,
+      "MEM01_MEMORY": 0,
+      "MEM01_MESSAGE": 0,
+      "MEM01_ORACLEAGENTMEMORY_SCHEMA_META": 4,
+      "MEM01_RECORD_CHUNKS": 0,
+      "MEM01_THREAD": 0
+    }
+  },
+  "recall_after_delete": [],
+  "failures": []
+}

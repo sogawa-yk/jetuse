@@ -16,7 +16,7 @@ from langgraph.graph import END, StateGraph
 from oci_genai_auth import OciResourcePrincipalAuth, OciUserPrincipalAuth
 from pydantic import BaseModel
 
-REGION = os.environ.get("OCI_REGION", "ap-osaka-1")
+REGION = os.environ.get("OCI_REGION", "us-chicago-1")
 COMPARTMENT = os.environ["COMPARTMENT_OCID"]
 MODEL = "openai.gpt-oss-120b"
 

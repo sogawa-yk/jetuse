@@ -108,6 +108,63 @@ def test_other_service_error_maps_to_generic_tts_error(monkeypatch):
         tts.synthesize("こんにちは", tts.DEFAULT_VOICE)
 
 
+def test_falls_back_to_next_region_on_server_error(monkeypatch):
+    """2026-08-03 実機: デプロイリージョン(シカゴ)の TTS が 500
+    "Connection refused: speech-tts-engine-service..." を返す一方、Phoenix では合成できていた。
+
+    5xx を打ち切りにしていたため、_resolved_region を持たない Functions プロセスは
+    シカゴで諦めて Phoenix に到達せず、/api/tts が常に 503 になっていた。
+    """
+    monkeypatch.setenv("OCI_REGION", "us-chicago-1")
+    monkeypatch.delenv("TTS_REGION", raising=False)
+    get_settings.cache_clear()
+    down = mock.Mock()
+    down.synthesize_speech.side_effect = _service_error(500, "InternalError")
+    alive = mock.Mock()
+    alive.synthesize_speech.return_value = mock.Mock(data=mock.Mock(content=b"mp3"))
+    monkeypatch.setattr(
+        tts, "_speech_client", lambda r: down if r == "us-chicago-1" else alive
+    )
+    assert tts.synthesize("こんにちは", tts.DEFAULT_VOICE) == b"mp3"
+    assert tts.last_result()["region"] == "us-phoenix-1"
+
+
+def test_client_error_other_than_availability_does_not_retry_other_regions(monkeypatch):
+    """400 はリクエスト自体の誤りなので、リージョンを変えても直らない。
+    無駄な再試行で遅くしないよう、最初の候補で打ち切ること。"""
+    monkeypatch.setenv("OCI_REGION", "us-chicago-1")
+    monkeypatch.delenv("TTS_REGION", raising=False)
+    get_settings.cache_clear()
+    tried: list[str] = []
+
+    def client(region):
+        tried.append(region)
+        c = mock.Mock()
+        c.synthesize_speech.side_effect = _service_error(400, "InvalidParameter")
+        return c
+
+    monkeypatch.setattr(tts, "_speech_client", client)
+    with pytest.raises(tts.TtsError):
+        tts.synthesize("こんにちは", tts.DEFAULT_VOICE)
+    assert tried == ["us-chicago-1"]
+
+
+def test_all_regions_failing_reports_last_status_not_only_subscription(monkeypatch):
+    """全滅時のヒントに直近の HTTP を載せる。5xx の一時障害なのに
+    「未購読の可能性」だけを出すと、購読設定を疑わせて切り分けが遠回りになる。"""
+    monkeypatch.setenv("OCI_REGION", "us-chicago-1")
+    monkeypatch.delenv("TTS_REGION", raising=False)
+    get_settings.cache_clear()
+    fake_client = mock.Mock()
+    fake_client.synthesize_speech.side_effect = _service_error(500, "InternalError")
+    monkeypatch.setattr(tts, "_speech_client", lambda r: fake_client)
+    with pytest.raises(tts.TtsError) as ei:
+        tts.synthesize("こんにちは", tts.DEFAULT_VOICE)
+    msg = str(ei.value)
+    assert "500" in msg and "InternalError" in msg
+    assert "一時障害" in msg
+
+
 def test_auth_mode_guard_runtime_error_maps_to_tts_error(monkeypatch):
     """PORT-02レビュー指摘: _speech_client()がAUTH_MODEガード(oci_auth.load_local_oci_config)
     由来のRuntimeErrorを投げても、TtsErrorに統一されFastAPI/Functions双方で同じ縮退になる

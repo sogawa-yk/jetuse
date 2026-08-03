@@ -41,6 +41,9 @@ from jetuse_core import (  # noqa: F401
     conversations as conv_repo,
 )
 from jetuse_core import (  # noqa: F401
+    http_tools as http_tools_repo,
+)
+from jetuse_core import (  # noqa: F401
     mcp_servers as mcp_repo,
 )
 from jetuse_core import (  # noqa: F401

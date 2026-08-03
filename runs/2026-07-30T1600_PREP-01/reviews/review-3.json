@@ -1,0 +1,79 @@
+{
+  "review_n": 3,
+  "timestamp": "2026-07-30T16:59:06+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-3.input.diff",
+  "raw_output_path": "reviews/review-3.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "主要な ADB／Vector Store 経路は4本の実環境 E2E で裏づけられています。一方、疎な行番号で走査上限を迂回して worker を長時間占有できる blocker と、文字数上限・エラー処理・後方互換に関する問題が残っています。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 4,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "PREP01-008",
+      "severity": "blocker",
+      "file": "packages/api/jetuse_core/extract_xlsx.py",
+      "line": 258,
+      "issue": "`_rows()` は空行を除外し、`_Budget.spend_row()` は非空行が yield された後にしか呼ばれません。openpyxl の read-only 反復は欠落した行番号を空行で補うため、極端に大きい行番号を持つ小容量の sheet XML では、`MAX_ROWS` を一切消費せず膨大な空行を反復し続けます。認証済みの単一リクエストで API worker を長時間占有でき、走査上限による保護が成立していません。",
+      "suggestion": "非空行ではなく `iter_rows()` が返す全行、または前後の実行番号の差を走査予算へ計上し、上限到達時点で停止してください。非常に大きい行番号を持つ疎なブックが `limit=rows` で速やかに拒否されるテストを追加してください。"
+    },
+    {
+      "id": "PREP01-009",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/extract_xlsx.py",
+      "line": 296,
+      "issue": "後続行が左側へ広がると、`min_col` を先に更新して既存 buffer のサイズを再計算します。再描画した既存 buffer だけで上限を超えた場合も、行310の分割処理は更新後の `min_col` でその buffer を出力するため、`MAX_CHUNK_CHARS` を超えたチャンクが生成されます。保存本文と埋め込み対象を揃えるという上限の目的が破られます。",
+      "suggestion": "左端を広げた再計算結果が上限を超える場合は、旧 `min_col` のまま既存 buffer を確定してから新しい行を開始するか、buffer を再分割してください。上限付近まで C 列だけに値を置き、次行が A 列へ広がるケースを追加し、全チャンク長を検証してください。"
+    },
+    {
+      "id": "PREP01-010",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag_metadata.py",
+      "line": 85,
+      "issue": "`kind` の上限を `len(value)` で検査していますが、migration の `VARCHAR2(32)` は長さセマンティクスを明示していません。BYTE セマンティクスの環境では、例えば日本語11文字は検証を通過しても32バイトを超え、Vector Store だけ成功した後に ADB の INSERT が ORA-12899 で失敗します。防ごうとしているバックエンド間不整合が残ります。",
+      "suggestion": "UTF-8バイト長を32以下に制限するか、列を `VARCHAR2(32 CHAR)` など意図したセマンティクスへ明示的に変更してください。マルチバイト文字の境界テストも追加してください。"
+    },
+    {
+      "id": "PREP01-011",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag_metadata.py",
+      "line": 85,
+      "issue": "従来の公開属性契約は各キーに string／number／boolean のスカラーを許可していましたが、新しい特殊判定は `kind=0` や `kind=false` を全形式で422にします。xlsx だけでなく既存の pdf／txt／md クライアントにも適用される、バージョン付けされていない後方互換性破壊です。",
+      "suggestion": "既存スカラー入力を維持して ADB 用に明示的な変換を行うか、破壊的な型制約を導入するなら API バージョンまたは移行期間を設けてください。少なくとも従来許可されていた数値・真偽値の回帰テストを追加してください。"
+    },
+    {
+      "id": "PREP01-012",
+      "severity": "major",
+      "file": "packages/api/service/routes/rag.py",
+      "line": 124,
+      "issue": "新しい `POST /api/extract` は `.pdf` も受け付けて `rag_adb.chunk_units()` へ渡しますが、`PdfReader` の生成・ページ反復・抽出で起きる不正PDF由来の例外は `UnsupportedDocument` に変換されません。`_rag_call()` にも該当する捕捉がないため、壊れたPDFという利用者入力が500になります。",
+      "suggestion": "pypdf の読み取り・抽出例外を `UnsupportedDocument` に正規化して422へ変換し、非PDFバイト、壊れたxref、ページ抽出失敗のルートテストを追加してください。"
+    },
+    {
+      "id": "PREP01-013",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/rag.py",
+      "line": 506,
+      "issue": "Select AI の対応判定は台帳から取得した `filename` の末尾を見ますが、台帳保存時には `_fit()` が400バイトでファイル名の末尾を切ります。400バイトを超える日本語名の `.pdf`／`.txt`／`.md` は拡張子を失い、同期待ちであるにもかかわらず `select_ai=\"error\"` と誤表示されます。",
+      "suggestion": "正規化時に拡張子を保持する、対応形式を別列へ保存する、または切り詰め前に算出した形式を状態判定へ使用してください。長いマルチバイトファイル名のテストも追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "sufficient",
+    "notes": "`runs/2026-07-30T1600_PREP-01/e2e/scenario-0.md`〜`scenario-3.md`、`upload.md`、`summary.md`、`SKIPPED.md` を確認しました。scenario-0 は抽出・非保存・上限422、scenario-1 は実ADBと実LLMでチャンク単位のセル出典、scenario-2 は実Vector Storeで変換後アップロード・ファイル単位属性・素のxlsx拒否、scenario-3 は版フィルタを裏づけており、最低2本を超えて主要要件を網羅しています。Select AI、OpenSearch、配備済みLB／認証経路の未実施理由は記載されていますが、境界条件の blocker／major はこの証跡では検出できません。また、検証資源の teardown 実施証跡は添付されていません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲット URL が提供されていないため、指示どおりブラウザ E2E は実施していません。"
+    }
+  }
+}

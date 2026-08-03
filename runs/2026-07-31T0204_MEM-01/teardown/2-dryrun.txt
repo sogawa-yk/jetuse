@@ -1,0 +1,5 @@
+  接続先確認: jetuse-loop-adb / compartment=dev（承認済み）/ DB_NAME=G912A29DFC5DE89_JETUSELOOP2 / DSN=jetuseloop2_low
+  台帳と一致（USER_ID / 作成時刻 / マーカーの 3 点）
+  削除対象のオブジェクト: [('INDEX', 10), ('INDEX PARTITION', 2), ('JOB', 1), ('SEQUENCE', 4), ('TABLE', 10), ('TABLE PARTITION', 1)]
+
+dry-run。実削除は --yes を付けて実行する（DROP USER JETUSE_MEM01_EFC2EA CASCADE）

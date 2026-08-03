@@ -30,7 +30,7 @@
 
 - **開発モデル（2026-07-26〜）**: **ローカル(macOS)が主開発環境**（実装・単体は `make`。OCI認証は config_file＝`~/.oci/config`）。**OCI compute インスタンス `dev`（VM.Standard.E6.Flex / OL9.7 / ap-osaka-1・ブートボリューム150GB）は長時間タスクの無人実行機**（`dispatch-remote` で `claude -p` を委譲・`AUTH_MODE=instance_principal`）。移動でローカルが切れても委譲実行は継続する。コードは OneDrive 配下に置かない（`.git` 破損回避）。
 - コンパートメント: `jetuse-proto`（OCIDは `.env` の `COMPARTMENT_OCID`）。計画書の `jetuse-spike` は存在しないため代替使用（ADR-0001）。
-- ツール: Python 3.13（ローカル macOS・venv: `.venv`。2026-07-28 に 3.12→3.13 へ更新。インスタンス `dev` は 3.12 のまま）/ Node 22 / Terraform 1.15 / podman 5.6 / OCI CLI 3.85。
+- ツール: Python 3.13（ローカル macOS・venv: `.venv`。2026-07-28 に 3.12→3.13 へ更新。インスタンス `dev` は 3.12 のまま）/ Node 22 / Terraform 1.15（2026-08-03 に 1.6.6→1.15.8 へ更新。**1.7 未満だと `terraform test` の `mock_provider` が動かず `make lint` が落ちる**）/ podman 5.6 / OCI CLI 3.85。
 - **大阪リージョン（ap-osaka-1）はOpenAI互換 agentic API フル対応**: ベースURL `https://inference.generativeai.ap-osaka-1.oci.oraclecloud.com/openai/v1` 配下に Responses / Conversations / Files / Vector Stores / File Search / Code Interpreter。
 - 認証は IAM署名（`oci-genai-auth` パッケージでopenai-pythonに署名注入）を採用。
 - 大阪のオンデマンドモデル: gpt-oss-120b/20b, command-a-03-2025, command-a-reasoning/vision, gemini-2.5-pro/flash, llama-3.3-70b 等。**Grok系・Llama 4系は大阪不可**（ADR-0001）。
@@ -69,6 +69,6 @@ ops/           # 運用スクリプト（dev-env-up/down・deploy・sync-main-to
   `LOOP_TASK` が無いセッションでは hooks は完全 no-op（通常開発に影響しない）。
 - **毎ターン**: `loop-protocol` の手順（実装→`codex-review`→履歴記録→STATE 更新）を厳守。
   完了ゲート = review_verdict=PASS かつ area の test/lint 緑 かつ実環境 E2E 通過。PASS 後は非 blocker を追わず停止（手順5.5）。
-- **単一の真実源**: 現在状態は `STATE.md`、不変の実行履歴は `runs/<run-id>/`（追記のみ）。
+- **単一の真実源**: 現在状態は `STATE.md`（**ローカル・git 追跡外**。worktree ごとに持ち、コミットしない）、不変の実行履歴は `runs/<run-id>/`（追記のみ）。完了時に `runs/<run-id>/STATE.md` へ写しを残すので、後から状態を辿れる。
 - **自己改善**: 成果物の問題は `loop-doctor` へ（コードでなく「ループの仕組み」を直す）。
 - **人間ゲート**: コミット / PR / push / リリース、および仕組み（スキル・hooks・完了条件・設定）の編集は承認なしに行わない。

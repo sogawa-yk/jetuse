@@ -71,3 +71,18 @@ def test_auth_required_fails_closed_without_oidc_config(monkeypatch):
     get_settings.cache_clear()
     res = client.get("/api/chat/ping", headers={"Authorization": "Bearer dummy"})
     assert res.status_code == 500
+
+
+def test_max_tool_hops_rejects_boolean():
+    """`true` が 1 として通らないこと(AGT-04 review-10)。
+
+    bool は int の派生なので、素の int 宣言だと JSON の真偽値が黙って 1 になる。
+    上限の指定に真偽値が来るのは誤りで、**API 境界で断る**のが
+    `chat.resolve_max_tool_hops` の bool 拒否と揃った挙動。
+    """
+    res = client.post("/api/chat/stream", json={
+        "model": "gpt-oss-120b",
+        "messages": [{"role": "user", "content": "x"}],
+        "agent": True, "max_tool_hops": True,
+    })
+    assert res.status_code == 422

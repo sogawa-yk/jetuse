@@ -7,9 +7,9 @@ import される。`validated()` は service/validators.py 側の純粋関数へ
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
-from jetuse_core import rag_metadata, tts
+from jetuse_core import http_tools, rag_metadata, settings, tts
 
 from .validators import validate_agent_definition, validate_usecase_definition
 
@@ -37,10 +37,40 @@ class ChatRequest(BaseModel):
     rag_filters: dict | None = None
     # エージェントモード(AGT-01)。tool_resultsは承認フローの継続時に使用
     agent: bool = False
+    # AGT-04: エージェントの文書検索(rag_search)のバックエンド。既定は現行と同じ
+    # file_search built-in(出典はファイル単位)。adb はチャンク単位の出典
+    # (シート名・セル範囲)を返す。`rag=true` との併用禁止は据え置き(別タスク)
+    agent_rag_backend: Literal["vector_store", "adb"] = "vector_store"
+    # AGT-04: このターンのツール往復上限。未指定は設定値(AGENT_MAX_TOOL_HOPS)。
+    # 天井を超える値は 422(クランプしない — ADR-0025)
+    # bool は int の派生なので、素の int だと JSON の `true` が 1 として通る。
+    # 上限の指定に真偽値が来るのは誤りなので API 境界で断る(resolve_max_tool_hops の
+    # bool 拒否と挙動を揃える — 片方だけ厳しいと、どちらが正か読めなくなる)
+    max_tool_hops: StrictInt | None = Field(
+        default=None, ge=1, le=settings.AGENT_MAX_TOOL_HOPS_CEILING
+    )
     auto_tools: bool = False
-    tool_results: list[dict] | None = Field(default=None, max_length=24)
+    # AGT-04: 承認往復の継続で送り返すツール結果。ホップ上限の天井まで受ける
+    # (ここが天井より小さいと、上限を上げても承認モードだけ 422 で継続できない)
+    # AGT-05: 文書検索はホップの予算から外れたので、ここを 48 のままにすると
+    # 検索を挟む承認往復が予算判定に届く前に 422 で詰まる(review-2 の指摘)。
+    # **これは予算の上界ではなく要求ボディの安全弁**である —— 1 往復から複数の
+    # function_call が返りうるので、件数はホップ数からは決まらない(AGT-01d からの既存の
+    # 性質で、従来の 48 も上界ではなかった)。検索を別枠にしたぶん枠を広げただけで、
+    # 実際の歯止めは stream_agent 側の 2 つの予算が持つ。
+    tool_results: list[dict] | None = Field(
+        default=None,
+        max_length=(
+            settings.AGENT_MAX_TOOL_HOPS_CEILING + settings.AGENT_MAX_DOC_SEARCHES_CEILING
+        ),
+    )
     enabled_tools: list[str] | None = Field(default=None, max_length=20)  # AGT-01b
     mcp_server_ids: list[str] | None = Field(default=None, max_length=5)  # AGT-02
+    # TOOL-01: 登録済み外部HTTPツールのid。1エージェントに渡せる数はモデルの選択精度の
+    # ためMAX_TOOLS_PER_AGENTで頭打ちにする
+    http_tool_ids: list[str] | None = Field(
+        default=None, max_length=http_tools.MAX_TOOLS_PER_AGENT
+    )
     agent_id: str | None = None  # AGT-03: エージェント定義の適用
     # 画像入力(MM-01): data URI。最終userメッセージに適用(当該ターンのみ・永続化なし)
     # 上限10枚=映像分析のフレーム数を許容(チャットUIは4枚に制限)
@@ -194,9 +224,33 @@ class McpServerCreate(BaseModel):
     auth_token: str | None = Field(default=None, max_length=2000)
 
 
+class HttpToolCreate(BaseModel):
+    """外部HTTPツールの登録(TOOL-01)。
+
+    秘密そのものは受け取らない。Vault に置いた秘密の OCID だけを受け取る
+    (`mcp_servers.auth_secret_ocid` と同じ流儀)。
+    """
+
+    name: str = Field(min_length=3, max_length=48)
+    description: str = Field(min_length=1, max_length=1000)
+    parameters: dict = Field(default_factory=lambda: {"type": "object", "properties": {}})
+    url: str = Field(min_length=12, max_length=1000)
+    method: Literal["GET", "POST"] = "GET"
+    auth_header: str | None = Field(default=None, max_length=63)
+    auth_secret_ocid: str | None = Field(default=None, max_length=255)
+    # TOOL-02: 認証以外に必須ヘッダを持つ相手のための固定ヘッダと、冪等キーのヘッダ名。
+    # 値は平文で保存されるので**秘密を入れない**(秘密は auth_secret_ocid = Vault 参照)。
+    # 冪等キーの値は登録しない。ヘッダ名だけ登録すれば JetUse が呼び出しごとに発行する
+    headers: dict[str, str] | None = Field(default=None)
+    idempotency_header: str | None = Field(default=None, max_length=63)
+
+
 class ToolExecuteRequest(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     arguments: str = Field(default="{}", max_length=10000)
+    # TOOL-01: 承認イベントが返した外部HTTPツールの id。指定時はこの id で解決する
+    # (名前だけだと承認待ちの間に同名で別 URL のツールへ差し替えられる)
+    http_tool_id: str | None = Field(default=None, max_length=36)
 
 
 class ChartSuggestRequest(BaseModel):

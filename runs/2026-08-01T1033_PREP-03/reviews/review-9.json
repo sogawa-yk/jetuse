@@ -1,0 +1,63 @@
+{
+  "review_n": 9,
+  "timestamp": "2026-08-01T12:14:41+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-9.input.diff",
+  "raw_output_path": "reviews/review-9.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "OCR 結線の主要シナリオは十分に検証されていますが、既存の共有 ADB を承認記録なしで起動しており、人間ゲート違反の blocker です。また、大容量のテキスト層付き PDF の後方互換性と、破損画像のエラー分類に問題があります。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 2,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "PREP03-001",
+      "severity": "blocker",
+      "file": "runs/2026-08-01T1033_PREP-03/e2e/deploy.log",
+      "line": 1,
+      "issue": "既存リソースである共有 ADB `jetuse-loop-adb` を STOPPED から起動し、AVAILABLE のまま残しています。既存リソース変更は人間ゲート対象であり、「列挙された既存リソースに含まれない」という証跡内の説明では、本レビュー条件の包括的なゲートを満たしません。起動は課金状態も変更します。",
+      "suggestion": "共有 ADB の起動について人間の承認記録を取得してください。停止の要否も利用中 run を確認したうえで人間に判断してもらい、今後は既存 ADB の start/stop 前に明示的な承認ゲートを設けてください。"
+    },
+    {
+      "id": "PREP03-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag.py",
+      "line": 303,
+      "issue": "すべての PDF について `derived_keys()` が `needs_ocr()` を呼び、その過程で `native_page_texts()` の 200 万文字上限が適用されます。このため、20MB 以下でテキスト層が揃った従来は素通しできた PDF でも、抽出文字数が 200 万文字を超えると 422 になり、「テキスト層付き PDF は従来どおり素通し」という後方互換性を破ります。添付テストにはこの境界条件がありません。",
+      "suggestion": "OCR 要否の判定と、OCR 変換時の抽出文字数制限を分離してください。テキスト層が全ページにある PDF は従来どおり原本を素通しし、MAX_TEXT_CHARS は実際に OCR 済みテキストへ変換する経路にだけ適用する回帰テストを追加してください。"
+    },
+    {
+      "id": "PREP03-003",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/extract_scan.py",
+      "line": 104,
+      "issue": "画像検証が PNG/JPEG の magic bytes だけなので、ヘッダーだけ正しく本文が破損・途中切れの画像を受理します。OCI が一般的な 400 を返すと、この差分では構成ミスとの区別を避けるため `OcrUnavailable`、最終的に 503 となり、利用者の破損入力をサービス障害として誤報します。テストも magic bytes に任意文字列を足しただけの偽画像を正常入力として扱っており、この経路を隠しています。",
+      "suggestion": "OCI 呼び出し前に Pillow、PyMuPDF 等で画像全体をデコード・verifyし、破損画像や拡張子と実形式の不一致を ScanUnsupported（422）にしてください。実際に有効な PNG/JPEG fixtureと、ヘッダーのみ・途中切れ画像の回帰テストを追加してください。"
+    },
+    {
+      "id": "PREP03-004",
+      "severity": "minor",
+      "file": "packages/web/src/i18n/dict.ja.ts",
+      "line": 155,
+      "issue": "画面は画像を含む対応形式全体を「20MBまで」と案内しますが、画像にはサーバ側で約8MBの `MAX_IMAGE_BYTES` が適用されます。8MB超20MB以下の画像を選択できるため、利用者向け表示と実際の制限が一致しません。英語表示も同様です。",
+      "suggestion": "画像は8MBまで、その他のアップロードは20MBまでと日英両方で明記し、表示文言のテストにも各上限を含めてください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "sufficient",
+    "notes": "`runs/2026-08-01T1033_PREP-03/e2e/` のシナリオ0〜4を確認。スキャンPDFの抽出・検索・p.2引用、PNGの検索・p.1引用、テキスト層付きPDFのOCR呼び出し0回、上限/未知エンジン422、VLM明示指定を実 OCI サービスで検証しており、最低2本を超える網羅があります。Resource Principal、Select AI、OpenSearch、5ページ超、非ゴールは SKIPPED.md に理由と再検証条件があります。ただし実施形態はローカル config_file 認証のプロセス内 ASGI であり、配備先 Resource Principal の動作証明ではありません。また deploy.log の共有ADB起動は技術的証跡の十分性とは別に人間ゲート違反です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲット URL が提供されていないため、指示どおりブラウザ E2E は実施していません。"
+    }
+  }
+}
