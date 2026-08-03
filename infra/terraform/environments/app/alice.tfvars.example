@@ -4,10 +4,10 @@
 #   terraform apply -var-file=alice.tfvars -state=alice.tfstate
 
 dev_name = "alice"
-region   = "ap-osaka-1"
+region   = "us-chicago-1"
 
 # OCIRイメージ(不変shaタグ推奨)。ops/dev-env-up.sh は -var で上書きするので雛形では仮値でよい
-api_image_url     = "kix.ocir.io/<namespace>/jetuse-dev-api:dev-alice-<sha>"
+api_image_url     = "ord.ocir.io/<namespace>/jetuse-dev-api:dev-alice-<sha>"  # ord=シカゴ / kix=大阪
 registry_username = "<namespace>/<user>@example.com"
 registry_password = "<OCIR auth token>"
 
@@ -25,10 +25,10 @@ apigw_allow_cidr = "0.0.0.0/0" # 例: "203.0.113.10/32"
 # main.tf が上書きするので不要。
 api_environment = {
   AUTH_MODE           = "resource_principal"
-  OCI_REGION          = "ap-osaka-1"
+  OCI_REGION          = "us-chicago-1"
   COMPARTMENT_OCID    = "ocid1.compartment.oc1..xxxx"
-  PROJECT_OCID        = "ocid1.generativeaiproject.oc1.ap-osaka-1.xxxx"
-  SEMSTORE_OCID       = "ocid1.generativeaisemanticstore.oc1.ap-osaka-1.xxxx"
+  PROJECT_OCID        = "ocid1.generativeaiproject.oc1.us-chicago-1.xxxx" # project はリージョン別
+  SEMSTORE_OCID       = "ocid1.generativeaisemanticstore.oc1.us-chicago-1.xxxx"
   OS_NAMESPACE        = "<namespace>"
   ADB_DSN             = "jetusedev_low"
   ADB_WALLET_BUCKET   = "jetuse-dev-app-data" # 共有ウォレット

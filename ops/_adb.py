@@ -232,7 +232,7 @@ def verify_login(user: str, password: str) -> bool:
 
 
 def acl_hosts() -> list[str]:
-    region = env("OCI_REGION", "ap-osaka-1")
+    region = env("OCI_REGION", "us-chicago-1")
     return [
         f"inference.generativeai.{region}.oci.oraclecloud.com",
         f"generativeai.{region}.oci.oraclecloud.com",

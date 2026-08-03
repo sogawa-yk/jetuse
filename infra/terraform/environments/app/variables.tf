@@ -9,7 +9,8 @@ variable "dev_name" {
 
 variable "region" {
   type    = string
-  default = "ap-osaka-1"
+  # AGT-06: 既定はシカゴ(GenAI のモデル品揃えが厚い)。大阪も値を渡せば使える。
+  default = "us-chicago-1"
 }
 
 variable "shared_state_path" {
@@ -19,7 +20,7 @@ variable "shared_state_path" {
 }
 
 variable "api_image_url" {
-  description = "OCIRイメージ。不変shaタグ推奨。例: kix.ocir.io/<ns>/jetuse-dev-api:dev-alice-9f3c1a2"
+  description = "OCIRイメージ。不変shaタグ推奨。例: ord.ocir.io/<ns>/jetuse-dev-api:dev-alice-9f3c1a2(レジストリはデプロイ先リージョンの OCIR)"
   type        = string
 }
 

@@ -14,9 +14,21 @@ ev() { grep "^$1=" .env | cut -d= -f2- || true; }
 tfv() { grep -E "^  $1 *=" "$TFV" | head -1 | sed -E 's/.*= *"(.*)"/\1/' || true; }
 COMP=$(ev COMPARTMENT_OCID)
 PROJECT=$(ev PROJECT_OCID)
-DOMAIN=https://idcs-1a7db50d84bd47acb4ef51b5bcbdf56f.identity.oraclecloud.com
-REGION=ap-osaka-1
-NS=idqcucnenh88
+# Identity Domain の URL はテナンシ固有なので**リポジトリに埋めない**（規約）。
+# .env の IDENTITY_DOMAIN_URL から読む。未設定なら止める（誤った認証ドメインを掴まないため）。
+DOMAIN="${IDENTITY_DOMAIN_URL:-$(ev IDENTITY_DOMAIN_URL)}"
+[ -n "$DOMAIN" ] || { echo "IDENTITY_DOMAIN_URL を .env に設定してください" >&2; exit 1; }
+. "$(dirname "$0")/_region.sh"
+REGION=$(jetuse_region)
+jetuse_use_cli_region "$REGION"   # oci CLI を必ずこのリージョンへ向ける
+OCIR=$(jetuse_ocir_host "$REGION")
+# OCIR の名前空間はテナンシ固有なので**リポジトリに埋めない**（規約）。
+# Object Storage の名前空間と同じ値なので、.env の OS_NAMESPACE を既定に使う。
+# **.env は source していない**ので、環境変数ではなくファイルから読む。
+NS="${OCIR_NAMESPACE:-$(ev OCIR_NAMESPACE)}"
+[ -n "$NS" ] || NS="$(ev OS_NAMESPACE)"
+# どちらも無いなら止める（誤ったテナンシの repository を掴まないため）
+[ -n "$NS" ] || { echo "OCIR_NAMESPACE か OS_NAMESPACE を .env に設定してください" >&2; exit 1; }
 SEMSTORE=$(tfv SEMSTORE_OCID)
 ADB_DSN=$(tfv ADB_DSN)
 ADB_QPW=$(tfv ADB_QUERY_PASSWORD)
@@ -55,7 +67,7 @@ deploy_one() {
   local dep
   dep=$(oci generative-ai hosted-deployment create \
     --display-name "$name-dep" --compartment-id "$COMP" --hosted-application-id "$app" \
-    --active-artifact '{"artifactType":"SIMPLE_DOCKER_ARTIFACT","containerUri":"kix.ocir.io/'"$NS"'/'"$repo"'","tag":"'"$TAG"'"}' \
+    --active-artifact '{"artifactType":"SIMPLE_DOCKER_ARTIFACT","containerUri":"'"$OCIR"'/'"$NS"'/'"$repo"'","tag":"'"$TAG"'"}' \
     --query 'data.id' --raw-output)
   echo "[$sdk] DEP=$dep"
   while :; do

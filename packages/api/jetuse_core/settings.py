@@ -29,7 +29,10 @@ AGENT_MAX_DOC_SEARCHES_CEILING = 80
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    oci_region: str = "ap-osaka-1"
+    # AGT-06: 既定はシカゴ。大阪よりモデルの品揃えが厚く、エージェントで使える系統
+    # (Grok)がある(docs/comparison/agent-capable-models.md)。配備時は Terraform が
+    # OCI_REGION を注入するので、この既定が効くのはローカル/ベア実行のときだけ。
+    oci_region: str = "us-chicago-1"
     # OCI ログイン方式。env AUTH_MODE を読む（後方互換）。既定 config_file=ローカル ~/.oci/config。
     # config_file | resource_principal | instance_principal。解決は jetuse_core.oci_auth 経由。
     auth_mode: str = "config_file"
