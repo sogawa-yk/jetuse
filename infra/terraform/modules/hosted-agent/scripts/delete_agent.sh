@@ -30,4 +30,11 @@ if [ -z "$APP" ]; then
 fi
 
 delete_app_and_wait "$APP"
+
+# 「消えたはず」で state から外さない。一覧を引き直して所有リソースが 0 件になったことを
+# 確認してから成功にする（残っていれば state を保持し、次の destroy で回収できるようにする）。
+find_owned_app
+[ -z "$OWNED_APP" ] ||
+  fail "Hosted Application $HA_NAME の削除後も所有リソース ($OWNED_APP) が残っています。state を保持して中断します"
+
 echo "deleted hosted agent: $HA_NAME"
