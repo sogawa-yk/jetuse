@@ -60,6 +60,24 @@ jobs:
         run: npm run test
       - name: Build
         run: npm run build
+      - name: dist が最新か（コミット済みと一致するか）
+        working-directory: .
+        # 以前は release workflow が main へ dist を直接 commit していたが、それだと
+        # branch protection（PR 必須）と両立しない。**人がコミットする成果物**に変え、
+        # 陳腐化を CI で止める。dist は .gitignore で明示的に追跡対象にしており
+        # (`!/packages/web/dist/`)、scripts/package-orm-stacks.sh が存在を要求する。
+        run: |
+          # **git diff だけでは足りない。** 新規ファイルだけを生成するビルドでは
+          # 追跡ファイルに差分が出ず素通りする。未追跡も見る status を使う
+          # (.gitignore が `!/packages/web/dist/` で除外解除しているので ?? として出る)。
+          changed=$(git status --porcelain --untracked-files=all -- packages/web/dist)
+          if [ -n "$changed" ]; then
+            echo "::error::packages/web/dist がソースと一致しません。" \
+                 "'npm --prefix packages/web run build' を実行して結果をコミットしてください。"
+            printf '%s\n' "$changed"
+            exit 1
+          fi
+          echo "dist は最新です"
 
   terraform:
     runs-on: ubuntu-latest
