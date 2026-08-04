@@ -1,0 +1,9 @@
+{
+  "turn": 1,
+  "timestamp": "2026-07-30T03:29:16+09:00",
+  "action_summary": "(loop-protocol 側で追記可)",
+  "files_changed": ["STATE.md", "docs/decisions/ADR-0020-rag-metadata-backend.md", "docs/tips.md", "docs/verification/RAGM-02.md", "packages/api/jetuse_core/migrations/017_rag_adb.sql", "packages/api/jetuse_core/migrations/018_rag_adb_docs.sql", "packages/api/jetuse_core/migrations/019_rag_adb_ingest.sql", "packages/api/jetuse_core/rag.py", "packages/api/jetuse_core/rag_adb.py", "packages/api/service/routes/chat.py", "packages/api/service/schemas.py", "packages/api/tests/test_rag.py", "packages/api/tests/test_rag_adb.py", "specs/09-rag.md", "spikes/ragm02/common.py", "spikes/ragm02/e2e.py", "spikes/ragm02/fixtures.py", "spikes/ragm02/guard_checks.py", "spikes/ragm02/scale_appshape.py", "spikes/ragm02/scale_check.py", "spikes/ragm02/scale_filters.py", "spikes/ragm02/setup_schema.py", "spikes/ragm02/teardown.py", "spikes/ruff.toml"],
+  "diff_path": "diffs/turn-1.diff",
+  "review_ref": "reviews/review-9.json",
+  "goal_checker": { "verdict": "(/goal 判定モデルが記録)", "reason": "" }
+}

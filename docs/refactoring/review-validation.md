@@ -121,7 +121,7 @@
 
 ### ⚠️注意
 
-- `agents_sdk.py` / `langgraph_engine.py` は **FW-01/FW-02 の検証成果**（`docs/verification/FW-01.md`, `FW-02.md`）。git履歴に残るため削除可。
+- `agents_sdk.py` / `langgraph_engine.py` は **FW-01/FW-02 の検証成果**（`docs/verification/jetuse-app/FW-01.md`, `FW-02.md`）。git履歴に残るため削除可。
 - **`langgraph` という framework 値は現役**（hosted langgraph コンテナへルーティング）。消すのは `langgraph_engine.py`（インプロセス実装）であって framework 値ではない。同様に **`hosted_agent.normalize_sdk`/`_LEGACY_SDK` は現役**（§1.5）で削除対象外。
 - FastAPI route 関数は decorator 経由で使われるため、単純な参照数では未使用判定しない。`Nav` は design.tsx でも未使用と確認済み。
 

@@ -1,0 +1,55 @@
+{
+  "review_n": 9,
+  "timestamp": "2026-08-04T16:59:09+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-9.input.diff",
+  "raw_output_path": "reviews/review-9.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "起点判定の主要分岐にはテストがありますが、CI が PR 側の検査スクリプトを実行するため自己改変による迂回が可能です。認証情報・OCID・エンドポイント実値の追加は確認されません。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 1,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "major",
+      "file": ".github/workflows/ci.yml",
+      "line": 24,
+      "issue": "起点検査は checkout された PR 側の `ops/check-branch-base.sh` を直接実行します。そのため、internal-dev 宛の PR 自身がこのスクリプトを成功終了するよう変更すれば、base 側の `internal-only-paths.txt` を読む防御を含めて検査全体を迂回できます。差分内のテストは一覧ファイルの改変だけを扱い、検査実装自体の改変経路を網羅していません。",
+      "suggestion": "base ブランチから取得した検査スクリプトを一時パスで実行するか、GitHub Rulesets の required workflow など PR から変更できない検査へ移してください。検査スクリプトと workflow を同時に無効化する PR が通らない回帰シナリオも追加してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "minor",
+      "file": "docs/decisions/ADR-0028-four-branch-layout-and-base-check.md",
+      "line": 3,
+      "issue": "ADR-0028 は `Status: Proposed` のままですが、同じ差分で ADR-0014 を superseded、ADR-0016 を amended と記録し、コードと運用資料も新体制へ切り替えています。提案段階と適用済み状態が矛盾し、どの決定が有効か判断できません。",
+      "suggestion": "承認済みなら Status を Accepted に更新してください。未承認なら旧 ADR を superseded 扱いにせず、運用切替を承認後の差分へ分離してください。"
+    },
+    {
+      "id": "F003",
+      "severity": "minor",
+      "file": "ops/check-branch-base.sh",
+      "line": 140,
+      "issue": "すべてのパターンを無条件の前方一致で処理するため、ファイルとして列挙した `packages/api/tests/test_auth.py` 等も `test_auth.py.bak` や `test_auth.py_new` に一致します。共有ファイルが既存の内部専用ファイル名を接頭辞に持つだけで internal と誤分類され、共有物-only PR が通る可能性があります。",
+      "suggestion": "末尾 `/` のパターンだけディレクトリ前方一致とし、通常のファイル行は完全一致にしてください。完全一致ファイルの類似名が shared と判定される境界テストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "`runs/2026-08-04T1626_BRANCH-LAYOUT/e2e/` は空です。本差分は Git ブランチ、worktree、CI 判定の変更であり、jetuse-dev へのデプロイを伴う実環境 E2E は対象外と判断します。多数の一時 Git リポジトリを使う単体テストは追加されていますが、その実行結果の証跡は添付されていません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

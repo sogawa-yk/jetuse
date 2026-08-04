@@ -11,7 +11,6 @@ SPIKE-06の実機確定事項:
 
 import asyncio
 import logging
-import os
 import time
 import uuid
 from typing import Any
@@ -95,8 +94,9 @@ def _make_listener(session: SttSession):  # noqa: ANN202
 
 def _build_client(session: SttSession) -> Any:
     """OCIリアルタイムSTTクライアントを構築(RP/ユーザー認証両対応)"""
-    import oci
     from oci_ai_speech_realtime import RealtimeParameters, RealtimeSpeechClient
+
+    from .oci_auth import sdk_signer_args
 
     params = RealtimeParameters()
     params.language_code = session.language
@@ -108,18 +108,13 @@ def _build_client(session: SttSession) -> Any:
 
     s = get_settings()
     url = f"wss://realtime.aiservice.{s.oci_region}.oci.oraclecloud.com"
-    if os.environ.get("AUTH_MODE") == "resource_principal":
-        signer = oci.auth.signers.get_resource_principals_signer()
-        config: dict = {"region": s.oci_region}
-    else:
-        signer = None
-        config = oci.config.from_file()
+    args = sdk_signer_args(s.oci_region)
     return RealtimeSpeechClient(
-        config=config,
+        config=args["config"],
         realtime_speech_parameters=params,
         listener=_make_listener(session),
         service_endpoint=url,
-        signer=signer,
+        signer=args.get("signer"),
         compartment_id=s.compartment_ocid,
     )
 

@@ -1,0 +1,71 @@
+{
+  "review_n": 8,
+  "timestamp": "2026-07-13T08:44:10+00:00",
+  "reviewer": "codex",
+  "model": "gpt-5.5",
+  "input_diff_path": "reviews/review-8.input.diff",
+  "raw_output_path": "reviews/review-8.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker は見つかりませんでしたが、モデル可用性のグローバル判定が無関係な RAG 経路を止めるケースや、明示指定された dbchat backend を上書きする公開契約上の問題があります。実環境 E2E 証跡は空で、OCI/IAM/リージョン依存の主張を裏づけるには不十分です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 5,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "major",
+      "file": "packages/api/service/routes/chat.py",
+      "line": 86,
+      "issue": "モデル可用性チェックが Select AI / OpenSearch RAG の早期分岐より前にあるため、既定モデルが unavailable にマークされると、LLM モデルを使わない `rag_backend=select_ai|opensearch` まで即座にエラーで遮断されます。",
+      "suggestion": "`req.rag and req.rag_backend in (\"select_ai\", \"opensearch\")` の分岐を可用性チェックより前に移すか、この backend ではモデル unavailable 判定を適用しないようにしてください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/chat.py",
+      "line": 580,
+      "issue": "`model_only_call` が暗黙の OpenAi-Project / compartment ヘッダ依存を考慮していないため、Responses 系の 401/403/404 が PROJECT_OCID/IAM/compartment 不整合でもモデル unavailable としてプロセス全体に記録されます。結果として本当の構成不備がモデル不在に見え、後続リクエストが誤ってフォールバックまたは遮断されます。",
+      "suggestion": "Responses 系では 401/403/404 を即 `mark_unavailable` しない、またはエラー本文・リクエスト先・project 解決結果からモデル不在と判定できる場合だけ記録してください。少なくとも PROJECT_OCID/権限不備は別の診断エラーとして扱ってください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "major",
+      "file": "packages/api/service/routes/dbchat.py",
+      "line": 64,
+      "issue": "`SEMSTORE_OCID` 未設定時に `backend=\"sql_search\"` を明示したリクエストまで Select AI に切り替えています。フロントエンドは常に backend を送るため、UI 上は SQL Search 選択なのに実際は Select AI が実行され、SQL-04 の比較モードと公開リクエスト契約を壊します。",
+      "suggestion": "自動切替は backend 省略時だけに限定するか、明示的な `sql_search` では SSE エラーで `SEMSTORE_OCID` 未設定を返してください。必要ならレスポンスや schema で SQL Search 無効状態を UI に伝えてください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/health.py",
+      "line": 89,
+      "issue": "`ocr_health()` と `tts_health()` が必須設定を見ずに常に `ok` を返します。少なくとも OCR/TTS 実行時に必要な `COMPARTMENT_OCID` が空の既定設定でも `/api/health` 上は capability が ok になり、readiness の自己診断として誤判定します。",
+      "suggestion": "OCR/TTS も `compartment_ocid`、対象 region、AUTH_MODE/ローカル OCI config の最低限の設定有無を確認し、不足時は `unavailable` または `degraded` と hint を返してください。"
+    },
+    {
+      "id": "F-005",
+      "severity": "major",
+      "file": "runs/2026-07-13T0730_PORT-02/e2e",
+      "line": 1,
+      "issue": "実環境 E2E 証跡ディレクトリが空で、最低2本のシナリオ、デプロイ先、結果、SKIPPED.md のいずれも確認できません。今回の差分は OCI IAM、TTS リージョン、Select AI、RAG/health など実環境差分に強く依存するため、単体テストだけでは主張を裏づけられません。",
+      "suggestion": "jetuse-dev へデプロイ後、少なくとも `/api/health` の degraded/unavailable 表示、TTS 503 ヒント、dbchat の semstore 未設定時挙動、RAG backend のうち2本以上を実ブラウザまたはAPIで記録してください。未実施範囲がある場合は SKIPPED.md に理由を残してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-07-13T0730_PORT-02/e2e` は空と記載されており、実行シナリオ・結果・スクリーンショット/ログ・SKIPPED.md は確認できません。diff の実環境依存の主張を裏づける証跡としては不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲット URL が提供されておらず、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

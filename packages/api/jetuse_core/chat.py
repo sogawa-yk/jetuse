@@ -10,11 +10,19 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from openai import APIConnectionError, OpenAI
+from openai import APIConnectionError, APIStatusError, OpenAI
 
 from .genai import make_inference_client
 from .logging import log_with
-from .models import MODELS, ModelDef
+from .model_compat import agent_refusal, responses_input
+from .models import MODELS, ModelDef, mark_unavailable
+from .settings import (
+    AGENT_MAX_DOC_SEARCHES_CEILING,
+    AGENT_MAX_DOC_SEARCHES_DEFAULT,
+    AGENT_MAX_TOOL_HOPS_CEILING,
+    AGENT_MAX_TOOL_HOPS_DEFAULT,
+    get_settings,
+)
 
 logger = logging.getLogger("jetuse.chat")
 
@@ -39,6 +47,9 @@ class GenParams:
     max_tokens: int | None = None
     reasoning_effort: ReasoningEffort | None = None  # 推論モデルのみ有効
     file_search_store: str | None = None  # RAG(RAG-02)。Responses系のみ
+    # RAGM-01: file_searchのメタデータ絞り込み(例: current_version='Y'で旧版を外す)。
+    # 検証済み(rag_metadata.validate_filters)の構造だけを渡す — 未知キーは静かに0件になる
+    file_search_filters: dict | None = None
 
 
 def _to_responses_input(messages: list[dict]) -> list[dict]:
@@ -85,28 +96,82 @@ def _extra_responses_params(model: ModelDef, params: "GenParams") -> dict:
         out["reasoning"] = {"effort": params.reasoning_effort}
     if params.file_search_store:
         out["tools"] = [
-            {"type": "file_search", "vector_store_ids": [params.file_search_store]}
+            file_search_tool(params.file_search_store, params.file_search_filters)
         ]
         out["include"] = ["file_search_call.results"]
         out["instructions"] = RAG_INSTRUCTIONS
     return out
 
 
+def file_search_tool(store_id: str, filters: dict | None = None) -> dict:
+    """file_search ツール仕様(RAGM-01: メタデータ絞り込みを任意で載せる)。
+
+    filters は `rag_metadata.validate_filters` を通った構造のみ(未知キーは上流でエラーに
+    ならず 0 件になるため、境界で弾いてからここへ来る — SPIKE-M1 ①-b)。
+    """
+    tool: dict = {"type": "file_search", "vector_store_ids": [store_id]}
+    if filters:
+        tool["filters"] = filters
+    return tool
+
+
+# 引用に載せる本文抜粋の上限(SSEペイロードを膨らませないための切り詰め)
+CITATION_TEXT_CHARS = 500
+
+
+def _as_dict(value: Any) -> dict:
+    """SDKの属性値(dict / pydanticモデル)を素のdictへ。取れなければ空dict。"""
+    if isinstance(value, dict):
+        return value
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        try:
+            return dump(exclude_none=True)
+        except Exception:  # noqa: BLE001 - 引用の付加情報。落とさず捨てる
+            return {}
+    return {}
+
+
+def _structured_citation(r: Any) -> dict:
+    """file_search_call の 1 ヒットを構造化引用にする(RAGM-01)。
+
+    既存の `{file_id, filename, score}` は後方互換のため必ず含め、拡張分
+    (`source` = 取り込み時の attributes / `text` = 該当箇所の本文 / `chunk_id`)を足す。
+    属性はファイル単位なので(SPIKE-M1 ①-a)、同一ファイルの複数ヒットからは
+    最上位スコアのものを採る。
+    """
+    score = getattr(r, "score", None)
+    cite: dict = {
+        "file_id": getattr(r, "file_id", ""),
+        "filename": getattr(r, "filename", ""),
+        "score": round(score, 3) if score is not None else None,
+    }
+    source = {k: v for k, v in _as_dict(getattr(r, "attributes", None)).items() if v != ""}
+    if source:
+        cite["source"] = source
+    text = getattr(r, "text", None)
+    if text:
+        cite["text"] = str(text)[:CITATION_TEXT_CHARS]
+    chunk_id = _as_dict(getattr(r, "additional_properties", None)).get("chunk_id")
+    if chunk_id:
+        cite["chunk_id"] = chunk_id
+    return cite
+
+
 def _extract_citations(response: Any) -> list[dict]:
-    """file_search_call.results + message annotations から引用元を抽出(RAG-02)"""
+    """file_search_call.results + message annotations から引用元を抽出(RAG-02/RAGM-01)"""
     by_file: dict[str, dict] = {}
+    # 比較は丸め前のスコアで行う(丸めた値で比べると 0.8504 と 0.8501 が同値になり、
+    # 最上位でないチャンクの text/chunk_id を引用してしまう — レビュー F-005)
+    raw_scores: dict[str, float] = {}
     for item in getattr(response, "output", None) or []:
         if getattr(item, "type", "") == "file_search_call":
             for r in getattr(item, "results", None) or []:
                 fid = getattr(r, "file_id", "")
-                score = getattr(r, "score", None)
-                cur = by_file.get(fid)
-                if not cur or (score or 0) > (cur.get("score") or 0):
-                    by_file[fid] = {
-                        "file_id": fid,
-                        "filename": getattr(r, "filename", ""),
-                        "score": round(score, 3) if score is not None else None,
-                    }
+                score = getattr(r, "score", None) or 0
+                if fid not in by_file or score > raw_scores.get(fid, 0):
+                    by_file[fid] = _structured_citation(r)
+                    raw_scores[fid] = score
         elif getattr(item, "type", "") == "message":
             for part in getattr(item, "content", None) or []:
                 for a in getattr(part, "annotations", None) or []:
@@ -136,7 +201,7 @@ def _stream_responses(
         stream = client.responses.create(
             model=model.oci_id,
             conversation=oci_conversation_id,
-            input=_to_responses_input(sendable),
+            input=responses_input(model, _to_responses_input(sendable)),
             temperature=temperature,
             stream=True,
             **extra,
@@ -144,7 +209,7 @@ def _stream_responses(
     else:
         stream = client.responses.create(
             model=model.oci_id,
-            input=_to_responses_input(messages),
+            input=responses_input(model, _to_responses_input(messages)),
             temperature=temperature,
             stream=True,
             # 既定はサーバー側に保存される(store=true相当 — 実機確定)。
@@ -224,20 +289,139 @@ def complete_once(model_key: str, messages: list[dict], max_chars: int = 200) ->
     client = make_inference_client(with_project=model.api == "responses")
     if model.api == "responses":
         r = client.responses.create(
-            model=model.oci_id, input=_to_responses_input(messages), store=False
+            model=model.oci_id,
+            input=responses_input(model, _to_responses_input(messages)),
+            store=False,
         )
         return (r.output_text or "")[:max_chars]
     r = client.chat.completions.create(model=model.oci_id, messages=messages)
     return (r.choices[0].message.content or "")[:max_chars]
 
 
-MAX_TOOL_HOPS = 5
+def _configured_max_tool_hops() -> int:
+    """設定(env `AGENT_MAX_TOOL_HOPS`)の値。空なら既定値。整数でなければ拒否。
+
+    `Settings` 側でレンジ検証も型変換もしないのは意図的(settings.py のコメント)。
+    ここで解釈すれば、設定ミスで壊れるのはエージェント実行だけになる。
+    """
+    raw = (get_settings().agent_max_tool_hops or "").strip()
+    if not raw:
+        return AGENT_MAX_TOOL_HOPS_DEFAULT
+    try:
+        return int(raw)
+    except ValueError as e:
+        raise ValueError(f"AGENT_MAX_TOOL_HOPS must be an integer: {raw!r}") from e
+
+
+def resolve_max_tool_hops(requested: int | None = None) -> int:
+    """このターンのホップ上限を決める(AGT-04)。要求 > 設定(env)の順。
+
+    1 ホップ = モデル 1 往復。天井(`AGENT_MAX_TOOL_HOPS_CEILING`)を超える値は
+    **クランプせず拒否**する — 黙って下げると「上げたのに効かない」が起き、
+    利用者は上限に当たった理由を設定値から追えなくなる。既定値と天井の根拠は ADR-0025。
+    """
+    value = requested if requested is not None else _configured_max_tool_hops()
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"max_tool_hops must be an integer >= 1: {value!r}")
+    if value > AGENT_MAX_TOOL_HOPS_CEILING:
+        raise ValueError(
+            f"max_tool_hops exceeds the ceiling "
+            f"({AGENT_MAX_TOOL_HOPS_CEILING}): {value}"
+        )
+    return value
+
+
+def resolve_max_doc_searches() -> int:
+    """このターンの文書検索の上限(AGT-05)。設定(env `AGENT_MAX_DOC_SEARCHES`)か既定値。
+
+    **ホップとは別枠**の予算。要求から指定する口は設けていないが、天井
+    (`AGENT_MAX_DOC_SEARCHES_CEILING`)は持つ —— 承認往復で送り返せる `tool_results` の
+    件数上限を静的に決めるため(ADR-0026 §2)。ホップ上限と同じくクランプせず**拒否**し、
+    不正な設定で壊れるのはエージェント実行だけに閉じる。
+    """
+    raw = (get_settings().agent_max_doc_searches or "").strip()
+    if not raw:
+        return AGENT_MAX_DOC_SEARCHES_DEFAULT
+    try:
+        value = int(raw)
+    except ValueError as e:
+        raise ValueError(f"AGENT_MAX_DOC_SEARCHES must be an integer: {raw!r}") from e
+    if value < 1:
+        raise ValueError(f"AGENT_MAX_DOC_SEARCHES must be >= 1: {value}")
+    if value > AGENT_MAX_DOC_SEARCHES_CEILING:
+        raise ValueError(
+            f"AGENT_MAX_DOC_SEARCHES exceeds the ceiling "
+            f"({AGENT_MAX_DOC_SEARCHES_CEILING}): {value}"
+        )
+    return value
+
+
+# 承認往復をまたいだツール結果の累計上限(AGT-01d)。ホップ上限より下だと、上限を上げても
+# 承認モードだけ先に打ち切られるため、ホップ上限を上げたときは連動して上がる(AGT-04)。
+MIN_TOOL_RESULTS_CAP = 16
 
 # ツール使用回数の上限に達したときの最終回答強制プロンプト(AGT-01d)
 _FORCE_ANSWER_TEXT = (
     "ツール使用回数の上限に達しました。これまでに得た情報だけで"
     "最終的な回答をまとめてください。"
 )
+
+# 上限に当たったことを利用者へ伝える文面(AGT-04)。**黙って打ち切らない**:
+# 途中で力尽きたのか答え切ったのかが外から区別できないと、失敗の説明ができない。
+_LIMIT_TEXTS = {
+    "max_tool_hops": "ツール使用の上限({limit} ホップ・文書検索は別枠)に達したため、"
+                     "ここまでに得た情報で回答します（手続きは未完了の可能性があります）。",
+    "max_tool_results": "ツール実行の累計が上限({limit} 件)に達したため、"
+                        "ここまでに得た情報で回答します（手続きは未完了の可能性があります）。",
+    # AGT-05: 検索の予算だけが尽きた状態。**手続きは打ち切らない**(検索ツールを外して続ける)
+    # ので、他の 2 つとは伝えることが違う
+    "max_doc_searches": "文書検索の回数が上限({limit} 回)に達したため、"
+                        "これ以降は検索せず、ここまでに得た情報で手続きを続けます。",
+}
+
+
+def _normalized_query(arguments: str | None) -> str | None:
+    """文書検索の問い合わせ文を、比較用に正規化する(AGT-05・ADR-0026 §4 案 B)。
+
+    表記ゆれ(前後の空白・大小・連続空白)だけの違いは「同じ検索」とみなす。
+    解析できない引数は None を返す = 反復判定の対象にしない(**握り潰さないため**、
+    判定できないものを「同じ」と決めつけない)。
+    """
+    try:
+        args = json.loads(arguments or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return None
+    q = args.get("query") if isinstance(args, dict) else None
+    if not isinstance(q, str) or not q.strip():
+        return None
+    return " ".join(q.lower().split())
+
+
+def _repeated_search_event(query: str) -> ChatEvent:
+    """同じ検索の繰り返しを知らせる(ADR-0026 §4 案 B)。
+
+    **結果はそのまま返す。**握り潰すと、モデルは「調べた」と思ったまま結果を得られず、
+    記憶で埋めるか同じ検索を繰り返す(案 C を却下した理由)。
+    ここで知らせておくと、反復が起きていることが応答と証跡に残り、
+    上限値の見直しや instructions の改善の材料になる。
+    """
+    shown = query if len(query) <= 60 else query[:60] + "…"
+    return {"notice": f"同じ内容の文書検索が繰り返されています（「{shown}」）。"
+                      "結果はそのまま返します。",
+            "repeated_search": {"query": shown}}
+
+
+def _limit_reached_events(reason: str, limit: int) -> Iterator[ChatEvent]:
+    """上限到達を通知する。構造化イベントと、現行 UI にそのまま出る本文の両方を出す。
+
+    `notice` は機械可読(将来 UI が専用表示にできる)。ただし現行のチャット UI は
+    `delta` / `tool_call` / `error` しか描かないので、それだけだと画面には何も出ない。
+    デモで「なぜ途中で止まったか」を出せることが要件なので、既存の警告表記に合わせた
+    本文も流す(会話履歴にも残り、後から打ち切りだったと分かる)。
+    """
+    text = _LIMIT_TEXTS[reason].format(limit=limit)
+    yield {"notice": text, "limit_reached": {"reason": reason, "limit": limit}}
+    yield {"delta": f"\n\n> ⚠ {text}\n\n"}
 
 
 def _force_answer_message() -> dict:
@@ -277,32 +461,75 @@ def _build_agent_input(
     return base_input
 
 
+def _is_doc_search_result(tool_result: dict, rag_tool: Any | None) -> bool:
+    """承認往復で送り返された結果が adb 経路の文書検索かどうか(AGT-05)。
+
+    `rag_tool` が無い(＝ built-in 経路)ときは常に False。built-in の検索は
+    function_call として往復しないので、同名の結果が来ても検索由来とは言えない。
+    """
+    from .tools import RAG_SEARCH
+
+    if rag_tool is None:
+        return False
+    call = tool_result.get("call")
+    return isinstance(call, dict) and call.get("name") == RAG_SEARCH
+
+
+def _function_spec(tool: Any) -> dict:
+    return {
+        "type": "function",
+        "name": tool.name,
+        "description": tool.description,
+        "parameters": tool.parameters,
+    }
+
+
 def _build_agent_tools(
     enabled_tools: list[str] | None,
     mcp_servers: list[dict] | None,
     auto_tools: bool,
     rag_store: str | None,
+    http_tools: list[Any] | None = None,
+    rag_tool: Any | None = None,
 ) -> list[dict]:
-    """このターンで使用可能なツール仕様を構築(custom + MCP + rag_search/file_search)。"""
+    """このターンで使用可能なツール仕様を構築(custom + MCP + 外部HTTP + rag_search)。
+
+    http_tools は外部HTTPツール(TOOL-01)の `ToolDef`。呼び出し側が owner 所有の
+    ものだけを解決済みで渡す = 明示選択なので enabled_tools では絞らない。
+    rag_tool は adb バックエンドの `rag_search`(AGT-04)。指定時は file_search built-in
+    ではなくこちらを載せる(**増やすだけ**で built-in 経路は置き換えない)。
+    """
     from .mcp_servers import mcp_tool_spec
     from .tools import RAG_SEARCH, tool_specs
 
     custom_enabled = [t for t in (enabled_tools or []) if t != RAG_SEARCH]
     all_tools = tool_specs(custom_enabled if enabled_tools is not None else None) + [
+        _function_spec(t) for t in (http_tools or [])
+    ] + [
         mcp_tool_spec(srv, auto_tools) for srv in (mcp_servers or [])
     ]
-    if enabled_tools and RAG_SEARCH in enabled_tools and rag_store:
+    if rag_tool is not None:
+        # adb バックエンド(AGT-04): チャンク単位の出典(シート名・セル範囲)を結果に載せる
+        all_tools.append(_function_spec(rag_tool))
+    elif enabled_tools and RAG_SEARCH in enabled_tools and rag_store:
         # rag_searchの実体はfile_search built-in(ユーザーのVector Store) — AGT-01c
-        all_tools.append({"type": "file_search", "vector_store_ids": [rag_store]})
+        # 絞り込み(RAGM-01)はこの経路では未対応。ルート側が rag_filters を 400 で断る
+        all_tools.append(file_search_tool(rag_store))
     return all_tools
 
 
 def _collect_hop_events(
-    stream: Any, calls: list[Any], mcp_approvals: list[Any]
+    stream: Any, calls: list[Any], mcp_approvals: list[Any],
+    server_side: list[str] | None = None,
 ) -> Iterator[ChatEvent]:
     """1ホップのResponseストリームを消費。delta/tool_call/citations/usageを
     passthroughで yield し、function_call / mcp_approval_request を渡された
-    リストへ収集する(呼び出し側で承認/実行を判断)。"""
+    リストへ収集する(呼び出し側で承認/実行を判断)。
+
+    `server_side` を渡すと、**この往復で OCI 側が実行した業務の操作**
+    (MCP / コード実行)の名前を追記する。これらは `function_call` として返らないので、
+    `calls` だけを見るとホップの計上から漏れる(AGT-05 review-7 のすり抜け)。
+    file_search built-in は**業務の操作ではない**ので数えない(検索は別枠)。"""
     try:
         for event in stream:
             etype = getattr(event, "type", "")
@@ -311,6 +538,8 @@ def _collect_hop_events(
             elif etype == "response.output_item.added":
                 itype = getattr(event.item, "type", "")
                 if itype == "code_interpreter_call":
+                    if server_side is not None:
+                        server_side.append("code_interpreter_call")
                     # built-in: OCI側サンドボックスで実行される(承認対象外・通知のみ)
                     yield {"tool_call": {
                         "name": "code_interpreter", "label": "コード実行",
@@ -322,6 +551,8 @@ def _collect_hop_events(
                         "builtin": True, "status": "running",
                     }}
                 elif itype == "mcp_call":
+                    if server_side is not None:
+                        server_side.append("mcp_call")
                     # MCPはサーバーサイド実行(通知のみ — AGT-02)
                     label = (f"MCP: {getattr(event.item, 'server_label', '')}/"
                              f"{getattr(event.item, 'name', '')}")
@@ -369,14 +600,47 @@ def _emit_pending_approval(call_dicts: list[dict], tools: dict) -> Iterator[Chat
     """function_callバッチをUIへ承認待ちとして通知(混在バッチは全件承認制)。"""
     for cd in call_dicts:
         tool = tools.get(cd["name"])
-        yield {"tool_call": {
+        event = {
             "name": cd["name"],
             "label": tool.label if tool else cd["name"],
             "arguments": cd.get("arguments", "{}"),
             "call_id": cd.get("call_id"),
             "item": cd,
             "status": "pending_approval",
-        }}
+        }
+        if tool and tool.tool_id:
+            # 外部HTTPツール(TOOL-01): 承認したその1件を id で名指しできるようにする。
+            # 名前だけで再解決すると、承認待ちの間に同名で別 URL のツールを作り直された
+            # 場合に「利用者が確認したのと違う HTTP 操作」が実行されうる
+            event["http_tool_id"] = tool.tool_id
+        yield {"tool_call": event}
+
+
+def _rag_search_citations(output: str) -> Iterator[ChatEvent]:
+    """adb バックエンドの `rag_search` の結果を引用イベントにする(AGT-04)。
+
+    file_search built-in は `response.completed` から引用を取れる(`_extract_citations`)が、
+    function tool の結果はサーバー側で実行するこちらにしか無い。出さないと、
+    せっかくのチャンク単位の出典が UI の出典欄に出ないままになる。
+    """
+    try:
+        results = json.loads(output).get("results")
+    except (ValueError, AttributeError):
+        return
+    if not isinstance(results, list):
+        return
+    cites = [
+        {
+            "file_id": r.get("file_id", ""),
+            "filename": r.get("filename", ""),
+            "score": r.get("score"),
+            "source": r.get("source"),
+            "text": str(r.get("text") or "")[:CITATION_TEXT_CHARS],
+        }
+        for r in results if isinstance(r, dict)
+    ]
+    if cites:
+        yield {"citations": cites}
 
 
 def _run_tool_calls(
@@ -388,6 +652,8 @@ def _run_tool_calls(
     tool_error: type[Exception],
 ) -> Iterator[ChatEvent]:
     """function_callを実行し結果を base_input へ追記(自動実行ホップ)。"""
+    from .tools import RAG_SEARCH
+
     for cd in call_dicts:
         tool = tools.get(cd["name"])
         yield {"tool_call": {
@@ -407,6 +673,8 @@ def _run_tool_calls(
             "call_id": cd.get("call_id"), "name": cd["name"],
             "preview": output[:500],
         }}
+        if cd["name"] == RAG_SEARCH:
+            yield from _rag_search_citations(output)
         base_input.append(cd)
         base_input.append({
             "type": "function_call_output",
@@ -428,35 +696,129 @@ def stream_agent(
     instructions: str | None = None,
     project_ocid: str | None = None,
     rag_store: str | None = None,
+    http_tools: list[Any] | None = None,
+    rag_backend: str = "vector_store",
+    rag_owner: str = "",
+    max_tool_hops: int | None = None,
 ) -> Iterator[ChatEvent]:
     """エージェントモード(AGT-01)。ツール付きResponses呼び出しをループする。
 
     - ステートレス(全履歴再送)。Responses系モデルのみ
     - auto_tools=False: function_callを {"tool_call"} イベントで通知してストリーム終了
       (UIが承認後、tool_results付きで再呼び出しして継続する)
-    - auto_tools=True: サーバー側で実行し最大MAX_TOOL_HOPSホップまで自動継続
+    - auto_tools=True: サーバー側で実行し、ホップ上限(AGT-04: 設定 or 要求。既定は
+      `AGENT_MAX_TOOL_HOPS_DEFAULT`)まで自動継続する
+    - http_tools: owner 所有の外部HTTPツール(TOOL-01)の ToolDef。組込ツールと同じ
+      レジストリに載せ、JetUse がサーバー側で代理実行する
+    - rag_backend='adb': 文書検索を Vector Store の file_search built-in ではなく
+      `rag_adb` の検索(チャンク単位の出典)で行う。既定は現行どおり vector_store
+    - 文書検索(AGT-05)は**ホップを消費しない**。別枠の上限
+      (`AGENT_MAX_DOC_SEARCHES`)で数え、そちらに達したら検索ツールだけ外して
+      業務の手続きは続ける。built-in 経路はもともと消費しないので挙動不変
     """
-    from .tools import TOOLS, ToolError, execute_tool
+    from .tools import RAG_SEARCH, TOOLS, ToolError, adb_rag_search_tool, execute_with
 
+    max_hops = resolve_max_tool_hops(max_tool_hops)
+    # adb バックエンドの rag_search は built-in ではなく **function tool**(AGT-04)。
+    # 読み取り専用なので承認は要らない(要ると検索のたびにストリームが止まる)
+    rag_tool = (
+        adb_rag_search_tool(rag_owner)
+        if rag_backend == "adb" and enabled_tools and RAG_SEARCH in enabled_tools
+        else None
+    )
+    # そのターン限りのレジストリ。組込を後勝ちにして外部ツールの名前衝突を無害化する
+    # (登録時にも予約名を弾いているが、実行段でも組込が上書きされないようにする)
+    registry = {**{t.name: t for t in (http_tools or [])}, **TOOLS}
+    if rag_tool is not None:
+        registry[rag_tool.name] = rag_tool
     model = MODELS[model_key]
-    if model.api != "responses":
-        yield {"error": "エージェントモードはResponses系モデルのみ対応です"}
+    # エージェント不可のモデルは**理由をつけて断る**(AGT-06)。Responses 系でも
+    # ツールを渡せないもの(grok-4.20-multi-agent)があり、api 属性だけでは足りない。
+    # 黙って動かないより断るほうがよい — 断らないと「同じ検索を繰り返して
+    # 架空のコードを作る」ような失敗が、モデルの都合だと分からないまま出る
+    refusal = agent_refusal(model_key)
+    if refusal:
+        yield {"error": refusal}
         return
     temp = model.default_temperature if temperature is None else temperature
     client = make_inference_client(with_project=True, project_ocid=project_ocid)
     base_input = _build_agent_input(messages, instructions, tool_results)
     extra = _extra_responses_params(model, params or GenParams())
-    # ターン内ツール総数の安全弁(AGT-01d): 累積16件以上はツールを外し最終回答を強制
-    force_answer = len(tool_results or []) >= 16
-    all_tools = _build_agent_tools(enabled_tools, mcp_servers, auto_tools, rag_store)
+    # ターン内ツール総数の安全弁(AGT-01d): 累積がこの数に達したらツールを外し最終回答を強制。
+    # ホップ上限を上げても承認モードだけ先に打ち切られないよう連動させる(AGT-04)
+    results_cap = max(MIN_TOOL_RESULTS_CAP, max_hops)
+    # 文書検索は業務の予算を食わない(AGT-05)。承認往復をまたぐ累計でも同じ扱いにしないと、
+    # 検索を挟むほど承認モードだけ先に打ち切られる — ホップ側だけ直しても不整合が残る
+    force_answer = sum(
+        1 for tr in (tool_results or []) if not _is_doc_search_result(tr, rag_tool)
+    ) >= results_cap
+    all_tools = _build_agent_tools(
+        enabled_tools, mcp_servers, auto_tools, rag_store, http_tools, rag_tool
+    )
     if force_answer:
         all_tools = []
         base_input.append(_force_answer_message())
+        yield from _limit_reached_events("max_tool_results", results_cap)
 
-    for _hop in range(MAX_TOOL_HOPS):
+    # 予算は 2 本立て(AGT-05)。ホップは**業務の操作**(外部HTTPツール・MCP・組込ツール)を
+    # 含む往復でだけ減り、文書検索は別枠で数える。検索の上限に達したら検索ツールを外して
+    # 続ける(手続きごと打ち切ると、この不整合を別の形で作り直すことになる)。
+    # 終了は保証される: 1 往復ごとに hops_used か doc_searches のどちらかが必ず増え、
+    # doc_searches が上限に達すると検索ツールが消えて以降は数えなくなる。
+    max_doc_searches = resolve_max_doc_searches() if rag_tool is not None else 0
+    hops_used = 0
+    # 承認往復で送り返された分を引き継ぐ。0 から数え直すと、承認のたびに検索の予算が
+    # 復活して上限が効かない(累計上限からも検索を外したので、ここで数えないと歯止めが無い)
+    doc_searches = sum(
+        1 for tr in (tool_results or []) if _is_doc_search_result(tr, rag_tool)
+    )
+    searches_open = rag_tool is not None
+    # 反復検知用(ADR-0026 §4 案 B)。承認往復で送り返された検索は引き継がない
+    # (どの問い合わせだったかは tool_results から復元できない。既知の限界)
+    seen_queries: set[str] = set()
+
+    def run_tool(name: str, arguments: str) -> str:
+        """ツール実行。検索の予算が尽きたあとの `rag_search` は**実行せず**理由を返す。
+
+        ツール一覧から外してもモデルが名前を出してくることはある。そのとき実行して
+        しまうと上限が上限でなくなるので、ここで断る(黙って空を返さない —— 理由が
+        モデルに届けば、記憶で埋めずに手続きへ戻れる)。
+        """
+        if not searches_open and rag_tool is not None and name == RAG_SEARCH:
+            raise ToolError(
+                f"文書検索の回数が上限({max_doc_searches} 回)に達したため実行できません"
+            )
+        return execute_with(registry, name, arguments)
+
+    def close_searches_if_exhausted() -> Iterator[ChatEvent]:
+        """検索の予算が尽きたら検索ツールを外して通知する(AGT-05)。
+
+        **手続きは止めない** —— 業務の操作は続けさせる。ここで打ち切ると
+        「検索が業務の予算を潰す」という直したはずの不整合を別の入口で作り直すことになる。
+
+        **ループの先頭だけでなく、予算を数えた直後にも呼ぶ。** 混在バッチで検索とホップの
+        上限に**同時に**達すると、次の周回に入らずループを抜けてしまい、先頭のチェックだけでは
+        `reason=max_doc_searches` の通知が出ない(公開契約を満たさない — review-6)。
+        `searches_open` を落としてから通知するので、二度呼んでも二重には出ない。
+        """
+        nonlocal searches_open, all_tools
+        if not (searches_open and doc_searches >= max_doc_searches):
+            return
+        searches_open = False
+        all_tools = [
+            t for t in all_tools
+            if not (t.get("type") == "function" and t.get("name") == RAG_SEARCH)
+        ]
+        log_with(logger, logging.INFO, "agent_doc_search_limit_reached",
+                 model=model_key, user=user, max_doc_searches=max_doc_searches)
+        yield from _limit_reached_events("max_doc_searches", max_doc_searches)
+
+    while hops_used < max_hops:
+        yield from close_searches_if_exhausted()
+
         stream = client.responses.create(
             model=model.oci_id,
-            input=base_input,
+            input=responses_input(model, base_input),
             temperature=temp,
             tools=all_tools,
             stream=True,
@@ -465,7 +827,10 @@ def stream_agent(
         )
         calls: list[Any] = []
         mcp_approvals: list[Any] = []
-        yield from _collect_hop_events(stream, calls, mcp_approvals)
+        # OCI 側で実行された業務の操作(MCP / コード実行)。function_call として返らないので
+        # 別に受け取らないとホップの計上から漏れる(review-7)
+        server_side: list[str] = []
+        yield from _collect_hop_events(stream, calls, mcp_approvals, server_side)
 
         if mcp_approvals:
             # MCP承認要求(AGT-02): UIへ通知してストリーム終了(承認モードのみ発生)
@@ -481,29 +846,73 @@ def stream_agent(
              if k in ("type", "name", "arguments", "call_id", "id")}
             for c in calls
         ]
+        # 予算の計上(AGT-05)。検索は別枠。混在バッチはホップを 1 回だけ消費する。
+        # **バッチは切り詰めない** — 出した function_call には必ず結果を返す必要があり、
+        # 上限超過分を捨てると「調べたのに結果が来ない」状態を作る
+        doc_calls = sum(1 for cd in call_dicts
+                        if searches_open and cd["name"] == RAG_SEARCH)
+        # 同じ検索の繰り返しを知らせる(実行は止めない — ADR-0026 §4 案 B)
+        for cd in call_dicts:
+            if not searches_open or cd["name"] != RAG_SEARCH:
+                continue
+            q = _normalized_query(cd.get("arguments"))
+            if q is None:
+                continue
+            if q in seen_queries:
+                yield _repeated_search_event(q)
+            else:
+                seen_queries.add(q)
+        # **サーバー側で実行された業務の操作も勘定に入れる。** `call_dicts` だけで見ると、
+        # 検索と MCP / コード実行が同じ往復に混ざったときに `doc_calls == len(call_dicts)` と
+        # なり、業務の操作が走ったのにホップが減らない(= 上限を迂回できる — review-7)
+        if doc_calls < len(call_dicts) or server_side:
+            hops_used += 1
+        doc_searches += doc_calls
+
         needs_approval = [
             cd for cd in call_dicts
-            if not (TOOLS.get(cd["name"]) and not TOOLS[cd["name"]].requires_approval)
+            if not (registry.get(cd["name"]) and not registry[cd["name"]].requires_approval)
         ]
         if not auto_tools and needs_approval:
             # 混在バッチは全件承認制(ステートレス継続で安全側の結果が失われるのを防ぐ)
-            yield from _emit_pending_approval(call_dicts, TOOLS)
+            yield from _emit_pending_approval(call_dicts, registry)
             return  # UIの承認待ち
         # 全件が承認不要(requires_approval=False)の場合は承認モードでも自動実行して継続
 
-        yield from _run_tool_calls(call_dicts, base_input, user, TOOLS, execute_tool, ToolError)
+        yield from _run_tool_calls(
+            call_dicts, base_input, user, registry, run_tool, ToolError,
+        )
+        # **実行したあとに**見る。ホップも同時に尽きると次の周回に入らないので、
+        # ループ先頭のチェックだけでは `reason=max_doc_searches` が出ない(review-6)。
+        # 計上直後に置くと、いま数えたバッチ自身が「上限超過」で断られてしまう
+        yield from close_searches_if_exhausted()
 
-    # ホップ上限: エラーではなくツールなしで最終回答を強制する(AGT-01d)
-    yield {"delta": ""}
+    # ホップ上限: エラーではなくツールなしで最終回答を強制する(AGT-01d)。
+    # **黙って打ち切らない**(AGT-04): 上限に当たったことを通知してから最終回答へ移る。
+    # この最終回答は**ツールを外した 1 往復**で、上限とは別に加算される
+    # (= 1 ターンの最大往復数は max_hops + 文書検索の上限 + 1。検索は別枠なので
+    # ホップだけでは往復数の上界にならない — AGT-05)。usage も必ず出す — 出さないと
+    # 打ち切ったターンだけコストが記録から漏れる
+    log_with(logger, logging.INFO, "agent_hop_limit_reached",
+             model=model_key, user=user, max_hops=max_hops)
+    yield from _limit_reached_events("max_tool_hops", max_hops)
     final_input = base_input + [_force_answer_message()]
     stream = client.responses.create(
-        model=model.oci_id, input=final_input, temperature=temp,
+        model=model.oci_id, input=responses_input(model, final_input), temperature=temp,
         stream=True, store=False, **extra,
     )
     try:
         for event in stream:
-            if getattr(event, "type", "") == "response.output_text.delta":
+            etype = getattr(event, "type", "")
+            if etype == "response.output_text.delta":
                 yield {"delta": event.delta}
+            elif etype == "response.completed":
+                usage = getattr(event.response, "usage", None)
+                if usage:
+                    yield {"usage": {
+                        "input_tokens": usage.input_tokens,
+                        "output_tokens": usage.output_tokens,
+                    }}
     finally:
         stream.close()
 
@@ -569,6 +978,31 @@ def stream_chat(
                 "error": "上流応答の解析に失敗しました（一時的なエラーの可能性）。"
                 "再生成をお試しください"
             }
+            return
+        except APIStatusError as e:
+            # 404/403/401はモデル未提供/未認可(リージョン/テナンシ差)を示しうる(PORT-02)。
+            # ただしRAG(stale vector store)/短期メモリ(stale conversation)/エージェント固有
+            # project_ocid絡みの呼び出しはモデル以外が原因の404/403もあるため、プロセス全体を
+            # 汚す mark_unavailable はそれらが関与しない素のチャット呼び出しに限定する
+            # (レビュー指摘F-001)。
+            p = params or GenParams()
+            model_only_call = (
+                not p.file_search_store and not oci_conversation_id and not project_ocid
+            )
+            if e.status_code in (401, 403, 404) and model_only_call:
+                hint = f"HTTP {e.status_code}"
+                mark_unavailable(model_key, hint)
+                log_with(
+                    logger, logging.WARNING, "chat_model_unavailable",
+                    model=model_key, status=e.status_code,
+                )
+                yield {
+                    "error": f"モデル {model_key} はこのリージョン/テナンシでは利用できません"
+                    f"({hint})"
+                }
+                return
+            log_with(logger, logging.ERROR, "chat_failed", model=model_key, error=str(e))
+            yield {"error": str(e)}
             return
         except Exception as e:  # ストリーミング途中の失敗はイベントで通知
             log_with(logger, logging.ERROR, "chat_failed", model=model_key, error=str(e))

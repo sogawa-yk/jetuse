@@ -5,7 +5,7 @@ description: >-
   実行ユーザーの権限や既存IAMに応じて、Dynamic GroupとPolicyの作成範囲を選択できます。
   デプロイ後、出力の app_url を開き demo ユーザーでログインしてください。
 schemaVersion: 1.1.0
-version: "20260702"
+version: "20260713"
 
 logoUrl: ""
 
@@ -19,23 +19,41 @@ variableGroups:
     variables:
       - prefix
       - enable_auth
+      - oidc_audience
+      - oidc_issuer
+      - oidc_jwks_url
+      - enable_hosted_agents
       - demo_email
+      - admin_users
       - adb_admin_password
+      - demo_password_version
   - title: "IAM設定（実行ユーザーの権限に応じて選択）"
     variables:
       - enable_dynamic_group
       - existing_dynamic_group
       - enable_runtime_policy
       - enable_semantic_store
-  - title: "オプション（詳細）"
+      - semstore_ocid
+      - enable_project_autocreate
+      - existing_iam_covers_hosted_agents
+  - title: "リージョン・サービス枠（可搬性）"
     variables:
+      - allow_unvalidated_genai_region
+      - adb_db_version
+      - adb_ecpu_count
+      - ci_shape
+  - title: "オプション（詳細・通常変更不要）"
+    variables:
+      - project_ocid
+      - hosted_agent_min_replica
+      - image_tag
       - enable_opensearch
       - rate_limit_rps
-      - ocir_namespace
-      - ocir_region_key
       - image_repo_prefix
+      - hosted_agent_image_registry
       - api_image_url
       - fn_router_image
+      - ocir_namespace
   - title: "Hidden"
     visible: false
     variables:
@@ -62,6 +80,29 @@ variables:
     description: "Identity Domain + OIDCアプリ + デモユーザーを作成し、ログインを必須にする"
     default: true
 
+  oidc_audience:
+    type: string
+    title: "OIDC audience"
+    description: "APIが検証するaudience（アプリ登録のprimary audience、または実トークンのaud実測値）。認証有効時は必須（未設定はplanで停止 — SP2-04 fail-closed）"
+    visible: enable_auth
+
+  oidc_issuer:
+    type: string
+    title: "OIDC issuer"
+    description: "トークンのiss（discoveryのissuerをそのまま。世代で異なるため固定既定なし）。認証有効時は必須（未設定はplanで停止）"
+    visible: enable_auth
+
+  oidc_jwks_url:
+    type: string
+    title: "OIDC JWKS URL（任意）"
+    description: "discoveryのjwks_uri。空なら本スタック作成ドメインの /admin/v1/SigningCert/jwk を使用"
+  enable_hosted_agents:
+    type: boolean
+    title: "ホスト型エージェントを配備"
+    description: "3種類のSDK（OpenAI Agents / LangGraph / ADK）のReActエージェントをEnterprise AI Agentとして配備します。アイドル時はゼロスケール（レプリカ0）なので、使わない間の課金は発生しません。OAuthの発行元が必要なため「OIDC認証を有効化」がONのとき、かつ大阪(ap-osaka-1)・シカゴ(us-chicago-1)にデプロイするときだけ有効です（エージェント画像の配置先）。"
+    default: true
+    visible: enable_auth
+
   enable_dynamic_group:
     type: boolean
     title: "Dynamic Groupを作成"
@@ -85,8 +126,15 @@ variables:
   enable_semantic_store:
     type: boolean
     title: "SQL Search用Semantic Store権限"
-    description: "SQL Searchを使用しない場合はオフにするとDynamic GroupとPolicy文を減らせます。"
+    description: "SQL Searchを使用しない場合はオフにするとDynamic GroupとPolicy文を減らせます。使用する場合は下のSemantic Store OCIDも設定してください（未設定だとIAMだけ作られNL2SQLは503）。"
     default: true
+
+  semstore_ocid:
+    type: string
+    title: "Semantic Store OCID（SQL Search用・任意）"
+    description: "NL2SQL（SQL Search）が使う既存のGenerative AI Semantic StoreのOCID。スタックは実体を作らずIAM権限のみ付与します。空ならNL2SQLは無効（503）。"
+    required: false
+    visible: enable_semantic_store
 
   demo_email:
     type: string
@@ -95,10 +143,101 @@ variables:
     default: "demo@example.com"
     visible: enable_auth
 
+  admin_users:
+    type: string
+    title: "管理ダッシュボードの管理者（任意）"
+    description: "/admin を開けるユーザーをカンマ区切りで指定（JWTのsubまたはemailと一致）。空欄なら、このスタックが作成する demo ユーザーが管理者になります。"
+    required: false
+    visible: enable_auth
+
+  demo_password_version:
+    type: string
+    title: "デモユーザーのパスワード世代（通常変更不要）"
+    description: "この値を変えると、次のApplyでデモユーザーのパスワードを再発行します。更新時に「パスワード履歴と衝突しました」で失敗した場合の復旧に使います。"
+    default: "1"
+    required: false
+    visible: enable_auth
+
   adb_admin_password:
     type: password
     title: "ADB ADMIN パスワード（任意）"
     description: "空欄なら自動生成します（出力に表示）。12〜30文字・英大小+数字"
+    required: false
+
+  project_ocid:
+    type: string
+    title: "GenerativeAI Project OCID（任意）"
+    description: "RAG・会話メモリが使う GenerativeAiProject。空欄なら既存のACTIVEなprojectを自動検出し、無ければ自動作成します（自動作成は下のIAM設定でオフにできます）"
+    required: false
+
+  enable_project_autocreate:
+    type: boolean
+    title: "GenerativeAI Projectの自動作成を許可"
+    description: "RAG・会話メモリに必須のGenerativeAiProjectが無い場合にアプリが自動作成します（IAMに manage generative-ai-project を含めます）。オフの場合は Project OCID の明示指定を推奨"
+    default: true
+
+  existing_iam_covers_hosted_agents:
+    type: boolean
+    title: "既存IAMがホスト型エージェントを含むことを確認済み"
+    description: "Dynamic Group / Runtime Policy を作らない構成でホスト型エージェントを使う場合のみ ON にします。既存の Dynamic Group に generativeaihostedapplication / generativeaihostedapplicationiam / generativeaihosteddeployment が含まれ、そのグループに JetUse のランタイム権限が付与されていることを確認してください。未確認のまま進めるとエージェントは配備されても実行時に権限エラーになります。"
+    default: false
+    # Dynamic Group か Runtime Policy の**どちらか**を作らない構成で必要になる
+    # （precondition の条件と一致させる）。
+    visible:
+      and:
+        - enable_hosted_agents
+        - or:
+            - not:
+                - enable_dynamic_group
+            - not:
+                - enable_runtime_policy
+
+  allow_unvalidated_genai_region:
+    type: boolean
+    title: "GenAI未検証リージョンへのデプロイを許可"
+    description: "GenAI（推論/agentic API）が実証済みなのは大阪（ap-osaka-1）とシカゴ（us-chicago-1）のみ。他リージョンはアプリのapplyは通ってもRAG/会話メモリ/デモ生成が動きません。承知の上で他リージョンへ進める場合のみオン。"
+    default: false
+
+  adb_db_version:
+    type: string
+    title: "ADB バージョン"
+    description: "Select AIベクトル索引（RAG）は 26ai 必須。26ai非提供のリージョン/レルムでは変更が必要な場合があります。通常は既定のまま。"
+    default: "26ai"
+
+  adb_ecpu_count:
+    type: number
+    title: "ADB ECPU 数"
+    description: "新規テナンシは ADB ECPU のサービス枠が 0 のことが多く、その場合 apply が LimitExceeded で落ちます。事前にリージョンのADB ECPU枠を確認してください。"
+    default: 2
+    minimum: 2
+
+  ci_shape:
+    type: string
+    title: "API コンテナ shape"
+    description: "APIのContainer Instance shape。CI.Standard.E4.Flex が無いリージョンでのみ変更。通常は既定のまま。"
+    default: "CI.Standard.E4.Flex"
+
+  hosted_agent_min_replica:
+    type: number
+    title: "エージェントのアイドル時レプリカ数"
+    description: "0 でゼロスケール（アイドル課金なし。初回リクエストはコールドスタート待ちが入ります）。デモで初回応答を速くしたいときだけ 1 にしてください（常時課金になります）。"
+    default: 0
+    minimum: 0
+    maximum: 2
+    multipleOf: 1
+    visible: enable_hosted_agents
+
+  image_tag:
+    type: string
+    title: "コンテナ画像のタグ（通常変更不要）"
+    description: "API・Functionsルーター・エージェントの全画像に共通のタグ。配布ZIPではそのビルドの commit SHA に固定されているため、通常は変更しません。main の最新を追いたい場合のみ latest を指定してください。"
+    default: "latest"
+
+  hosted_agent_image_registry:
+    type: string
+    title: "エージェント画像のレジストリ（通常変更不要）"
+    description: "空ならデプロイリージョンのOCIRを自動選択します。OCIRネームスペースを既定から変更した場合は、jetuse-agent-openai / -langgraph / -adk をミラーしたレジストリ（例 ord.ocir.io/<namespace>）を指定してください。"
+    default: ""
     required: false
 
   enable_opensearch:
@@ -115,17 +254,10 @@ variables:
 
   ocir_namespace:
     type: string
-    title: "OCIR ネームスペース"
-    description: "コンテナイメージを置くOCIRのネームスペース（= Object Storage namespace）"
+    title: "OCIR ネームスペース（通常変更不要）"
+    description: "JetUse公開イメージのレジストリnamespace。既定値はcross-tenancy pullに必要なので通常は変更しません。自テナンシのObject Storage namespaceとは無関係です。変更する場合はイメージを自テナンシのOCIRへミラーした上で、下のAPI/Functionsイメージ（api_image_url・fn_router_image）を両方必須で指定してください（単独変更はplan時にエラーになります）。"
     default: "idqcucnenh88"
-    required: true
-
-  ocir_region_key:
-    type: string
-    title: "OCIR リージョンキー"
-    description: "OCIRレジストリのリージョンキー（ap-osaka-1 は kix）"
-    default: "kix"
-    required: true
+    required: false
 
   image_repo_prefix:
     type: string
@@ -137,13 +269,13 @@ variables:
   api_image_url:
     type: string
     title: "API コンテナイメージ（上書き）"
-    description: "通常は空欄。空ならOCIRパスを自動合成（kix.ocir.io/<namespace>/<prefix>-api:latest）"
+    description: "通常は空欄。空ならデプロイリージョンのOCIRパスを自動合成（<region-key>.ocir.io/<namespace>/<prefix>-api:latest。イメージ提供: 大阪/東京/アシュバーン/シカゴの4リージョン。ただしGenAI実証済は大阪/シカゴの2リージョンのみ）"
     required: false
 
   fn_router_image:
     type: string
     title: "Functions ルーターイメージ（上書き）"
-    description: "通常は空欄。空ならOCIRパスを自動合成（kix.ocir.io/<namespace>/<prefix>-fn-router:latest）"
+    description: "通常は空欄。空ならデプロイリージョンのOCIRパスを自動合成（イメージ提供4リージョン: 大阪/東京/アシュバーン/シカゴ。GenAI実証済は大阪/シカゴのみ）。対応外リージョンでは自リージョンOCIRへミラーし api_image_url と合わせて指定"
     required: false
 
   tenancy_ocid:

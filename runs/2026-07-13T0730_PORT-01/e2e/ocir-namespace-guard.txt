@@ -1,0 +1,7 @@
+# F-001 fix — ocir_namespace 単独変更ガード (region_guard 第3 precondition)
+local `terraform plan -target=terraform_data.region_guard`:
+  default namespace (public idqcucnenh88)                         -> PASS
+  custom ocir_namespace, api_image_url/fn_router_image 空          -> DENY  (precondition: "ocir_namespace を公開既定から変更する場合は...")
+  custom ocir_namespace + api_image_url + fn_router_image 両方指定  -> PASS
+=> 公開既定のままなら影響なし。namespace 単独変更のサイレント image 404 を plan 時に停止。
+   共有スタックは ocir_namespace=既定のためガードに当たらない(RM plan v2 SUCCEEDED で確認)。

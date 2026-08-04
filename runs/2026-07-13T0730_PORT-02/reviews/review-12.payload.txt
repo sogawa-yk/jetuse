@@ -1,0 +1,2210 @@
+diff --git a/docs/tips.md b/docs/tips.md
+index 90071de..90be3b1 100644
+--- a/docs/tips.md
++++ b/docs/tips.md
+@@ -129,3 +129,6 @@
+ - **2026-07-13 新規作成直後の GenerativeAiProject は DP から数分見えない(FIX-47 E2E)**: CP で ACTIVE になっても、その OCID を `OpenAi-Project` に載せた DP 呼び出し(files.list 等)は数分間 404 を返す(実測 2〜3分。vector store の CP→DP 伝播と同パターン)。クリーンルーム初回リクエストは project 自動作成→即 DP 呼び出しでこの窓に当たる → 一時的な 503(ヒント付き)は仕様として許容し、`GET /api/rag/health` が ok になってから再試行が正。伝播をコードで待ち込むとチャット経路が分単位でブロックされるため採用しない。
+ - **2026-07-13 ADB を prefix 変更で in-place rename すると wallet が stale になり DB 全断(FIX-47 E2E)**: `oci_database_autonomous_database` の db_name 変更は置換でなく in-place 更新で、tnsnames のサービス名(`<dbname>_low`)は変わるのに `oci_database_autonomous_database_wallet` は `autonomous_database_id` 不変のため再生成されない → 旧サービス名のウォレットがバケットに配置され `DPY-4000` で接続不能。復旧=Database API でウォレット再生成→バケット上書き→CI 再起動。恒久修正は wallet リソースに `lifecycle.replace_triggered_by = [db_name]`(PORT-01)。またアプリの `/tmp/adb_wallet` キャッシュは tnsnames 不整合を検知せず再フェッチしないため、復旧には CI 再起動が必須(PORT-02)。
+ - **2026-07-13 ORM の on-behalf-of 実行はテナンシレベル読取に明示 policy が要る(FIX-47 E2E)**: `data.oci_identity_region_subscriptions` は直接 CLI(ユーザー認証)では暗黙に読めるが、RM ジョブの OBO トークンでは `inspect tenancies in tenancy` が無いと **エラーでなく null** を返し、home リージョン導出(providers.tf)と deploy_region_key(Issue #55)が `Iteration over null value` / region_guard 失敗で plan 不能になる。deployer policy には既に `inspect tenancies` が含まれるが、含まないグループの実行では再現する。切り分け: ローカル plan は通るのに RM だけ落ちたらこれ(PORT-01)。あわせて prefix は15文字以内でないと VCN dnsLabel 上限(15)で apply が落ちる(schema.yaml に長さ検証なし — PORT-01)。
++- **2026-07-13 `oci.config.from_file()` 直呼びは genai系の入口(`_signer()`/`OciUserPrincipalAuth`)にも潜む(PORT-02 AUTH_MODEガード)**: AUTH_MODE未設定コンテナでの `~/.oci/config` 不在ガードは、素朴に `grep oci.config.from_file` した14箇所(db/rag/obs/tts/stt_realtime/docunderstand/minutes/guardrails/embeddings/mcp_servers/agents/translate等)を共通ヘルパ化するだけでは不十分。`oci_genai_auth.OciUserPrincipalAuth()`(genai.py `_signer()` が呼ぶ、make_inference_client/make_cp_client/nl2sql等genai全経路の認証入口)は**内部で独自に** `oci.config.from_file()` を呼ぶため、この呼び出しはgrep対象に映らずヒントなしの生 `ConfigFileNotFound` が漏れる。教訓: サードパーティラッパー(OciUserPrincipalAuth等)が内部で設定ロードするケースは、ラッパーの呼び出し側(`_signer()`自体)を try/except で包む必要がある。
++- **2026-07-13 dbchatのbackend選択はweb UIが常に明示送信するため「未指定」を表現できない(PORT-02 dbchat既定切替)**: `Nl2SqlRequest.backend` を `Literal[...] | None = None` にして「未指定=サーバー既定に任せる」を導入し、明示 `sql_search` はSemanticStore未構成でも強制(ヒント付きエラー)という設計にしたところ、codex-reviewで**blocker**判定(`packages/web/src/pages/dbchat.tsx` の `useState<Nl2SqlBackend>('sql_search')` が常に明示送信するため、SEMSTORE_OCID未設定環境で既定のdbchat縮退が実UIから到達不能になっていた)。対象area外(packages/web)への変更を避けるため `backend="sql_search"` は明示/既定を区別せず一律select_aiへ自動切替する設計に戻し、trade-off(SQL-04比較モードがSEMSTORE_OCID未設定環境で両パネルselect_aiになりうる)を`ponytail:`コメントで明記。教訓: APIのみで「既定値」を区別可能にするスキーマ変更は、既存フロントの初期state送信パターンを先に確認しないと実到達性を壊す。
++- **2026-07-13 OCI Functionsルーター(fn/router/func.py)はADR-0005で二重実装禁止だが機械的に検出できない(PORT-02)**: `/api/dbchat/schema` と `/api/tts` はFastAPI(service/routes/)とFunctionsルーター(fn/router/func.py)の両方に実装があり、後者はCI/gitのlint/testでは一切実行されないパス(呼び出しはAPI GWのfunctions_routes経由)。FastAPI側だけ縮退メッセージ/新フィールドを追加してもruff/pytestはグリーンのまま通り、codex-reviewの手動diff読解で初めて発覚した。教訓: service/routes配下のエンドポイントを変更するときは必ず `grep -rn "<同一path>" packages/api/fn/` で二重実装の有無を確認する。
+diff --git a/packages/api/fn/router/func.py b/packages/api/fn/router/func.py
+index 6d1d28b..e2b8bcf 100644
+--- a/packages/api/fn/router/func.py
++++ b/packages/api/fn/router/func.py
+@@ -62,6 +62,11 @@ def handler(ctx, data: io.BytesIO):
+         return _error(ctx, e.status_code, str(e.detail))
+     except nl2sql.SqlRejectedError as e:
+         return _error(ctx, 400, str(e))
++    except tts.TtsError as e:
++        # PORT-02: CI(FastAPI)側と同じ縮退(503+ヒント)。捕捉しないと下のExceptionで
++        # 生の"internal error"500に潰れヒントが失われる(ADR-0005: 二重実装の禁止)。
++        logger.warning("fn tts synthesize degraded: %s", e)
++        return _error(ctx, 503, str(e))
+     except oracledb.Error as e:
+         msg = str(e).splitlines()[0][:300]
+         if "DPY-" in msg:
+@@ -91,7 +96,16 @@ def _route(ctx, method: str, path: str, body: dict, owner: str):
+ 
+     # --- dbchat (SQL-02/03) ---
+     if path == "/api/dbchat/schema" and method == "GET":
+-        return _json(ctx, nl2sql.get_schema_info())
++        # PORT-02: CI(FastAPI)側の /api/dbchat/schema と同じ契約に揃える
++        # (sample_available/sample_unavailable_reason。ADR-0005: 二重実装の禁止)。
++        info = nl2sql.get_schema_info()
++        sample = nl2sql.sh_sample_status()
++        return _json(ctx, {
++            **info,
++            "sample_available": sample["available"],
++            **({"sample_unavailable_reason": sample["reason"]}
++               if not sample["available"] else {}),
++        })
+     # feedback 20260620 #3: Select AIで選択可能なモデル一覧(dbchatセグメントはFn経由のため要追加)
+     if path == "/api/dbchat/select-ai-models" and method == "GET":
+         return _json(ctx, {"models": nl2sql.SELECT_AI_MODELS,
+diff --git a/packages/api/jetuse_core/agents.py b/packages/api/jetuse_core/agents.py
+index 3ad4f94..41ee999 100644
+--- a/packages/api/jetuse_core/agents.py
++++ b/packages/api/jetuse_core/agents.py
+@@ -150,7 +150,9 @@ def list_projects() -> list[dict[str, str]]:
+             {"region": s.oci_region}, signer=signer
+         )
+     else:
+-        client = oci.generative_ai.GenerativeAiClient(oci.config.from_file())
++        from .genai import load_local_oci_config
++
++        client = oci.generative_ai.GenerativeAiClient(load_local_oci_config())
+     res = client.list_generative_ai_projects(compartment_id=s.compartment_ocid)
+     return [
+         {"id": p.id, "name": p.display_name}
+diff --git a/packages/api/jetuse_core/bootstrap.py b/packages/api/jetuse_core/bootstrap.py
+index 5f5e492..f5c2841 100644
+--- a/packages/api/jetuse_core/bootstrap.py
++++ b/packages/api/jetuse_core/bootstrap.py
+@@ -15,6 +15,7 @@
+ 
+ import logging
+ import os
++import threading
+ import time
+ 
+ import oracledb
+@@ -24,6 +25,33 @@ from .settings import Settings, get_settings
+ 
+ logger = logging.getLogger("jetuse.bootstrap")
+ 
++# Select AI(データセット)クレデンシャルの可視化(PORT-02)。bootstrap は best-effort で
++# ENABLE_RESOURCE_PRINCIPAL を試みる(下記 _provision)。/api/health がこの結果を読む。
++# 初期値はok=None(未検証) — bootstrap未実行/未完了を「成功」と偽って見せない
++# (レビュー指摘F-003: 既定trueだとRUN_DB_BOOTSTRAP未設定や起動直後にhealthが誤ってokを返す)。
++_rp_lock = threading.Lock()
++_rp_status: dict = {
++    "ok": None,
++    "hint": "起動時のENABLE_RESOURCE_PRINCIPAL検証が未実行です(bootstrap未完了)",
++}
++
++_RP_HINT = (
++    "ENABLE_RESOURCE_PRINCIPAL に失敗しました。Select AI(データセット)のクレデンシャルが"
++    "使えない可能性があります。動的グループへの generative-ai-family 権限、および"
++    "Object Storage バケットの read 権限を確認してください"
++)
++
++
++def resource_principal_status() -> dict:
++    with _rp_lock:
++        return dict(_rp_status)
++
++
++def _set_resource_principal_status(ok: bool, hint: str | None = None) -> None:
++    global _rp_status
++    with _rp_lock:
++        _rp_status = {"ok": ok, **({"hint": hint} if hint else {})}
++
+ # ADB ACTIVE 待ちの上限(秒)と間隔。ADB作成は実測10-15分。
+ BOOTSTRAP_TIMEOUT_S = int(os.environ.get("DB_BOOTSTRAP_TIMEOUT_S", "1500"))
+ RETRY_INTERVAL_S = int(os.environ.get("DB_BOOTSTRAP_INTERVAL_S", "20"))
+@@ -109,11 +137,10 @@ def _provision(settings: Settings) -> None:
+                 u=app_user,
+             )
+             logger.info("resource principal enabled for %s", app_user)
+-        except oracledb.DatabaseError:
+-            logger.warning(
+-                "ENABLE_RESOURCE_PRINCIPAL 失敗(Select AIは手動クレデンシャルが必要)",
+-                exc_info=True,
+-            )
++            _set_resource_principal_status(True)
++        except oracledb.DatabaseError as e:
++            logger.warning("%s: %s", _RP_HINT, e, exc_info=True)
++            _set_resource_principal_status(False, _RP_HINT)
+         conn.commit()
+     finally:
+         conn.close()
+diff --git a/packages/api/jetuse_core/chat.py b/packages/api/jetuse_core/chat.py
+index 1fe1e38..ada5c0e 100644
+--- a/packages/api/jetuse_core/chat.py
++++ b/packages/api/jetuse_core/chat.py
+@@ -10,11 +10,11 @@ from collections.abc import Iterator
+ from dataclasses import dataclass
+ from typing import Any, Literal
+ 
+-from openai import APIConnectionError, OpenAI
++from openai import APIConnectionError, APIStatusError, OpenAI
+ 
+ from .genai import make_inference_client
+ from .logging import log_with
+-from .models import MODELS, ModelDef
++from .models import MODELS, ModelDef, mark_unavailable
+ 
+ logger = logging.getLogger("jetuse.chat")
+ 
+@@ -570,6 +570,31 @@ def stream_chat(
+                 "再生成をお試しください"
+             }
+             return
++        except APIStatusError as e:
++            # 404/403/401はモデル未提供/未認可(リージョン/テナンシ差)を示しうる(PORT-02)。
++            # ただしRAG(stale vector store)/短期メモリ(stale conversation)/エージェント固有
++            # project_ocid絡みの呼び出しはモデル以外が原因の404/403もあるため、プロセス全体を
++            # 汚す mark_unavailable はそれらが関与しない素のチャット呼び出しに限定する
++            # (レビュー指摘F-001)。
++            p = params or GenParams()
++            model_only_call = (
++                not p.file_search_store and not oci_conversation_id and not project_ocid
++            )
++            if e.status_code in (401, 403, 404) and model_only_call:
++                hint = f"HTTP {e.status_code}"
++                mark_unavailable(model_key, hint)
++                log_with(
++                    logger, logging.WARNING, "chat_model_unavailable",
++                    model=model_key, status=e.status_code,
++                )
++                yield {
++                    "error": f"モデル {model_key} はこのリージョン/テナンシでは利用できません"
++                    f"({hint})"
++                }
++                return
++            log_with(logger, logging.ERROR, "chat_failed", model=model_key, error=str(e))
++            yield {"error": str(e)}
++            return
+         except Exception as e:  # ストリーミング途中の失敗はイベントで通知
+             log_with(logger, logging.ERROR, "chat_failed", model=model_key, error=str(e))
+             logger.exception("chat_failed traceback (model=%s)", model_key)
+diff --git a/packages/api/jetuse_core/db.py b/packages/api/jetuse_core/db.py
+index 4790e2b..2957726 100644
+--- a/packages/api/jetuse_core/db.py
++++ b/packages/api/jetuse_core/db.py
+@@ -47,7 +47,9 @@ def _wallet_bytes(settings: Settings) -> bytes:
+                 {"region": settings.oci_region}, signer=_rp_signer()
+             )
+         else:
+-            client = oci.object_storage.ObjectStorageClient(oci.config.from_file())
++            from .genai import load_local_oci_config
++
++            client = oci.object_storage.ObjectStorageClient(load_local_oci_config())
+         ns = client.get_namespace().data
+         obj = client.get_object(ns, settings.adb_wallet_bucket, settings.adb_wallet_object)
+         content = obj.data.content
+@@ -58,7 +60,9 @@ def _wallet_bytes(settings: Settings) -> bytes:
+         if rp:
+             db = oci.database.DatabaseClient({"region": settings.oci_region}, signer=_rp_signer())
+         else:
+-            db = oci.database.DatabaseClient(oci.config.from_file())
++            from .genai import load_local_oci_config
++
++            db = oci.database.DatabaseClient(load_local_oci_config())
+         resp = db.generate_autonomous_database_wallet(
+             settings.adb_ocid,
+             oci.database.models.GenerateAutonomousDatabaseWalletDetails(
+diff --git a/packages/api/jetuse_core/docunderstand.py b/packages/api/jetuse_core/docunderstand.py
+index 33e3f06..428b54f 100644
+--- a/packages/api/jetuse_core/docunderstand.py
++++ b/packages/api/jetuse_core/docunderstand.py
+@@ -82,7 +82,9 @@ def _doc_client():
+                 {"region": region}, signer=signer
+             )
+         else:
+-            _client = oci.ai_document.AIServiceDocumentClient(oci.config.from_file())
++            from .genai import load_local_oci_config
++
++            _client = oci.ai_document.AIServiceDocumentClient(load_local_oci_config())
+     return _client
+ 
+ 
+diff --git a/packages/api/jetuse_core/embeddings.py b/packages/api/jetuse_core/embeddings.py
+index 19cc478..d17c2c7 100644
+--- a/packages/api/jetuse_core/embeddings.py
++++ b/packages/api/jetuse_core/embeddings.py
+@@ -28,7 +28,9 @@ def _embed_client():
+             _client = GenerativeAiInferenceClient({"region": region}, signer=signer,
+                                                   service_endpoint=ep)
+         else:
+-            _client = GenerativeAiInferenceClient(oci.config.from_file(), service_endpoint=ep)
++            from .genai import load_local_oci_config
++
++            _client = GenerativeAiInferenceClient(load_local_oci_config(), service_endpoint=ep)
+     return _client
+ 
+ 
+diff --git a/packages/api/jetuse_core/genai.py b/packages/api/jetuse_core/genai.py
+index 512f22e..14a0efd 100644
+--- a/packages/api/jetuse_core/genai.py
++++ b/packages/api/jetuse_core/genai.py
+@@ -21,12 +21,43 @@ from .settings import Settings, get_settings
+ 
+ logger = logging.getLogger("jetuse.genai")
+ 
++_AUTH_MODE_HINT = (
++    "OCI設定ファイル(~/.oci/config)が見つかりません。"
++    "AUTH_MODE=resource_principal の設定漏れの可能性があります"
++)
++
+ 
+ def _signer():
+     # CI/Functions上は AUTH_MODE=resource_principal を環境変数で指定(specs/07)
+     if os.environ.get("AUTH_MODE") == "resource_principal":
+         return OciResourcePrincipalAuth()
+-    return OciUserPrincipalAuth()
++    try:
++        # OciUserPrincipalAuth()内部でもoci.config.from_file()を呼ぶため、
++        # ここで捕捉しないとload_local_oci_config()の外側で生ConfigFileNotFoundが
++        # 漏れる(make_inference_client/make_cp_client/nl2sql等genai系全経路の入口 —
++        # レビュー指摘: AUTH_MODEガードがOpenAI互換クライアント側に届いていなかった)。
++        return OciUserPrincipalAuth()
++    except Exception as e:
++        import oci
++
++        if isinstance(e, oci.exceptions.ConfigFileNotFound):
++            raise RuntimeError(_AUTH_MODE_HINT) from e
++        raise
++
++
++def load_local_oci_config() -> dict:
++    """AUTH_MODE!=resource_principal のときの ~/.oci/config フォールバック(PORT-02)。
++
++    未設定コンテナでの ConfigFileNotFound を未処理500で落とさず、原因(AUTH_MODE設定漏れ)を
++    明示する。genai/obs/tts/stt_realtime/docunderstand/minutes/guardrails/embeddings/
++    mcp_servers/agents/rag/translate/db の各モジュールが共通で使う(root-causeを1箇所に集約)。
++    """
++    import oci
++
++    try:
++        return oci.config.from_file()
++    except oci.exceptions.ConfigFileNotFound as e:
++        raise RuntimeError(_AUTH_MODE_HINT) from e
+ 
+ 
+ # --- GenerativeAiProject 解決(FIX-47 / Issue #47) ---
+@@ -66,7 +97,7 @@ def _sdk_client(settings: Settings):
+         return oci.generative_ai.GenerativeAiClient(
+             {"region": settings.oci_region}, signer=signer
+         )
+-    config = oci.config.from_file()
++    config = load_local_oci_config()
+     config["region"] = settings.oci_region
+     return oci.generative_ai.GenerativeAiClient(config)
+ 
+@@ -97,11 +128,16 @@ def _create_project(client, settings: Settings) -> str:
+     )
+ 
+ 
+-def resolve_project_ocid(settings: Settings | None = None) -> str:
++def resolve_project_ocid(
++    settings: Settings | None = None, *, allow_autocreate: bool = True
++) -> str:
+     """OpenAi-Project 用 project OCID を返す。
+ 
+     設定 > キャッシュ > compartment内ACTIVE検索 > 自動作成(PROJECT_AUTOCREATE=true のときのみ。
+     公開 ORM スタックが policy とセットで有効化する — ベアランタイム既定は検出のみ)。
++
++    allow_autocreate=False は診断/health目的の呼び出し向け(PORT-02): GETの読み取り専用
++    エンドポイントがポーリングだけでリソースを作ってしまうのを避ける(レビュー指摘)。
+     """
+     global _project_cache
+     settings = settings or get_settings()
+@@ -122,7 +158,7 @@ def resolve_project_ocid(settings: Settings | None = None) -> str:
+             ).data
+             resolved = next((p.id for p in items if p.lifecycle_state == "ACTIVE"), None)
+             if not resolved:
+-                if not settings.project_autocreate:
++                if not settings.project_autocreate or not allow_autocreate:
+                     raise ProjectResolutionError(
+                         _ACTIONABLE + " (cause: no ACTIVE project and autocreate disabled)"
+                     )
+diff --git a/packages/api/jetuse_core/guardrails.py b/packages/api/jetuse_core/guardrails.py
+index 07d3632..5c64d51 100644
+--- a/packages/api/jetuse_core/guardrails.py
++++ b/packages/api/jetuse_core/guardrails.py
+@@ -35,8 +35,10 @@ def _inference_client():
+                 {"region": region}, signer=signer
+             )
+         else:
++            from .genai import load_local_oci_config
++
+             _client = oci.generative_ai_inference.GenerativeAiInferenceClient(
+-                oci.config.from_file()
++                load_local_oci_config()
+             )
+     return _client
+ 
+diff --git a/packages/api/jetuse_core/health.py b/packages/api/jetuse_core/health.py
+new file mode 100644
+index 0000000..896c1d2
+--- /dev/null
++++ b/packages/api/jetuse_core/health.py
+@@ -0,0 +1,130 @@
++"""機能別 readiness 集約(PORT-02)。
++
++FIX-47の `/api/rag/health`(project/CP/DP 3点検査)を土台に、GenAI以外の機能面
++(モデル可用性・NL2SQL・Speech・OCR・TTS)も横断して自己診断できるようにする。
++Issue #47 の「切り分け不能」問題のアプリ全域での根治。
++
++各チェックは他機能を巻き込まないよう例外を握りつぶし、ok(bool) + hint(理由) を返す。
++実際にAPI課金が発生しうる呼び出し(TTS合成・OCR実行等)は行わない=設定の整合性のみを見る
++(実失敗は各機能のリクエスト時に個別に縮退メッセージへ変換済み — PORT-02作業内容4)。
++"""
++
++from typing import Any
++
++from . import nl2sql, rag
++from .bootstrap import resource_principal_status
++from .models import MODELS, model_status
++from .settings import get_settings
++
++
++def _check(ok: bool | None, hint: str | None = None) -> dict[str, Any]:
++    """ok=None は「未検証」(例: bootstrap未完了)。ok=Falseと同様に非okだが、
++    hintで区別できるようにする(レビュー指摘F-003: 未検証をokと偽らない)。"""
++    out: dict[str, Any] = {"ok": ok}
++    if not ok and hint:
++        out["hint"] = hint
++    return out
++
++
++def _agg(checks: list[dict[str, Any]]) -> str:
++    oks = [c["ok"] for c in checks]
++    if all(oks):
++        return "ok"
++    if any(oks):
++        return "degraded"
++    return "unavailable"
++
++
++def chat_health() -> dict[str, Any]:
++    models = {}
++    for key in MODELS:
++        ok, hint = model_status(key)
++        models[key] = _check(ok, hint)
++    return {"status": _agg(list(models.values())) if models else "unavailable", "models": models}
++
++
++def _rag_health() -> dict[str, Any]:
++    try:
++        # allow_autocreate=False: 集約healthはGETポーリングされうるため、project未解決を
++        # そのまま報告するだけに留め、GenerativeAiProjectの新規作成は起こさない(レビュー指摘)。
++        raw = rag.health_check(allow_autocreate=False)
++    except Exception as e:  # noqa: BLE001 - RAG個別の想定外失敗で/api/health全体を落とさない
++        return {"status": "unavailable", "hint": f"RAG health check failed: {type(e).__name__}"}
++    if raw["ok"]:
++        return {"status": "ok"}
++    project_ok = raw["checks"].get("project", {}).get("ok", False)
++    hints = [c["hint"] for c in raw["checks"].values() if not c.get("ok") and c.get("hint")]
++    return {
++        "status": "degraded" if project_ok else "unavailable",
++        "hint": "; ".join(hints)[:500] if hints else None,
++        "checks": raw["checks"],
++    }
++
++
++def dbchat_health() -> dict[str, Any]:
++    s = get_settings()
++    sem_ok = bool(s.semstore_ocid)
++    semantic = _check(sem_ok, "SEMSTORE_OCID 未設定" if not sem_ok else None)
++    rp = resource_principal_status()
++    select_ai = _check(rp["ok"], rp.get("hint"))
++    try:
++        sample = nl2sql.sh_sample_status()
++        sample_check = _check(sample["available"], sample.get("reason"))
++    except Exception as e:  # noqa: BLE001 - DB未接続等。診断エンドポイントは落とさない
++        sample_check = _check(False, f"SHサンプル検査に失敗しました: {type(e).__name__}")
++    # sample_dataは「SQL生成能力」ではなく「(生成できた場合に)SHサンプルが読めるか」という
++    # 前提条件でしかないため、semantic_store/select_aiと単純に_agg()すると、両方とも
++    # 生成不可なのにsample_data=trueだけでdegraded判定になってしまう(レビュー指摘)。
++    # 生成経路が1つも無ければunavailable、経路はあるがsampleだけ不調ならdegraded、とする。
++    has_generation_backend = semantic["ok"] is True or select_ai["ok"] is True
++    if not has_generation_backend:
++        status = "unavailable"
++    elif sample_check["ok"] is not True:
++        status = "degraded"
++    else:
++        status = "ok"
++    return {
++        "status": status,
++        "semantic_store": semantic,
++        "select_ai": select_ai,
++        "sample_data": sample_check,
++    }
++
++
++def speech_health() -> dict[str, Any]:
++    ok = bool(get_settings().speech_bucket)
++    return {"status": "ok" if ok else "unavailable",
++            **({"hint": "SPEECH_BUCKET 未設定"} if not ok else {})}
++
++
++def ocr_health() -> dict[str, Any]:
++    # OCR自体に専用設定は不要だが、全OCI呼び出しに必須のcompartment_ocidが空なら
++    # 呼び出し前から確実に失敗するため、それだけは検出する(実合成/実OCR自体は課金対象
++    # のため呼ばない — レビュー指摘: 常時okは最低限の設定不備すら見逃す)。
++    ok = bool(get_settings().compartment_ocid)
++    return {"status": "ok" if ok else "unavailable",
++            **({"hint": "COMPARTMENT_OCID 未設定"} if not ok else {})}
++
++
++def tts_health() -> dict[str, Any]:
++    # 実合成は課金対象のため呼ばない。設定(TTS_REGION)とcompartment_ocidの有無を報告する。
++    ok = bool(get_settings().compartment_ocid)
++    return {
++        "status": "ok" if ok else "unavailable",
++        "region": get_settings().tts_region,
++        **({"hint": "COMPARTMENT_OCID 未設定"} if not ok else {}),
++    }
++
++
++def capability_health() -> dict[str, Any]:
++    chat = chat_health()
++    capabilities = {
++        "chat": chat,
++        "rag": _rag_health(),
++        "dbchat": dbchat_health(),
++        "speech": speech_health(),
++        "ocr": ocr_health(),
++        "tts": tts_health(),
++    }
++    ok = all(c["status"] == "ok" for c in capabilities.values())
++    return {"ok": ok, "capabilities": capabilities}
+diff --git a/packages/api/jetuse_core/mcp_servers.py b/packages/api/jetuse_core/mcp_servers.py
+index 5827534..7a2087e 100644
+--- a/packages/api/jetuse_core/mcp_servers.py
++++ b/packages/api/jetuse_core/mcp_servers.py
+@@ -115,6 +115,8 @@ def _read_secret(secret_ocid: str) -> str:
+         signer = oci.auth.signers.get_resource_principals_signer()
+         client = oci.secrets.SecretsClient({}, signer=signer)
+     else:
+-        client = oci.secrets.SecretsClient(oci.config.from_file())
++        from .genai import load_local_oci_config
++
++        client = oci.secrets.SecretsClient(load_local_oci_config())
+     bundle = client.get_secret_bundle(secret_ocid).data
+     return base64.b64decode(bundle.secret_bundle_content.content).decode()
+diff --git a/packages/api/jetuse_core/minutes.py b/packages/api/jetuse_core/minutes.py
+index b81b37f..33f6413 100644
+--- a/packages/api/jetuse_core/minutes.py
++++ b/packages/api/jetuse_core/minutes.py
+@@ -51,7 +51,9 @@ def _clients():
+             oci.object_storage.ObjectStorageClient(cfg, signer=signer),
+             oci.ai_speech.AIServiceSpeechClient(cfg, signer=signer),
+         )
+-    cfg = oci.config.from_file()
++    from .genai import load_local_oci_config
++
++    cfg = load_local_oci_config()
+     return (
+         oci.object_storage.ObjectStorageClient(cfg),
+         oci.ai_speech.AIServiceSpeechClient(cfg),
+diff --git a/packages/api/jetuse_core/models.py b/packages/api/jetuse_core/models.py
+index 9440eea..8ef9bcd 100644
+--- a/packages/api/jetuse_core/models.py
++++ b/packages/api/jetuse_core/models.py
+@@ -1,5 +1,7 @@
+ """モデルレジストリ(specs/07)。API対応はモデル依存(SPIKE-01実証)。"""
+ 
++import threading
++import time
+ from dataclasses import dataclass
+ from typing import Literal
+ 
+@@ -46,3 +48,44 @@ MODELS: dict[str, ModelDef] = {
+ }
+ 
+ DEFAULT_MODEL = "gpt-oss-120b"
++
++# 利用可否のlazyマーク(PORT-02): 起動時プローブはせず、実際のchat呼び出しが
++# NotFound/PermissionDenied(=リージョン/テナンシに無い)で失敗した時点でプロセス内に記録する。
++# マーク後は routes/chat.py が実呼び出し自体をスキップするため、TTLで自動的に
++# 再試行対象へ戻さないと一時的なIAM伝播遅延・リージョン購読直後の遅延等でも
++# プロセス再起動までモデルが永久に使えなくなる(レビュー指摘: 自己回復手段が無い)。
++_RETRY_AFTER_SECONDS = 300.0  # ponytail: 固定5分。運用で頻発するなら設定化を検討
++_lock = threading.Lock()
++_unavailable: dict[str, tuple[str, float]] = {}  # model_key -> (hint, retry_at monotonic)
++
++
++def mark_unavailable(key: str, hint: str) -> None:
++    with _lock:
++        _unavailable[key] = (hint, time.monotonic() + _RETRY_AFTER_SECONDS)
++
++
++def clear_unavailable(key: str | None = None) -> None:
++    """テスト用リセット。keyを省略すると全解除。"""
++    with _lock:
++        if key is None:
++            _unavailable.clear()
++        else:
++            _unavailable.pop(key, None)
++
++
++def model_status(key: str) -> tuple[bool, str | None]:
++    """(利用可能か, 不可の場合のヒント)。TTL経過後は自動的に利用可能へ戻す
++    (次回呼び出しで実際に再試行し、まだ不可なら新しいTTLで再マークされる)。
++
++    読み取り専用(GET /api/chat/models・/api/health等からポーリングされうる)なので
++    _unavailable への書き込みは行わない(レビュー指摘: 照会が状態を変えるべきではない)。
++    期限切れエントリは次にmark_unavailable()が呼ばれた時に上書きされるのみで、放置しても
++    MODELSレジストリ規模(数件)を超えて増え続けることはない。
++    """
++    with _lock:
++        entry = _unavailable.get(key)
++    if entry is not None and time.monotonic() >= entry[1]:
++        entry = None
++    if entry is None:
++        return True, None
++    return False, entry[0]
+diff --git a/packages/api/jetuse_core/nl2sql.py b/packages/api/jetuse_core/nl2sql.py
+index 37af47e..7b3c015 100644
+--- a/packages/api/jetuse_core/nl2sql.py
++++ b/packages/api/jetuse_core/nl2sql.py
+@@ -47,7 +47,9 @@ def generate_sql(question: str) -> str:
+     """SemanticStoreでNL→SQL生成(同期/非同期両対応)。実測30秒前後"""
+     s = get_settings()
+     if not s.semstore_ocid:
+-        raise RuntimeError("SEMSTORE_OCID is not configured")
++        raise RuntimeError(
++            "SemanticStore 未構成(SEMSTORE_OCID)。Select AI を使うか構成してください"
++        )
+     with httpx.Client(auth=_signer(), timeout=GENERATE_TIMEOUT) as client:
+         res = client.post(
+             f"{_base()}/semanticStores/{s.semstore_ocid}/actions/generateSqlFromNl",
+@@ -121,18 +123,27 @@ def create_profile(cur, prof: str, model: str, object_list: list[dict]) -> None:
+         cur.execute("BEGIN DBMS_CLOUD_AI.DROP_PROFILE(:p); END;", p=prof)
+     except Exception:  # noqa: BLE001
+         pass
+-    cur.execute(
+-        "BEGIN DBMS_CLOUD_AI.CREATE_PROFILE(:p, :a); END;",
+-        p=prof,
+-        a=json.dumps({
+-            "provider": "oci",
+-            "credential_name": s.select_ai_credential,
+-            "region": s.oci_region,
+-            "model": model,
+-            "object_list": object_list,
+-            "comments": "true",
+-        }),
+-    )
++    try:
++        cur.execute(
++            "BEGIN DBMS_CLOUD_AI.CREATE_PROFILE(:p, :a); END;",
++            p=prof,
++            a=json.dumps({
++                "provider": "oci",
++                "credential_name": s.select_ai_credential,
++                "region": s.oci_region,
++                "model": model,
++                "object_list": object_list,
++                "comments": "true",
++            }),
++        )
++    except oracledb.DatabaseError as e:
++        # PORT-02: クレデンシャル/DG権限未整備がここに集約して落ちる。原因ヒントを付す。
++        raise RuntimeError(
++            f"Select AI プロファイル作成に失敗しました。DBMS_CLOUD_AI のクレデンシャル"
++            f"({s.select_ai_credential})が未整備の可能性があります。動的グループへの"
++            "generative-ai-family 権限、Object Storage バケットの read 権限、および"
++            "ENABLE_RESOURCE_PRINCIPAL の起動ログ(/api/health)を確認してください"
++        ) from e
+ 
+ 
+ def _ensure_select_ai_profile(model: str) -> str:
+@@ -316,6 +327,21 @@ def get_schema_info() -> dict[str, Any]:
+     return _schema_cache
+ 
+ 
++def sh_sample_status() -> dict[str, Any]:
++    """SHサンプルスキーマが読めるか(PORT-02)。bootstrapはSHへのgrantをしないため、
++    未整備ADBではALL_TABLESが空になり従来はサイレントに空表示していた — ここで検出する。
++    """
++    if get_schema_info()["tables"]:
++        return {"available": True}
++    return {
++        "available": False,
++        "reason": (
++            "SHサンプルスキーマが読み取れません(ADBのSHスキーマがPUBLIC公開されていない"
++            "可能性)。CSVデータセット取り込み(datasets)を利用してください"
++        ),
++    }
++
++
+ def preview_table(table: str, limit: int = 20) -> dict[str, Any]:
+     """対象スキーマの既知テーブルの中身(サンプル行)を返す(ENH-02。read-only)。
+ 
+diff --git a/packages/api/jetuse_core/obs.py b/packages/api/jetuse_core/obs.py
+index 5311ed2..cf49fac 100644
+--- a/packages/api/jetuse_core/obs.py
++++ b/packages/api/jetuse_core/obs.py
+@@ -21,6 +21,56 @@ _internal = logging.getLogger("jetuse.obs")
+ 
+ _BATCH_MAX = 50
+ _FLUSH_SECONDS = 5.0
++_MAX_BACKOFF_SECONDS = 300.0
++
++
++def _is_auth_error(e: Exception) -> bool:
++    return getattr(e, "status", None) in (401, 403)
++
++
++class _ShipThrottle:
++    """送信失敗の抑制(PORT-02): 指数バックオフ + N回に1回のstderrサマリ。
++
++    恒常的な401/403(認可エラー)はWARNING1回だけ出し、以後リトライしない
++    (failed()がTrueを返すのでworker側でスレッドを終了=detachする)。
++    """
++
++    def __init__(self, name: str):
++        self.name = name
++        self.fail_count = 0
++        self.retry_after = 0.0
++
++    def blocked(self) -> bool:
++        return time.monotonic() < self.retry_after
++
++    def ok(self) -> None:
++        self.fail_count = 0
++        self.retry_after = 0.0
++
++    def failed(self, e: Exception) -> bool:
++        self.fail_count += 1
++        if _is_auth_error(e):
++            _internal.warning(
++                "%s: 認可エラーのため送信を停止します"
++                "(AUTH_MODE設定漏れ/IAMポリシー未整備の可能性): %s", self.name, e,
++            )
++            return True
++        if self.fail_count == 1 or self.fail_count % 10 == 0:
++            import sys
++
++            print(f"{self.name} failed x{self.fail_count} (backing off)", file=sys.stderr)
++        backoff = min(_MAX_BACKOFF_SECONDS, _FLUSH_SECONDS * (2 ** min(self.fail_count, 6)))
++        self.retry_after = time.monotonic() + backoff
++        return False
++
++
++def _retain_buffer(buf: list, cap: int) -> list:
++    """バックオフ中はバッファを破棄せず保持する(直近capまで、超過分は古いものから捨てる)。
++
++    障害発生中ほど観測データが欠落しては意味がないため、送信を一時停止していても
++    キューから引いた分は失わない(全体の上限はself._q自体のmaxsizeで別途effectively bound)。
++    """
++    return buf[-cap:] if len(buf) > cap else buf
+ 
+ 
+ def _signer_args() -> dict:
+@@ -31,7 +81,9 @@ def _signer_args() -> dict:
+             "config": {"region": get_settings().oci_region},
+             "signer": oci.auth.signers.get_resource_principals_signer(),
+         }
+-    return {"config": oci.config.from_file()}
++    from .genai import load_local_oci_config
++
++    return {"config": load_local_oci_config()}
+ 
+ 
+ class OciLogHandler(logging.Handler):
+@@ -64,6 +116,7 @@ class OciLogHandler(logging.Handler):
+ 
+         buf: list = []
+         last = time.monotonic()
++        throttle = _ShipThrottle("oci log ship")
+         while True:
+             timeout = max(0.2, _FLUSH_SECONDS - (time.monotonic() - last))
+             try:
+@@ -71,6 +124,10 @@ class OciLogHandler(logging.Handler):
+             except queue.Empty:
+                 pass
+             if buf and (len(buf) >= _BATCH_MAX or time.monotonic() - last >= _FLUSH_SECONDS):
++                if throttle.blocked():
++                    buf = _retain_buffer(buf, _BATCH_MAX)
++                    last = time.monotonic()
++                    continue
+                 try:
+                     now = datetime.now(UTC)
+                     entries = [
+@@ -89,13 +146,15 @@ class OciLogHandler(logging.Handler):
+                             )],
+                         ),
+                     )
+-                except Exception:  # noqa: BLE001
+-                    # 送信失敗はstderrへ1行だけ(無限ループ防止のためloggingは使わない)
+-                    import sys
+-
+-                    print("oci log ship failed", file=sys.stderr)
++                    throttle.ok()
++                    buf = []
++                except Exception as e:  # noqa: BLE001
++                    # 失敗した当該バッチも破棄しない(レビュー指摘: バックオフに入る直前の
++                    # 1回目の失敗バッチだけ従来 buf=[] で毎回捨てていた)。
+                     self._client = None  # 次回再接続
+-                buf = []
++                    if throttle.failed(e):
++                        return  # 認可エラー: 以後リトライせずdetach
++                    buf = _retain_buffer(buf, _BATCH_MAX)
+                 last = time.monotonic()
+ 
+ 
+@@ -128,6 +187,7 @@ def _metrics_worker() -> None:
+     client = None
+     buf: list = []
+     last = time.monotonic()
++    throttle = _ShipThrottle("oci metric ship")
+     while True:
+         timeout = max(0.2, _FLUSH_SECONDS - (time.monotonic() - last))
+         try:
+@@ -135,6 +195,10 @@ def _metrics_worker() -> None:
+         except queue.Empty:
+             pass
+         if buf and (len(buf) >= _BATCH_MAX or time.monotonic() - last >= _FLUSH_SECONDS):
++            if throttle.blocked():
++                buf = _retain_buffer(buf, _BATCH_MAX)
++                last = time.monotonic()
++                continue
+             try:
+                 if client is None:
+                     args = _signer_args()
+@@ -157,12 +221,13 @@ def _metrics_worker() -> None:
+                 client.post_metric_data(
+                     post_metric_data_details=mm.PostMetricDataDetails(metric_data=data)
+                 )
+-            except Exception:  # noqa: BLE001
+-                import sys
+-
+-                print("oci metric ship failed", file=sys.stderr)
++                throttle.ok()
++                buf = []
++            except Exception as e:  # noqa: BLE001
+                 client = None
+-            buf = []
++                if throttle.failed(e):
++                    return  # 認可エラー: 以後リトライせずdetach
++                buf = _retain_buffer(buf, _BATCH_MAX)
+             last = time.monotonic()
+ 
+ 
+diff --git a/packages/api/jetuse_core/rag.py b/packages/api/jetuse_core/rag.py
+index 07c0a63..b4de077 100644
+--- a/packages/api/jetuse_core/rag.py
++++ b/packages/api/jetuse_core/rag.py
+@@ -134,7 +134,9 @@ def _os_client():
+         return oci.object_storage.ObjectStorageClient(
+             {"region": get_settings().oci_region}, signer=signer
+         )
+-    return oci.object_storage.ObjectStorageClient(oci.config.from_file())
++    from .genai import load_local_oci_config
++
++    return oci.object_storage.ObjectStorageClient(load_local_oci_config())
+ 
+ 
+ def _backup_original(owner: str, file_id: str, filename: str, content: bytes) -> None:
+@@ -174,15 +176,18 @@ def _check_hint(e: Exception, what: str) -> str:
+             "リージョンの agentic API 対応を確認してください")
+ 
+ 
+-def health_check() -> dict[str, Any]:
++def health_check(*, allow_autocreate: bool = True) -> dict[str, Any]:
+     """RAG 経路の3点検査: ①project解決 ②CP vector_stores.list ③DP files.list(OpenAi-Project付き)。
+ 
+     Issue #47 の報告者が「どこで落ちているか」を自己診断できる粒度で返す(認可済み前提)。
++    allow_autocreate=False は集約health(/api/health)からの呼び出し向け(PORT-02):
++    GETの読み取り専用ポーリングだけでGenerativeAiProjectを作ってしまわないようにする
++    (/api/rag/health は既定のallow_autocreate=True=従来どおりの挙動を維持)。
+     """
+     checks: dict[str, dict[str, Any]] = {}
+     project: str | None = None
+     try:
+-        project = resolve_project_ocid()
++        project = resolve_project_ocid(allow_autocreate=allow_autocreate)
+         checks["project"] = {
+             "ok": True, "source": "env" if get_settings().project_ocid else "auto",
+         }
+diff --git a/packages/api/jetuse_core/stt_realtime.py b/packages/api/jetuse_core/stt_realtime.py
+index a794d7b..4417ebf 100644
+--- a/packages/api/jetuse_core/stt_realtime.py
++++ b/packages/api/jetuse_core/stt_realtime.py
+@@ -112,8 +112,10 @@ def _build_client(session: SttSession) -> Any:
+         signer = oci.auth.signers.get_resource_principals_signer()
+         config: dict = {"region": s.oci_region}
+     else:
++        from .genai import load_local_oci_config
++
+         signer = None
+-        config = oci.config.from_file()
++        config = load_local_oci_config()
+     return RealtimeSpeechClient(
+         config=config,
+         realtime_speech_parameters=params,
+diff --git a/packages/api/jetuse_core/translate.py b/packages/api/jetuse_core/translate.py
+index 0d18cbf..b0867f4 100644
+--- a/packages/api/jetuse_core/translate.py
++++ b/packages/api/jetuse_core/translate.py
+@@ -41,7 +41,9 @@ def _oci_language_client():
+                 {"region": region}, signer=signer
+             )
+         else:
+-            _lang_client = oci.ai_language.AIServiceLanguageClient(oci.config.from_file())
++            from .genai import load_local_oci_config
++
++            _lang_client = oci.ai_language.AIServiceLanguageClient(load_local_oci_config())
+     return _lang_client
+ 
+ 
+diff --git a/packages/api/jetuse_core/tts.py b/packages/api/jetuse_core/tts.py
+index 2a1dfc9..bbb901f 100644
+--- a/packages/api/jetuse_core/tts.py
++++ b/packages/api/jetuse_core/tts.py
+@@ -23,6 +23,10 @@ _client: Any = None
+ _lock = threading.Lock()
+ 
+ 
++class TtsError(Exception):
++    """TTS失敗(テナンシ未購読・サービス不在等。PORT-02で明確なヒントを付す)。"""
++
++
+ def _speech_client() -> Any:
+     """TTSリージョンのSpeechクライアント(プロセス内キャッシュ)"""
+     global _client
+@@ -38,7 +42,9 @@ def _speech_client() -> Any:
+                         {"region": region}, signer=signer
+                     )
+                 else:
+-                    cfg = oci.config.from_file()
++                    from .genai import load_local_oci_config
++
++                    cfg = load_local_oci_config()
+                     cfg["region"] = region
+                     _client = oci.ai_speech.AIServiceSpeechClient(cfg)
+     return _client
+@@ -46,21 +52,31 @@ def _speech_client() -> Any:
+ 
+ def synthesize(text: str, voice: str) -> bytes:
+     """テキストをmp3へ合成(同期。呼び出し側でto_thread推奨)"""
++    import oci
+     import oci.ai_speech.models as sm
+ 
+     if voice not in VOICES:
+         raise ValueError(f"unknown voice: {voice}")
+-    r = _speech_client().synthesize_speech(
+-        sm.SynthesizeSpeechDetails(
+-            text=text,
+-            compartment_id=get_settings().compartment_ocid,
+-            configuration=sm.TtsOracleConfiguration(
+-                model_details=sm.TtsOracleTts2NaturalModelDetails(
+-                    voice_id=voice, language_code="ja-JP"
++    try:
++        r = _speech_client().synthesize_speech(
++            sm.SynthesizeSpeechDetails(
++                text=text,
++                compartment_id=get_settings().compartment_ocid,
++                configuration=sm.TtsOracleConfiguration(
++                    model_details=sm.TtsOracleTts2NaturalModelDetails(
++                        voice_id=voice, language_code="ja-JP"
++                    ),
++                    # 既定はWAV(24kHz PCM、1文270KB超)のためMP3を明示(帯域1/10程度)
++                    speech_settings=sm.TtsOracleSpeechSettings(output_format="MP3"),
+                 ),
+-                # 既定はWAV(24kHz PCM、1文270KB超)のためMP3を明示(帯域1/10程度)
+-                speech_settings=sm.TtsOracleSpeechSettings(output_format="MP3"),
+-            ),
++            )
+         )
+-    )
++    except oci.exceptions.ServiceError as e:
++        if e.status in (401, 403, 404):
++            region = get_settings().tts_region
++            raise TtsError(
++                f"TTSにアクセスできません(テナンシが{region}未購読の可能性。"
++                "TTS_REGIONで対象リージョンを変更できます)"
++            ) from e
++        raise TtsError(f"音声合成に失敗しました: {e.code} {e.message}") from e
+     return r.data.content
+diff --git a/packages/api/service/main.py b/packages/api/service/main.py
+index c651e59..2bed9ee 100644
+--- a/packages/api/service/main.py
++++ b/packages/api/service/main.py
+@@ -72,6 +72,7 @@ from .routes import (
+     conversations,
+     dbchat,
+     demos,
++    health,
+     minutes,
+     usecases,
+     voice,
+@@ -124,6 +125,7 @@ def create_app() -> FastAPI:
+     app.include_router(usecases.router)
+     app.include_router(capabilities.router)
+     app.include_router(demos.router)
++    app.include_router(health.router)
+ 
+     return app
+ 
+diff --git a/packages/api/service/routes/chat.py b/packages/api/service/routes/chat.py
+index d26d114..4be86dd 100644
+--- a/packages/api/service/routes/chat.py
++++ b/packages/api/service/routes/chat.py
+@@ -16,7 +16,7 @@ from jetuse_core import mcp_servers as mcp_repo
+ from jetuse_core.auth import AuthContext, require_user
+ from jetuse_core.chat import GenParams, create_oci_conversation
+ from jetuse_core.logging import log_with
+-from jetuse_core.models import MODELS
++from jetuse_core.models import DEFAULT_MODEL, MODELS, model_status
+ from jetuse_core.settings import get_settings
+ 
+ from .. import agent_dispatch
+@@ -78,6 +78,49 @@ async def stream_chat_response(  # noqa: ANN202
+     if req.model not in MODELS:
+         raise HTTPException(status_code=400, detail=f"unknown model: {req.model}")
+ 
++    # モデル可用性(PORT-02): 直前の呼び出しで利用不可と判明したモデルは、既定モデルなら
++    # 同系統(chat-family)へフォールバックし、それ以外は生エラーでなくヒント付きで即座に返す。
++    # 対象外: agent_id指定(実行時に agent_def["model"] を使う) / select_ai・opensearch
++    # バックエンドのRAG(下のSelect AI/OpenSearch分岐がreq.modelを一切使わず終端するため)。
++    bypasses_model_check = bool(req.agent_id) or (
++        req.rag and req.rag_backend in ("select_ai", "opensearch")
++    )
++    model_ok, model_hint = model_status(req.model)
++    fallback_notice: str | None = None
++    if not model_ok and not bypasses_model_check:
++        # responses-family必須の機能(agent/rag/画像/保存済み会話メモリ)ではchat-familyへの
++        # フォールバックは機能欠落(later checksが400にする、または会話メモリのサイレント
++        # 無効化)につながるため行わない。素のchatリクエストに限定する。
++        needs_responses_family = bool(
++            req.agent or req.agent_id or req.rag or req.images or req.conversation_id
++        )
++        fallback_key = None
++        if req.model == DEFAULT_MODEL and not needs_responses_family:
++            fallback_key = next(
++                (k for k in MODELS
++                 if k != req.model and MODELS[k].api == "chat" and model_status(k)[0]),
++                None,
++            )
++        if fallback_key:
++            fallback_notice = (
++                f"既定モデル {req.model} は利用できません({model_hint})。"
++                f"{fallback_key} に自動フォールバックしました"
++            )
++            req = req.model_copy(update={"model": fallback_key})
++        else:
++            hint = f"モデル {req.model} はこのリージョン/テナンシでは利用できません"
++            if model_hint:
++                hint += f"({model_hint})"
++
++            async def unavailable_gen():
++                yield KEEPALIVE_FRAME
++                yield f"data: {json.dumps({'error': hint}, ensure_ascii=False)}\n\n"
++                yield "data: [DONE]\n\n"
++
++            return StreamingResponse(
++                unavailable_gen(), media_type="text/event-stream", headers=SSE_HEADERS
++            )
++
+     # 監査の機能ラベル(SEC-02)
+     audit_feature = (
+         req.source or ("agent" if (req.agent or req.agent_id) else "rag" if req.rag else "chat")
+@@ -418,6 +461,8 @@ async def stream_chat_response(  # noqa: ANN202
+ 
+     async def gen():
+         yield KEEPALIVE_FRAME
++        if fallback_notice:
++            yield f"data: {json.dumps({'notice': fallback_notice}, ensure_ascii=False)}\n\n"
+         producer = loop.run_in_executor(None, produce)
+         try:
+             while True:
+@@ -438,20 +483,24 @@ async def stream_chat_response(  # noqa: ANN202
+     return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
+ 
+ 
++def _model_entry(k: str, m) -> dict:
++    ok, hint = model_status(k)
++    entry = {
++        "key": k,
++        "label": m.label,
++        "default_temperature": m.default_temperature,
++        "api": m.api,
++        "reasoning": m.reasoning,  # UIの出し分け用(CHAT-04b)
++        "min_max_tokens": m.min_max_tokens,
++        "vision": m.vision,  # 画像添付UIの出し分け(MM-01)
++        "multi_image": m.multi_image,  # 複数画像可否(ENH-09)
++        "available": ok,  # PORT-02: リージョン/テナンシで利用不可と判明したものはfalse
++    }
++    if not ok and hint:
++        entry["unavailable_reason"] = hint
++    return entry
++
++
+ @router.get("/api/chat/models")
+ async def list_models(user: Annotated[AuthContext, Depends(require_user)]):
+-    return {
+-        "models": [
+-            {
+-                "key": k,
+-                "label": m.label,
+-                "default_temperature": m.default_temperature,
+-                "api": m.api,
+-                "reasoning": m.reasoning,  # UIの出し分け用(CHAT-04b)
+-                "min_max_tokens": m.min_max_tokens,
+-                "vision": m.vision,  # 画像添付UIの出し分け(MM-01)
+-                "multi_image": m.multi_image,  # 複数画像可否(ENH-09)
+-            }
+-            for k, m in MODELS.items()
+-        ]
+-    }
++    return {"models": [_model_entry(k, m) for k, m in MODELS.items()]}
+diff --git a/packages/api/service/routes/dbchat.py b/packages/api/service/routes/dbchat.py
+index d8cfbed..3bf175d 100644
+--- a/packages/api/service/routes/dbchat.py
++++ b/packages/api/service/routes/dbchat.py
+@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
+ from jetuse_core import audit, datasets, nl2sql
+ from jetuse_core.auth import AuthContext, require_user
+ from jetuse_core.logging import log_with
++from jetuse_core.settings import get_settings
+ 
+ from ..schemas import (
+     ChartSuggestRequest,
+@@ -32,14 +33,45 @@ router = APIRouter()
+ async def nl2sql_generate(
+     req: Nl2SqlRequest, user: Annotated[AuthContext, Depends(require_user)]
+ ):
++    if req.target == "sample":
++        # PORT-02: SHが読めないADBでの ORA-00942 / サイレント空表示を、生成前に検出して防ぐ。
++        # 検査自体がDB未接続等で失敗しても、SSE契約を破る生500にせずSSEエラーへ正規化する
++        # (レビュー指摘F-003)。
++        try:
++            sample = await asyncio.to_thread(nl2sql.sh_sample_status)
++        except Exception as e:  # noqa: BLE001
++            logger.exception("sh_sample_status precheck failed")
++            sample = {"available": False, "reason": f"SHサンプル検査に失敗しました: {e}"[:300]}
++        if not sample["available"]:
++            async def unavailable_gen():
++                yield KEEPALIVE_FRAME
++                err = {"error": sample["reason"]}
++                yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
++                yield "data: [DONE]\n\n"
++
++            return StreamingResponse(
++                unavailable_gen(), media_type="text/event-stream", headers=SSE_HEADERS
++            )
++
++    effective_backend = req.backend  # 監査ログ用の実効値
+     if req.target == "datasets":
+         # ENH-01: 本人のCSVデータセット。本人専用Select AIプロファイルで生成。
+         # feedback 20260620 #3: 選択モデルでプロファイルを(必要なら)整える(#2: 準備待ちも内包)。
+         # ensure_profile は再構築/ウォームアップでブロックしうるためワーカースレッド内で呼ぶ。
++        effective_backend = "select_ai"  # datasetsは常にSelect AI経由(監査ログの実効値)
++
+         def generator(q: str) -> str:
+             prof = datasets.ensure_profile(user.subject, req.model)
+             return nl2sql.generate_sql_select_ai(q, profile_name=prof)
+-    elif req.backend == "select_ai":
++    elif req.backend == "select_ai" or (
++        req.target == "sample" and not get_settings().semstore_ocid
++    ):
++        # PORT-02: semantic store未構成の別テナンシでは既定でselect_ai経路へ切替える
++        # (公開ORMスタックはSemanticStoreを作らないため — 既定dbchatが必ず壊れる問題の根治)。
++        # web UIは常にbackendを明示送信するため「未指定」と「明示sql_search」をワイヤ上で
++        # 区別できず、両方をここで拾う(schemas.Nl2SqlRequestのponytailコメント参照)。
++        effective_backend = "select_ai"
++
+         def generator(q: str) -> str:
+             return nl2sql.generate_sql_select_ai(q, model=req.model)
+     else:
+@@ -60,7 +92,7 @@ async def nl2sql_generate(
+             log_with(logger, logging.INFO, "nl2sql generated", user=user.subject)
+             yield f"data: {json.dumps({'sql': sql}, ensure_ascii=False)}\n\n"
+             await asyncio.to_thread(
+-                audit.log_event, user.subject, "nl2sql", req.backend
++                audit.log_event, user.subject, "nl2sql", effective_backend
+             )
+         except Exception as e:
+             logger.exception("nl2sql generation failed")
+@@ -88,7 +120,13 @@ async def dbchat_chart(
+ @router.get("/api/dbchat/schema")
+ async def dbchat_schema(user: Annotated[AuthContext, Depends(require_user)]):
+     """対象スキーマの一覧(UIの「質問できるデータ」表示用 — SQL-02b)"""
+-    return await asyncio.to_thread(nl2sql.get_schema_info)
++    info = await asyncio.to_thread(nl2sql.get_schema_info)
++    sample = await asyncio.to_thread(nl2sql.sh_sample_status)
++    return {
++        **info,
++        "sample_available": sample["available"],
++        **({"sample_unavailable_reason": sample["reason"]} if not sample["available"] else {}),
++    }
+ 
+ 
+ @router.get("/api/dbchat/select-ai-models")
+diff --git a/packages/api/service/routes/health.py b/packages/api/service/routes/health.py
+new file mode 100644
+index 0000000..347c29c
+--- /dev/null
++++ b/packages/api/service/routes/health.py
+@@ -0,0 +1,26 @@
++"""機能別 readiness ルート(PORT-02)。Issue #47 報告者の自己診断用。"""
++
++import asyncio
++import logging
++from typing import Annotated
++
++from fastapi import APIRouter, Depends, HTTPException
++
++from jetuse_core import health
++from jetuse_core.auth import AuthContext, require_user
++
++logger = logging.getLogger("jetuse.service")
++router = APIRouter()
++
++
++@router.get("/api/health")
++async def capability_health(user: Annotated[AuthContext, Depends(require_user)]):
++    try:
++        # 同期のOCI/DB呼び出しを含むため /api/rag/health と同様にワーカースレッドで実行し
++        # イベントループをブロックしない(レビュー指摘F-002)。
++        return await asyncio.to_thread(health.capability_health)
++    except Exception as e:  # 診断エンドポイントは500を漏らさない
++        logger.exception("capability health check crashed")
++        raise HTTPException(
++            status_code=503, detail=f"health check failed: {type(e).__name__}"
++        ) from e
+diff --git a/packages/api/service/routes/voice.py b/packages/api/service/routes/voice.py
+index 1a733bb..74465b6 100644
+--- a/packages/api/service/routes/voice.py
++++ b/packages/api/service/routes/voice.py
+@@ -113,6 +113,9 @@ async def synthesize_tts(
+             audit.log_event, user.subject, "tts", None, len(req.text), None,
+             "ok", req.voice,
+         )
++    except tts.TtsError as e:
++        logger.warning("tts synthesize degraded: %s", e)
++        raise HTTPException(status_code=503, detail=str(e)) from e
+     except Exception as e:
+         logger.exception("tts synthesize failed")
+         raise HTTPException(
+diff --git a/packages/api/service/schemas.py b/packages/api/service/schemas.py
+index 14b05e1..1098818 100644
+--- a/packages/api/service/schemas.py
++++ b/packages/api/service/schemas.py
+@@ -56,7 +56,15 @@ class ConversationCreate(BaseModel):
+ 
+ class Nl2SqlRequest(BaseModel):
+     question: str = Field(min_length=1, max_length=2000)
+-    backend: Literal["sql_search", "select_ai"] = "sql_search"  # SQL-04比較モード
++    # SQL-04比較モード。web UI(dbchat.tsx)は常にbackendを明示送信し既定値は"sql_search"
++    # のため、「未指定」と「明示sql_search」をワイヤ上で区別できない(対象areaはpackages/api
++    # のためUI側の変更はこのタスクでは行わない)。よって"sql_search"はどちらの場合も
++    # SEMSTORE_OCID未設定なら既定機能(dbchatが別テナンシで必ず壊れる問題の根治)を優先し
++    # select_aiへ自動切替する(下記PORT-02コメント参照)。
++    # ponytail: この結果SQL-04比較モードはSEMSTORE_OCID未設定環境では両パネルがselect_ai
++    # になり得る既知の制約。UI側がbackend="auto"相当を明示送信できるようになれば
++    # sql_search側を強制する経路を分離できる(docs/tips.md参照)。
++    backend: Literal["sql_search", "select_ai"] = "sql_search"
+     target: Literal["sample", "datasets"] = "sample"  # ENH-01: SHサンプル or 本人CSV
+     model: str | None = Field(default=None, max_length=100)  # feedback 20260620 #3: モデル選択
+ 
+diff --git a/packages/api/tests/test_agent.py b/packages/api/tests/test_agent.py
+index 1315e87..1409ec9 100644
+--- a/packages/api/tests/test_agent.py
++++ b/packages/api/tests/test_agent.py
+@@ -326,6 +326,33 @@ def test_chat_with_agent_applies_instructions(fake_agents, monkeypatch):
+     assert "丁寧" in captured["state"]["system_prompt"]
+ 
+ 
++def test_chat_with_agent_ignores_caller_model_availability(fake_agents, monkeypatch):
++    """PORT-02 レビュー指摘F-002: agent_id指定時は実行時にagent_def["model"]を使うため、
++    リクエスト上のmodelフィールド(呼び出し側が指定した別モデル)がたまたま利用不可マーク
++    されていても、エージェント実行自体を巻き込んで弾いてはいけない。"""
++    from jetuse_core import models
++
++    res = client.post("/api/agents", json={**AGENT_DEF, "enabled_tools": []})
++    aid = res.json()["id"]
++    models.mark_unavailable("llama-3.3-70b", "HTTP 404")
++    try:
++
++        def fake_invoke(sdk, state):
++            return {"output": "ok", "tool_trace": []}
++
++        monkeypatch.setattr(service_main.hosted_agent, "invoke_agent", fake_invoke)
++        r = client.post("/api/chat/stream", json={
++            "model": "llama-3.3-70b",  # 利用不可マーク済みだが、agent_def側のモデルを使う
++            "agent_id": aid,
++            "messages": [{"role": "user", "content": "q"}],
++        })
++        assert r.status_code == 200
++        assert "ok" in r.text
++        assert "利用できません" not in r.text
++    finally:
++        models.clear_unavailable("llama-3.3-70b")
++
++
+ def test_chat_with_unknown_agent_404(fake_agents):
+     r = client.post("/api/chat/stream", json={
+         "model": "gpt-oss-120b", "agent_id": "nope",
+diff --git a/packages/api/tests/test_auth_mode_guard.py b/packages/api/tests/test_auth_mode_guard.py
+new file mode 100644
+index 0000000..3f1c19d
+--- /dev/null
++++ b/packages/api/tests/test_auth_mode_guard.py
+@@ -0,0 +1,55 @@
++"""AUTH_MODEガード(PORT-02): ~/.oci/config フォールバックの共通ヘルパ。
++
++設定ファイル不在時に未処理のConfigFileNotFoundで落とさず、AUTH_MODE設定漏れの可能性を
++明示したRuntimeErrorへ変換することを検証する(genai/obs/tts/stt_realtime/docunderstand/
++minutes/guardrails/embeddings/mcp_servers/agents/rag/translate/dbが共通で使う)。
++"""
++
++from unittest import mock
++
++import oci
++import pytest
++
++from jetuse_core import genai
++
++
++def test_load_local_oci_config_passes_through_on_success(monkeypatch):
++    monkeypatch.setattr(oci.config, "from_file", lambda: {"region": "ap-osaka-1"})
++    assert genai.load_local_oci_config() == {"region": "ap-osaka-1"}
++
++
++def test_load_local_oci_config_raises_actionable_error_when_missing():
++    with mock.patch.object(
++        oci.config, "from_file", side_effect=oci.exceptions.ConfigFileNotFound("~/.oci/config")
++    ):
++        with pytest.raises(RuntimeError) as ei:
++            genai.load_local_oci_config()
++    assert "AUTH_MODE" in str(ei.value)
++    assert "resource_principal" in str(ei.value)
++
++
++def test_signer_wraps_config_file_not_found_from_user_principal_auth(monkeypatch):
++    """PORT-02レビュー指摘: OciUserPrincipalAuth()は内部でoci.config.from_file()を
++    独自に呼ぶため、load_local_oci_config()を経由しない。make_inference_client/
++    make_cp_client/nl2sqlなどgenai系全経路の入口である_signer()自体で捕捉する。"""
++    monkeypatch.delenv("AUTH_MODE", raising=False)
++
++    def boom(*a, **kw):
++        raise oci.exceptions.ConfigFileNotFound("~/.oci/config")
++
++    monkeypatch.setattr(genai, "OciUserPrincipalAuth", boom)
++    with pytest.raises(RuntimeError) as ei:
++        genai._signer()
++    assert "AUTH_MODE" in str(ei.value)
++    assert "resource_principal" in str(ei.value)
++
++
++def test_signer_leaves_other_errors_from_user_principal_auth_untouched(monkeypatch):
++    monkeypatch.delenv("AUTH_MODE", raising=False)
++
++    def boom(*a, **kw):
++        raise oci.exceptions.InvalidConfig("malformed key")
++
++    monkeypatch.setattr(genai, "OciUserPrincipalAuth", boom)
++    with pytest.raises(oci.exceptions.InvalidConfig):
++        genai._signer()
+diff --git a/packages/api/tests/test_bootstrap.py b/packages/api/tests/test_bootstrap.py
+index d2e184f..6ba1c97 100644
+--- a/packages/api/tests/test_bootstrap.py
++++ b/packages/api/tests/test_bootstrap.py
+@@ -17,14 +17,17 @@ class FakeErr:
+ 
+ 
+ class FakeCursor:
+-    def __init__(self, fail_create_user: bool = False):
++    def __init__(self, fail_create_user: bool = False, fail_rp: bool = False):
+         self.executed: list[str] = []
+         self._fail_create_user = fail_create_user
++        self._fail_rp = fail_rp
+ 
+     def execute(self, sql, **kw):
+         self.executed.append(sql.strip())
+         if self._fail_create_user and sql.strip().startswith("CREATE USER JETUSE_APP"):
+             raise oracledb.DatabaseError(FakeErr(1920))  # user already exists
++        if self._fail_rp and "ENABLE_RESOURCE_PRINCIPAL" in sql:
++            raise oracledb.DatabaseError(FakeErr(20000))
+ 
+ 
+ class FakeConn:
+@@ -90,6 +93,23 @@ def test_provision_skips_when_passwords_missing(patched, monkeypatch):
+     assert called["connect"] is False  # ADMINパスワード無しなら接続しない
+ 
+ 
++def test_provision_success_reports_rp_status_ok(patched):
++    # PORT-02: Select AI可視化(/api/health が読む resource_principal_status())
++    cur = FakeCursor()
++    patched.setattr(oracledb, "connect", lambda **kw: FakeConn(cur))
++    bootstrap._provision(_settings())
++    assert bootstrap.resource_principal_status() == {"ok": True}
++
++
++def test_provision_rp_failure_reports_hint(patched):
++    cur = FakeCursor(fail_rp=True)
++    patched.setattr(oracledb, "connect", lambda **kw: FakeConn(cur))
++    bootstrap._provision(_settings())
++    status = bootstrap.resource_principal_status()
++    assert status["ok"] is False
++    assert "generative-ai-family" in status["hint"]
++
++
+ def test_bootstrap_runs_migrate(patched, monkeypatch):
+     cur = FakeCursor()
+     patched.setattr(oracledb, "connect", lambda **kw: FakeConn(cur))
+diff --git a/packages/api/tests/test_chat.py b/packages/api/tests/test_chat.py
+index 2b110a7..a3e5f02 100644
+--- a/packages/api/tests/test_chat.py
++++ b/packages/api/tests/test_chat.py
+@@ -41,6 +41,27 @@ def test_list_models():
+     assert DEFAULT_MODEL in keys
+ 
+ 
++def test_list_models_response_is_backward_compatible():
++    """PORT-02 レビュー指摘: availableフラグの追加は既存フィールドを削除/改変しない
++    追加専用の変更であることを契約として固定する(構造的型付けのTSクライアントは
++    未知フィールドを無視するため additive は非破壊 — ModelInfo型は packages/web 側で
++    reasoning/vision/multi_image 追加時と同じ additive パターンを踏襲)。
++    """
++    res = client.get("/api/chat/models")
++    for m in res.json()["models"]:
++        # CHAT-04b/MM-01/ENH-09時点までの既存契約フィールド(削除・改変禁止)
++        assert set(m) >= {
++            "key", "label", "default_temperature", "api",
++            "reasoning", "min_max_tokens", "vision", "multi_image",
++        }
++        assert isinstance(m["key"], str) and isinstance(m["label"], str)
++        assert m["api"] in ("responses", "chat")
++        # 今回追加分(PORT-02): 常にbool、理由は不可時のみ付与
++        assert isinstance(m["available"], bool)
++        if m["available"]:
++            assert "unavailable_reason" not in m
++
++
+ def test_chat_stream_unknown_model():
+     res = client.post(
+         "/api/chat/stream",
+diff --git a/packages/api/tests/test_fn_router.py b/packages/api/tests/test_fn_router.py
+index a5527a4..8ae29e6 100644
+--- a/packages/api/tests/test_fn_router.py
++++ b/packages/api/tests/test_fn_router.py
+@@ -91,3 +91,36 @@ def test_tts_validation():
+     status, body = call("POST", "/api/tts", {"text": "a", "voice": "Nobody"})
+     assert status == 422
+     assert "unknown voice" in body["detail"]
++
++
++def test_tts_error_surfaces_hint_as_503(monkeypatch):
++    # PORT-02: CI(FastAPI)側と同じ縮退契約をFnルーターでも保つ(ADR-0005)
++    def boom(text, voice):
++        raise router.tts.TtsError("テナンシがus-phoenix-1未購読の可能性")
++
++    monkeypatch.setattr(router.tts, "synthesize", boom)
++    status, body = call("POST", "/api/tts", {"text": "こんにちは", "voice": "Yuki"})
++    assert status == 503
++    assert "未購読" in body["detail"]
++
++
++def test_dbchat_schema_reports_sample_available(monkeypatch):
++    # PORT-02: CI(FastAPI)側の /api/dbchat/schema と同じ契約をFnルーターでも保つ(ADR-0005)
++    monkeypatch.setattr(
++        router.nl2sql, "get_schema_info",
++        lambda: {"schema": "SH", "tables": [{"name": "SALES"}]},
++    )
++    status, body = call("GET", "/api/dbchat/schema")
++    assert status == 200
++    assert body["sample_available"] is True
++    assert "sample_unavailable_reason" not in body
++
++
++def test_dbchat_schema_reports_sample_unavailable_reason(monkeypatch):
++    monkeypatch.setattr(
++        router.nl2sql, "get_schema_info", lambda: {"schema": "SH", "tables": []}
++    )
++    status, body = call("GET", "/api/dbchat/schema")
++    assert status == 200
++    assert body["sample_available"] is False
++    assert body["sample_unavailable_reason"]
+diff --git a/packages/api/tests/test_health.py b/packages/api/tests/test_health.py
+new file mode 100644
+index 0000000..c918465
+--- /dev/null
++++ b/packages/api/tests/test_health.py
+@@ -0,0 +1,161 @@
++"""capability readiness集約(PORT-02)。GET /api/health が chat/rag/dbchat/speech/ocr/tts の
++ok/degraded/unavailable + hint を返すことを検証する(FIX-47の/api/rag/healthを踏まえて拡張)。
++"""
++
++import pytest
++from fastapi.testclient import TestClient
++
++from jetuse_core import bootstrap, health, models, nl2sql, rag
++from jetuse_core.settings import get_settings
++from service.main import app
++
++client = TestClient(app)
++
++
++@pytest.fixture(autouse=True)
++def reset_state():
++    get_settings.cache_clear()
++    models.clear_unavailable()
++    bootstrap._set_resource_principal_status(True)
++    yield
++    get_settings.cache_clear()
++    models.clear_unavailable()
++    bootstrap._set_resource_principal_status(True)
++
++
++def test_chat_health_all_ok_by_default():
++    out = health.chat_health()
++    assert out["status"] == "ok"
++    assert all(m["ok"] for m in out["models"].values())
++
++
++def test_chat_health_degraded_when_one_model_unavailable():
++    models.mark_unavailable("gemini-2.5-pro", "HTTP 404")
++    out = health.chat_health()
++    assert out["status"] == "degraded"
++    assert out["models"]["gemini-2.5-pro"]["ok"] is False
++    assert out["models"]["gemini-2.5-pro"]["hint"] == "HTTP 404"
++
++
++def test_dbchat_health_reflects_semstore_select_ai_and_sample(monkeypatch):
++    monkeypatch.delenv("SEMSTORE_OCID", raising=False)
++    get_settings.cache_clear()
++    monkeypatch.setattr(nl2sql, "get_schema_info", lambda: {"schema": "SH", "tables": []})
++    bootstrap._set_resource_principal_status(True)
++    out = health.dbchat_health()
++    assert out["semantic_store"]["ok"] is False
++    assert "SEMSTORE_OCID" in out["semantic_store"]["hint"]
++    assert out["select_ai"]["ok"] is True
++    assert out["sample_data"]["ok"] is False
++    assert out["status"] == "degraded"  # select_aiは生きているので全滅ではない
++
++
++def test_dbchat_health_unavailable_when_no_generation_backend_works(monkeypatch):
++    """PORT-02レビュー指摘: sample_dataは生成能力ではなく前提条件でしかないため、
++    semantic_store/select_aiが両方不可ならsample_dataの成否に関わらずunavailableとする。"""
++    monkeypatch.delenv("SEMSTORE_OCID", raising=False)
++    get_settings.cache_clear()
++    monkeypatch.setattr(
++        nl2sql, "get_schema_info",
++        lambda: {"schema": "SH", "tables": [{"name": "SALES"}]},  # sample自体は読める
++    )
++    bootstrap._set_resource_principal_status(False, "ENABLE_RESOURCE_PRINCIPAL失敗")
++    out = health.dbchat_health()
++    assert out["semantic_store"]["ok"] is False
++    assert out["select_ai"]["ok"] is False
++    assert out["sample_data"]["ok"] is True  # サンプル自体は読めるが…
++    assert out["status"] == "unavailable"  # …生成経路が無いのでunavailable
++
++
++def test_dbchat_health_reports_unverified_select_ai_as_not_ok():
++    # PORT-02 F-003: bootstrap未完了(未検証)をokと偽らない — ok=Noneで区別する
++    bootstrap._rp_status = {
++        "ok": None,
++        "hint": "起動時のENABLE_RESOURCE_PRINCIPAL検証が未実行です(bootstrap未完了)",
++    }
++    out = health.dbchat_health()
++    assert out["select_ai"]["ok"] is None
++    assert out["select_ai"]["hint"]
++
++
++def test_dbchat_health_survives_sample_check_crash(monkeypatch):
++    # DB未接続等でsh_sample_status()自体が例外を投げても、/api/health全体は落とさない
++    def boom():
++        raise RuntimeError("DPY-4000")
++
++    monkeypatch.setattr(nl2sql, "sh_sample_status", boom)
++    out = health.dbchat_health()
++    assert out["sample_data"]["ok"] is False
++    assert "sample_data" in out
++
++
++def test_speech_health_unavailable_without_bucket(monkeypatch):
++    monkeypatch.delenv("SPEECH_BUCKET", raising=False)
++    get_settings.cache_clear()
++    out = health.speech_health()
++    assert out["status"] == "unavailable"
++
++
++def test_ocr_and_tts_health_unavailable_without_compartment_ocid(monkeypatch):
++    # PORT-02レビュー指摘: 全OCI呼び出しに必須のCOMPARTMENT_OCIDが空なら
++    # 常時okと偽らない(最低限の設定不備検出)。
++    monkeypatch.delenv("COMPARTMENT_OCID", raising=False)
++    get_settings.cache_clear()
++    assert health.ocr_health()["status"] == "unavailable"
++    tts_out = health.tts_health()
++    assert tts_out["status"] == "unavailable"
++    assert tts_out["region"]  # region報告自体は維持
++
++
++def test_ocr_and_tts_health_ok_with_compartment_ocid(monkeypatch):
++    monkeypatch.setenv("COMPARTMENT_OCID", "ocid1.compartment.oc1..x")
++    get_settings.cache_clear()
++    assert health.ocr_health()["status"] == "ok"
++    assert health.tts_health()["status"] == "ok"
++
++
++def test_rag_health_aggregation_disables_autocreate(monkeypatch):
++    """PORT-02レビュー指摘: /api/healthはGETポーリングされうるため、
++    rag.health_check()をallow_autocreate=Falseで呼び、project未解決時に新規作成しない。"""
++    seen = {}
++
++    def fake_health_check(**kw):
++        seen.update(kw)
++        return {"ok": True, "checks": {}}
++
++    monkeypatch.setattr(rag, "health_check", fake_health_check)
++    health._rag_health()
++    assert seen == {"allow_autocreate": False}
++
++
++def test_capability_health_endpoint_returns_all_six(monkeypatch):
++    monkeypatch.setattr(rag, "health_check", lambda **kw: {"ok": True, "checks": {}})
++    res = client.get("/api/health")
++    assert res.status_code == 200
++    body = res.json()
++    assert set(body["capabilities"]) == {"chat", "rag", "dbchat", "speech", "ocr", "tts"}
++    assert isinstance(body["ok"], bool)
++
++
++def test_capability_health_endpoint_degrades_instead_of_crashing_on_rag_failure(monkeypatch):
++    # PORT-02 F-003: RAG個別の想定外失敗は/api/health全体を巻き込まず、
++    # rag capabilityをunavailableとして構造化して返す(500/503を漏らさない)。
++    def boom(**kw):
++        raise RuntimeError("cp down")
++
++    monkeypatch.setattr(rag, "health_check", boom)
++    res = client.get("/api/health")
++    assert res.status_code == 200
++    body = res.json()
++    assert body["capabilities"]["rag"]["status"] == "unavailable"
++    assert "RuntimeError" in body["capabilities"]["rag"]["hint"]
++
++
++def test_capability_health_endpoint_503_on_true_crash(monkeypatch):
++    # 集約処理自体が壊れた場合の最後の防衛線(ルート側のtry/except)は維持する。
++    def boom():
++        raise RuntimeError("aggregation itself broken")
++
++    monkeypatch.setattr(health, "capability_health", boom)
++    res = client.get("/api/health")
++    assert res.status_code == 503
+diff --git a/packages/api/tests/test_model_availability.py b/packages/api/tests/test_model_availability.py
+new file mode 100644
+index 0000000..3519dc4
+--- /dev/null
++++ b/packages/api/tests/test_model_availability.py
+@@ -0,0 +1,224 @@
++"""モデル可用性のlazyマーク(PORT-02)。
++
++chat.py:stream_chat での NotFound/PermissionDenied 検知→models._unavailable への記録→
++GET /api/chat/models と POST /api/chat/stream への反映(既定モデルはフォールバック、
++それ以外はヒント付きエラー)を検証する。
++"""
++
++import types
++
++import httpx
++import openai
++import pytest
++from fastapi.testclient import TestClient
++
++import service.main as service_main
++from jetuse_core import chat as chat_mod
++from jetuse_core import models
++from jetuse_core.models import DEFAULT_MODEL
++from service.main import app
++
++client = TestClient(app)
++
++
++@pytest.fixture(autouse=True)
++def reset_unavailable():
++    models.clear_unavailable()
++    yield
++    models.clear_unavailable()
++
++
++def _api_error(cls, status):
++    req = httpx.Request("POST", "https://genai.test/v1/x")
++    resp = httpx.Response(status, request=req, json={"message": "denied"})
++    return cls("denied", response=resp, body=None)
++
++
++def test_model_status_default_available():
++    ok, hint = models.model_status(DEFAULT_MODEL)
++    assert ok is True
++    assert hint is None
++
++
++def test_mark_unavailable_and_clear():
++    models.mark_unavailable("gemini-2.5-pro", "HTTP 404")
++    ok, hint = models.model_status("gemini-2.5-pro")
++    assert ok is False
++    assert hint == "HTTP 404"
++    models.clear_unavailable("gemini-2.5-pro")
++    assert models.model_status("gemini-2.5-pro")[0] is True
++
++
++def test_stream_chat_marks_unavailable_on_not_found(monkeypatch):
++    def _raise(**kw):
++        raise _api_error(openai.NotFoundError, 404)
++
++    fake_client = types.SimpleNamespace(
++        chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=_raise))
++    )
++    monkeypatch.setattr(chat_mod, "make_inference_client", lambda **kw: fake_client)
++    events = list(
++        chat_mod.stream_chat("llama-3.3-70b", [{"role": "user", "content": "hi"}])
++    )
++    assert any("利用できません" in ev.get("error", "") for ev in events)
++    ok, hint = models.model_status("llama-3.3-70b")
++    assert ok is False
++    assert hint == "HTTP 404"
++
++
++def test_stream_chat_rag_404_does_not_poison_model_availability(monkeypatch):
++    """stale vector store等RAG起因の404はモデル不可と誤記録しない(レビュー指摘F-001)。"""
++    from jetuse_core.chat import GenParams
++
++    def _raise(**kw):
++        raise _api_error(openai.NotFoundError, 404)
++
++    fake_client = types.SimpleNamespace(
++        responses=types.SimpleNamespace(create=_raise)
++    )
++    monkeypatch.setattr(chat_mod, "make_inference_client", lambda **kw: fake_client)
++    events = list(
++        chat_mod.stream_chat(
++            "gpt-oss-120b", [{"role": "user", "content": "hi"}],
++            params=GenParams(file_search_store="vs_stale"),
++        )
++    )
++    assert any(ev.get("error") for ev in events)
++    ok, hint = models.model_status("gpt-oss-120b")
++    assert ok is True
++    assert hint is None
++
++
++def test_stream_chat_project_scoped_404_does_not_poison_model_availability(monkeypatch):
++    """エージェント固有project_ocidの誤設定/権限不足による404もモデル不可と誤記録しない
++    (レビュー指摘F-001)。"""
++
++    def _raise(**kw):
++        raise _api_error(openai.NotFoundError, 404)
++
++    fake_client = types.SimpleNamespace(
++        responses=types.SimpleNamespace(create=_raise)
++    )
++    monkeypatch.setattr(chat_mod, "make_inference_client", lambda **kw: fake_client)
++    events = list(
++        chat_mod.stream_chat(
++            "gpt-oss-120b", [{"role": "user", "content": "hi"}],
++            project_ocid="ocid1.generativeaiproject.oc1..agent",
++        )
++    )
++    assert any(ev.get("error") for ev in events)
++    ok, hint = models.model_status("gpt-oss-120b")
++    assert ok is True
++    assert hint is None
++
++
++def test_stream_chat_leaves_other_errors_untouched(monkeypatch):
++    """400等(モデル不在以外)は可用性を落とさず、そのままのエラーを伝える。"""
++
++    def _raise(**kw):
++        raise _api_error(openai.BadRequestError, 400)
++
++    fake_client = types.SimpleNamespace(
++        chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=_raise))
++    )
++    monkeypatch.setattr(chat_mod, "make_inference_client", lambda **kw: fake_client)
++    list(chat_mod.stream_chat("llama-3.3-70b", [{"role": "user", "content": "hi"}]))
++    assert models.model_status("llama-3.3-70b")[0] is True
++
++
++def test_mark_unavailable_self_heals_after_ttl_expires():
++    """レビュー指摘(再発): マークしたままだとルート側が実呼び出し自体をスキップするため
++    TTL切れで自動的に再試行対象へ戻る(プロセス再起動なしでの自己回復)ことを確認する。"""
++    models.mark_unavailable("gemini-2.5-pro", "HTTP 404")
++    assert models.model_status("gemini-2.5-pro")[0] is False
++    # TTL経過をシミュレート(内部stateを直接操作。時計を書き換えない)
++    hint, _retry_at = models._unavailable["gemini-2.5-pro"]
++    models._unavailable["gemini-2.5-pro"] = (hint, models.time.monotonic() - 1)
++    ok, hint2 = models.model_status("gemini-2.5-pro")
++    assert ok is True
++    assert hint2 is None
++    # PORT-02レビュー指摘: 読み取り専用のmodel_status()は_unavailableを書き換えない
++    # (期限切れの判定のみ。エントリは残っていてよい — 次のmark_unavailable()で上書きされる)
++    assert "gemini-2.5-pro" in models._unavailable
++
++
++def test_list_models_reports_available_flag():
++    models.mark_unavailable("gemini-2.5-pro", "HTTP 404")
++    res = client.get("/api/chat/models")
++    body = {m["key"]: m for m in res.json()["models"]}
++    assert body["gemini-2.5-pro"]["available"] is False
++    assert body["gemini-2.5-pro"]["unavailable_reason"] == "HTTP 404"
++    assert body[DEFAULT_MODEL]["available"] is True
++    assert "unavailable_reason" not in body[DEFAULT_MODEL]
++
++
++def test_chat_stream_select_ai_rag_bypasses_model_availability_check(monkeypatch):
++    """PORT-02レビュー指摘(再発): select_ai/opensearch RAGはreq.modelを一切使わないため、
++    既定モデルがunavailableでもブロックしてはいけない。"""
++    models.mark_unavailable(DEFAULT_MODEL, "HTTP 404")
++
++    def fake_generate(owner, prompt):
++        return "回答本文です。", []
++
++    monkeypatch.setattr(service_main.rag_select_ai, "generate", fake_generate)
++    res = client.post(
++        "/api/chat/stream",
++        json={
++            "model": DEFAULT_MODEL,
++            "messages": [{"role": "user", "content": "q"}],
++            "rag": True,
++            "rag_backend": "select_ai",
++        },
++    )
++    assert res.status_code == 200
++    assert '"delta": "回答本文です。"' in res.text
++    assert "利用できません" not in res.text
++
++
++def test_chat_stream_non_default_unavailable_returns_hint_sse():
++    models.mark_unavailable("gemini-2.5-pro", "HTTP 404")
++    res = client.post(
++        "/api/chat/stream",
++        json={"model": "gemini-2.5-pro", "messages": [{"role": "user", "content": "hi"}]},
++    )
++    assert res.status_code == 200
++    assert "利用できません" in res.text
++    assert "HTTP 404" in res.text
++
++
++def test_chat_stream_default_unavailable_with_conversation_id_skips_fallback():
++    """PORT-02 レビュー指摘F-001: 会話メモリ付きリクエストはresponses-family必須のため、
++    既定モデル不可時にchat-familyへ黙ってフォールバックしない(短期メモリのサイレント無効化防止)。
++    フォールバック判定は早期returnのため conv_repo のモックは不要。"""
++    models.mark_unavailable(DEFAULT_MODEL, "HTTP 404")
++    res = client.post(
++        "/api/chat/stream",
++        json={
++            "model": DEFAULT_MODEL,
++            "conversation_id": "conv-1",
++            "messages": [{"role": "user", "content": "hi"}],
++        },
++    )
++    assert res.status_code == 200
++    assert "利用できません" in res.text
++    assert "フォールバック" not in res.text
++
++
++def test_chat_stream_default_unavailable_falls_back_to_chat_family(monkeypatch):
++    models.mark_unavailable(DEFAULT_MODEL, "HTTP 404")
++    seen_model = {}
++
++    def fake_stream(model_key, messages, temperature=None, user="",
++                    oci_conversation_id=None, params=None):
++        seen_model["key"] = model_key
++        yield {"delta": "ok"}
++
++    monkeypatch.setattr(service_main, "stream_chat", fake_stream)
++    res = client.post(
++        "/api/chat/stream",
++        json={"model": DEFAULT_MODEL, "messages": [{"role": "user", "content": "hi"}]},
++    )
++    assert res.status_code == 200
++    assert "フォールバック" in res.text
++    assert '"delta": "ok"' in res.text
++    assert seen_model["key"] == "llama-3.3-70b"  # MODELS登録順で最初のchat系
+diff --git a/packages/api/tests/test_nl2sql.py b/packages/api/tests/test_nl2sql.py
+index 699d5e5..c079014 100644
+--- a/packages/api/tests/test_nl2sql.py
++++ b/packages/api/tests/test_nl2sql.py
+@@ -6,10 +6,28 @@ from fastapi.testclient import TestClient
+ import service.main as service_main
+ from jetuse_core import datasets, nl2sql
+ from jetuse_core.nl2sql import SqlRejectedError, sanitize_sql
++from jetuse_core.settings import get_settings
+ from service.main import app
+ 
+ client = TestClient(app)
+ 
++_FAKE_SCHEMA = {
++    "schema": "SH",
++    "tables": [{"name": "SALES", "comment": "売上明細", "rows": 1, "columns": []}],
++}
++
++
++@pytest.fixture(autouse=True)
++def dbchat_defaults(monkeypatch):
++    """既定: SHサンプルは読める(sample_available=True) / SEMSTORE_OCIDは設定済み
++    (=既存の"sql_search既定"経路のテストが引き続き成立するようにする)。
++    unset/emptyにしたいテストは各テスト内で上書きする(PORT-02)。"""
++    monkeypatch.setattr(service_main.nl2sql, "get_schema_info", lambda: dict(_FAKE_SCHEMA))
++    monkeypatch.setenv("SEMSTORE_OCID", "ocid1.semanticstore.oc1..default")
++    get_settings.cache_clear()
++    yield
++    get_settings.cache_clear()
++
+ 
+ def test_sanitize_accepts_select_and_with():
+     assert sanitize_sql("SELECT 1 FROM dual;").startswith("SELECT")
+@@ -161,6 +179,153 @@ def test_seed_datasets_endpoint(monkeypatch):
+     assert res.json()["ready"] is True
+ 
+ 
++# --- PORT-02: dbchat既定切替(SEMSTORE_OCID空→select_ai) ---
++
++
++def test_generate_sql_raises_hinted_error_when_semstore_unset(monkeypatch):
++    monkeypatch.delenv("SEMSTORE_OCID", raising=False)
++    get_settings.cache_clear()
++    with pytest.raises(RuntimeError) as ei:
++        nl2sql.generate_sql("売上は？")
++    assert "SEMSTORE_OCID" in str(ei.value)
++    assert "Select AI" in str(ei.value)
++
++
++def test_sample_target_defaults_to_select_ai_when_semstore_unset(monkeypatch):
++    monkeypatch.delenv("SEMSTORE_OCID", raising=False)
++    get_settings.cache_clear()
++    called = {}
++    monkeypatch.setattr(
++        service_main.nl2sql, "generate_sql",
++        lambda q: called.setdefault("b", "ss") or "SELECT 1 FROM dual",
++    )
++    monkeypatch.setattr(
++        service_main.nl2sql, "generate_sql_select_ai",
++        lambda q, **k: called.setdefault("b", "sai") or "SELECT 2 FROM dual",
++    )
++    res = client.post("/api/chat/nl2sql", json={"question": "売上は？"})
++    assert res.status_code == 200
++    assert called["b"] == "sai"
++
++
++def test_explicit_sql_search_also_switches_to_select_ai_when_semstore_unset(monkeypatch):
++    """PORT-02: web UIは常にbackendを明示送信し既定値は"sql_search"のため、「未指定」と
++    「明示sql_search」をワイヤ上で区別できない(対象areaはpackages/apiのためUI変更は
++    このタスクでは行わない — schemas.Nl2SqlRequestのponytailコメント参照)。よって
++    backend="sql_search"は実UIの既定操作(=通常の「サンプルに質問する」)そのものであり、
++    ここを弾くとSEMSTORE_OCID未設定環境でdbchatの既定挙動が実UIから一切到達不能になる
++    (レビューでblocker指摘)。実UI到達性を優先しselect_aiへ自動切替する。"""
++    monkeypatch.delenv("SEMSTORE_OCID", raising=False)
++    get_settings.cache_clear()
++    called = {}
++    monkeypatch.setattr(
++        service_main.nl2sql, "generate_sql_select_ai",
++        lambda q, **k: called.setdefault("b", "sai") or "SELECT 1 FROM dual",
++    )
++    res = client.post(
++        "/api/chat/nl2sql", json={"question": "売上は？", "backend": "sql_search"}
++    )
++    assert res.status_code == 200
++    assert called["b"] == "sai"
++
++
++def test_sample_target_uses_semantic_store_when_semstore_set(monkeypatch):
++    # dbchat_defaults フィクスチャがSEMSTORE_OCIDを設定済み → 従来どおりsql_search経路
++    called = {}
++    monkeypatch.setattr(
++        service_main.nl2sql, "generate_sql",
++        lambda q: called.setdefault("b", "ss") or "SELECT 1 FROM dual",
++    )
++    res = client.post("/api/chat/nl2sql", json={"question": "売上は？"})
++    assert res.status_code == 200
++    assert called["b"] == "ss"
++
++
++def test_sh_sample_status_available_when_tables_present():
++    assert nl2sql.sh_sample_status() == {"available": True}
++
++
++def test_sh_sample_status_unavailable_when_no_tables(monkeypatch):
++    monkeypatch.setattr(
++        service_main.nl2sql, "get_schema_info",
++        lambda: {"schema": "SH", "tables": []},
++    )
++    status = nl2sql.sh_sample_status()
++    assert status["available"] is False
++    assert "SH" in status["reason"]
++
++
++def test_sample_target_unavailable_returns_hint_without_generating(monkeypatch):
++    monkeypatch.setattr(
++        service_main.nl2sql, "get_schema_info",
++        lambda: {"schema": "SH", "tables": []},
++    )
++
++    def boom(*a, **kw):
++        raise AssertionError("SQL生成を呼んではいけない(SH未整備の時点で打ち切る)")
++
++    monkeypatch.setattr(service_main.nl2sql, "generate_sql", boom)
++    monkeypatch.setattr(service_main.nl2sql, "generate_sql_select_ai", boom)
++    res = client.post("/api/chat/nl2sql", json={"question": "売上は？"})
++    assert res.status_code == 200
++    assert "SH" in res.text
++    assert '"error"' in res.text
++
++
++def test_sample_target_precheck_crash_returns_sse_error_not_500(monkeypatch):
++    # PORT-02 レビュー指摘F-003: sh_sample_status()自体が例外を投げても、SSE契約を破る
++    # 生500にせずSSEの{"error":...}へ正規化する。
++    def boom():
++        raise RuntimeError("DPY-4000: unable to find wallet")
++
++    monkeypatch.setattr(service_main.nl2sql, "sh_sample_status", boom)
++    res = client.post("/api/chat/nl2sql", json={"question": "売上は？"})
++    assert res.status_code == 200
++    assert res.headers["content-type"].startswith("text/event-stream")
++    assert '"error"' in res.text
++    assert res.text.rstrip().endswith("data: [DONE]")
++
++
++def test_schema_endpoint_reports_sample_available():
++    res = client.get("/api/dbchat/schema")
++    assert res.status_code == 200
++    body = res.json()
++    assert body["sample_available"] is True
++    assert "sample_unavailable_reason" not in body
++
++
++def test_schema_endpoint_reports_sample_unavailable_reason(monkeypatch):
++    monkeypatch.setattr(
++        service_main.nl2sql, "get_schema_info",
++        lambda: {"schema": "SH", "tables": []},
++    )
++    res = client.get("/api/dbchat/schema")
++    body = res.json()
++    assert body["sample_available"] is False
++    assert body["sample_unavailable_reason"]
++
++
++# --- PORT-02: Select AI可視化(create_profileのヒント付きエラー) ---
++
++
++def test_create_profile_wraps_database_error_with_hint():
++    import oracledb as oracledb_mod
++
++    class FakeErr:
++        code = 20000
++        message = "ORA-20000"
++
++    class FakeCursor:
++        def execute(self, sql, **kw):
++            if "CREATE_PROFILE" in sql:
++                raise oracledb_mod.DatabaseError(FakeErr())
++
++    with pytest.raises(RuntimeError) as ei:
++        nl2sql.create_profile(FakeCursor(), "PROF", "meta.llama-3.3-70b-instruct", [])
++    assert "generative-ai-family" in str(ei.value)
++    assert "/api/health" in str(ei.value)
++
++
+ def test_sample_data_csv_valid():
+     # 同梱サンプルCSVがヘッダ+データ行を持ち、列名がASCIIであること(feedback 20260620 #12)
+     from jetuse_core.sample_data import SAMPLE_DATASETS
+diff --git a/packages/api/tests/test_obs.py b/packages/api/tests/test_obs.py
+new file mode 100644
+index 0000000..c67c2a9
+--- /dev/null
++++ b/packages/api/tests/test_obs.py
+@@ -0,0 +1,97 @@
++"""obs.py の送信失敗抑制(PORT-02)。指数バックオフ・N回に1回のサマリ・
++認可エラー(401/403)での恒久detachのロジックを直接検証する(実スレッド/実OCI呼び出しは張らない)。
++"""
++
++import logging
++import time
++
++from jetuse_core import obs
++
++
++class _Err(Exception):
++    def __init__(self, status: int):
++        super().__init__(f"status={status}")
++        self.status = status
++
++
++def test_is_auth_error_detects_401_403_only():
++    assert obs._is_auth_error(_Err(401)) is True
++    assert obs._is_auth_error(_Err(403)) is True
++    assert obs._is_auth_error(_Err(500)) is False
++    assert obs._is_auth_error(RuntimeError("no status attr")) is False
++
++
++def test_throttle_backs_off_and_blocks_after_failure():
++    t = obs._ShipThrottle("test-ship")
++    assert t.blocked() is False
++    stop = t.failed(_Err(500))
++    assert stop is False
++    assert t.fail_count == 1
++    assert t.blocked() is True  # 直後はバックオフ窓内
++
++
++def test_throttle_backoff_grows_with_repeated_failures():
++    t = obs._ShipThrottle("test-ship")
++    t.failed(_Err(500))
++    first_wait = t.retry_after
++    t.retry_after = 0.0  # 窓が明けた体でリセットして次の失敗を即座に記録
++    t.failed(_Err(500))
++    second_wait = t.retry_after
++    assert second_wait >= first_wait  # 連続失敗で待ち時間が伸びる(単調非減少)
++
++
++def test_throttle_ok_resets_state():
++    t = obs._ShipThrottle("test-ship")
++    t.failed(_Err(500))
++    t.ok()
++    assert t.fail_count == 0
++    assert t.blocked() is False
++
++
++def test_throttle_auth_error_signals_detach_without_backoff_growth():
++    t = obs._ShipThrottle("test-ship")
++    stop = t.failed(_Err(401))
++    assert stop is True  # worker側はこれを見てスレッドを終了する
++
++
++def test_retain_buffer_keeps_entries_within_cap():
++    # レビュー指摘: バックオフ中もバッファを全破棄しない(障害時の観測欠落防止)
++    buf = list(range(10))
++    assert obs._retain_buffer(buf, 20) == buf  # 上限未満はそのまま保持
++
++
++def test_retain_buffer_trims_oldest_when_over_cap():
++    buf = list(range(100))
++    kept = obs._retain_buffer(buf, 50)
++    assert len(kept) == 50
++    assert kept == list(range(50, 100))  # 直近(末尾)を優先して残す
++
++
++def test_log_worker_retries_first_failed_batch_instead_of_dropping_it(monkeypatch):
++    """実スレッドでの回帰テスト(レビュー指摘の再発): 送信1回目が失敗しても、当該バッチは
++    捨てずにバックオフ明け後の再送に含める(以前は throttle.failed() 直後の無条件
++    buf=[] で1回目の失敗バッチだけ確実に失われていた)。"""
++    monkeypatch.setattr(obs, "_FLUSH_SECONDS", 0.05)
++    monkeypatch.setattr(obs, "_BATCH_MAX", 50)
++    calls: list = []
++    state = {"failed_once": False}
++
++    class FakeClient:
++        def put_logs(self, **kw):
++            calls.append(kw["put_logs_details"].log_entry_batches[0].entries)
++            if not state["failed_once"]:
++                state["failed_once"] = True
++                raise RuntimeError("transient 500")
++
++    handler = obs.OciLogHandler("ocid1.log.oc1..test")
++    monkeypatch.setattr(handler, "_ensure_client", lambda: FakeClient())
++    record = logging.LogRecord("t", logging.INFO, __file__, 1, "hello", None, None)
++    handler.emit(record)
++
++    deadline = time.monotonic() + 3.0
++    while time.monotonic() < deadline and len(calls) < 2:
++        time.sleep(0.02)
++
++    assert len(calls) >= 2, "1回目失敗後、バックオフ明けに再送されるはず"
++    assert len(calls[0]) == 1  # 1回目(失敗)にも本来送るはずだった1件が入っている
++    assert len(calls[1]) == 1  # 2回目(成功)でも同じ1件が失われず含まれる
+diff --git a/packages/api/tests/test_project_resolution.py b/packages/api/tests/test_project_resolution.py
+index 552a006..36852d7 100644
+--- a/packages/api/tests/test_project_resolution.py
++++ b/packages/api/tests/test_project_resolution.py
+@@ -114,6 +114,18 @@ def test_autocreate_disabled_fails_fast(monkeypatch):
+     assert "PROJECT_OCID" in str(ei.value)
+ 
+ 
++def test_allow_autocreate_false_suppresses_creation_even_when_enabled(monkeypatch):
++    """PORT-02レビュー指摘: /api/health等のGET診断エンドポイントがポーリングだけで
++    GenerativeAiProjectを作らないよう、呼び出し側でautocreateを明示的に抑制できる。"""
++    sdk = FakeSdk(items=[])
++    monkeypatch.setattr(genai, "_sdk_client", lambda s: sdk)
++    s = _settings(project_autocreate=True)  # 有効環境でも
++    with pytest.raises(genai.ProjectResolutionError):
++        genai.resolve_project_ocid(s, allow_autocreate=False)
++    assert sdk.created == []  # 作成されない
++    assert genai._project_cache is None
++
++
+ def test_nonactive_created_project_not_cached(monkeypatch):
+     """作成後 ACTIVE に達しない project は使わずキャッシュもしない(REV-001 major#2)。"""
+     sdk = FakeSdk(items=[], create_state="FAILED")
+@@ -236,7 +248,7 @@ def _fake_dp(fail=None):
+ 
+ def test_rag_health_all_ok(monkeypatch):
+     monkeypatch.setattr(rag, "resolve_project_ocid",
+-                        lambda: "ocid1.generativeaiproject.oc1..live")
++                        lambda **kw: "ocid1.generativeaiproject.oc1..live")
+     monkeypatch.setattr(rag, "make_cp_client", lambda: _fake_cp())
+     monkeypatch.setattr(rag, "make_inference_client", lambda **kw: _fake_dp())
+     res = client.get("/api/rag/health")
+@@ -250,7 +262,7 @@ def test_rag_health_all_ok(monkeypatch):
+ 
+ def test_rag_health_pinpoints_cp_failure(monkeypatch):
+     monkeypatch.setattr(rag, "resolve_project_ocid",
+-                        lambda: "ocid1.generativeaiproject.oc1..live")
++                        lambda **kw: "ocid1.generativeaiproject.oc1..live")
+     monkeypatch.setattr(rag, "make_cp_client",
+                         lambda: _fake_cp(fail=_api_error(openai.NotFoundError, 404)))
+     monkeypatch.setattr(rag, "make_inference_client", lambda **kw: _fake_dp())
+@@ -262,7 +274,7 @@ def test_rag_health_pinpoints_cp_failure(monkeypatch):
+ 
+ 
+ def test_rag_health_project_unresolved_skips_dp(monkeypatch):
+-    def raise_unresolved():
++    def raise_unresolved(**kw):
+         raise genai.ProjectResolutionError("set PROJECT_OCID")
+ 
+     monkeypatch.setattr(rag, "resolve_project_ocid", raise_unresolved)
+diff --git a/packages/api/tests/test_tts.py b/packages/api/tests/test_tts.py
+new file mode 100644
+index 0000000..74ffc01
+--- /dev/null
++++ b/packages/api/tests/test_tts.py
+@@ -0,0 +1,47 @@
++"""TTS(VOICE-03)の縮退メッセージ(PORT-02)。Phoenix未購読等をヒント付き503へ変換する。"""
++
++from unittest import mock
++
++import oci
++import pytest
++from fastapi.testclient import TestClient
++
++from jetuse_core import tts
++from service.main import app
++
++client = TestClient(app)
++
++
++def test_unknown_voice_raises_value_error():
++    with pytest.raises(ValueError):
++        tts.synthesize("hello", "NoSuchVoice")
++
++
++def test_not_authorized_maps_to_hinted_tts_error(monkeypatch):
++    err = oci.exceptions.ServiceError(404, "NotAuthorizedOrNotFound", {}, "nope")
++    fake_client = mock.Mock()
++    fake_client.synthesize_speech.side_effect = err
++    monkeypatch.setattr(tts, "_speech_client", lambda: fake_client)
++    with pytest.raises(tts.TtsError) as ei:
++        tts.synthesize("こんにちは", tts.DEFAULT_VOICE)
++    assert "未購読" in str(ei.value)
++    assert "us-phoenix-1" in str(ei.value)
++
++
++def test_other_service_error_maps_to_generic_tts_error(monkeypatch):
++    err = oci.exceptions.ServiceError(500, "InternalError", {}, "boom")
++    fake_client = mock.Mock()
++    fake_client.synthesize_speech.side_effect = err
++    monkeypatch.setattr(tts, "_speech_client", lambda: fake_client)
++    with pytest.raises(tts.TtsError):
++        tts.synthesize("こんにちは", tts.DEFAULT_VOICE)
++
++
++def test_tts_route_surfaces_hint_as_503(monkeypatch):
++    def boom(text, voice):
++        raise tts.TtsError("テナンシがus-phoenix-1未購読の可能性")
++
++    monkeypatch.setattr(tts, "synthesize", boom)
++    res = client.post("/api/tts", json={"text": "こんにちは", "voice": tts.DEFAULT_VOICE})
++    assert res.status_code == 503
++    assert "未購読" in res.json()["detail"]
+
+
+===== 実環境 E2E 証跡 (jetuse-dev / Codex は実行せず証跡を評価する) =====
+(証跡なし: runs/2026-07-13T0730_PORT-02/e2e が空。デプロイ/E2E 未実施または対象外。完了主張ならその妥当性を厳しく見ること)

@@ -30,3 +30,14 @@ output "dynamic_group" {
 output "policy_id" {
   value = try(oci_identity_policy.runtime[0].id, null)
 }
+
+# PORT-03: IAM の**内容**が変わったかを呼び出し元が検出するための指紋。
+# DG 名や policy OCID は matching rule 本文や statement 差し替えでは変わらないため、
+# 反映待ち(time_sleep)の trigger にはこちらを使う。
+output "content_fingerprint" {
+  value = sha256(jsonencode({
+    runtime_matching_rule = local.runtime_matching_rule
+    runtime_statements    = try(oci_identity_policy.runtime[0].statements, [])
+    adb_matching_rule     = try(oci_identity_dynamic_group.adb[0].matching_rule, "")
+  }))
+}

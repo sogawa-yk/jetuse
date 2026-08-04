@@ -1,0 +1,12 @@
+{
+  "run_id": "2026-07-10T0842_FIX-47",
+  "task_file": "tasks/FIX-47.md",
+  "goal_condition_path": "runs/2026-07-10T0842_FIX-47/goal.txt",
+  "loop_config_snapshot": { "stage": "report-only" },
+  "isolation": { "worktree": true, "working_tree": "/home/opc/jetuse-loops/FIX-47" },
+  "tool_versions": { "claude_code": "2.1.206", "codex": "0.142.5" },
+  "started_at": "2026-07-10T08:42:22+00:00",
+  "ended_at": null,
+  "outcome": "in_progress",
+  "totals": { "turns": 0, "tokens": 0, "reviews": 0, "review_fail": 0 }
+}

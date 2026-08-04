@@ -9,6 +9,10 @@ terraform {
       source  = "hashicorp/random"
       version = ">= 3.5"
     }
+    time = {
+      source  = "hashicorp/time"
+      version = ">= 0.9"
+    }
   }
 }
 
@@ -23,7 +27,10 @@ data "oci_identity_region_subscriptions" "this" {
   tenancy_id = var.tenancy_ocid
 }
 
+# 権限不足だと region_subscriptions は **null** になり(401/404 ではない)、生の for 式は
+# "Iteration over null value" で落ちる。原因が権限だと分からないメッセージになるので、
+# ここは locals.home_region(try 付き)を使い、判定と案内は main.tf の region_guard に集約する。
 provider "oci" {
   alias  = "home"
-  region = [for r in data.oci_identity_region_subscriptions.this.region_subscriptions : r.region_name if r.is_home_region][0]
+  region = local.home_region
 }

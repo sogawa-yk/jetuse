@@ -54,7 +54,7 @@
 
 ## 検証の再現手順
 
-- ①: `packages/api`（RAG-01/02実装）+ docs/verification/RAG-01-02.md
+- ①: `packages/api`（RAG-01/02実装）+ docs/verification/jetuse-app/RAG-01-02.md
 - ②: `spikes/spike08_select_ai_rag.py`（23ai ADBに対して実行。jetuse-spike-adb23は検証後STOPPED）
 - 質問セット: SPIKE-03と同一（spikes/spike03_vector_store.py QUESTIONS）
 
@@ -66,7 +66,7 @@
 
 ## 追補（2026-06-17 SPIKE-E2）: ④ OCI Search with OpenSearch
 
-ENH-05のゲート調査として4つ目の選択肢を比較。詳細は `docs/verification/SPIKE-E2.md`。
+ENH-05のゲート調査として4つ目の選択肢を比較。詳細は `docs/verification/spikes/SPIKE-E2.md`。
 
 | 観点 | ④ OpenSearch（OCI Search with OpenSearch） |
 |---|---|

@@ -1,0 +1,63 @@
+{
+  "review_n": 3,
+  "timestamp": "2026-08-01T20:46:15+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-3.input.diff",
+  "raw_output_path": "reviews/review-3.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "外部 HTTP ツールの主要動作は実環境で確認されていますが、SSRF の DNS TOCTOU と認証情報の不完全な伏字処理という2件のセキュリティ blocker が残っています。加えて、承認対象の差し替えと一部 3xx 応答の成功扱いにより、文書化された動作保証を満たしません。",
+  "severity_counts": {
+    "blocker": 2,
+    "major": 2,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "TOOL-01-001",
+      "severity": "blocker",
+      "file": "packages/api/jetuse_core/http_tools.py",
+      "line": 337,
+      "issue": "SSRF 検査時の名前解決と httpx 接続時の名前解決が別々であり、攻撃者が管理する DNS を使えば、検査時には公開 IP、接続時には 169.254.169.254 や private IP を返す DNS rebinding が可能です。任意 URL を登録できる新しいプロキシ経路なので、文字列上の内部 URL を拒否する scenario-3 だけでは「内部宛先を実行時にも拒否」という保証を満たしません。",
+      "suggestion": "検証で得た公開 IP に接続先を固定しつつ元の Host/SNI を維持する transport を導入するか、接続ソケットの peer IP を送信前に検証してください。DNS rebinding の再現テストも追加してください。"
+    },
+    {
+      "id": "TOOL-01-002",
+      "severity": "blocker",
+      "file": "packages/api/jetuse_core/http_tools.py",
+      "line": 387,
+      "issue": "秘密の伏字がデコード済み本文に対する単純な `replace(secret_value, ...)` だけです。例えば秘密に `\"` や `\\` が含まれ、相手が JSON としてヘッダを反射すると本文ではエスケープされるため一致せず、秘密がモデル・UI・会話履歴へ漏れます。URL encoding、Base64、文字コード変換でも同様で、「送った値は必ず伏せる」という保証になっていません。現在のテストと E2E は英数字トークンの完全一致だけを検証しています。",
+      "suggestion": "認証付きツールの応答を無条件に安全とは扱わない設計に変更してください。少なくとも Content-Type に応じて JSON を構造化解析し、秘密と一致する文字列値を再帰的に伏字化し、raw・JSON escaped・URL encoded など想定する表現も処理してください。引用符やバックスラッシュを含む秘密を使った回帰テストを追加してください。完全な非漏洩保証が必要なら、認証付き応答のモデル返却を allowlist されたフィールドに限定する必要があります。"
+    },
+    {
+      "id": "TOOL-01-003",
+      "severity": "major",
+      "file": "packages/api/service/routes/agents.py",
+      "line": 163,
+      "issue": "承認後の実行対象を pending 時の tool id・定義ではなく名前だけで再解決しています。承認待ちの間に元ツールを削除し、同名で別 URL・method・認証 Secret のツールを作成すると、ユーザーが確認したものとは異なる HTTP 操作が実行されます。添付 SKIPPED.md が引用する `test_stream_agent_executes_external_tool` も `auto_tools=True` のテストであり、この承認往復を固定していません。",
+      "suggestion": "pending approval に不変な tool id と定義の version/hash を含め、execute-tool でもそれらの一致を必須にしてください。削除・同名再作成後の承認が拒否されるテストと、`auto_tools=false` の pending→execute→tool_results 再開を通す E2E を追加してください。"
+    },
+    {
+      "id": "TOOL-01-004",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/http_tools.py",
+      "line": 359,
+      "issue": "`res.is_redirect` は通常 Location ヘッダを伴うリダイレクトだけを表すため、Location のない 300、301、304、307、308 などは拒否されず、status < 400 として成功結果になります。仕様・能力カタログの「3xx は失敗」および「非 2xx は失敗」と不一致です。",
+      "suggestion": "`if not 200 <= res.status_code < 300:` で全非 2xx を失敗にしてください。Location のない 3xx を含む各代表ステータスのテストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-08-01T2002_TOOL-01/e2e/` の scenario-1〜5 はすべて PASS で、登録・モデルによる呼出し・Vault ヘッダ・基本的な SSRF 拒否・タイムアウト・サイズ上限を実物の ADB/Vault/Object Storage/OCI Generative AI に対して確認しています。一方、SKIPPED.md で未実施とされた DNS rebinding は現実に残る SSRF blocker であり、承認往復について引用されたテストは auto_tools=True のため説明を裏づけません。また、特殊文字を含む秘密の反射と Location なし 3xx も未検証です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲット URL が提供されておらず、指示に従いブラウザツールは使用していません。"
+    }
+  }
+}

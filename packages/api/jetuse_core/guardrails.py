@@ -11,7 +11,6 @@ OCI Generative AIの ApplyGuardrails API(ネイティブ、オンデマンド対
 """
 
 import logging
-import os
 
 from .settings import get_settings
 
@@ -28,16 +27,11 @@ def _inference_client():
     if _client is None:
         import oci
 
-        region = get_settings().oci_region
-        if os.environ.get("AUTH_MODE") == "resource_principal":
-            signer = oci.auth.signers.get_resource_principals_signer()
-            _client = oci.generative_ai_inference.GenerativeAiInferenceClient(
-                {"region": region}, signer=signer
-            )
-        else:
-            _client = oci.generative_ai_inference.GenerativeAiInferenceClient(
-                oci.config.from_file()
-            )
+        from .oci_auth import sdk_signer_args
+
+        _client = oci.generative_ai_inference.GenerativeAiInferenceClient(
+            **sdk_signer_args(get_settings().oci_region)
+        )
     return _client
 
 

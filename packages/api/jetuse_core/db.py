@@ -30,35 +30,22 @@ WALLET_CACHE = "/tmp/adb_wallet"
 CALL_TIMEOUT_MS = int(os.environ.get("DB_CALL_TIMEOUT_MS", "10000"))
 
 
-def _rp_signer():
-    import oci
-
-    return oci.auth.signers.get_resource_principals_signer()
-
-
 def _wallet_bytes(settings: Settings) -> bytes:
     """ウォレットzipのバイト列を取得。バケット優先、無ければADB OCIDからAPI生成(INFRA-03)。"""
     import oci
 
-    rp = os.environ.get("AUTH_MODE") == "resource_principal"
+    from .oci_auth import sdk_signer_args
+
     if settings.adb_wallet_bucket:
-        if rp:
-            client = oci.object_storage.ObjectStorageClient(
-                {"region": settings.oci_region}, signer=_rp_signer()
-            )
-        else:
-            client = oci.object_storage.ObjectStorageClient(oci.config.from_file())
+        client = oci.object_storage.ObjectStorageClient(**sdk_signer_args(settings.oci_region))
         ns = client.get_namespace().data
         obj = client.get_object(ns, settings.adb_wallet_bucket, settings.adb_wallet_object)
         content = obj.data.content
         # Terraformが base64 テキストで配置したウォレットはデコードして使う(INFRA-03)
         return base64.b64decode(content) if settings.adb_wallet_base64 else content
     if settings.adb_ocid:
-        # ORMワンクリック: Database APIでウォレットを直接生成(リソースプリンシパル)
-        if rp:
-            db = oci.database.DatabaseClient({"region": settings.oci_region}, signer=_rp_signer())
-        else:
-            db = oci.database.DatabaseClient(oci.config.from_file())
+        # ORMワンクリック: Database APIでウォレットを直接生成
+        db = oci.database.DatabaseClient(**sdk_signer_args(settings.oci_region))
         resp = db.generate_autonomous_database_wallet(
             settings.adb_ocid,
             oci.database.models.GenerateAutonomousDatabaseWalletDetails(

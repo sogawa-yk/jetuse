@@ -1,0 +1,9 @@
+{
+  "turn": 11,
+  "timestamp": "2026-07-13T06:16:20+00:00",
+  "action_summary": "(loop-protocol 側で追記可)",
+  "files_changed": [".env.example", "docs/tips.md", "docs/verification/fix47-clean-room-e2e.md", "infra/orm/locals.tf", "infra/orm/main.tf", "infra/orm/schema.yaml", "infra/orm/variables.tf", "infra/terraform/modules/iam/main.tf", "infra/terraform/modules/iam/tests/iam.tftest.hcl", "infra/terraform/modules/iam/variables.tf", "packages/api/jetuse_core/genai.py", "packages/api/jetuse_core/rag.py", "packages/api/jetuse_core/settings.py", "packages/api/service/routes/rag.py", "packages/api/tests/test_project_resolution.py", "tasks/FIX-47.md", "tasks/FIX47-PROGRESS.md", "tasks/PORT-01.md", "tasks/PORT-02.md"],
+  "diff_path": "diffs/turn-11.diff",
+  "review_ref": "reviews/review-3.json",
+  "goal_checker": { "verdict": "(/goal 判定モデルが記録)", "reason": "" }
+}

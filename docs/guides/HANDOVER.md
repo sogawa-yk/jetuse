@@ -25,7 +25,7 @@ AWSの JetUse（generative-ai-use-cases）相当の生成AIユースケース集
 | 実行マシン | OCIインスタンス `dev`（VM.Standard.E6.Flex / Oracle Linux 9.7 / **ap-osaka-1** / sudo可） |
 | コンパートメント | `jetuse-proto`（OCIDは `.env` の `COMPARTMENT_OCID`。計画書の `jetuse-spike` は存在せず代替 — ADR-0001） |
 | OCI認証 | `~/.oci/config` DEFAULT（ユーザー: yuki.sogawa.2@oracle.com）。**鍵ファイル末尾に `OCI_API_KEY` マーカー行あり（流用時は除去必須）** |
-| 導入済みツール | Python 3.12（venv: `.venv`）/ Node 22 / Terraform 1.15 / podman 5.6 / OCI CLI 3.85 / mpg123 |
+| 導入済みツール | Python 3.12（venv: `.venv`。ローカル macOS 開発は 3.13）/ Node 22 / Terraform 1.15 / podman 5.6 / OCI CLI 3.85 / mpg123 |
 | Python venv | `openai, oci, oci-genai-auth, oracledb, fastapi, httpx, gTTS, websockets, oci-ai-speech-realtime, reportlab, python-docx` 等導入済み |
 | 秘密情報 | すべて `.env`（gitignore済み）。ADBウォレット: `/home/opc/adb_wallet/` |
 
@@ -87,7 +87,7 @@ oci raw-request --target-uri "$BASE/semanticStores/$SS/actions/enrich" --http-me
   --request-body '{"enrichmentJobType":"FULL_BUILD","enrichmentJobConfiguration":{"enrichmentJobType":"FULL_BUILD","schemaName":"SH"}}'
 # 2) generateSqlFromNl で spike04_select_ai.py と同じ日本語10問を評価
 #    body: {"inputNaturalLanguageQuery": "..."} / SQLは jobOutput.content
-# 3) docs/verification/SPIKE-04.md の評価表を更新（Select AIとの比較を完成）
+# 3) docs/verification/spikes/SPIKE-04.md の評価表を更新（Select AIとの比較を完成）
 ```
 
 ### チェックポイント①承認後（Phase 1着手、`docs/plan.md` §3）
@@ -104,7 +104,7 @@ oci raw-request --target-uri "$BASE/semanticStores/$SS/actions/enrich" --http-me
 - Vector Store: CP `completed` 後もDP可視化まで10〜30秒待つ。docxはunsupported_file
 - SQL SearchはAPIバージョン **`/20260325`**（CLIにデータプレーンコマンドなし、raw-requestで叩く）
 - Speech realtime WHISPER: `modelType=WHISPER`。`shouldIgnoreInvalidCustomizations`/`finalSilenceThresholdInMs` を送ると400。partialなし
-- TTS: Phoenix限定。`modelDetails.languageCode: "ja-JP"` を付けないと日本語ボイスが弾かれる
+- TTS: 提供リージョンは拡大中（Phoenix限定ではない。`TTS_REGION` 未指定ならデプロイリージョン → us-phoenix-1 の順に試行）。`modelDetails.languageCode: "ja-JP"` を付けないと日本語ボイスが弾かれる
 - OCIR: 大阪は `kix.ocir.io`、ユーザー名 `{namespace}/{user}`、auth tokenは**ホームリージョン(us-ashburn-1)で作成**、リポジトリ事前作成必須（無いとpush 403）
 - DBMS_CLOUD.CREATE_CREDENTIAL に渡す秘密鍵は `OCI_API_KEY` マーカー行を除去（ORA-20401の原因）
 - API GWデプロイは `readTimeoutInSeconds: 300` 明示必須（デフォルト10秒）。SSEにはkeepaliveコメント送出を実装すること

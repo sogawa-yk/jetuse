@@ -10,13 +10,29 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from jetuse_core import agents as agents_repo
-from jetuse_core import audit, guardrails, moderation, rag, rag_opensearch, rag_select_ai
+from jetuse_core import (
+    audit,
+    guardrails,
+    moderation,
+    rag,
+    rag_adb,
+    rag_opensearch,
+    rag_select_ai,
+)
 from jetuse_core import conversations as conv_repo
+from jetuse_core import http_tools as http_tools_repo
 from jetuse_core import mcp_servers as mcp_repo
 from jetuse_core.auth import AuthContext, require_user
-from jetuse_core.chat import GenParams, create_oci_conversation
+from jetuse_core.chat import (
+    GenParams,
+    create_oci_conversation,
+    resolve_max_doc_searches,
+    resolve_max_tool_hops,
+)
 from jetuse_core.logging import log_with
-from jetuse_core.models import MODELS
+from jetuse_core.model_compat import agent_refusal
+from jetuse_core.models import DEFAULT_MODEL, MODELS, model_status
+from jetuse_core.owner_keys import owner_key_gate, user_owner_key
 from jetuse_core.settings import get_settings
 
 from .. import agent_dispatch
@@ -25,6 +41,14 @@ from ..sse import KEEPALIVE_FRAME, KEEPALIVE_SECONDS, SSE_HEADERS
 
 logger = logging.getLogger("jetuse.service")
 router = APIRouter()
+
+# Responses API を使わない RAG バックエンド(自前検索 → 単発生成)。値は (モジュール, 表示名)。
+# generate は呼び出し時にモジュールから引く(差し替えを効かせるため参照を束縛しない)。
+NON_RESPONSES_RAG_BACKENDS = {
+    "select_ai": (rag_select_ai, "Select AI"),
+    "opensearch": (rag_opensearch, "OpenSearch"),
+    "adb": (rag_adb, "Oracle AI Database"),
+}
 
 # stream_chat / stream_agent は tests が `service.main` 上で monkeypatch するため、
 # 呼び出し時に service.main 経由で解決する(lazy import で循環を回避)。
@@ -64,8 +88,90 @@ async def chat_stream(  # noqa: ANN202
     user: Annotated[AuthContext, Depends(require_user)],
 ):
     """チャットストリーミング(CHAT-01)。LLMの2系統APIを正規化したSSEを返す。"""
-    if req.model not in MODELS:
+    return await stream_chat_response(req, user, user_owner_key(user.subject))
+
+
+async def stream_chat_response(  # noqa: ANN202
+    req: ChatRequest, user: AuthContext, rag_ns: str, demo_id: str | None = None
+):
+    """チャットSSE本体(user単位/デモスコープ共有 — SP1-03/specs/17 §5)。
+
+    rag_ns はRAG文書の名前空間キー: user単位ルートは user.subject、デモスコープは
+    DemoContext.namespace。監査・会話・エージェント/MCP解決は実ユーザーのまま。
+
+    demo_id はデモスコープの会話紐付け(SP2-03 / specs/18 §4.2): conversation_id は
+    `owner_sub = owner_key(user.subject) AND demo_id = ctx.demo_id` の会話のみ受理
+    (不一致 404 — 両方向の持ち込み拒否)。user 単位(demo_id=None)は demo_id IS NULL を
+    強制。demo 会話は OCI Conversation(サーバ側会話状態)を作らず LTM も無効 —
+    継続の契約はクライアントが messages に全履歴を再送する(既存 SPA と同じ流儀)。
+    """
+    # モデル関連の事前検証は agent_id 指定時は行わない: 実行時に req.model ではなく
+    # agent_def["model"] を使う(既存test_chat_with_agent_applies_instructionsが示すとおり
+    # 呼び出し側モデルは定義側で上書きされる仕様)ため、req.modelがMODELS未登録でも
+    # 正当なエージェント実行を拒否してはいけない(レビュー指摘: unknown-model 400の回帰)。
+    # 同様に非Responses系バックエンドのRAG(下の分岐がreq.modelを一切使わず終端)も対象外。
+    bypasses_model_check = bool(req.agent_id) or (
+        req.rag and req.rag_backend in NON_RESPONSES_RAG_BACKENDS
+    )
+    if not bypasses_model_check and req.model not in MODELS:
         raise HTTPException(status_code=400, detail=f"unknown model: {req.model}")
+
+    # 会話の所有者・箱スコープ検証は全早期 return より前で行う(review-1 M001 / review-2 B002)。
+    # agent_id の有無に依らず検証する: 保存済み Select AI/hosted agent 経路(agent_dispatch)は
+    # conversation_id へ owner 条件なしで append_message するため、agent_id をスキップ条件にすると
+    # 自分の agent_id + 他人/他デモの conversation_id で越境書き込みできてしまう。
+    # owner キー移行ゲートを会話照合より前に通す(review-11 B004): 変換済みキー
+    # (user_owner_key)で照合する前に、未分類の予約接頭辞行が残る間は 503。さもないと legacy
+    # owner `sub_sub_x` と新 sub `sub_x`→`sub_sub_x` の衝突で他人の会話を参照・追記できる。
+    conv: dict | None = None
+    if req.conversation_id:
+        await asyncio.to_thread(owner_key_gate)
+        conv = await asyncio.to_thread(
+            conv_repo.get_conversation, user_owner_key(user.subject),
+            req.conversation_id, demo_id,
+        )
+        if not conv:
+            raise HTTPException(status_code=404, detail="conversation not found")
+
+    # モデル可用性(PORT-02): 直前の呼び出しで利用不可と判明したモデルは、既定モデルなら
+    # 同系統(chat-family)へフォールバックし、それ以外は生エラーでなくヒント付きで即座に返す。
+    # bypasses_model_check時はreq.modelが未登録キーでもmodel_status()は安全に(True, None)を
+    # 返す(dict.getベース)ため、下のif節がそのまま素通りする。
+    model_ok, model_hint = model_status(req.model)
+    fallback_notice: str | None = None
+    if not model_ok and not bypasses_model_check:
+        # responses-family必須の機能(agent/rag/画像/保存済み会話メモリ)ではchat-familyへの
+        # フォールバックは機能欠落(later checksが400にする、または会話メモリのサイレント
+        # 無効化)につながるため行わない。素のchatリクエストに限定する。
+        needs_responses_family = bool(
+            req.agent or req.agent_id or req.rag or req.images or req.conversation_id
+        )
+        fallback_key = None
+        if req.model == DEFAULT_MODEL and not needs_responses_family:
+            fallback_key = next(
+                (k for k in MODELS
+                 if k != req.model and MODELS[k].api == "chat" and model_status(k)[0]),
+                None,
+            )
+        if fallback_key:
+            fallback_notice = (
+                f"既定モデル {req.model} は利用できません({model_hint})。"
+                f"{fallback_key} に自動フォールバックしました"
+            )
+            req = req.model_copy(update={"model": fallback_key})
+        else:
+            hint = f"モデル {req.model} はこのリージョン/テナンシでは利用できません"
+            if model_hint:
+                hint += f"({model_hint})"
+
+            async def unavailable_gen():
+                yield KEEPALIVE_FRAME
+                yield f"data: {json.dumps({'error': hint}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+
+            return StreamingResponse(
+                unavailable_gen(), media_type="text/event-stream", headers=SSE_HEADERS
+            )
 
     # 監査の機能ラベル(SEC-02)
     audit_feature = (
@@ -124,17 +230,56 @@ async def chat_stream(  # noqa: ANN202
                 pi_blocked_gen(), media_type="text/event-stream", headers=SSE_HEADERS
             )
 
-    # Select AI / OpenSearch バックエンド: 非ストリーミングGENERATEを単発deltaで返す
-    if req.rag and req.rag_backend in ("select_ai", "opensearch"):
+    # RAGM-01: 絞り込みは vector_store バックエンドの file_search でしか効かない。
+    # 黙って無視すると「版フィルタを掛けたのに旧版が混ざる」ため、明示的に断る。
+    if req.rag_filters is not None:
+        if not req.rag:
+            raise HTTPException(status_code=400, detail="rag_filters requires rag=true")
+        if req.rag_backend != "vector_store":
+            raise HTTPException(
+                status_code=400,
+                detail=f"rag_filters is not supported on the {req.rag_backend} backend",
+            )
+        if req.agent or req.agent_id:
+            # エージェント経路(AGT-01/03)は別ディスパッチで、絞り込みを渡す口が無い。
+            # 素通しすると黙って無視される(レビュー F-001)ので、ここで断る。
+            raise HTTPException(
+                status_code=400, detail="rag_filters is not supported in agent mode"
+            )
+
+    # AGT-04: エージェント専用のパラメータを黙って無視しない（無視すると「上限を上げたのに
+    # 変わらない」「adb を選んだのに出典が粗い」が起きる）。**保存済みエージェント
+    # (agent_id) は別ディスパッチ**（Select AI / ホスト型コンテナ）でこのループを通らないので、
+    # 受理せず断る。**dispatch より前に**弾く（後ろに置くと agent_id 経路で素通りする）。
+    if req.max_tool_hops is not None or req.agent_rag_backend != "vector_store":
+        param = "max_tool_hops" if req.max_tool_hops is not None else "agent_rag_backend"
+        if req.agent_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{param} is not supported for saved agents (agent_id)",
+            )
+        if not req.agent:
+            raise HTTPException(status_code=400, detail=f"{param} requires agent mode")
+
+    # agent と rag は併用できない。**RAG ディスパッチより前に**弾く（後ろに置くと
+    # 非Responses系バックエンドでは agent 指定が黙って無視されたまま RAG が走る）。
+    if (req.agent or req.agent_id) and req.rag:
+        raise HTTPException(status_code=400, detail="agent and rag cannot be combined")
+
+    # Select AI / OpenSearch / ADB自前索引: 非ストリーミングGENERATEを単発deltaで返す
+    if req.rag and req.rag_backend in NON_RESPONSES_RAG_BACKENDS:
+        # RAG 読取も owner_key 移行ゲートを通す(store 解決と同じ fail-closed 一貫性 — M007)。特に
+        # Select AI generate は ensure_profile で永続 profile/index を作るため、未分類 owner が
+        # escaped 側へ新規資産を作るのをストリーム開始前に塞ぐ(raise は 503 に正規化)。
+        await asyncio.to_thread(owner_key_gate)
         prompt = req.messages[-1].content
-        _rag_gen = (rag_opensearch.generate if req.rag_backend == "opensearch"
-                    else rag_select_ai.generate)
-        _rag_label = "OpenSearch" if req.rag_backend == "opensearch" else "Select AI"
+        _rag_mod, _rag_label = NON_RESPONSES_RAG_BACKENDS[req.rag_backend]
 
         async def sa_gen():
             yield KEEPALIVE_FRAME
+            # generate はモジュール属性として毎回引く(テスト/差し替えが効くように)
             task = asyncio.create_task(
-                asyncio.to_thread(_rag_gen, user.subject, prompt)
+                asyncio.to_thread(_rag_mod.generate, rag_ns, prompt)
             )
             try:
                 while True:
@@ -147,10 +292,23 @@ async def chat_stream(  # noqa: ANN202
                         yield KEEPALIVE_FRAME  # 初回は索引構築で数分かかりうる
                 yield f"data: {json.dumps({'delta': body}, ensure_ascii=False)}\n\n"
                 if cites:
-                    cites = rag.resolve_citation_filenames(user.subject, cites)
+                    cites = rag.resolve_citation_filenames(rag_ns, cites)
                     yield (
                         f"data: {json.dumps({'citations': cites}, ensure_ascii=False)}\n\n"
                     )
+                # conversation_id 指定時は箱の会話へ履歴保存(review-1 M001 の契約 —
+                # RAG ストリームでも user/assistant を保存。失敗はストリームを止めない)
+                if req.conversation_id:
+                    try:
+                        if req.persist_user:
+                            await asyncio.to_thread(
+                                conv_repo.append_message, req.conversation_id,
+                                "user", prompt)
+                        await asyncio.to_thread(
+                            conv_repo.append_message, req.conversation_id,
+                            "assistant", body)
+                    except Exception:
+                        logger.exception("rag persist failed")
             except Exception as e:
                 logger.exception("%s rag failed", _rag_label)
                 err = {"error": f"{_rag_label} RAGの実行に失敗しました: {str(e)[:200]}"}
@@ -166,13 +324,16 @@ async def chat_stream(  # noqa: ANN202
 
     # 画像入力(MM-01): visionモデル必須・agent/rag併用不可・最終メッセージはuser
     if req.images:
+        if req.agent or req.rag or req.agent_id:
+            # PORT-02: agent_id時はreq.modelがMODELS未登録キーでありうるため、
+            # MODELS[req.model]参照(vision判定)より先にこちらを判定する
+            # (レビュー指摘: agent_id+images+未知modelがKeyErrorで500していた)。
+            raise HTTPException(
+                status_code=422, detail="images cannot be combined with agent/rag"
+            )
         if not MODELS[req.model].vision:
             raise HTTPException(
                 status_code=422, detail="selected model does not support images"
-            )
-        if req.agent or req.rag or req.agent_id:
-            raise HTTPException(
-                status_code=422, detail="images cannot be combined with agent/rag"
             )
         if req.messages[-1].role != "user":
             raise HTTPException(status_code=422, detail="last message must be user")
@@ -202,27 +363,78 @@ async def chat_stream(  # noqa: ANN202
     if agent_def:
         return await agent_dispatch.hosted_agent_stream_response(req, user, agent_def)
 
+    # 外部HTTPツール(TOOL-01): owner所有のものだけ解決してエージェントループへ配線する。
+    # 1件でも解決できなければ 404 で止める。黙って外すと、業務APIを参照しないまま
+    # もっともらしい回答を返してしまう(削除済み・他人所有・不正idのいずれも同じ)
+    http_tool_defs: list = []
+    if req.agent and req.http_tool_ids:
+        wanted = list(dict.fromkeys(req.http_tool_ids))
+        rows = await asyncio.to_thread(http_tools_repo.get_tools, user.subject, wanted)
+        if len(rows) != len(wanted):
+            missing = sorted(set(wanted) - {r["id"] for r in rows})
+            raise HTTPException(
+                status_code=404, detail=f"http tool not found: {', '.join(missing)}"
+            )
+        http_tool_defs = [http_tools_repo.to_tooldef(r) for r in rows]
+
     mcp_defs: list[dict] = []
     if req.agent and req.mcp_server_ids:
         # owner所有のサーバーのみ解決(AGT-02)
         mcp_defs = await asyncio.to_thread(
             mcp_repo.get_servers, user.subject, req.mcp_server_ids
         )
-    # rag_searchツール(AGT-01c): 有効ならユーザーのVector Storeを解決
+    # AGT-04: ホップ上限は**エージェントループを使う要求だけ**で解決する。無条件に呼ぶと、
+    # 設定値が天井超えのときに素のチャットまで 400 になる（壊すのは当該機能だけに閉じる）。
+    # 設定値が不正でもここで断る（クランプしない — ADR-0025）
+    max_tool_hops: int | None = None
+    if req.agent:
+        try:
+            max_tool_hops = resolve_max_tool_hops(req.max_tool_hops)
+            if req.agent_rag_backend == "adb":
+                # AGT-05: 文書検索の上限も入口で検証する（設定が壊れていると
+                # ストリームの途中で落ち、打ち切りとの区別がつかなくなる）。
+                # 数えるのは adb 経路の function tool だけなので、そこに限る
+                resolve_max_doc_searches()
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    # rag_searchツール(AGT-01c): 有効ならユーザーのVector Storeを解決。
+    # adb バックエンド(AGT-04)は Vector Store を使わず rag_adb を直接引く
     agent_rag_store: str | None = None
     eff_tools = agent_def["enabled_tools"] if agent_def else (req.enabled_tools or [])
+    if req.agent_rag_backend != "vector_store" and "rag_search" not in eff_tools:
+        # バックエンドだけ指定しても rag_search が無効なら文書検索は行われない。
+        # 受理すると「adb を選んだのに出典が粗い(そもそも検索していない)」になる
+        raise HTTPException(
+            status_code=400,
+            detail="agent_rag_backend requires rag_search in enabled_tools",
+        )
     if (req.agent or agent_def) and eff_tools and "rag_search" in eff_tools:
-        agent_rag_store = await asyncio.to_thread(rag.get_store_id, user.subject)
+        if req.agent_rag_backend == "adb":
+            # 使えないまま素通しすると、検索が毎回失敗したまま回答だけ返る。
+            # 「表が無い(未導入)」と「今つながらない」を区別して理由ごと断る
+            state = await asyncio.to_thread(rag_adb.availability)
+            if state != rag_adb.READY:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"adb rag backend is not available ({state})",
+                )
+        else:
+            # Vector Store 経路は owner_key 移行ゲートを通してから解決する
+            # (add_file/delete_file/一覧と同じ fail-closed 一貫性 — SP2-02)
+            agent_rag_store = await asyncio.to_thread(rag.resolve_store_for_read, rag_ns)
 
     if agent_def and agent_def["mcp_server_ids"] and agent_def["mine"]:
         # 共有エージェントのMCP(所有者の私有資源)は実行ユーザーには適用しない(specs/11)
         mcp_defs += await asyncio.to_thread(
             mcp_repo.get_servers, user.subject, agent_def["mcp_server_ids"]
         )
-    if req.agent and MODELS[req.model].api != "responses":
-        raise HTTPException(
-            status_code=400, detail="agent mode requires a responses-family model"
-        )
+    if req.agent:
+        # AGT-06: Responses 系かどうかだけでは足りない(ツールを渡せない Responses 系がある)。
+        # 断る理由は登録簿が持ち、そのまま利用者に見える文言で返す
+        refusal = agent_refusal(req.model)
+        if refusal:
+            raise HTTPException(status_code=400, detail=refusal)
 
     rag_store: str | None = None
     if req.rag:
@@ -230,20 +442,18 @@ async def chat_stream(  # noqa: ANN202
             raise HTTPException(
                 status_code=400, detail="rag requires a responses-family model"
             )
-        rag_store = await asyncio.to_thread(rag.get_store_id, user.subject)
+        rag_store = await asyncio.to_thread(rag.resolve_store_for_read, rag_ns)
         if not rag_store:
             raise HTTPException(status_code=400, detail="no documents uploaded")
 
     oci_conv: str | None = None
-    if req.conversation_id and not req.agent_id:
-        conv = await asyncio.to_thread(
-            conv_repo.get_conversation, user.subject, req.conversation_id
-        )
-        if not conv:
-            raise HTTPException(status_code=404, detail="conversation not found")
+    if conv is not None:  # 冒頭で取得・404 済み(review-1 M001)。再取得しない
         # 短期メモリ(CHAT-06): Responses系のみ。再生成時(persist_user=false)は
-        # Conversation側のアイテム重複を避けるためステートレスにフォールバック
-        if MODELS[req.model].api == "responses" and req.persist_user:
+        # Conversation側のアイテム重複を避けるためステートレスにフォールバック。
+        # demo 会話はスキップ = OCI Conversation を作らない(specs/18 §4.2 — 外部会話の
+        # 後始末・クラッシュ孤児・memory_subject_id=user.subject の LTM がデモ間で
+        # 記憶を共有する混線を構造的に排除。demo chat の LTM は無効)
+        if demo_id is None and MODELS[req.model].api == "responses" and req.persist_user:
             oci_conv = conv.get("oci_conversation_id")
             if not oci_conv:
                 try:
@@ -258,7 +468,7 @@ async def chat_stream(  # noqa: ANN202
                     )
                     await asyncio.to_thread(
                         conv_repo.set_oci_conversation,
-                        user.subject, req.conversation_id, oci_conv,
+                        user_owner_key(user.subject), req.conversation_id, oci_conv,
                     )
                 except Exception:
                     logger.exception("oci conversation create failed (fallback stateless)")
@@ -298,6 +508,7 @@ async def chat_stream(  # noqa: ANN202
                 max_tokens=req.max_tokens,
                 reasoning_effort=req.reasoning_effort,
                 file_search_store=rag_store,
+                file_search_filters=req.rag_filters,  # RAGM-01(検証済み構造のみ)
             )
             eff_model = agent_def["model"] if agent_def else req.model
             use_agent_loop = req.agent or bool(
@@ -322,6 +533,10 @@ async def chat_stream(  # noqa: ANN202
                     instructions=agent_def["instructions"] if agent_def else None,
                     project_ocid=agent_def.get("project_ocid") if agent_def else None,
                     rag_store=agent_rag_store,
+                    http_tools=http_tool_defs,
+                    rag_backend=req.agent_rag_backend,  # AGT-04
+                    rag_owner=rag_ns,
+                    max_tool_hops=max_tool_hops,
                 )
             elif agent_def:
                 # ツールなしエージェント: instructionsをsystemとして付与(AGT-03)
@@ -365,10 +580,15 @@ async def chat_stream(  # noqa: ANN202
                 if "delta" in ev:
                     parts.append(ev["delta"])
                 if "usage" in ev:
-                    usage = ev["usage"]
+                    # エージェントは**ホップごとに** usage を流す(AGT-04 で最終回答の
+                    # 1 往復も含めた)。上書きすると最後の 1 往復しか記録されず、
+                    # 会話の使用量も監査ログもターン全体を大幅に過少計上する
+                    usage = {
+                        k: (usage or {}).get(k, 0) + v for k, v in ev["usage"].items()
+                    }
                 if "citations" in ev:  # 日本語ファイル名の文字化け対策(元名へ解決)
                     ev["citations"] = rag.resolve_citation_filenames(
-                        user.subject, ev["citations"]
+                        rag_ns, ev["citations"]
                     )
                 if cancel.is_set() or not put_event(ev):
                     cancelled = True
@@ -407,6 +627,8 @@ async def chat_stream(  # noqa: ANN202
 
     async def gen():
         yield KEEPALIVE_FRAME
+        if fallback_notice:
+            yield f"data: {json.dumps({'notice': fallback_notice}, ensure_ascii=False)}\n\n"
         producer = loop.run_in_executor(None, produce)
         try:
             while True:
@@ -427,20 +649,29 @@ async def chat_stream(  # noqa: ANN202
     return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
 
 
+def _model_entry(k: str, m) -> dict:
+    ok, hint = model_status(k)
+    entry = {
+        "key": k,
+        "label": m.label,
+        "default_temperature": m.default_temperature,
+        "api": m.api,
+        "reasoning": m.reasoning,  # UIの出し分け用(CHAT-04b)
+        "min_max_tokens": m.min_max_tokens,
+        "vision": m.vision,  # 画像添付UIの出し分け(MM-01)
+        "multi_image": m.multi_image,  # 複数画像可否(ENH-09)
+        "available": ok,  # PORT-02: リージョン/テナンシで利用不可と判明したものはfalse
+        # AGT-06: エージェントモードの可否。UIが選ばせる前に出し分けられるようにする
+        # (選ばせてから 400 で断るより、選べないほうがよい)
+        "agent": m.agent,
+    }
+    if m.agent_blocked_reason:
+        entry["agent_blocked_reason"] = m.agent_blocked_reason
+    if not ok and hint:
+        entry["unavailable_reason"] = hint
+    return entry
+
+
 @router.get("/api/chat/models")
 async def list_models(user: Annotated[AuthContext, Depends(require_user)]):
-    return {
-        "models": [
-            {
-                "key": k,
-                "label": m.label,
-                "default_temperature": m.default_temperature,
-                "api": m.api,
-                "reasoning": m.reasoning,  # UIの出し分け用(CHAT-04b)
-                "min_max_tokens": m.min_max_tokens,
-                "vision": m.vision,  # 画像添付UIの出し分け(MM-01)
-                "multi_image": m.multi_image,  # 複数画像可否(ENH-09)
-            }
-            for k, m in MODELS.items()
-        ]
-    }
+    return {"models": [_model_entry(k, m) for k, m in MODELS.items()]}

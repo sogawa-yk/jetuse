@@ -1,0 +1,40 @@
+data: {"ka": 1}
+
+data: {"delta": "あなた"}
+
+data: {"delta": "の"}
+
+data: {"delta": "好き"}
+
+data: {"delta": "な"}
+
+data: {"delta": "飲"}
+
+data: {"delta": "み"}
+
+data: {"delta": "物"}
+
+data: {"delta": "は"}
+
+data: {"delta": " **"}
+
+data: {"delta": "抹"}
+
+data: {"delta": "茶"}
+
+data: {"delta": "ラ"}
+
+data: {"delta": "テ"}
+
+data: {"delta": "**"}
+
+data: {"delta": " "}
+
+data: {"delta": "です"}
+
+data: {"delta": "。"}
+
+data: {"usage": {"input_tokens": 169, "output_tokens": 70}}
+
+data: [DONE]
+

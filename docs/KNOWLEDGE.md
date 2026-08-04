@@ -16,7 +16,7 @@ OCI版 JetUse プロトタイプの開発で**実機検証によって得た知�
   **Grok系・Llama4系は大阪不可**（ADR-0001）。
 - ADB: `jetuse-dev-adb`（**23.26.2.2.0 = 26ai**）。夜間停止に巻き込まれ自動再開しないため
   セッション開始時に起動確認（`ops/start-adb-if-stopped.sh`）。
-- OCI Speech: STTはWhisperで日本語可。**TTSはPhoenix限定**（クロスリージョン呼び出しは追加IAM不要）。
+- OCI Speech: STTはWhisperで日本語可。TTSの提供リージョンは拡大しており**Phoenix限定ではない**（2026-07-28実測: us-chicago-1 可 / ap-osaka-1・ca-toronto-1 不可）。アプリは `TTS_REGION` 未指定ならデプロイリージョン → us-phoenix-1 の順に試す（クロスリージョン呼び出しは追加IAM不要）。
 
 ---
 
@@ -34,7 +34,7 @@ OCI版 JetUse プロトタイプの開発で**実機検証によって得た知�
 - 長期メモリ: プロジェクト作成時に `--long-term-memory-config` 必須（後から変更不可）。
   利用は会話metadataの `memory_subject_id`（ADR-0006 / SPIKE-10 / AGT-05）。
 - マルチモーダル: gemini系は複数画像OK、**llama-3.2-90b-visionは画像1枚まで**（"At most 1 image"で400, ENH-09）。
-- 詳細: [SPIKE-01](./verification/SPIKE-01.md) / [CHAT-04b](./verification/CHAT-04b.md) / [CP2-measurements](./verification/CP2-measurements.md)。
+- 詳細: [SPIKE-01](./verification/spikes/SPIKE-01.md) / [CHAT-04b](./verification/jetuse-app/CHAT-04b.md) / [CP2-measurements](./verification/jetuse-app/CP2-measurements.md)。
 
 ---
 
@@ -74,14 +74,14 @@ OCI版 JetUse プロトタイプの開発で**実機検証によって得た知�
   **Select AI=`{INDEX}$VECTAB` の `attributes.object_name`(="{file_id}_{filename}")** に存在するか。
 - **OpenSearchは security_mode=DISABLEDでも9200はTLS** → 平文HTTPだと「Server disconnected」。**https + verify=False**。
 - 日本語検索品質はSPIKE-03で10/10。OpenSearch最小クラスタは master memory 16GBが下限割れ→32GBへ。
-- 詳細: [SPIKE-03](./verification/SPIKE-03.md) / [RAG-01-02](./verification/RAG-01-02.md) / [SPIKE-08](./verification/SPIKE-08.md) / [RAG-03](./verification/RAG-03.md) / [SPIKE-E2](./verification/SPIKE-E2.md)。
+- 詳細: [SPIKE-03](./verification/spikes/SPIKE-03.md) / [RAG-01-02](./verification/jetuse-app/RAG-01-02.md) / [SPIKE-08](./verification/spikes/SPIKE-08.md) / [RAG-03](./verification/jetuse-app/RAG-03.md) / [SPIKE-E2](./verification/spikes/SPIKE-E2.md)。
 
 ### NL2SQL（[comparison/nl2sql-backends.md](./comparison/nl2sql-backends.md)）
 - **SQL Search**（Generative AI Semantic Store/enrich）= 正確（10/10）。**Select AI (NL2SQL)** = 速いが四半期取り違え等が残る(8/10)。
 - `RUN_TEAM`/GENERATE等は遅く、既定call_timeout(10s)では `DPY-4024` → 個別に延長。
-- 詳細: [SPIKE-04](./verification/SPIKE-04.md) / [SQL-01〜04](./verification/SQL-01.md) / [ENH-01](./verification/ENH-01.md)。
+- 詳細: [SPIKE-04](./verification/spikes/SPIKE-04.md) / [SQL-01〜04](./verification/jetuse-app/SQL-01.md) / [ENH-01](./verification/jetuse-app/ENH-01.md)。
 
-### Trusted Answer Search（ENH-06 / [SPIKE-E3](./verification/SPIKE-E3.md)）
+### Trusted Answer Search（ENH-06 / [SPIKE-E3](./verification/spikes/SPIKE-E3.md)）
 - Oracle DB 26aiの「NL→精選ターゲット」**決定的マッピング**（LLM非使用・AI Vector Search・ハルシネーションなし）。
   Search API = `DBMS_TRUSTED_SEARCH.SEARCH()`。**当ADB Serverlessには未提供（no-go）**。
 
@@ -98,7 +98,7 @@ OCI版 JetUse プロトタイプの開発で**実機検証によって得た知�
 - **Select AI Agent**（`DBMS_CLOUD_AI_AGENT`）: CREATE_TOOL/AGENT/TASK/TEAM → RUN_TEAM。
   team名はリテラル（named-bindは ORA-00904）、call_timeout 240s、一覧系は **ROW_GUARD(最大50行)** でHTTP 413回避。
 - **Hosted Applicationのイメージ更新は in-place不可** → **アプリ削除→再作成**（OCID更新→tfvars→API再デプロイ）。
-- 詳細: [AGT-01](./verification/AGT-01.md) / [AGT-MULTI](./verification/AGT-MULTI.md) / [FW-01](./verification/FW-01.md) / [FW-02](./verification/FW-02.md) / [ENH-04](./verification/ENH-04.md) / [SPIKE-ADK](./verification/SPIKE-ADK.md)。
+- 詳細: [AGT-01](./verification/jetuse-app/AGT-01.md) / [AGT-MULTI](./verification/jetuse-app/AGT-MULTI.md) / [FW-01](./verification/jetuse-app/FW-01.md) / [FW-02](./verification/jetuse-app/FW-02.md) / [ENH-04](./verification/jetuse-app/ENH-04.md) / [SPIKE-ADK](./verification/spikes/SPIKE-ADK.md)。
 
 ---
 
@@ -106,7 +106,7 @@ OCI版 JetUse プロトタイプの開発で**実機検証によって得た知�
 
 - **議事録**(VOICE-01): Whisperバッチ+話者分離+LLM整形。バッチは `manage object-family` + tag-namespaces 必要（不足だと INTERNAL_ERROR）。
 - **リアルタイムSTT**(VOICE-02): API GWは**WebSocket非対応** → 「音声=チャンクPOST / 結果=SSE」中継。Whisperリアルタイムは**partialなし**（final数秒遅れ）。RPでも動く。
-- **音声チャット**(VOICE-03): 半二重（話す→STT→LLM→TTS）。**全二重はOCIにストリーミング対話モデルが無く現状不可**（[SPIKE-G5](./verification/SPIKE-G5.md)）。TTS既定出力はMP3でなくWAV。
+- **音声チャット**(VOICE-03): 半二重（話す→STT→LLM→TTS）。**全二重はOCIにストリーミング対話モデルが無く現状不可**（[SPIKE-G5](./verification/spikes/SPIKE-G5.md)）。TTS既定出力はMP3でなくWAV。
 - **翻訳**(ENH-10 / [comparison/translation.md](./comparison/translation.md)): LLM(llama-3.3-70b)とOCI Languageの2択。両方大阪可用・低レイテンシ。OCI Languageは `use ai-service-language-family` 要（未付与時はLLMへ自動フォールバック）。
 - **映像分析**(MM-01/ENH-09): ブラウザでフレーム抽出→画像のみ送信。複数画像はgemini、llama-3.2-visionは1枚。
 
@@ -128,7 +128,7 @@ OCI版 JetUse プロトタイプの開発で**実機検証によって得た知�
 - **ApplyGuardrails**: プロンプトインジェクション検知=言語非依存で機能。**コンテンツモデレーションは日本語非対応**（英語のみ）。PIIは既定未検知。→ 日本語アプリではプロンプトインジェクションのみ採用（GAP-01）。
 - 入力モデレーション+監査ログ（SEC-02）、IP制限・レート制限（SEC-03 / [comparison/access-control.md](./comparison/access-control.md)）。
 - SAMLフェデレーションはOCIマネージド完結で構成可（GAP-02）。
-- 詳細: [SEC-02](./verification/SEC-02.md) / [SEC-03](./verification/SEC-03.md) / [GAP-01](./verification/GAP-01.md)。
+- 詳細: [SEC-02](./verification/jetuse-app/SEC-02.md) / [SEC-03](./verification/jetuse-app/SEC-03.md) / [GAP-01](./verification/jetuse-app/GAP-01.md)。
 
 ---
 
@@ -142,13 +142,13 @@ OCI版 JetUse プロトタイプの開発で**実機検証によって得た知�
 - **ADB接続**: タイムアウト3層（tcp_connect_timeout / pool wait_timeout 15s / call_timeout）必須。
   ウォレットの ewallet.pem はパスワード保護（`ADB_WALLET_PASSWORD`未指定で無限プロンプト→DPY-4005様ハング）。
 - **API GWはWebSocket非対応**（HTTP/Sのみ）。
-- デプロイ手順は [../README.md](../README.md)（リポジトリ直下）。インフラ詳細は [INFRA-01](./verification/INFRA-01.md) / [ARCH-02-04](./verification/ARCH-02-04.md)。
+- デプロイ手順は [../README.md](../README.md)（リポジトリ直下）。インフラ詳細は [INFRA-01](./verification/jetuse-app/INFRA-01.md) / [ARCH-02-04](./verification/jetuse-app/ARCH-02-04.md)。
 
 ---
 
 ## 9. フロントエンド・UI
 
-- OCIコンソール風（Redwood）デザインシステム（[SPIKE-07](./verification/SPIKE-07.md) / [UI-01-03](./verification/UI-01-03.md)）。テーマは `theme.css` のトークン。
+- OCIコンソール風（Redwood）デザインシステム（[SPIKE-07](./verification/spikes/SPIKE-07.md) / [UI-01-03](./verification/jetuse-app/UI-01-03.md)）。テーマは `theme.css` のトークン。
 - **Tailwind v4採用**。`translate-x-*` は `transform` ではなく **CSS `translate` プロパティ**を出力し、絶対配置要素の静的位置に加算される（音声トグルのノブはみ出し不具合の原因）→ 位置はみ出しは **明示的 `left`** で実装。
 - ルーティングは **HashRouter**（`#/path`）。リブランドは `public/branding.json`（productName/shortName/logoText）+ `index.html` title。
 - 配列編集は「カンマ区切り即時split」を避ける。LLM生成mermaidの未クオート括弧は自動クオートで救済。

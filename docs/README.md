@@ -15,13 +15,13 @@ OCI版 JetUse プロトタイプのドキュメント案内。**まずここか�
 |---|---|
 | [guides/onboarding.md](./guides/onboarding.md) | **新規開発者の入門** — ローカル起動→テスト→Gitフロー→自分専用E2E環境 |
 | [guides/dev-environments.md](./guides/dev-environments.md) | 開発者ごとのデプロイ済みE2E環境(共有基盤+per-devアプリ層) |
-| [guides/branching-and-releases.md](./guides/branching-and-releases.md) | Public (`main`) / Internal (`dev`) のブランチ・同期・正式リリース規約 |
+| [guides/branching-and-releases.md](./guides/branching-and-releases.md) | 4ブランチ体制（`main` / `public-dev` / `internal-dev` / `internal-stable`）の起点判定・同期・正式リリース規約 |
 | [../CLAUDE.md](../CLAUDE.md) | 運用ルール（spec-driven / 実機検証主義 / 比較ドキュメント主義）と環境の確定事実 |
 | [plan.md](./plan.md) | 作業計画書（正本）。フェーズ・タスクチケット |
 | [architecture/system.md](./architecture/system.md) | システムアーキテクチャ（Mermaid・正本） |
 | [architecture/](./architecture/README.md) | OCI構成図（drawio/png）＋ユースケース別構成図（chat/agent/dbchat/minutes/ocr） |
 | [guides/HANDOVER.md](./guides/HANDOVER.md) | 引き継ぎ資料（Phase 0完了時点の経緯） |
-| [backlog.md](./backlog.md) | 既知の課題バックログ |
+| [archive/plans/backlog.md](./archive/plans/backlog.md) | 既知の課題バックログ（archive） |
 | [KNOWLEDGE.md](./KNOWLEDGE.md) | **本開発で得た知見のドメイン別まとめ（新規）** |
 | [tips.md](./tips.md) | 発見・ハマり所の時系列メモ（実機確定の一次情報） |
 
@@ -30,8 +30,8 @@ OCI版 JetUse プロトタイプのドキュメント案内。**まずここか�
 | 資料 | 内容 |
 |---|---|
 | [plan.md](./plan.md) | 全体計画・タスクチケット書式（§16） |
-| [plan-enhance.md](./plan-enhance.md) | 機能拡張(ENH-01〜10)の計画とゲート |
-| [plan-gap-b.md](./plan-gap-b.md) | AWS版との差分「簡易版ギャップ(B項目)」解消計画 |
+| [archive/plans/plan-enhance.md](./archive/plans/plan-enhance.md) | 機能拡張(ENH-*)の計画（archive・7月ピボット前） |
+| [archive/plans/plan-gap-b.md](./archive/plans/plan-gap-b.md) | AWS版差分「簡易版ギャップ(B項目)」解消計画（archive・同上） |
 
 ### プラットフォーム化構想（将来）
 
@@ -86,61 +86,65 @@ OCI版 JetUse プロトタイプのドキュメント案内。**まずここか�
 
 ## 6. 検証レポート（実機検証主義の一次成果）— テーマ別
 
+> **ディレクトリ構成**（2026-07-23 整理）: `verification/` はファイル種別で 4 群に分割。
+> `spikes/`（Phase 0 スパイク）／ `jetuse-app/`（JetUse 本体の機能検証・画像 `img/`・`e2e-screenshots/` 同梱）／
+> `demo-platform/`（SP1〜SP3 のデモ生成基盤）／ `fixes/`（issue/port/fix 系）。以下はテーマ別の索引。
+
 ### 6.1 基盤・インフラ・デプロイ
-[SPIKE-01](./verification/SPIKE-01.md)(Responses基礎) ／ [SPIKE-02](./verification/SPIKE-02.md)(GW越しSSE) ／
-[APP-01](./verification/APP-01.md)(FastAPI) ／ [APP-02](./verification/APP-02.md)(React SPA) ／
-[INFRA-01](./verification/INFRA-01.md)(Terraform) ／ [INFRA-02](./verification/INFRA-02.md)・[02b](./verification/INFRA-02b.md)・[02c](./verification/INFRA-02c.md)(Identity Domain/OIDC) ／
-[ARCH-01](./verification/ARCH-01.md)(コンピュート構成) ／ [ARCH-02-04](./verification/ARCH-02-04.md)(Functions移行) ／
-[OPS-01](./verification/OPS-01.md)(管理画面) ／ [OPS-02](./verification/OPS-02.md)(可観測性) ／
-[perf-refactor](./verification/perf-refactor.md)(リファクタ後性能) ／ [refactor-validation-report](./verification/refactor-validation-report.md)(リファクタ検証総括)
+[SPIKE-01](./verification/spikes/SPIKE-01.md)(Responses基礎) ／ [SPIKE-02](./verification/spikes/SPIKE-02.md)(GW越しSSE) ／
+[APP-01](./verification/jetuse-app/APP-01.md)(FastAPI) ／ [APP-02](./verification/jetuse-app/APP-02.md)(React SPA) ／
+[INFRA-01](./verification/jetuse-app/INFRA-01.md)(Terraform) ／ [INFRA-02](./verification/jetuse-app/INFRA-02.md)・[02b](./verification/jetuse-app/INFRA-02b.md)・[02c](./verification/jetuse-app/INFRA-02c.md)(Identity Domain/OIDC) ／
+[ARCH-01](./verification/jetuse-app/ARCH-01.md)(コンピュート構成) ／ [ARCH-02-04](./verification/jetuse-app/ARCH-02-04.md)(Functions移行) ／
+[OPS-01](./verification/jetuse-app/OPS-01.md)(管理画面) ／ [OPS-02](./verification/jetuse-app/OPS-02.md)(可観測性) ／
+[perf-refactor](./verification/jetuse-app/perf-refactor.md)(リファクタ後性能) ／ [refactor-validation-report](./verification/jetuse-app/refactor-validation-report.md)(リファクタ検証総括)
 
 **リファクタリング・レビュー**: [refactoring/](./refactoring/README.md)（[review-validation](./refactoring/review-validation.md)＝検証済み版 ／ [review-validation-audit](./refactoring/review-validation-audit.md)＝監査）
 
 ### 6.2 チャット
-[CHAT-01](./verification/CHAT-01.md)(ストリーミング) ／ [CHAT-02](./verification/CHAT-02.md)(会話永続化) ／
-[CHAT-03b](./verification/CHAT-03b.md)(コード/Mermaid) ／ [CHAT-03c](./verification/CHAT-03c.md)(UX改善) ／
-[CHAT-04-06](./verification/CHAT-04-06.md)・[CHAT-04b](./verification/CHAT-04b.md)(パラメータ/検索/記憶) ／
-[CHAT-07-09](./verification/CHAT-07-09.md)(タイムアウト/キャンセル/削除同期) ／
-[SPIKE-05](./verification/SPIKE-05.md)(Conversations/記憶) ／ [SPIKE-10](./verification/SPIKE-10.md)(長期メモリAPI探索) ／
-[CP2-measurements](./verification/CP2-measurements.md)(TTFT/トークン計測)
+[CHAT-01](./verification/jetuse-app/CHAT-01.md)(ストリーミング) ／ [CHAT-02](./verification/jetuse-app/CHAT-02.md)(会話永続化) ／
+[CHAT-03b](./verification/jetuse-app/CHAT-03b.md)(コード/Mermaid) ／ [CHAT-03c](./verification/jetuse-app/CHAT-03c.md)(UX改善) ／
+[CHAT-04-06](./verification/jetuse-app/CHAT-04-06.md)・[CHAT-04b](./verification/jetuse-app/CHAT-04b.md)(パラメータ/検索/記憶) ／
+[CHAT-07-09](./verification/jetuse-app/CHAT-07-09.md)(タイムアウト/キャンセル/削除同期) ／
+[SPIKE-05](./verification/spikes/SPIKE-05.md)(Conversations/記憶) ／ [SPIKE-10](./verification/spikes/SPIKE-10.md)(長期メモリAPI探索) ／
+[CP2-measurements](./verification/jetuse-app/CP2-measurements.md)(TTFT/トークン計測)
 
 ### 6.3 RAG・検索・DB
-[SPIKE-03](./verification/SPIKE-03.md)(Vector Store/File Search) ／ [RAG-01-02](./verification/RAG-01-02.md)(ファイル管理+引用) ／
-[SPIKE-08](./verification/SPIKE-08.md)・[RAG-03](./verification/RAG-03.md)(Select AI RAG) ／
-[SPIKE-E2](./verification/SPIKE-E2.md)(OpenSearch RAG) ／
-[SPIKE-04](./verification/SPIKE-04.md)・[SQL-01](./verification/SQL-01.md)・[SQL-02](./verification/SQL-02.md)・[SQL-03-04](./verification/SQL-03-04.md)(NL2SQL/SQL Search) ／
-[ENH-01](./verification/ENH-01.md)(CSV取込) ／ [ENH-02](./verification/ENH-02.md)(テーブルプレビュー) ／
-[SPIKE-E3](./verification/SPIKE-E3.md)(Trusted Answer Search 調査)
+[SPIKE-03](./verification/spikes/SPIKE-03.md)(Vector Store/File Search) ／ [RAG-01-02](./verification/jetuse-app/RAG-01-02.md)(ファイル管理+引用) ／
+[SPIKE-08](./verification/spikes/SPIKE-08.md)・[RAG-03](./verification/jetuse-app/RAG-03.md)(Select AI RAG) ／
+[SPIKE-E2](./verification/spikes/SPIKE-E2.md)(OpenSearch RAG) ／
+[SPIKE-04](./verification/spikes/SPIKE-04.md)・[SQL-01](./verification/jetuse-app/SQL-01.md)・[SQL-02](./verification/jetuse-app/SQL-02.md)・[SQL-03-04](./verification/jetuse-app/SQL-03-04.md)(NL2SQL/SQL Search) ／
+[ENH-01](./verification/jetuse-app/ENH-01.md)(CSV取込) ／ [ENH-02](./verification/jetuse-app/ENH-02.md)(テーブルプレビュー) ／
+[SPIKE-E3](./verification/spikes/SPIKE-E3.md)(Trusted Answer Search 調査)
 
 ### 6.4 エージェント
-[SPIKE-09](./verification/SPIKE-09.md)(Responsesツール機構) ／ [AGT-01](./verification/AGT-01.md)・[AGT-01c](./verification/AGT-01c.md)(Function Calling/ツール) ／
-[AGT-02](./verification/AGT-02.md)(MCP) ／ [AGT-03](./verification/AGT-03.md)(Agent Builder) ／
-[AGT-04](./verification/agt-04.md)・[GAP-04](./verification/GAP-04.md)・[SPIKE-G4](./verification/SPIKE-G4.md)(ホスト型エージェント) ／
-[AGT-05](./verification/AGT-05.md)(長期メモリ統合) ／ [AGT-MULTI](./verification/AGT-MULTI.md)(3SDK別Hosted ReAct) ／
-[FW-01](./verification/FW-01.md)(Agents SDK) ／ [FW-02](./verification/FW-02.md)(LangGraph) ／ [FW-03-04](./verification/FW-03-04.md)(CrewAI/LangChain比較) ／
-[SPIKE-ADK](./verification/SPIKE-ADK.md)(Google ADK) ／ [SPIKE-E1](./verification/SPIKE-E1.md)・[ENH-04](./verification/ENH-04.md)(Select AI Agent)
+[SPIKE-09](./verification/spikes/SPIKE-09.md)(Responsesツール機構) ／ [AGT-01](./verification/jetuse-app/AGT-01.md)・[AGT-01c](./verification/jetuse-app/AGT-01c.md)(Function Calling/ツール) ／
+[AGT-02](./verification/jetuse-app/AGT-02.md)(MCP) ／ [AGT-03](./verification/jetuse-app/AGT-03.md)(Agent Builder) ／
+[AGT-04](./verification/jetuse-app/agt-04.md)・[GAP-04](./verification/jetuse-app/GAP-04.md)・[SPIKE-G4](./verification/spikes/SPIKE-G4.md)(ホスト型エージェント) ／
+[AGT-05](./verification/jetuse-app/AGT-05.md)(長期メモリ統合) ／ [AGT-MULTI](./verification/jetuse-app/AGT-MULTI.md)(3SDK別Hosted ReAct) ／
+[FW-01](./verification/jetuse-app/FW-01.md)(Agents SDK) ／ [FW-02](./verification/jetuse-app/FW-02.md)(LangGraph) ／ [FW-03-04](./verification/jetuse-app/FW-03-04.md)(CrewAI/LangChain比較) ／
+[SPIKE-ADK](./verification/spikes/SPIKE-ADK.md)(Google ADK) ／ [SPIKE-E1](./verification/spikes/SPIKE-E1.md)・[ENH-04](./verification/jetuse-app/ENH-04.md)(Select AI Agent)
 
 ### 6.5 音声・映像・翻訳
-[SPIKE-06](./verification/SPIKE-06.md)(OCI Speech) ／ [VOICE-01](./verification/VOICE-01.md)(議事録) ／
-[VOICE-02](./verification/VOICE-02.md)(リアルタイムSTT) ／ [VOICE-03](./verification/VOICE-03.md)(音声チャットv1) ／
-[MM-01](./verification/MM-01.md)(画像入力/映像分析) ／ [ENH-09](./verification/ENH-09.md)(映像分析修正) ／
-[ENH-10](./verification/ENH-10.md)(リアルタイム翻訳) ／ [SPIKE-G5](./verification/SPIKE-G5.md)(全二重化の可否)
+[SPIKE-06](./verification/spikes/SPIKE-06.md)(OCI Speech) ／ [VOICE-01](./verification/jetuse-app/VOICE-01.md)(議事録) ／
+[VOICE-02](./verification/jetuse-app/VOICE-02.md)(リアルタイムSTT) ／ [VOICE-03](./verification/jetuse-app/VOICE-03.md)(音声チャットv1) ／
+[MM-01](./verification/jetuse-app/MM-01.md)(画像入力/映像分析) ／ [ENH-09](./verification/jetuse-app/ENH-09.md)(映像分析修正) ／
+[ENH-10](./verification/jetuse-app/ENH-10.md)(リアルタイム翻訳) ／ [SPIKE-G5](./verification/spikes/SPIKE-G5.md)(全二重化の可否)
 
 ### 6.6 OCR / ドキュメント理解
-[SPIKE-E4](./verification/SPIKE-E4.md)(Document Understanding 可用性/日本語精度) ／
+[SPIKE-E4](./verification/spikes/SPIKE-E4.md)(Document Understanding 可用性/日本語精度) ／
 [guides/ocr-limits-and-workarounds.md](./guides/ocr-limits-and-workarounds.md)(制限・回避・VLMエンジン)
 
 ### 6.7 UI
-[SPIKE-07](./verification/SPIKE-07.md)(Redwood風試作) ／ [UI-01-03](./verification/UI-01-03.md)(実装・自己検証) ／
-[UC-01-03](./verification/UC-01-03.md)(ユースケースエンジン)
+[SPIKE-07](./verification/spikes/SPIKE-07.md)(Redwood風試作) ／ [UI-01-03](./verification/jetuse-app/UI-01-03.md)(実装・自己検証) ／
+[UC-01-03](./verification/jetuse-app/UC-01-03.md)(ユースケースエンジン)
 
 ### 6.8 セキュリティ・ガバナンス
-[SEC-02](./verification/SEC-02.md)(入力モデレーション/監査) ／ [SEC-03](./verification/SEC-03.md)(IP/レート制限) ／
-[GAP-01](./verification/GAP-01.md)・[SPIKE-G1](./verification/SPIKE-G1.md)(ガードレール) ／
-[GAP-02](./verification/GAP-02.md)・[SPIKE-G2](./verification/SPIKE-G2.md)(SAML) ／ [SPIKE-G3](./verification/SPIKE-G3.md)(Code Interpreter相当)
+[SEC-02](./verification/jetuse-app/SEC-02.md)(入力モデレーション/監査) ／ [SEC-03](./verification/jetuse-app/SEC-03.md)(IP/レート制限) ／
+[GAP-01](./verification/jetuse-app/GAP-01.md)・[SPIKE-G1](./verification/spikes/SPIKE-G1.md)(ガードレール) ／
+[GAP-02](./verification/jetuse-app/GAP-02.md)・[SPIKE-G2](./verification/spikes/SPIKE-G2.md)(SAML) ／ [SPIKE-G3](./verification/spikes/SPIKE-G3.md)(Code Interpreter相当)
 
 ### 6.9 配布・ドキュメント
-[DOC-01-04](./verification/DOC-01-04.md)(配布・ドキュメント) ／ [guides/customize.md](./guides/customize.md)(カスタマイズ) ／
+[DOC-01-04](./verification/jetuse-app/DOC-01-04.md)(配布・ドキュメント) ／ [guides/customize.md](./guides/customize.md)(カスタマイズ) ／
 [guides/demo-scenarios.md](./guides/demo-scenarios.md)(デモシナリオ)
 
 ## 7. フィードバック・UI素材

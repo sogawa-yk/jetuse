@@ -1,0 +1,1 @@
+tasks/PORT-01.md の完了条件: terraform validate+fmt-check クリーン / jetuse:test RM plan 成功+変更部分 apply 成功 / codex PASS / E2E シナリオ2本以上の証跡

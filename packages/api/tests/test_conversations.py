@@ -17,20 +17,22 @@ class FakeRepo:
     def list_conversations(self, owner):
         return [
             {"id": c["id"], "title": c["title"], "model": c["model"], "updated_at": ""}
-            for c in self.convs.values() if c["owner"] == owner
+            for c in self.convs.values()
+            if c["owner"] == owner and c.get("demo_id") is None
         ]
 
-    def create_conversation(self, owner, model, title):
+    def create_conversation(self, owner, model, title, demo_id=None):
         cid = f"c{len(self.convs) + 1}"
         self.convs[cid] = {
-            "id": cid, "owner": owner, "model": model,
+            "id": cid, "owner": owner, "model": model, "demo_id": demo_id,
             "title": title or "新しい会話", "messages": [],
         }
         return {"id": cid, "title": title, "model": model}
 
-    def get_conversation(self, owner, cid):
+    def get_conversation(self, owner, cid, demo_id=None):
+        # 実装と同じ契約(specs/18 §4.2): user 経路は demo_id IS NULL、demo は exact 一致
         c = self.convs.get(cid)
-        if not c or c["owner"] != owner:
+        if not c or c["owner"] != owner or c.get("demo_id") != demo_id:
             return None
         return {
             **{k: c[k] for k in ("id", "title", "model", "messages")},
@@ -42,7 +44,7 @@ class FakeRepo:
 
     def delete_conversation(self, owner, cid):
         c = self.convs.get(cid)
-        if not c or c["owner"] != owner:
+        if not c or c["owner"] != owner or c.get("demo_id") is not None:
             return False
         del self.convs[cid]
         return True
@@ -62,6 +64,11 @@ def fake_repo(monkeypatch):
         "delete_conversation", "append_message", "log_usage", "set_oci_conversation",
     ):
         monkeypatch.setattr(service_main.conv_repo, name, getattr(repo, name))
+    # owner_key_gate は preflight(DB 接続)なのでこのユニットでは no-op(M004 ゲートは別テスト)
+    import service.routes.chat as chat_routes
+    import service.routes.conversations as conv_routes
+    monkeypatch.setattr(conv_routes, "owner_key_gate", lambda: None)
+    monkeypatch.setattr(chat_routes, "owner_key_gate", lambda: None)  # review-11 B004
     # OCI Conversation削除同期(CHAT-09)は実呼び出しせず記録のみ
     repo.deleted_oci: list[str] = []
     monkeypatch.setattr(
@@ -133,3 +140,23 @@ def test_stream_rejects_others_conversation(fake_repo, monkeypatch):
     assert res.status_code == 404
     assert client.get("/api/conversations/x1").status_code == 404
     assert client.delete("/api/conversations/x1").status_code == 404
+
+
+def test_stream_with_agent_id_still_validates_conversation(fake_repo, monkeypatch):
+    """review-2 B002: agent_id があっても conversation_id の所有者検証は必須。
+    保存済み agent 経路(agent_dispatch)が owner 条件なしで append_message するため、
+    他人の conversation_id + 自分の agent_id で越境書き込みできてはならない(404 で拒否)。"""
+    fake_repo.convs["x1"] = {
+        "id": "x1", "owner": "someone-else", "model": "gpt-oss-120b",
+        "demo_id": None, "title": "t", "messages": [],
+    }
+    # get_agent が呼ばれる前に 404 になること(検証は全早期 return より前)
+    import jetuse_core.agents as agents_repo
+    monkeypatch.setattr(agents_repo, "get_agent",
+                        lambda *a, **k: pytest.fail("must 404 before agent dispatch"))
+    res = client.post(
+        "/api/chat/stream",
+        json={"model": "gpt-oss-120b", "conversation_id": "x1", "agent_id": "ag-1",
+              "messages": [{"role": "user", "content": "越境書き込み"}]},
+    )
+    assert res.status_code == 404

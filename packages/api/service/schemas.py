@@ -7,9 +7,9 @@ import される。`validated()` は service/validators.py 側の純粋関数へ
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
-from jetuse_core import tts
+from jetuse_core import http_tools, rag_metadata, settings, tts
 
 from .validators import validate_agent_definition, validate_usecase_definition
 
@@ -30,14 +30,47 @@ class ChatRequest(BaseModel):
     conversation_id: str | None = None  # 指定時はADBへ永続化(CHAT-02)
     persist_user: bool = True  # 再生成時はfalse(ユーザー発話の二重保存防止)
     rag: bool = False  # file_searchツール接続(RAG-02。Responses系のみ)
-    # RAG-03/ENH-05
-    rag_backend: Literal["vector_store", "select_ai", "opensearch"] = "vector_store"
+    # RAG-03/ENH-05/RAGM-02(adb=Oracle AI Database 自前索引・チャンク単位の出典)
+    rag_backend: Literal["vector_store", "select_ai", "opensearch", "adb"] = "vector_store"
+    # RAGM-01: file_searchのメタデータ絞り込み(例 {"type":"eq","key":"current_version",
+    # "value":"Y"} で旧版を検索から外す)。vector_storeバックエンドのみ。
+    rag_filters: dict | None = None
     # エージェントモード(AGT-01)。tool_resultsは承認フローの継続時に使用
     agent: bool = False
+    # AGT-04: エージェントの文書検索(rag_search)のバックエンド。既定は現行と同じ
+    # file_search built-in(出典はファイル単位)。adb はチャンク単位の出典
+    # (シート名・セル範囲)を返す。`rag=true` との併用禁止は据え置き(別タスク)
+    agent_rag_backend: Literal["vector_store", "adb"] = "vector_store"
+    # AGT-04: このターンのツール往復上限。未指定は設定値(AGENT_MAX_TOOL_HOPS)。
+    # 天井を超える値は 422(クランプしない — ADR-0025)
+    # bool は int の派生なので、素の int だと JSON の `true` が 1 として通る。
+    # 上限の指定に真偽値が来るのは誤りなので API 境界で断る(resolve_max_tool_hops の
+    # bool 拒否と挙動を揃える — 片方だけ厳しいと、どちらが正か読めなくなる)
+    max_tool_hops: StrictInt | None = Field(
+        default=None, ge=1, le=settings.AGENT_MAX_TOOL_HOPS_CEILING
+    )
     auto_tools: bool = False
-    tool_results: list[dict] | None = Field(default=None, max_length=24)
+    # AGT-04: 承認往復の継続で送り返すツール結果。ホップ上限の天井まで受ける
+    # (ここが天井より小さいと、上限を上げても承認モードだけ 422 で継続できない)
+    # AGT-05: 文書検索はホップの予算から外れたので、ここを 48 のままにすると
+    # 検索を挟む承認往復が予算判定に届く前に 422 で詰まる(review-2 の指摘)。
+    # **これは予算の上界ではなく要求ボディの安全弁**である —— 1 往復から複数の
+    # function_call が返りうるので、件数はホップ数からは決まらない(AGT-01d からの既存の
+    # 性質で、従来の 48 も上界ではなかった)。検索を別枠にしたぶん枠を広げただけで、
+    # 実際の歯止めは stream_agent 側の 2 つの予算が持つ。
+    tool_results: list[dict] | None = Field(
+        default=None,
+        max_length=(
+            settings.AGENT_MAX_TOOL_HOPS_CEILING + settings.AGENT_MAX_DOC_SEARCHES_CEILING
+        ),
+    )
     enabled_tools: list[str] | None = Field(default=None, max_length=20)  # AGT-01b
     mcp_server_ids: list[str] | None = Field(default=None, max_length=5)  # AGT-02
+    # TOOL-01: 登録済み外部HTTPツールのid。1エージェントに渡せる数はモデルの選択精度の
+    # ためMAX_TOOLS_PER_AGENTで頭打ちにする
+    http_tool_ids: list[str] | None = Field(
+        default=None, max_length=http_tools.MAX_TOOLS_PER_AGENT
+    )
     agent_id: str | None = None  # AGT-03: エージェント定義の適用
     # 画像入力(MM-01): data URI。最終userメッセージに適用(当該ターンのみ・永続化なし)
     # 上限10枚=映像分析のフレーム数を許容(チャットUIは4枚に制限)
@@ -48,15 +81,83 @@ class ChatRequest(BaseModel):
     sdk_state: str | None = Field(default=None, max_length=2_000_000)
     sdk_approvals: dict[str, bool] | None = None
 
+    @field_validator("rag_filters")
+    @classmethod
+    def _check_rag_filters(cls, v: dict | None) -> dict | None:
+        """RAGM-01: 未知キーは上流でエラーにならず0件になる(SPIKE-M1 ①-b)ため
+        ここで弾く(422)。既知フィールドだけに正規化して通す。"""
+        try:
+            return rag_metadata.validate_filters(v)
+        except rag_metadata.MetadataError as e:
+            raise ValueError(str(e)) from e
+
 
 class ConversationCreate(BaseModel):
     model: str
     title: str | None = None
 
 
+class DemoCreate(BaseModel):
+    """Demo 作成(SP2-01 / specs/18 §2.2)。config の 1MB/dbchat 形状はルート側の共通検証。"""
+
+    name: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=1000)
+    visibility: Literal["private", "public"] = "private"
+    config: dict = Field(default_factory=dict)
+
+
+class DemoPatch(BaseModel):
+    """Demo 部分更新(specs/18 §2.2)。省略 = 変更しない(exclude_unset)。明示 null は
+    description のみ許可(クリア)。id/owner_sub/status は変更不可(入力スキーマに含めない)。"""
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=1000)
+    visibility: Literal["private", "public"] | None = None
+    config: dict | None = None
+
+
+class BuilderMessageIn(BaseModel):
+    """ヒアリング発話(SP3-01 / specs/19 §2.1 — 発話 1 件 ≤ 4,000 文字。超過は 422)。"""
+
+    content: str = Field(min_length=1, max_length=4000)
+
+
+class BuilderPlanPatch(BaseModel):
+    """プランの title/description のみ直接編集(SP3-05 / specs/19 §7②)。
+
+    プラン JSON の自由編集はさせない(§11) — extra=forbid で他フィールドは 422。
+    上限は DemoPlan(§3.3)と同一。省略 = 変更しない。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, min_length=1, max_length=1000)
+
+
+class BuilderGenerateIn(BaseModel):
+    """生成開始 body(SP3-06 / specs/19 §4.5)。model = 生成レジストリ(gen_models)の key。
+
+    省略(または body なし)= 設定既定(generation_model)。fail-closed: 未知フィールドは
+    422(extra=forbid)。未知 model キーはルート側で生成レジストリと突き合わせて 422。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: str | None = None
+
+
 class Nl2SqlRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
-    backend: Literal["sql_search", "select_ai"] = "sql_search"  # SQL-04比較モード
+    # SQL-04比較モード。web UI(dbchat.tsx)は常にbackendを明示送信し既定値は"sql_search"
+    # のため、「未指定」と「明示sql_search」をワイヤ上で区別できない(対象areaはpackages/api
+    # のためUI側の変更はこのタスクでは行わない)。よって"sql_search"はどちらの場合も
+    # SEMSTORE_OCID未設定なら既定機能(dbchatが別テナンシで必ず壊れる問題の根治)を優先し
+    # select_aiへ自動切替する(下記PORT-02コメント参照)。
+    # ponytail: この結果SQL-04比較モードはSEMSTORE_OCID未設定環境では両パネルがselect_ai
+    # になり得る既知の制約。UI側がbackend="auto"相当を明示送信できるようになれば
+    # sql_search側を強制する経路を分離できる(docs/tips.md参照)。
+    backend: Literal["sql_search", "select_ai"] = "sql_search"
     target: Literal["sample", "datasets"] = "sample"  # ENH-01: SHサンプル or 本人CSV
     model: str | None = Field(default=None, max_length=100)  # feedback 20260620 #3: モデル選択
 
@@ -123,9 +224,33 @@ class McpServerCreate(BaseModel):
     auth_token: str | None = Field(default=None, max_length=2000)
 
 
+class HttpToolCreate(BaseModel):
+    """外部HTTPツールの登録(TOOL-01)。
+
+    秘密そのものは受け取らない。Vault に置いた秘密の OCID だけを受け取る
+    (`mcp_servers.auth_secret_ocid` と同じ流儀)。
+    """
+
+    name: str = Field(min_length=3, max_length=48)
+    description: str = Field(min_length=1, max_length=1000)
+    parameters: dict = Field(default_factory=lambda: {"type": "object", "properties": {}})
+    url: str = Field(min_length=12, max_length=1000)
+    method: Literal["GET", "POST"] = "GET"
+    auth_header: str | None = Field(default=None, max_length=63)
+    auth_secret_ocid: str | None = Field(default=None, max_length=255)
+    # TOOL-02: 認証以外に必須ヘッダを持つ相手のための固定ヘッダと、冪等キーのヘッダ名。
+    # 値は平文で保存されるので**秘密を入れない**(秘密は auth_secret_ocid = Vault 参照)。
+    # 冪等キーの値は登録しない。ヘッダ名だけ登録すれば JetUse が呼び出しごとに発行する
+    headers: dict[str, str] | None = Field(default=None)
+    idempotency_header: str | None = Field(default=None, max_length=63)
+
+
 class ToolExecuteRequest(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     arguments: str = Field(default="{}", max_length=10000)
+    # TOOL-01: 承認イベントが返した外部HTTPツールの id。指定時はこの id で解決する
+    # (名前だけだと承認待ちの間に同名で別 URL のツールへ差し替えられる)
+    http_tool_id: str | None = Field(default=None, max_length=36)
 
 
 class ChartSuggestRequest(BaseModel):

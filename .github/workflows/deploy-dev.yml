@@ -1,0 +1,65 @@
+name: deploy-dev
+
+# dev 派生の開発用ブランチ push で jetuse:dev のプレビュー(RM スタック jetuse-dev-app)へ
+# 自動デプロイする(SP3-07)。手順の実体は ops/deploy-dev-app.sh — 各 step が同スクリプトの
+# サブコマンドを呼ぶため、ローカル検証(実機 E2E 済み)とワークフローが同一手順になる。
+# 必要な Secrets の一覧と入手方法: docs/guides/dev-environments.md 「開発ブランチ push → 自動デプロイ」
+
+on:
+  push:
+    branches: # 許可パターン外の main / dev / internal-stable へは配備しない
+      - "feat/**"
+      - "fix/**"
+      - "chore/**"
+
+# 共有スタック 1 本のため並行 push の apply 競合を構造で防ぐ。cancel は GH 側 job の打ち切りで、
+# 走り出した RM job は止まらない — 次回 run の直列ガード(_wait_no_active_job)が完了を待つ。
+concurrency:
+  group: dev-app-deploy
+  cancel-in-progress: true
+
+env:
+  OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+  OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+  OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+  OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+  OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+  COMPARTMENT_OCID: ${{ secrets.COMPARTMENT_OCID }}
+  OCIR_USERNAME: ${{ secrets.OCIR_USERNAME }}
+  OCIR_AUTH_TOKEN: ${{ secrets.OCIR_AUTH_TOKEN }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: packages/web/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install OCI CLI
+        run: pip install --quiet oci-cli
+      - name: Build & push API image (OCIR)
+        run: ops/deploy-dev-app.sh image
+      - name: Update RM stack (config + image_url)
+        run: ops/deploy-dev-app.sh update-stack
+      - name: RM plan + apply (oci resource-manager job)
+        run: ops/deploy-dev-app.sh apply
+      # SP3-08: 生成/ビルド CI イメージ。apply が OCIR repo を作った後に push(既存タグは skip)
+      - name: Build & push generation CI images (OCIR)
+        run: ops/deploy-dev-app.sh gen-images
+      # SPA オブジェクトは tf 管理外(CLI 同期)。apply でバケット/PAR が整った後に同期する
+      - name: Build & sync SPA
+        run: ops/deploy-dev-app.sh spa
+      - name: Smoke (gateway)
+        id: smoke
+        run: ops/deploy-dev-app.sh smoke
+      - name: Step summary
+        if: always()
+        # smoke の outcome を明示表示(失敗/未実施を成功に見せない)
+        run: ops/deploy-dev-app.sh summary "${{ steps.smoke.outcome }}" >> "$GITHUB_STEP_SUMMARY"

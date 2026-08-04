@@ -4,19 +4,68 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# エージェントのツール往復(ホップ)上限(AGT-04・ADR-0025)。1 ホップ = モデル 1 往復。
+# **この 2 つの数値は 2026-08-02 の人間ゲートで承認済み**(ADR-0025 は Accepted)。
+# 値を変えるのはこの 2 行だけ。機構(設定で変えられる / 天井超過は拒否 / 打ち切りを通知)は
+# tasks/AGT-04.md で承認済みの決定。
+# 天井は「モデルが同じツールを呼び続けても必ず止まる」ための硬い上限で、既定値ともども
+# 根拠は ADR-0025。天井を超える値はクランプせず**拒否**する
+# (黙って下げると「上げたのに効かない」が起きる — 解決は chat.resolve_max_tool_hops)。
+AGENT_MAX_TOOL_HOPS_CEILING = 48
+AGENT_MAX_TOOL_HOPS_DEFAULT = 24
+
+# 文書検索(adb 経路の `rag_search`)の回数上限(AGT-05・ADR-0026)。**ホップとは別枠**で数える。
+# 検索がホップを食うと「出典を細かくするほど業務 API に使える往復が減る」という不整合になる
+# (実測: 予算 24 のうち 19〜22 が検索。業務 API に回せたのは 4〜5 回)。
+# **2026-08-02 の人間ゲートで承認済み**(ADR-0026 §2 は Accepted)。
+# 根拠は実測「1 API あたり 3〜5 回 × API 8 本 = 24〜40」。その**上端**を採る:
+# 上限に達しても手続きは死なない(検索ツールを外して通知し、業務 API は続く)ので、
+# **余らせるより届かせる側に倒す**ほうが、外したときの代償が小さい。
+# 天井は既定の 2 倍。env `AGENT_MAX_DOC_SEARCHES` で変更できる。
+AGENT_MAX_DOC_SEARCHES_DEFAULT = 40
+AGENT_MAX_DOC_SEARCHES_CEILING = 80
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    oci_region: str = "ap-osaka-1"
+    # AGT-06: 既定はシカゴ。大阪よりモデルの品揃えが厚く、エージェントで使える系統
+    # (Grok)がある(docs/comparison/agent-capable-models.md)。配備時は Terraform が
+    # OCI_REGION を注入するので、この既定が効くのはローカル/ベア実行のときだけ。
+    oci_region: str = "us-chicago-1"
+    # OCI ログイン方式。env AUTH_MODE を読む（後方互換）。既定 config_file=ローカル ~/.oci/config。
+    # config_file | resource_principal | instance_principal。解決は jetuse_core.oci_auth 経由。
+    auth_mode: str = "config_file"
+    # ~/.oci/config のプロファイル名（空=DEFAULT）。config_file モードで使用。
+    oci_profile: str = ""
     compartment_ocid: str = ""
     project_ocid: str = ""
+    # FIX-47: project_ocid 空のとき、compartment に ACTIVE project が無ければ自動作成を許可する。
+    # 既定 false(検出のみ)。公開 ORM スタックは IAM policy とセットで true を注入する
+    project_autocreate: bool = False
 
     # OpenSearch RAG(ENH-05)。例 http://10.1.1.x:9200。空ならOpenSearchバックエンド無効
     opensearch_endpoint: str = ""
 
+    # AGT-04: エージェントのツール往復上限(env AGENT_MAX_TOOL_HOPS)。天井は
+    # AGENT_MAX_TOOL_HOPS_CEILING。**あえて文字列で持ち、検証は
+    # chat.resolve_max_tool_hops で行う**(空文字は未設定 = 既定値)。
+    # int 宣言にすると `AGENT_MAX_TOOL_HOPS=abc` で Settings 生成そのものが失敗し、
+    # get_settings() を呼ぶ**全 API**(チャット・RAG・認証依存)が 500 になる。
+    # エージェント専用の設定ミスで壊すのは当該機能だけに閉じる。
+    agent_max_tool_hops: str = ""
+
+    # AGT-05: 文書検索の回数上限(env AGENT_MAX_DOC_SEARCHES)。既定は
+    # AGENT_MAX_DOC_SEARCHES_DEFAULT。ホップ上限と同じ理由で**文字列で持ち**、
+    # 検証は chat.resolve_max_doc_searches で行う(設定ミスで壊すのは当該機能だけ)。
+    agent_max_doc_searches: str = ""
+
     # feature flags
     auth_required: bool = False  # INFRA-02(OIDC)完了までの暫定。本番はtrue必須
+
+    # SP3-03(ADR-0023 §3.5): 生成 SPA の app-session トークン(一回性コード/Cookie)の HMAC 秘密鍵。
+    # 空 = fail-closed(AUTH=true で Cookie 認証経路を無効化)。環境依存の秘密値ゆえ .env 必須。
+    app_session_secret: str = ""
 
     # OIDC(IAM Identity Domain)。INFRA-02で確定する
     oidc_issuer: str = ""
@@ -44,17 +93,76 @@ class Settings(BaseSettings):
     rag_bucket: str = ""
     # RAG-03(Select AI): 索引のバケットURL組み立てに使用
     os_namespace: str = ""
+    # SP2-02(specs/18 §3.1): アプリ全体の DP Files 総数上限(予約 ledger)。
+    # 既定 None = 無制限(Public/main 互換・挙動不変)。Internal 配備で有効値(目安 2000)。
+    rag_files_total_limit: int | None = None
+    # SP2-02(specs/18 §3.1): デモ箱あたりの上限(超過 422 — 同期削除の所要を有界化)
+    demo_max_rag_files: int = 20
+    demo_max_datasets: int = 10
+    # SP3-03/SP3-06(ADR-0023 §6・F2): フロント生成 LLM = 生成レジストリ(gen_models)のキー。
+    # 既定 gpt-oss-120b(自テナンシ)。model 未指定時に使う。**自テナンシ既定を保つ**ことで、
+    # 共有設定(gen_shared_*)が無い環境でも省略時生成が動く(後方互換 — codex review-5 B001)。
+    # UI 選択肢の品質厳選(state.ts)とは別レイヤ。allowlist はレジストリが単一真実源。
+    generation_model: str = "gpt-oss-120b"
+    # SP3-06: ORASEJAPAN 共有テナンシ(生成 gpt-5 系)の auth プロファイルと compartment OCID。
+    # 環境依存値ゆえ .env(コミット禁止)。空 = 共有テナンシモデルは使用不可(fail-closed)。
+    gen_shared_profile: str = ""
+    gen_shared_compartment_ocid: str = ""
+    # SP3-09: デプロイ環境の鍵材料 = Vault シークレット(JSON)の OCID(非鍵材料)。
+    # 設定時は GEN_SHARED_PROFILE より優先(gen_shared_vault — RP で取得・in-memory 署名)。
+    gen_shared_secret_ocid: str = ""
+    # SP3-03(§4.2 N3): 同時 provisioning デモ数の上限。固定名グローバルロック下で数える。
+    demo_max_concurrent_generations: int = 2
+    # SP3-03(specs/19 §4.2 N7・ADR-0023): 1 生成の壁時計上限(秒)。runtime のハードキル。
+    generation_timeout_s: int = 900
+    # SP3-03(ADR-0023 §1 の 2 相分離): 非信頼生成相の使い捨て podman コンテナ。鍵レス(OCI 認証を
+    # 渡さず egress は署名プロキシ経由)+ N7 資源上限。環境依存の到達/資源値(承認済み緩和で単純化)。
+    # 版数タグ(opencode 版)で固定 — stale な別版イメージを掴んで N6 メタと食い違わせない(#194)
+    generation_image: str = "jetuse-demo-gen:oc1.17.15"
+    # コンテナから見た署名プロキシ(鍵レス egress)。環境依存の実エンドポイントゆえ .env 必須
+    # (既定は空 = 生成開始時に fail-fast。エンドポイント実値をコードにコミットしない)。
+    generation_proxy_url: str = ""
+    generation_container_network: str = "slirp4netns:allow_host_loopback=true"
+    generation_cpus: str = "1"
+    generation_memory: str = "4g"
+    generation_pids_limit: int = 256
+    generation_scaffold_dir: str = ""  # 空なら repo 既定(spikes/sp3_03_scaffold)
+    # SP3-08(ADR-0023 §1 B'): 生成 runtime バックエンド。podman = ローカル開発(従来)、
+    # oci-ci = 生成ごとの使い捨て Container Instance(デプロイ環境の正 — dev-app tf が設定)。
+    generation_runtime: str = "podman"
+    # oci-ci 用の配線(dev-app tf が env で与える。未設定は生成開始時に fail-fast)
+    generation_ci_subnet_ocid: str = ""   # 生成 CI を置く private サブネット
+    generation_ci_ad: str = ""            # availability domain 名
+    generation_gen_image_url: str = ""    # 相1 生成イメージ(OCIR public repo)
+    generation_build_image_url: str = ""  # 相2 信頼ビルドイメージ(OCIR public repo)
+    # 相ごとのタイムアウト(ADR-0023 §1: 相1 9 分・相2 2 分。全体は generation_timeout_s)
+    generation_ci_gen_timeout_s: int = 540
+    generation_ci_build_timeout_s: int = 120
+    # SP2-02(specs/18 §3.1): 起動世代トークン。entrypoint.sh が bootstrap/uvicorn 起動前に
+    # export し、両プロセスで共有する。upload gate は「今回起動の reconcile が開けた」場合のみ
+    # 通す(前回起動の 'Y' が残っていても boot_id 不一致で fail-closed — codex review-8 B001)。
+    # 空(単一プロセス/未設定)なら boot 照合はスキップ(gate 値のみ)。
+    app_boot_id: str = ""
+    # SP2-02(specs/18 §4.3): VPD(行レベル分離)を有効化するか。既定 False = Public/main 互換
+    # (VPD は Internal/デモテナンシ機能。未配備環境で integrity_gate/apply_policy を強制すると
+    # 従来デプロイの dataset 作成・dbchat が壊れる — codex review-10 B004)。Internal/デモ配備は
+    # 明示的に True(かつ人間ゲートで VPD セットアップ済み)にする。
+    vpd_enabled: bool = False
 
     # NL2SQL(SQL-02): SemanticStore + 読取専用ユーザー
     semstore_ocid: str = ""
     adb_query_password: str = ""
-    # Select AI クレデンシャル名。ORM/RP環境は OCI$RESOURCE_PRINCIPAL(INFRA-03)
-    select_ai_credential: str = "JETUSE_OCI_CRED"
+    # Select AI クレデンシャル名。配備先(ORM/dev)も開発も ADB 自身の身分に統一した(ADR-0021)。
+    # かつての既定 JETUSE_OCI_CRED は API キー焼き込み版で、これを作る経路は廃止済み
+    # (＝既定のままだと存在しない資格情報を指す)。上書きは env SELECT_AI_CREDENTIAL。
+    select_ai_credential: str = "OCI$RESOURCE_PRINCIPAL"
 
     # 議事録(VOICE-01): 音声と文字起こし結果のバケット(空なら機能無効=503)
     speech_bucket: str = ""
-    # TTS(VOICE-03): Phoenix限定(SPIKE-06)。クロスリージョン呼び出し
-    tts_region: str = "us-phoenix-1"
+    # TTS(VOICE-03): 空=自動(デプロイリージョン → us-phoenix-1 の順に試行。FIX-58)。
+    # かつてPhoenix限定だったが提供リージョンは拡大しており、決め打ちにするとPhoenix未購読の
+    # テナンシで「デプロイ先では使えるのに落ちる」が起きる。明示指定時はそのリージョンのみ。
+    tts_region: str = ""
 
     # SEC-02: 入力モデレーション(llama自己判定ガード)と管理者(カンマ区切りsub)
     moderation_enabled: bool = False
@@ -71,6 +179,10 @@ class Settings(BaseSettings):
     agent_openai_app_ocid: str = ""
     agent_langgraph_app_ocid: str = ""
     agent_adk_app_ocid: str = ""
+    # PORT-03: このスタックがホスト型エージェントを配備する構成かどうか。
+    # 「意図的に配備していない」と「配備したのに壊れている」を health で区別するために使う
+    # (前者で /api/health 全体の ok を落とすと、エージェント不要のスタックが常時赤くなる)。
+    hosted_agents_enabled: bool = False
 
     # OPS-02: OCI Logging(カスタムログOCID。空なら送らない) / Monitoring名前空間
     log_ocid: str = ""

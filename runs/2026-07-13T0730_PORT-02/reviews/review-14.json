@@ -1,0 +1,47 @@
+{
+  "review_n": 14,
+  "timestamp": "2026-07-13T09:32:10+00:00",
+  "reviewer": "codex",
+  "model": "gpt-5.5",
+  "input_diff_path": "reviews/review-14.input.diff",
+  "raw_output_path": "reviews/review-14.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "差分は概ね後方互換を保っていますが、モデル不可の lazy マークが Responses API の project 起因 404 を誤分類しうる点が残っています。実環境 E2E 証跡は空で、今回の横断的な縮退・readiness 変更を裏づけるには不十分です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 2,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/chat.py",
+      "line": 580,
+      "issue": "`model_only_call` が `project_ocid` 引数だけを見ているため、Responses 系モデルが内部で解決した `OpenAi-Project` ヘッダを使う通常チャットでも 404/403/401 を「モデル未提供」として `mark_unavailable()` します。新規 GenerativeAiProject の DP 伝播待ちや project 権限不備でも 404 が起こり得るため、既定モデルを 5 分間誤って利用不可にし、原因診断も誤ります。",
+      "suggestion": "Responses 系の暗黙 project 利用時はモデル不可としてマークしない、またはエラー本文/code を見て model-not-found と project-not-found を区別してください。少なくとも `model.api == \"chat\"` など project を使わない経路に限定するテストを追加してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "runs/2026-07-13T0730_PORT-02/e2e",
+      "line": 1,
+      "issue": "実環境 E2E 証跡が空で、`/api/health`、dbchat の Select AI 縮退、TTS 503、Functions ルーター、モデル可用性フォールバックなど複数の実環境依存変更を裏づけるシナリオがありません。未実施の正当化を示す `SKIPPED.md` もありません。",
+      "suggestion": "jetuse-dev で最低2本以上の実シナリオを実行し、証跡を `runs/.../e2e/` に保存してください。実施できない経路は理由とリスクを `SKIPPED.md` に明記してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-07-13T0730_PORT-02/e2e` は空と明記されています。差分の主張を裏づける実環境シナリオは確認できず、複数シナリオ網羅もありません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおり実ブラウザ E2E は実施していません。"
+    }
+  }
+}

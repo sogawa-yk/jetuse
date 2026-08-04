@@ -19,7 +19,7 @@
 |---|---|
 | OCIアクセス | テナンシ/コンパートメント `jetuse-proto` への権限、`~/.oci/config`(DEFAULTプロファイル, APIキー) |
 | 秘密値 | `.env`(ADB等の接続情報)。**リポジトリには無い**ので管理者/チームから受領 |
-| ツール | Python 3.12 / Node 22 / podman / Terraform 1.15+ / OCI CLI。開発ホスト `dev` には導入済み |
+| ツール | Python 3.13（開発ホスト `dev` は 3.12）/ Node 22 / podman / Terraform 1.15+ / OCI CLI。`dev` には導入済み |
 
 > 開発ホスト(`dev` インスタンス)上で作業する場合、ツールとウォレットは整備済み。手元PCで動かす場合は上記ツールを各自導入する。
 
@@ -30,7 +30,7 @@ git clone <repo>            # GitHub経由
 cd jetuse
 
 # --- Python(API) ---
-python3.12 -m venv .venv
+python3.13 -m venv .venv        # dev インスタンス上では python3.12
 .venv/bin/pip install -e "packages/api[dev]"   # 実行+開発依存(pytest/ruff/uvicorn)
 
 # --- Node(SPA) ---
@@ -43,6 +43,9 @@ cp .env.example .env        # 値は管理者/チームから受領して記入(
 
 ポイント:
 - `.env` と `~/.oci/config` の実値は**絶対にコミットしない**(CLAUDE.md)。雛形は `.env.example`。
+- `~/.oci/config` を使うのは**手元のPythonプロセスのOCI署名だけ**。DBの中で `DBMS_CLOUD` /
+  `DBMS_CLOUD_AI` が使う資格情報はADB自身の身分 `OCI$RESOURCE_PRINCIPAL` で、APIキーをDBへ
+  焼き込む手順はもう無い(ADR-0021)。有効化は `ops/setup-dev-schema.py` が行う。
 - ADBは**夜間停止**運用。作業前に起動確認: `bash ops/start-adb-if-stopped.sh`(「送信無反応/保存失敗(503)」の常連原因)。
 
 ## 3. ローカルで動かす
@@ -76,8 +79,9 @@ cd packages/web && npm run build && npm run lint
 
 ## 5. 変更の進め方(Gitフロー)
 
-- **1タスク = 1ブランチ + PR**。Public または両版向けは `main` から分岐して `main` へ入れ、直後に `main → dev` の同期PRを出す。Internal 固有・先行機能は `dev` から分岐して `dev` のみに入れる。
-- `dev` 全体を `main` へ merge しない。Internal 機能を後から Public 化するときは、対象変更だけを最新 `main` 上へ移植する。
+- **1タスク = 1ブランチ + PR**。Public または両版向け（＝ほとんど）は `public-dev` から分岐して `public-dev` へ入れ、`ops/sync-public-to-internal.sh` で `internal-dev` への同期PRを出す。Internal 固有・先行機能は `internal-dev` から分岐して `internal-dev` のみに入れる。起点は `ops/check-branch-base.sh` が CI で検査する。
+- `internal-dev` を `public-dev` / `main` へ merge しない。Internal 機能を後から Public 化するときは、対象変更だけを最新 `public-dev` 上へ cherry-pick で移植する。
+- `main` / `internal-stable` は release 先。feature branch を直接向けない（`main` への merge は即座に公開配信物を差し替える）。
 - 詳細、hotfix、tag 規約は **[branching-and-releases.md](./branching-and-releases.md)** を参照。
 - spec-driven: 仕様にない実装判断が要るときは実装せず `docs/decisions/` にADR案を書いて人間レビューを依頼。
 - **人間承認が必要な操作**: 本番相当の `terraform apply`、IAMポリシー変更、Identity Domain設定変更、スパイク用以外のリソース削除。
@@ -91,7 +95,7 @@ cd packages/web && npm run build && npm run lint
 → 手順は **[dev-environments.md](./dev-environments.md)** を参照。要約:
 
 ```bash
-.venv/bin/python ops/setup-dev-schema.py --dev <you>     # 専用スキーマ作成(初回)
+.venv/bin/python ops/setup-dev-schema.py --dev <you>     # 専用スキーマ作成(再実行可)
 cp infra/terraform/environments/app/alice.tfvars.example \
    infra/terraform/environments/app/<you>.tfvars         # 値を記入
 ops/dev-env-up.sh <you>     # build/push→plan確認→apply→SPA配信→URL表示

@@ -57,7 +57,7 @@
 | `ADMIN_USERS` | 管理ダッシュボード `/admin` を見られるユーザー（sub、カンマ区切り） |
 | `rate_limit_rps` / `rate_limit_key` | API GWレート制限（送信元IP単位/全体） |
 | `LOG_OCID` | OCI Loggingカスタムログへの送信先（未設定でstdoutのみ） |
-| `TTS_REGION` | TTSのリージョン（既定 us-phoenix-1。日本語TTSはPhoenix限定） |
+| `TTS_REGION` | TTSのリージョン。**既定は空＝自動**（デプロイリージョン → us-phoenix-1 の順に試行）。特定リージョンに固定したいときだけ指定する（2026-07-28: us-chicago-1 で合成成功、ap-osaka-1 / ca-toronto-1 は未提供を実測） |
 | `auth_required` / OIDC各種 | 認証の有効化と接続先Identity Domain |
 
 ## ⑧ 新しいエンドポイント/機能の追加
@@ -67,3 +67,26 @@
 - **SSE・プロセス内状態・6MB超アップロードはCI**、短時間・非ストリーミングはFunctions候補
   （配置の判断は `docs/comparison/compute-architecture.md`）
 - 監査対象にするなら `audit.log_event(...)` を呼ぶ（機能ラベルは `source` か固定文字列）
+
+## ⑨ 別テナンシ / リージョンへの持ち出し（可搬性・ORMスタック変数）
+
+ワンクリックスタック（`infra/orm`）は自環境固有値を持たないよう可搬化してある（PORT-01）。
+別テナンシへデプロイする前に README の「デプロイ前チェックリスト」を確認し、必要に応じて次の変数で調整する。
+
+| 変数 | 既定 | いつ変える |
+|---|---|---|
+| `allow_unvalidated_genai_region` | false | GenAI実証済（大阪/シカゴ）以外へ承知の上でデプロイするとき（plan時にエラーで停止する） |
+| `adb_ecpu_count` / `adb_db_version` | 2 / 26ai | ADB ECPU枠が足りない、または 26ai 非提供のリージョン |
+| `ci_shape` | CI.Standard.E4.Flex | E4.Flex が提供されないリージョン |
+| `ocir_namespace` | 公開namespace | イメージを自テナンシへミラーした場合のみ（自テナンシの Object Storage namespace とは無関係） |
+| `semstore_ocid` | 空 | NL2SQL(SQL Search)を使うとき（事前作成した Semantic Store の OCID。空だと503） |
+
+- **SPA配信PARの期限**: ORM 利用者は入力不要で、既定で apply 時刻起点+1年の相対期限になる（基準時刻を
+  `time_offset` リソースが state に固定するため plan 毎の差分は出ない）。**これは ORM スタック変数ではない** ——
+  固定の絶対日付を使いたい場合は object-storage / spa-bucket モジュールを直接利用する側で `spa_par_expiry` に
+  RFC3339 を渡す（module 変数。指定時はその値を尊重し後からの変更も反映）。**固定日付から相対期限へ移行する既存
+  スタックは、初回 apply で PAR が1回だけ再発行される**（access_uri が変わるが Terraform が API Gateway バックエンドへ再配線する）。
+- **Identity Domain の destroy（`enable_auth=true` 時のみ）**: ドメインは ACTIVE のままだと削除できないため、
+  スタックの destroy 時に provisioner がテナンシのホームリージョンで自動 deactivate する。RM ランナーで CLI 認証が
+  効かず deactivate に失敗した場合は、**手動で**ホームリージョンにて `oci iam domain deactivate --domain-id <id>
+  --region <home>` を実行してから再度 destroy する（未 deactivate のまま同 prefix で再デプロイすると衝突する）。

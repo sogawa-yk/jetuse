@@ -1,0 +1,7 @@
+4ブランチ体制(main=Public安定 / public-dev / internal-dev / internal-stable)へ移行する。
+完了条件:
+- ci.yml・ops・loop-config.yml・.claude ループ機構のブランチ参照が新体制に揃っている
+- 起点判定 ops/check-branch-base.sh が internal-dev 宛の共有物-only PR を落とす
+- docs/guides/branching-and-releases.md と ADR-0028 が根拠を含めて正本になっている
+- 環境としての dev（コンパートメント/インスタンス/environments/dev）を誤って書き換えていない
+- make lint / make test 緑

@@ -21,7 +21,6 @@ import base64
 import io
 import json
 import logging
-import os
 
 from .settings import get_settings
 
@@ -62,6 +61,11 @@ MAX_TOTAL_BYTES = 60_000_000
 MAX_TOTAL_PAGES = 100
 # チャンク並列OCRの同時実行数(直列だとGWのread_timeoutを超え504になるため並列化)
 OCR_CONCURRENCY = 5
+# 「入力が悪い」と**断定できる** OCI のステータスだけを並べる。
+# 401/404 は IAM、413 は上限として先に拾う。**400 は入れない** — compartment の指定ミスや
+# 要求の組み立て不備でも 400 になり、それを「文書が不正」と返すと運用側の設定ミスを隠す。
+# 429/408 も入れない(再試行しうるサービス側の事情)。ここに無いものは 503 側へ送る。
+INPUT_ERROR_STATUSES = frozenset({415, 422})
 
 _client = None
 
@@ -70,19 +74,33 @@ class OcrError(Exception):
     """OCR失敗(IAM未整備・非対応形式・サービスエラー等)。"""
 
 
+class OcrInputError(OcrError):
+    """入力そのものが受け付けられない(非対応形式・壊れたファイル・OCI が 4xx で拒否)。
+
+    IAM 未整備やサービス障害と分けるために立てる。取り込み経路はこれを 422、
+    それ以外の `OcrError` を 503 に振り分ける(利用者の入力の問題か、こちらの問題か)。
+    """
+
+
+class OcrLimitError(OcrError):
+    """入力が上限(バイト数・ページ数)を超えている(PREP-03)。
+
+    サービス側の失敗(IAM未整備・障害)と**呼び出し側の入力が大きすぎる**を分ける。
+    取り込み経路はこれを 422(どの上限かを detail に載せる)、それ以外を 503 に振り分ける。
+    `OcrError` の派生なので、既存の呼び出し側(`/api/ocr` は一律 422)の挙動は変わらない。
+    """
+
+
 def _doc_client():
     global _client
     if _client is None:
         import oci
 
-        region = get_settings().oci_region
-        if os.environ.get("AUTH_MODE") == "resource_principal":
-            signer = oci.auth.signers.get_resource_principals_signer()
-            _client = oci.ai_document.AIServiceDocumentClient(
-                {"region": region}, signer=signer
-            )
-        else:
-            _client = oci.ai_document.AIServiceDocumentClient(oci.config.from_file())
+        from .oci_auth import sdk_signer_args
+
+        _client = oci.ai_document.AIServiceDocumentClient(
+            **sdk_signer_args(get_settings().oci_region)
+        )
     return _client
 
 
@@ -125,7 +143,7 @@ def _analyze_chunk(content: bytes, language: str, tables: bool, key_values: bool
     )
 
     if len(content) > MAX_CHUNK_BYTES:
-        raise OcrError(
+        raise OcrLimitError(
             f"分割後の1チャンクが大きすぎます(上限 {MAX_CHUNK_BYTES // 1_000_000}MB)。"
             "解像度を下げるか、ページ数を減らしてください。"
         )
@@ -158,20 +176,31 @@ def _analyze_chunk(content: bytes, language: str, tables: bool, key_values: bool
             ) from e
         if e.status == 413 or "too many pages" in (e.message or "").lower():
             # 通常はここに来ない(事前分割済み)。多ページTIFF等の保険
-            raise OcrError(
+            raise OcrLimitError(
                 f"ページ数が同期OCRの上限({MAX_SYNC_PAGES}ページ)を超えています。"
                 f"{MAX_SYNC_PAGES}ページ以下に分割してアップロードしてください。"
             ) from e
+        if e.status in INPUT_ERROR_STATUSES:
+            # **入力が受け付けられない**(非対応形式・壊れたファイル)。4xx を一律で
+            # こちらに寄せない — 400(構成ミスでも返る)・429(レート超過)・408(タイムアウト)を
+            # 「文書が不正」と誤報すると、こちら側の問題が利用者のせいに見える
+            raise OcrInputError(f"この文書はOCRできませんでした: {e.code} {e.message}") from e
         raise OcrError(f"OCR失敗: {e.code} {e.message}") from e
 
     pages = doc.pages or []
     lines: list[str] = []
+    page_lines: list[list[str]] = []
     confs: list[float] = []
     out_tables: list[dict] = []
     out_kv: list[dict] = []
     for p in pages:
+        # **ページごとの行**も残す(PREP-03)。平坦化した lines だけだと「何ページ目の本文か」が
+        # 失われ、取り込み経路が出典にページ番号を付けられない。既存キーはそのまま。
+        this_page: list[str] = []
         for ln in (p.lines or []):
             lines.append(ln.text)
+            this_page.append(ln.text)
+        page_lines.append(this_page)
         for w in (p.words or []):
             c = getattr(w, "confidence", None)
             if c is not None:
@@ -209,8 +238,8 @@ def _analyze_chunk(content: bytes, language: str, tables: bool, key_values: bool
             if lab or val:
                 out_kv.append({"label": lab, "value": val})
 
-    return {"lines": lines, "page_count": len(pages), "confidences": confs,
-            "tables": out_tables, "key_values": out_kv}
+    return {"lines": lines, "pages": page_lines, "page_count": len(pages),
+            "confidences": confs, "tables": out_tables, "key_values": out_kv}
 
 
 def ocr(content: bytes, *, language: str = "JPN",
@@ -218,13 +247,14 @@ def ocr(content: bytes, *, language: str = "JPN",
     """画像/PDFのバイト列をOCRし、抽出結果(辞書)を返す。
 
     5ページを超えるPDFは内部で5ページ以下に分割して順次OCRし、結果をマージする。
-    返り値: {text, lines:[...], page_count, mean_confidence, tables:[...], key_values:[...],
-            chunk_count}
+    返り値: {text, lines:[...], pages:[[行,...],...], page_count, mean_confidence,
+            tables:[...], key_values:[...], chunk_count}
+    `pages` は**ページごとの行**(分割したチャンクを跨いでページ順に並ぶ)。
     """
     if not content:
-        raise OcrError("空のファイルです")
+        raise OcrInputError("空のファイルです")
     if len(content) > MAX_TOTAL_BYTES:
-        raise OcrError(f"ファイルが大きすぎます(上限 {MAX_TOTAL_BYTES // 1_000_000}MB)")
+        raise OcrLimitError(f"ファイルが大きすぎます(上限 {MAX_TOTAL_BYTES // 1_000_000}MB)")
 
     # PDFかつ5ページ超 → 分割。それ以外(画像・小さいPDF)は単発。
     chunks: list[bytes] = [content]
@@ -235,7 +265,7 @@ def ocr(content: bytes, *, language: str = "JPN",
             logger.warning("pdf page count failed (%s); single-shot", e)
             n_pages = 1
         if n_pages > MAX_TOTAL_PAGES:
-            raise OcrError(
+            raise OcrLimitError(
                 f"ページ数が多すぎます({n_pages}ページ。上限 {MAX_TOTAL_PAGES}ページ)。"
                 "分割してアップロードしてください。"
             )
@@ -256,12 +286,14 @@ def ocr(content: bytes, *, language: str = "JPN",
             )
 
     all_lines: list[str] = []
+    all_pages: list[list[str]] = []
     all_confs: list[float] = []
     all_tables: list[dict] = []
     all_kv: list[dict] = []
     page_count = 0
     for r in results:
         all_lines.extend(r["lines"])
+        all_pages.extend(r["pages"])
         all_confs.extend(r["confidences"])
         all_tables.extend(r["tables"])
         all_kv.extend(r["key_values"])
@@ -270,6 +302,7 @@ def ocr(content: bytes, *, language: str = "JPN",
     return {
         "text": "\n".join(all_lines),
         "lines": all_lines,
+        "pages": all_pages,
         "page_count": page_count,
         "mean_confidence": round(sum(all_confs) / len(all_confs), 4) if all_confs else None,
         "tables": all_tables,
@@ -381,9 +414,9 @@ def ocr_vlm(content: bytes, *, model: str = DEFAULT_VLM_MODEL,
     日本語の表も抽出可能。ページごとにLLMを呼ぶため、ページ数分のコストがかかる。
     """
     if not content:
-        raise OcrError("空のファイルです")
+        raise OcrInputError("空のファイルです")
     if len(content) > MAX_TOTAL_BYTES:
-        raise OcrError(f"ファイルが大きすぎます(上限 {MAX_TOTAL_BYTES // 1_000_000}MB)")
+        raise OcrLimitError(f"ファイルが大きすぎます(上限 {MAX_TOTAL_BYTES // 1_000_000}MB)")
     if model not in _VLM_MODEL_KEYS:
         model = DEFAULT_VLM_MODEL
 
@@ -393,7 +426,7 @@ def ocr_vlm(content: bytes, *, model: str = DEFAULT_VLM_MODEL,
         except Exception:  # noqa: BLE001
             n_pages = 1
         if n_pages > MAX_TOTAL_PAGES:
-            raise OcrError(
+            raise OcrLimitError(
                 f"ページ数が多すぎます({n_pages}ページ。上限 {MAX_TOTAL_PAGES}ページ)。"
                 "分割してアップロードしてください。"
             )
@@ -419,6 +452,8 @@ def ocr_vlm(content: bytes, *, model: str = DEFAULT_VLM_MODEL,
     return {
         "text": "\n".join(all_lines),
         "lines": all_lines,
+        # 1 画像 = 1 ページなので、結果の並びがそのままページごとの行になる(PREP-03)
+        "pages": [r["lines"] for r in results],
         "page_count": len(images),
         "mean_confidence": None,
         "tables": all_tables,

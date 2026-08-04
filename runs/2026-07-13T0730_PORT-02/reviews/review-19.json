@@ -1,0 +1,47 @@
+{
+  "review_n": 19,
+  "timestamp": "2026-07-13T10:05:11+00:00",
+  "reviewer": "codex",
+  "model": "gpt-5.5",
+  "input_diff_path": "reviews/review-19.input.diff",
+  "raw_output_path": "reviews/review-19.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker はありません。モデル可用性の lazy mark 周辺に、project/IAM 起因エラーの誤分類と saved agent 側モデル未検証の major リスクが残っています。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 2,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/chat.py",
+      "line": 580,
+      "issue": "Responses 系の素のチャットでも `make_inference_client(with_project=True)` が `OpenAi-Project` を解決して送るため、PROJECT_OCID 未解決、project 権限不足、DP 伝播待ちなど project/IAM 起因の 401/403/404 が `model_only_call` と判定され、モデル自体を unavailable に mark してしまいます。結果として最大 TTL 5 分間、利用可能な既定モデルが誤って不可扱いになり chat-family へフォールバックします。",
+      "suggestion": "401/403/404 の本文/code からモデル未提供と project/IAM 起因を判別する、または Responses 系では project 解決・project 認可エラーをモデル可用性キャッシュに反映しないよう分離してください。少なくとも PROJECT_OCID/Project/Compartment/OpenAi-Project 系のエラーでは `mark_unavailable()` を呼ばないテストを追加してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "packages/api/service/routes/chat.py",
+      "line": 264,
+      "issue": "`agent_id` 指定時は `req.model` の検証を bypass していますが、実際に使う `agent_def[\"model\"]` の可用性を dispatch 前に確認していません。保存済みエージェントのモデルが `mark_unavailable()` 済みでも `hosted_agent_stream_response()` へ進み、今回追加したヒント付き停止やフォールバック契約を通らず hosted agent 側の生エラーになります。",
+      "suggestion": "`agent_def` 読み込み直後、dispatch 前に `model_status(agent_def[\"model\"])` を確認し、不可なら SSE のヒント付きエラーを返すか、明示的な agent 用フォールバック方針を実装してください。保存済み agent のモデルを unavailable にした回帰テストも追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "sufficient",
+    "notes": "runs/2026-07-13T0730_PORT-02/e2e/ を確認。scenario1 は /api/chat/models、実チャット、未知モデル400を実証。scenario2 は /api/chat/nl2sql の select_ai 縮退 core path を実証し、/api/dbchat/schema の新フィールドは Functions 別イメージ未更新のため SKIPPED.md で正当に未実施理由を記録。scenario3 は /api/health の6機能集約を実証。obs の IAM 剥奪試験は人間ゲートのため未実施で、単体テスト代替の理由が記録されています。ライブブラウザE2Eは指示どおり未実施です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲット URL が提供されていないため、ブラウザツールは使用していません。"
+    }
+  }
+}

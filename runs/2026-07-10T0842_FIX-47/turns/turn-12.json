@@ -1,0 +1,9 @@
+{
+  "turn": 12,
+  "timestamp": "2026-07-13T06:39:00+00:00",
+  "action_summary": "(loop-protocol 側で追記可)",
+  "files_changed": [],
+  "diff_path": "diffs/turn-12.diff",
+  "review_ref": "reviews/review-3.json",
+  "goal_checker": { "verdict": "(/goal 判定モデルが記録)", "reason": "" }
+}

@@ -1,0 +1,71 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-07-31T10:08:32+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "`sendReadiness` の実装が提出差分に含まれず、差分単体では web build が失敗するため FAIL です。E2E は2シナリオありますが、生ログ欠落と対象コンパートメント名の不整合により裏づけとして不十分です。認証情報・OCID・実クラウドエンドポイントのコミットは確認されませんでした。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 2,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "RAGM04-001",
+      "severity": "blocker",
+      "file": "packages/web/src/pages/rag.tsx",
+      "line": 10,
+      "issue": "`./rag/sendReadiness` を import していますが、`sendReadiness.ts` とそのテストは提示差分に含まれていません（作業ツリーでは untracked）。この差分だけを適用すると module resolution に失敗し、web build と画面修正が成立しません。",
+      "suggestion": "`packages/web/src/pages/rag/sendReadiness.ts` と `sendReadiness.test.ts` を差分へ追加し、tracked なコミットから web test/lint/build と E2E を再実行してください。"
+    },
+    {
+      "id": "RAGM04-002",
+      "severity": "major",
+      "file": "runs/2026-07-31T0204_RAGM-04/e2e/scenario-1.md",
+      "line": 11,
+      "issue": "生レスポンスとして参照する `scenario-1.body.md` が証跡ディレクトリに存在しません。また「以下は全文」とする 422/503 の本文も途中で切れており、シナリオ1を生の HTTP 記録から検証できません。",
+      "suggestion": "リクエスト、HTTP status、完全な response body を含む機械生成ログを `runs/<run-id>/e2e/` に保存し、実在する証跡を参照してください。"
+    },
+    {
+      "id": "RAGM04-003",
+      "severity": "major",
+      "file": "runs/2026-07-31T0204_RAGM-04/e2e/SKIPPED.md",
+      "line": 7,
+      "issue": "シナリオとタスクは検証先を `jetuse-dev` としていますが、マネージド経路を省略した理由は `jetuse-proto` の GenerativeAI project 不在になっています。同じコンパートメントを指す根拠がなく、jetuse-dev で実施不能だったという説明を検証できません。",
+      "suggestion": "実際に解決されたコンパートメント名を証跡全体で統一し、秘密値やOCIDを記録せずに、対象コンパートメントと project 解決結果を確認できるログを残してください。"
+    },
+    {
+      "id": "RAGM04-004",
+      "severity": "minor",
+      "file": "docs/verification/PREP-01.md",
+      "line": 166,
+      "issue": "同じ文書の残課題に「数値・真偽を受け続ける」と旧仕様が残っており、今回追加した「文字列のみ・422」と矛盾しています。",
+      "suggestion": "この残課題を解決済みとして更新または削除し、RAGM-04 の決定への参照に置き換えてください。"
+    },
+    {
+      "id": "RAGM04-005",
+      "severity": "minor",
+      "file": "docs/verification/PREP-01.md",
+      "line": 109,
+      "issue": "`docs/verification/RAGM-04.md` を詳細資料として参照していますが、その新規ファイルも提示差分に含まれていません。差分適用後は参照切れになります。",
+      "suggestion": "`docs/verification/RAGM-04.md` を提出差分へ追加するか、存在する文書への参照に修正してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 2,
+    "adequacy": "insufficient",
+    "notes": "シナリオ1は `kind` の取り込み・4 backend の filter が422になること、ADB直接取り込みで `kind='spec'` を確認したと記載されていますが、参照された生ログが欠落しています。シナリオ2は `scenario-2.md`、`snapshot-2a～2d.yml`、`docs/verification/e2e-screenshots/RAGM-04-2a/2b/2c-*.png` を確認し、VS/ADB/SAI の送信可否表示は主張と整合しました。ただし画面実装の中核ファイルが提出差分外であり、`jetuse-dev` と `jetuse-proto` の記載も不整合です。SKIPPED.md は未実施範囲を列挙していますが、上記理由から差分全体の完了証跡としては不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されておらず、指示によりブラウザツールは使用していません。"
+    }
+  }
+}

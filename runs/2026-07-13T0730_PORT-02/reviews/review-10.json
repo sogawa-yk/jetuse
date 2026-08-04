@@ -1,0 +1,55 @@
+{
+  "review_n": 10,
+  "timestamp": "2026-07-13T09:01:31+00:00",
+  "reviewer": "codex",
+  "model": "gpt-5.5",
+  "input_diff_path": "reviews/review-10.input.diff",
+  "raw_output_path": "reviews/review-10.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "主目的の一つである SEMSTORE_OCID 未設定時の dbchat 既定切替が、現行 Web UI の通常操作では発火しません。加えて、モデルフォールバック通知は SSE として出しているだけでフロントが消費しておらず、実環境 E2E 証跡も空です。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 2,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "packages/api/service/routes/dbchat.py",
+      "line": 66,
+      "issue": "SEMSTORE_OCID 未設定時の Select AI 自動切替は req.backend is None の場合だけですが、既存の DB チャット UI は初期値を sql_search にして常に backend を送っています。そのためユーザーが通常 UI から生成すると明示 sql_search 扱いになり、従来通り SemanticStore 経路で失敗します。",
+      "suggestion": "UI に auto/server-default 状態を追加して初期送信では backend を omit/null にする、または API に backend=\"auto\" を導入して UI 初期値をそれに変更してください。実 UI と同じ payload で SEMSTORE_OCID 未設定時に Select AI 経路へ入るテストも追加してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "packages/api/service/routes/chat.py",
+      "line": 464,
+      "issue": "既定モデル不可時の fallback_notice を SSE の notice イベントとして送っていますが、フロント側の ChatStreamEvent と useChatStream は notice を扱っていません。結果として UI ではモデルが自動変更された事実が表示されず、ユーザーに無断で非 reasoning/chat-family へ切り替わります。",
+      "suggestion": "ChatStreamEvent に notice を追加し、useChatStream から Chat の setNotice へ反映してください。フロントのストリームテストで notice 表示まで検証してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "major",
+      "file": "runs/2026-07-13T0730_PORT-02/e2e",
+      "line": 1,
+      "issue": "実環境 E2E 証跡が空です。今回の差分は /api/health、dbchat 経路切替、TTS 縮退、モデル不可時フォールバックなど実テナンシ/IAM/リージョン差の影響を受ける変更ですが、最低2シナリオの証跡も SKIPPED.md もありません。",
+      "suggestion": "jetuse-dev へデプロイし、少なくとも dbchat 既定生成、/api/health、TTS 503 縮退、モデル不可時挙動のうち複数シナリオを証跡付きで残してください。未実施範囲がある場合は SKIPPED.md に理由を書いてください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "insufficient",
+    "notes": "入力の E2E セクションは runs/2026-07-13T0730_PORT-02/e2e が空と明記しており、実行シナリオ・結果・ログ・スクリーンショット等は確認できません。diff の実環境依存主張を裏づける証跡として不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲット URL が提供されていないため、指示通りブラウザツールは使用していません。"
+    }
+  }
+}

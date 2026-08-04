@@ -1,0 +1,71 @@
+{
+  "review_n": 4,
+  "timestamp": "2026-07-29T01:40:06+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-4.input.diff",
+  "raw_output_path": "reviews/review-4.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker はないため PASS。ただし、TTS health の偽陽性・タイムアウト、パスワード更新の再試行判定と後方互換性に major の懸念がある。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 4,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "major",
+      "file": "infra/terraform/modules/identity-domain-app/main.tf",
+      "line": 116,
+      "issue": "直前の失敗が `pwdpolicyViolation` 以外というだけで、次の履歴違反を「前回PUT成功後の応答喪失」と断定している。DNS・認証・CLI起動エラーなど、サーバーへ到達していない失敗の後に既存の履歴違反が返ると、現在のパスワードを確認せず `exit 0` し、出力された `demo_password` でログインできない状態を成功扱いする。",
+      "suggestion": "前回エラーを分類し、適用結果が不明な通信切断以外では履歴違反を成功扱いしないこと。可能ならログインによる事後確認を行い、確認不能なら fail-closed として明示的な password rotation nonce で復旧できる設計にする。一般エラー→履歴違反を失敗とするテストも追加する。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/tts.py",
+      "line": 86,
+      "issue": "`list_voices(compartment_id=...)` がHTTP 200なら、返却内容を確認せずTTSを `verified=true` にしている。APIは `model_name`・`language_code`・`display_name` で絞り込めるため、対象リージョンに日本語の `TTS_2_NATURAL`／Yukiが存在しない、または結果が空でも偽陽性になる。[OCI Python SDK](https://docs.oracle.com/en-us/iaas/tools/python/2.160.0/api/ai_speech/client/oci.ai_speech.AIServiceSpeechClient.html)",
+      "suggestion": "`model_name=\"TTS_2_NATURAL\"`、`language_code=\"ja-JP\"`、必要なら `display_name=DEFAULT_VOICE` を指定し、`response.data.items` に実際の利用対象voiceが含まれる場合だけ成功とする。空・別モデル・別言語の200応答を検証するテストを追加する。"
+    },
+    {
+      "id": "F003",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/tts.py",
+      "line": 113,
+      "issue": "health用プローブにも合成用クライアントをそのまま使い、タイムアウトを指定していない。SDK既定は接続10秒・read 60秒であり、自動モードでは最大2リージョンを直列試行する。一方 `/api/health` は60秒のAPI Gateway汎用ルートなので、第1候補がハングするとフォールバック前に504になり得る。[OCI Python SDK](https://docs.oracle.com/en-us/iaas/tools/python/2.160.0/api/ai_speech/client/oci.ai_speech.AIServiceSpeechClient.html)",
+      "suggestion": "health専用の短いtimeoutを持つクライアントを分離し、全候補を含む総実行時間を60秒より十分短く制限する。タイムアウトした第1候補から次候補へ進み、healthが所定時間内に返るテストを追加する。"
+    },
+    {
+      "id": "F004",
+      "severity": "major",
+      "file": "infra/orm/main.tf",
+      "line": 77,
+      "issue": "`keepers`追加により既存Stackの初回更新時にdemoパスワードを無条件でローテートする。手動でmustChangeを解消して運用していた利用者の既存資格情報も変更されるが、`docs/setup/orm.md` の「Stack更新時の注意」には記載がなく、local-execによる外部パスワード変更もTerraform Planから把握しにくい。",
+      "suggestion": "アップグレード時に `demo_password` が変更されることと、新しいOutputの取得が必須であることを更新手順・リリースノート・Stackのnoteへ明記する。既存リソース変更の人間ゲートを明確にするなら、明示的な移行フラグも検討する。"
+    },
+    {
+      "id": "F005",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/bootstrap.py",
+      "line": 233,
+      "issue": "必須DB設定が欠けると `_provision()` は警告だけで正常returnするため、bootstrapは成功としてループを抜ける。その結果、RP状態ファイルは起動時に書いた `ok=null`／「bootstrap実行中」のまま残り、処理は終了しているのにhealthが永続的に実行中と表示する。",
+      "suggestion": "設定不足を専用例外または明示的な失敗戻り値にし、`ok=false` と不足項目を状態ファイルへ記録する。設定不足時の最終statusを確認するテストを追加する。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 38,
+    "adequacy": "sufficient",
+    "notes": "38/38 PASSで、ログイン、既定Responsesモデル、Conversations、RAG初回アップロード、管理画面、ORA-28007後の再起動、TTS合成・healthなど主要差分を網羅している。source-refは提示差分と一致し、TTSフォールバックとIAM分割構成の未実施理由・代替検証もSKIPPED.mdに記載されている。一方、READMEが参照する teardown.txt は添付されておらず、検証リソースとauth tokenの削除完了は確認できない。またF001〜F003の異常系は証跡対象外である。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されておらず、明示指示に従いブラウザツールは使用していない。"
+    }
+  }
+}

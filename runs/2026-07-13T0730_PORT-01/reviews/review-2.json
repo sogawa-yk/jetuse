@@ -1,0 +1,47 @@
+{
+  "review_n": 2,
+  "timestamp": "2026-07-13T08:20:37+00:00",
+  "reviewer": "codex",
+  "model": "gpt-5.5",
+  "input_diff_path": "reviews/review-2.input.diff",
+  "raw_output_path": "reviews/review-2.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "差分本体に blocker は見当たりません。region guard と OCIR namespace guard は前回指摘を潰しており、認証情報・テナンシ/コンパートメント OCID の新規コミットも差分本体には見当たりません。ただし、PAR 相対期限の apply 後確認が未完了で、ORM 変数として説明している `spa_par_expiry` が実際には公開されていない点は残ります。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 1,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "major",
+      "file": "runs/2026-07-13T0730_PORT-01/e2e/PENDING.md",
+      "line": 10,
+      "issue": "今回の差分は `time_offset` による PAR 期限再発行と API Gateway バックエンド再配線を含みますが、証跡では Scenario 1（PAR 相対期限 + gateway 200）が PENDING のままで、apply 後の `time_expires` 実値と Gateway 経由 200 が確認されていません。SKIPPED.md による恒久スキップ理由でもありません。",
+      "suggestion": "共有スタック apply が解禁された後に Scenario 1 を完了し、PAR の将来期限・API Gateway 経由 SPA 200・必要なら CI 差し替え後の復旧手順結果を証跡として追加してください。未実施で進めるなら SKIPPED.md に正当な理由とリスクを明記してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "minor",
+      "file": "docs/guides/customize.md",
+      "line": 84,
+      "issue": "この節は `infra/orm` の ORM スタック変数として `spa_par_expiry` を指定できるように読めますが、差分では `infra/orm/variables.tf` / `schema.yaml` / `module \"object_storage\"` に `spa_par_expiry` が公開・配線されていません。現状、ORM 利用者は固定の絶対日付を指定できません。",
+      "suggestion": "ORM でも固定期限をサポートするなら root 変数・schema 項目・module 引数を追加してください。サポートしないなら、この記述を module 直接利用者向けであることが分かる表現に修正してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "insufficient",
+    "notes": "確認済み証跡は、OCIR namespace guard、prefix validation、Scenario 2 の region guard 4ケース、Scenario 3 の RM stack create/schema受理/plan成功です。最低2シナリオは満たしますが、PAR 相対期限と Gateway 200 の apply 後検証が PENDING のため、この差分全体の裏づけとしては不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲット URL が提供されておらず、ユーザー指示に従いブラウザ E2E は未実施です。"
+    }
+  }
+}

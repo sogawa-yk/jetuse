@@ -1,0 +1,1 @@
+tasks/PORT-02.md の完了条件: pytest packages/api/tests 全緑+ruff クリーン / codex PASS / jetuse:test 実環境 E2E 2本以上の証跡

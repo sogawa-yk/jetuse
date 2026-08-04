@@ -10,16 +10,34 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-DEV="${1:?usage: dev-env-up.sh <dev>}"
+APPLY=0; DEV=""
+for a in "$@"; do case "$a" in --apply) APPLY=1;; -*) echo "unknown flag: $a" >&2; exit 2;; *) DEV="$a";; esac; done
+[ -n "$DEV" ] || { echo "usage: dev-env-up.sh <dev> [--apply]"; exit 1; }
 APPDIR=infra/terraform/environments/app
 TFVARS="$APPDIR/${DEV}.tfvars"
 [ -f "$TFVARS" ] || { echo "missing $TFVARS (copy alice.tfvars.example)"; exit 1; }
 
-NS=$(grep '^OS_NAMESPACE=' .env | cut -d= -f2- || true)
-NS="${NS:-idqcucnenh88}"
+# OCIR の名前空間はテナンシ固有なので**リポジトリに埋めない**（規約）。
+# Object Storage の名前空間と同じ値なので、.env の OS_NAMESPACE を既定に使う。
+# **.env は source していない**（shell 変数として export されない）ので、
+# 環境変数ではなくファイルから読む。優先順: 環境変数 > .env の OCIR_NAMESPACE > .env の OS_NAMESPACE。
+_ns_from_env_file() { grep "^$1=" .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r'; }
+NS="${OCIR_NAMESPACE:-$(_ns_from_env_file OCIR_NAMESPACE)}"
+[ -n "$NS" ] || NS="$(_ns_from_env_file OS_NAMESPACE)"
+# どちらも無いなら止める（誤ったテナンシの repository を掴まないため）
+[ -n "$NS" ] || { echo "OCIR_NAMESPACE か OS_NAMESPACE を .env に設定してください" >&2; exit 1; }
 SHA=$(git rev-parse --short HEAD)
 TAG="dev-${DEV}-${SHA}"
-IMAGE="kix.ocir.io/${NS}/jetuse-dev-api:${TAG}"
+# イメージの置き場は**このスタックの配備先リージョン**に合わせる(AGT-06)。
+# 正は <dev>.tfvars の region(terraform がそれで配備するため)。無ければ .env / 既定。
+# kix.ocir.io を直書きしていたときは、region=us-chicago-1 にしても
+# **イメージだけ大阪へ push され**、シカゴのコンテナが pull できなかった。
+. "$(dirname "$0")/_region.sh"
+REGION=$(jetuse_region_from_tfvars "$TFVARS")
+REGION="${REGION:-$(jetuse_region)}"
+jetuse_use_cli_region "$REGION"
+IMAGE="$(jetuse_ocir_host "$REGION")/${NS}/jetuse-dev-api:${TAG}"
+echo "== region=${REGION} (tfvars 由来) / image registry=$(jetuse_ocir_host "$REGION")"
 
 echo "== build & push ${IMAGE}"
 # ビルドコンテキストはリポジトリルート(Containerfile が packages/jetuse_shared を取り込むため。P1b)
@@ -32,9 +50,11 @@ echo "== terraform plan (state: ${DEV}.tfstate)"
   terraform plan -input=false -var-file="${DEV}.tfvars" \
     -var "api_image_url=${IMAGE}" -state="${DEV}.tfstate" -out="${DEV}.tfplan"
 )
-# CLAUDE.md: terraform apply は承認ゲート。明示確認してから適用する。
-read -r -p "上記planを適用しますか? [y/N] " ans
-[ "$ans" = "y" ] || { echo "中止"; exit 1; }
+# CLAUDE.md: terraform apply は承認ゲート。ヘッドレス安全のため対話確認はせず、--apply 明示時のみ適用する。
+if [ "$APPLY" -ne 1 ]; then
+  echo "== plan のみ完了（適用するには --apply を渡す）。SPA 配信もスキップ。"
+  exit 0
+fi
 ( cd "$APPDIR" && terraform apply -input=false -state="${DEV}.tfstate" "${DEV}.tfplan" )
 
 echo "== build & deploy SPA -> jetuse-${DEV}-spa"

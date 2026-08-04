@@ -1,0 +1,9 @@
+{
+  "turn": 3,
+  "timestamp": "2026-07-13T10:13:32+00:00",
+  "action_summary": "(loop-protocol 側で追記可)",
+  "files_changed": ["README.md", "docs/guides/customize.md", "docs/tips.md", "infra/orm/locals.tf", "infra/orm/main.tf", "infra/orm/providers.tf", "infra/orm/schema.yaml", "infra/orm/variables.tf", "infra/terraform/modules/adb/main.tf", "infra/terraform/modules/container-instance/main.tf", "infra/terraform/modules/container-instance/variables.tf", "infra/terraform/modules/identity-domain/main.tf", "infra/terraform/modules/identity-domain/variables.tf", "infra/terraform/modules/object-storage/main.tf", "infra/terraform/modules/object-storage/variables.tf", "infra/terraform/modules/object-storage/versions.tf", "infra/terraform/modules/spa-bucket/main.tf", "infra/terraform/modules/spa-bucket/variables.tf"],
+  "diff_path": "diffs/turn-3.diff",
+  "review_ref": "reviews/review-2.json",
+  "goal_checker": { "verdict": "(/goal 判定モデルが記録)", "reason": "" }
+}

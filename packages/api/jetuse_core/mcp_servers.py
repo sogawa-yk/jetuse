@@ -107,14 +107,11 @@ def mcp_tool_spec(server: dict, auto: bool) -> dict:
 
 def _read_secret(secret_ocid: str) -> str:
     import base64
-    import os
 
     import oci
 
-    if os.environ.get("AUTH_MODE") == "resource_principal":
-        signer = oci.auth.signers.get_resource_principals_signer()
-        client = oci.secrets.SecretsClient({}, signer=signer)
-    else:
-        client = oci.secrets.SecretsClient(oci.config.from_file())
+    from .oci_auth import sdk_signer_args
+
+    client = oci.secrets.SecretsClient(**sdk_signer_args())
     bundle = client.get_secret_bundle(secret_ocid).data
     return base64.b64decode(bundle.secret_bundle_content.content).decode()

@@ -1,0 +1,10 @@
+  接続先確認: jetuse-loop-adb / compartment=dev（承認済み）/ DB_NAME=G912A29DFC5DE89_JETUSELOOP2 / DSN=jetuseloop2_low
+  台帳と一致（USER_ID / 作成時刻 / マーカーの 3 点）
+  削除対象のオブジェクト: [('INDEX', 10), ('INDEX PARTITION', 2), ('JOB', 1), ('SEQUENCE', 4), ('TABLE', 10), ('TABLE PARTITION', 1)]
+
+==============================================================================
+== DROP USER JETUSE_MEM01_EFC2EA CASCADE
+==============================================================================
+  ACL: DROP USER で同時に消えた（残 0 件）
+  削除後の再照会: ユーザー 0 件 / ACL 0 件（どちらも 0 が期待値）
+  ローカルの認証資材を削除: secrets.json, ledger.json, schema.txt, wallet/

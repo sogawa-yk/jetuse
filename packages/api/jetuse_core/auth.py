@@ -52,20 +52,28 @@ def verify_token(token: str | None, settings: Settings) -> AuthContext:
 
     if token is None:
         raise _unauthorized("missing bearer token")
-    if not settings.oidc_jwks_url:
-        # 設定不備で認証を素通りさせない
+    # 空白のみ(env の混入しがちな値)も未設定扱い(review-3 m001)
+    issuer = settings.oidc_issuer.strip()
+    audience = settings.oidc_audience.strip()
+    jwks_url = settings.oidc_jwks_url.strip()
+    if not (issuer and audience and jwks_url):
+        # 設定不備で検証を欠いたまま受理しない(fail-closed)。issuer/audience/JWKSの3点必須
+        # (欠けると同一IdPの別アプリ用トークンを受理しうる — specs/18 §5.1 / codex review-2 B006)
         raise HTTPException(status_code=500, detail="OIDC is not configured")
 
     try:
-        key = _jwks_client(settings.oidc_jwks_url).get_signing_key_from_jwt(token)
+        key = _jwks_client(jwks_url).get_signing_key_from_jwt(token)
         claims = jwt.decode(
             token,
             key.key,
             algorithms=["RS256"],
-            audience=settings.oidc_audience or None,
-            issuer=settings.oidc_issuer or None,
-            options={"verify_aud": bool(settings.oidc_audience)},
+            audience=audience,
+            issuer=issuer,
         )
     except jwt.PyJWTError as e:
         raise _unauthorized(f"invalid token: {type(e).__name__}") from e
-    return AuthContext(subject=str(claims.get("sub", "")), claims=claims)
+    sub = claims.get("sub")
+    if not isinstance(sub, str) or not sub:
+        # sub はデータ分離キー。欠落/空/非文字列(JWT仕様外)のまま受理しない(specs/18 §5.1)
+        raise _unauthorized("token has no sub claim")
+    return AuthContext(subject=sub, claims=claims)

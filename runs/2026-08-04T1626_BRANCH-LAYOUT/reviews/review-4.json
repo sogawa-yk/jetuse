@@ -1,0 +1,47 @@
+{
+  "review_n": 4,
+  "timestamp": "2026-08-04T16:43:01+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-4.input.diff",
+  "raw_output_path": "reviews/review-4.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "共有チェックアウト用の後方互換経路が、`public-dev` 不在時に任意の現在地から feature branch を作るため、4ブランチ移行の中核保証を破ります。認証情報、OCID、実エンドポイントの追加は確認されません。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 0,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "blocker",
+      "file": ".claude/hooks/ensure_task_branch.sh",
+      "line": 48,
+      "issue": "既定の `public-dev` がローカルにも origin にも存在しない場合、エラーにせず現在の HEAD から `feat/<task>` を作成します。移行前の `dev` や Internal 系ブランチ上で実行すると、共有変更を誤った起点から作成しながら正常終了し、今回導入する起点保証を静かに破ります。実際のリポジトリ参照にも現時点で `public-dev` / `internal-dev` が存在しないため、移行順序によって直ちに到達可能です。",
+      "suggestion": "base を解決できない場合は `start-loop.sh` と同様にエラー終了してください。加えて、base 不在時に失敗するケース、既定で `public-dev` から分岐するケース、`BASE_BRANCH=internal-dev` のケースを一時 Git リポジトリでテストしてください。ブランチ作成を別途行うなら、その人間ゲートを先に実施する移行手順も明記してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "minor",
+      "file": "docs/decisions/ADR-0028-four-branch-layout-and-base-check.md",
+      "line": 53,
+      "issue": "ADR は `internal-only-paths.txt` が無い移行期間を「スキップされる（fail-open）」と記載していますが、現在の `check-branch-base.sh` は base と作業ツリーの双方に一覧が無ければ exit 1 で fail-closed です。正本と実装のエラー処理が矛盾しています。",
+      "suggestion": "現在の安全側の実装に合わせて、移行期間も fail-closed であることと、先に一覧を同期する必要があることをADRへ反映してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "`runs/2026-08-04T1626_BRANCH-LAYOUT/e2e/` は空で、実環境シナリオの証跡はありません。本差分はGitブランチ、worktree、CI判定の変更であり、jetuse-devへのデプロイを伴う実環境E2Eは対象外と判断します。起点判定には多数の単体テストが追加されていますが、`make lint` / `make test` の実行結果と、ブランチ作成経路の統合テスト証跡は提示されていません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

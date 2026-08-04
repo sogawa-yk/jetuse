@@ -8,6 +8,26 @@ locals {
   runtime_dynamic_group_name        = var.enable_dynamic_group ? "${var.prefix}-runtime-dg" : var.existing_dynamic_group
   adb_dynamic_group_name            = var.enable_dynamic_group ? "${var.prefix}-adb-dg" : var.existing_dynamic_group
   semantic_store_dynamic_group_name = var.enable_dynamic_group ? "${var.prefix}-semantic-store-dg" : var.existing_dynamic_group
+
+  # ホスト型エージェント(PORT-03 / ADR-0019)のコンテナ自身も GenAI 推論・Vector Store 検索・
+  # ADB ウォレット取得を resource principal で行うため、配備する構成では runtime DG に含める。
+  # 既定は false: DG は「コンパートメント内のその型のリソース全部」に効くので、エージェントを
+  # 配備しない呼び出し元(dev 環境や enable_hosted_agents=false)で無条件に足すと、同じ
+  # コンパートメントにある無関係な Hosted Application にまで JetUse のランタイム権限が付く。
+  # 3種類とも要る(公式 "Permissions for Deploying Applications")。
+  # generativeaihostedapplicationiam を落とすと、配備そのものは進んでも実行時の
+  # resource principal が DG に入らない。
+  hosted_agent_principals = var.include_hosted_agent_principals ? [
+    "         all {resource.type='generativeaihostedapplication', resource.compartment.id='${var.compartment_ocid}'},",
+    "         all {resource.type='generativeaihostedapplicationiam', resource.compartment.id='${var.compartment_ocid}'},",
+    "         all {resource.type='generativeaihosteddeployment', resource.compartment.id='${var.compartment_ocid}'},",
+  ] : []
+
+  runtime_matching_rule = join("\n", concat(
+    ["Any {all {resource.type='computecontainerinstance', resource.compartment.id='${var.compartment_ocid}'},"],
+    local.hosted_agent_principals,
+    ["         all {resource.type='fnfunc', resource.compartment.id='${var.compartment_ocid}'}}"],
+  ))
 }
 
 resource "oci_identity_dynamic_group" "runtime" {
@@ -15,11 +35,8 @@ resource "oci_identity_dynamic_group" "runtime" {
 
   compartment_id = var.tenancy_ocid
   name           = local.runtime_dynamic_group_name
-  description    = "JetUse Container Instances and Functions resource principals"
-  matching_rule  = <<-EOT
-    Any {all {resource.type='computecontainerinstance', resource.compartment.id='${var.compartment_ocid}'},
-         all {resource.type='fnfunc', resource.compartment.id='${var.compartment_ocid}'}}
-  EOT
+  description    = "JetUse Container Instances, Functions and hosted agent resource principals"
+  matching_rule  = local.runtime_matching_rule
 }
 
 resource "oci_identity_dynamic_group" "adb" {
@@ -50,6 +67,13 @@ locals {
     "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage generative-ai-vector-store in compartment id ${var.compartment_ocid}",
     "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage generative-ai-vectorstore-file in compartment id ${var.compartment_ocid}",
     "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage generative-ai-file in compartment id ${var.compartment_ocid}",
+    # agentic API 本体(Responses / Conversations)は generative-ai-family に**含まれない**独立
+    # resource-type。欠けると POST /openai/v1/responses と /conversations がリソース
+    # プリンシパルでのみ 404 になり、既定チャットモデル(responses系)・RAG の引用付き回答・
+    # 会話メモリが揃って失敗する(ユーザープリンシパルでは通るため切り分けが難しい)。
+    # DEPLOYTEST テナンシ(us-chicago-1)で 2026-07-28 に実機再現・修正確認。
+    "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage generative-ai-response in compartment id ${var.compartment_ocid}",
+    "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage generative-ai-conversation in compartment id ${var.compartment_ocid}",
     # ADB wallet 取得、RAG/議事録ファイル、AIサービス、可観測性。
     "Allow dynamic-group ${local.runtime_dynamic_group_name} to use autonomous-database-family in compartment id ${var.compartment_ocid}",
     "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage objects in compartment id ${var.compartment_ocid}",
@@ -65,6 +89,23 @@ locals {
     # API Gateway から Functions ルーターを呼び出す。
     "Allow any-user to use functions-family in compartment id ${var.compartment_ocid} where ALL {request.principal.type = 'ApiGateway', request.resource.compartment.id = '${var.compartment_ocid}'}",
   ]
+
+  # DP 状態API(Files/Conversations等)必須の OpenAi-Project を自動解決するため、
+  # GenerativeAiProject の検索と自動作成をアプリに許可する(FIX-47 / Issue #47)。
+  # opt-in: PROJECT_OCID を明示配線する運用では不要なので既定では付与しない。
+  project_autocreate_statements = var.enable_project_autocreate ? [
+    "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage generative-ai-project in compartment id ${var.compartment_ocid}",
+  ] : []
+
+  # ホスト型エージェント(PORT-03)の配備に必要な権限。公式
+  # "Permissions for Deploying Applications" が Dynamic Group に対して要求する2文。
+  #  - read repos : artifact(コンテナイメージ)の取得
+  #  - read vss-family : 配備時の脆弱性スキャン結果の参照(これが無いと ACTIVE に到達しない)
+  # 公開 OCIR からの cross-tenancy pull でも、スキャン結果参照はこの DG の権限で行われる。
+  hosted_agent_statements = var.include_hosted_agent_principals ? [
+    "Allow dynamic-group ${local.runtime_dynamic_group_name} to read repos in compartment id ${var.compartment_ocid}",
+    "Allow dynamic-group ${local.runtime_dynamic_group_name} to read vss-family in compartment id ${var.compartment_ocid}",
+  ] : []
 
   adb_statements = [
     # DBMS_CLOUD_AI / Select AI が ADB の resource principal で推論・RAGを行う。
@@ -90,6 +131,8 @@ resource "oci_identity_policy" "runtime" {
   # 単一の既存DGを参照する場合、責務間で同一になる文をまとめる。
   statements = distinct(concat(
     local.runtime_statements,
+    local.project_autocreate_statements,
+    local.hosted_agent_statements,
     local.adb_statements,
     local.semantic_store_statements,
   ))

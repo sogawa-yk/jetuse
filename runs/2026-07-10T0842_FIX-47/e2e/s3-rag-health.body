@@ -1,0 +1,1 @@
+{"ok":false,"checks":{"project":{"ok":true,"source":"env"},"control_plane":{"ok":true},"data_plane":{"ok":false,"hint":"DP files.list の呼び出しが失敗 (HTTP 404)。DG matching rule / IAM policy statements / PROJECT_OCID / リージョンの agentic API 対応を確認してください"}}}

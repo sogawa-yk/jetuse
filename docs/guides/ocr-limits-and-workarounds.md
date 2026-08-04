@@ -130,7 +130,7 @@ allow dynamic-group jetuse-dg to use ai-service-document-family in compartment j
 未付与でもアプリは500を出さず、上記の友好的422で安全に失敗する。詳細は `docs/setup/iam.md`。
 
 ## 5. 関連
-- 調査レポート: `docs/verification/SPIKE-E4.md`
+- 調査レポート: `docs/verification/spikes/SPIKE-E4.md`
 - Tips: `docs/tips.md`（2026-06-16 の Document Understanding 関連エントリ）
 - 実装: `packages/api/jetuse_core/docunderstand.py` / `service/main.py`（`/api/ocr`） / `packages/web/src/pages/ocr.tsx`
 - 公式: https://docs.oracle.com/en-us/iaas/Content/document-understanding/using/about_doc_understanding.htm

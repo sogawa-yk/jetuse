@@ -1,0 +1,63 @@
+{
+  "review_n": 9,
+  "timestamp": "2026-07-29T06:47:09+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-9.input.diff",
+  "raw_output_path": "reviews/review-9.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "公開 ORM の主要経路は実環境 E2E で強く裏づけられています。一方、共有 Object Storage モジュールの destroy 処理はローカル／jetuse-dev 経路でリージョンと停止順序を保証できず、追加した demo-scoped Gateway ルートも未検証です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 2,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "major",
+      "file": "infra/terraform/modules/object-storage/main.tf",
+      "line": 78,
+      "issue": "destroy-time の OCI CLI 呼び出しにデプロイリージョンが指定されていません。Terraform provider は var.region を使いますが、local-exec は OCI CLI の既定リージョンを使うため、ローカル実行時に両者が異なると別リージョンへ bulk-delete し、失敗が `|| true` で隠れた後にバケット削除が 409-BucketNotEmpty になります。添付 E2E は Resource Manager 環境のみで、この経路を検証していません。",
+      "suggestion": "object-storage モジュールへ region を渡し、bulk-delete、bulk-delete-versions、multipart list/abort の全呼び出しに `--region` を指定してください。OCI CLI の既定リージョンと配備リージョンが異なるローカル destroy もテストしてください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "infra/terraform/modules/object-storage/main.tf",
+      "line": 60,
+      "issue": "この destroy cleanup は共有モジュールに追加されていますが、書き込み元の停止順序は呼び出し側任せです。infra/orm/main.tf では Container Instance／Functions に depends_on を追加した一方、同じモジュールを使う infra/terraform/environments/dev には追加されていないため、jetuse-dev の destroy ではアプリ停止とバケット清掃が並行し、清掃後の再書き込みで 409 になる競合が残ります。",
+      "suggestion": "dev 環境の Container Instance と Functions にも `depends_on = [module.object_storage]` 相当の破棄順序を設定してください。可能なら、全呼び出し元で必要になる停止バリアをモジュール契約として明示し、使用中バケットを含む dev destroy を検証してください。"
+    },
+    {
+      "id": "F003",
+      "severity": "minor",
+      "file": "infra/terraform/modules/api-gateway/main.tf",
+      "line": 57,
+      "issue": "新設した `/api/demos/{p*}` の300秒ルートは、添付 E2E の通常 `/api/rag/files` シナリオでは検証されていません。demo-scoped のアップロード／チャットは SKIPPED.md にも未実施経路として記載されておらず、Terraform レベルのルート・timeout assertion もありません。",
+      "suggestion": "実 Gateway 経由で `/api/demos/{demo_id}/rag/files` と `/api/demos/{demo_id}/chat` を最低1本ずつ確認するか、未実施理由を SKIPPED.md に記載してください。併せて path、backend URL、read_timeout=300 の Terraform contract testを追加してください。"
+    },
+    {
+      "id": "F004",
+      "severity": "minor",
+      "file": "docs/verification/VOICE-03.md",
+      "line": 9,
+      "issue": "今回 `TTS_REGION` の既定を空＝自動選択へ変更していますが、既存の検証ドキュメントは依然として「Phoenixクロスリージョン、既定 us-phoenix-1」と記載しており、更新された設定・仕様書と矛盾しています。",
+      "suggestion": "VOICE-03.md も、未指定時はデプロイリージョンから us-phoenix-1 へフォールバックし、明示指定時のみ固定する現在の仕様へ更新してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 38,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-07-28T2226_PUBLIC-DEPLOY-E2E/e2e/e2e-results.json` はログイン、health、複数チャットモデル、Conversations、通常RAG、DBチャット、OCR、STT、TTS、管理画面、ページ描画の38/38 PASSを示しています。`upgrade-path.md` は旧Stackからのパスワード移行、`teardown.txt` は180リソースのdestroyと残存ゼロ、`image-digests.txt`／`source-ref.txt` は検証成果物とソースの対応を補強しています。TTSフォールバックとIAM分割経路の未実施理由はSKIPPED.mdにありますが、新設したdemo-scoped Gatewayルートとローカル／jetuse-devのdestroy経路は証跡にもSKIPPED.mdにも無いため、差分全体の裏づけとしては不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されておらず、指示に従ってブラウザツールは使用していません。"
+    }
+  }
+}

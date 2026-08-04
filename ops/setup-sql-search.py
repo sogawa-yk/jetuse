@@ -34,7 +34,7 @@ NL2SQL_BASE = f"https://inference.generativeai.{ENV['OCI_REGION']}.oci.oracleclo
 
 
 def oci_cmd(*args, parse=True):
-    res = subprocess.run(["oci", *args], capture_output=True, text=True)
+    res = subprocess.run(["oci", *args], capture_output=True, text=True, check=False)
     if res.returncode != 0:
         raise RuntimeError(f"oci {' '.join(args[:3])}...: {res.stderr[:500]}")
     return json.loads(res.stdout) if parse and res.stdout.strip() else None
@@ -88,7 +88,7 @@ def step_wallet_secret() -> str:
 def step_dbtools(wallet_secret: str) -> tuple[str, str]:
     print("== 3. DBTools接続 (enrich=ADMIN / query=JETUSE_QUERY) ==")
     tns = (pathlib.Path(WALLET) / "tnsnames.ora").read_text()
-    m = re.search(r"jetusedev_low\s*=\s*(\(description.*?)(?=\n\w|\Z)", tns, re.S | re.I)
+    m = re.search(r"jetusedev_low\s*=\s*(\(description.*?)(?=\n\w|\Z)", tns, re.DOTALL | re.IGNORECASE)
     conn_str = re.sub(r"\s+", " ", m.group(1)).strip()
     out = []
     for name, user, secret in [
@@ -174,7 +174,7 @@ def step_enrich(ss_id: str):
         ["oci", "raw-request", "--http-method", "POST",
          "--target-uri", f"{NL2SQL_BASE}/semanticStores/{ss_id}/actions/enrich",
          "--request-body", json.dumps(body)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     print("  request:", (res.stdout or res.stderr)[:400])
     if res.returncode != 0:
@@ -185,7 +185,7 @@ def step_enrich(ss_id: str):
         res = subprocess.run(
             ["oci", "raw-request", "--http-method", "GET",
              "--target-uri", f"{NL2SQL_BASE}/semanticStores/{ss_id}/enrichmentJobs/{job_id}"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, check=False,
         )
         st = json.loads(res.stdout)["data"].get("lifecycleState")
         print(f"  job: {st} ({i * 15}s)")

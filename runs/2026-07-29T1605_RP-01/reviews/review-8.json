@@ -1,0 +1,63 @@
+{
+  "review_n": 8,
+  "timestamp": "2026-07-29T18:12:46+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-8.input.diff",
+  "raw_output_path": "reviews/review-8.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "Resource Principal の有効化・Object Storage・Select AI を含む主要機能は E2E で確認できています。しかし、所有権取得の失敗後に無条件で同名ユーザーを台帳へ取り込む経路が残り、既存スキーマを変更・削除し得るため FAIL です。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 2,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 438,
+      "issue": "`capture_ownership(not_before=started)` が他者作成ユーザーを拒否しても、`finally` が `not_before` なしで再実行して同じユーザーを台帳へ取り込む。さらに setup は明示パスワード指定のため、競合した既存ユーザーを `ALTER USER` してからマーカーを追加できる。結果として他者のスキーマを自分の所有物として teardown で削除し得る。16 bit の run tag により偶発衝突も現実的で、添付 guard はこの競合経路を検証していない。",
+      "suggestion": "下限なしの回収を廃止し、最初の実行は `--require-new` 相当の create-only モードで既存ユーザーを変更せず中止させる。作成元を原子的に証明できたユーザーだけ台帳へ記録し、run tag もスキーマ長の範囲で十分なエントロピーへ増やす。事前確認後に同名ユーザーを挿入する競合テストを追加する。"
+    },
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 720,
+      "issue": "索引・プロファイル・資格情報の DROP が任意の `DatabaseError` を「既に無い」として握り潰し、直後に台帳から削除している。権限不足や一時障害でリソースが残った場合、後続照会は失敗を検出しても再 teardown に必要な台帳情報を失う。",
+      "suggestion": "既不存在を表す確認済み ORA コードだけを許容し、それ以外は `failed` に記録して台帳を保持する。台帳から落とすのは再照会で不在を確認した後に限定する。異常な DROP エラーで台帳が残る単体テストを追加する。"
+    },
+    {
+      "id": "M-002",
+      "severity": "major",
+      "file": "ops/setup-dev-schema.py",
+      "line": 94,
+      "issue": "生成パスワードを存在確認プリフライトより前に「これから設定する値」として出力する。既存スキーマへ引数なしで再実行すると、そのパスワードを一度も設定せずに処理が中止されるため、通常の再実行経路で無効な認証情報を利用者へ案内する。ドキュメントの bare command を「再実行可」とする説明とも整合しない。",
+      "suggestion": "接続先・ユーザー存在確認など read-only プリフライトを先に行い、実際に作成または変更するユーザーのパスワードだけを生成・出力する。既存スキーマへの引数なし再実行について CLI レベルのテストを追加し、必要な `--app-password` または `--skip-migrate` をガイドにも明記する。"
+    },
+    {
+      "id": "m-001",
+      "severity": "minor",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 47,
+      "issue": "ADB 表示名、DB 名、コンパートメント名、共有バケット名が実行コードに直接固定され、証跡にも実 DSN が残っている。OCID や完全なホスト名ではないものの、本リポジトリの「環境依存値は .env 管理」という規約に反する。",
+      "suggestion": "期待する ADB 名・DB 名・共有バケット名を `.env` から取得し、未設定時は fail-closed にする。コミットする証跡では DSN と環境固有のリソース名もプレースホルダー化する。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "insufficient",
+    "notes": "scenario-1（ops 2本の2回実行）、scenario-2（Resource Principal で Object Storage 200）、scenario-3（索引作成・2文書検索）、scenario-4（旧 API キー方式との対照）、guard（台帳不一致3ケース）は各 log/md で PASS を確認した。teardown.md と post-teardown-state.md も今回作成した資源の不在を示し、SKIPPED.md の dev stack apply と既存スキーマ未変更には人間ゲートを含む妥当な理由がある。一方、B-001 の事前確認後の競合・無条件所有権回収と、M-001 の予期しない DROP 失敗は検証されておらず、既存資源保護の主張を十分に裏づけていない。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲット URL が提供されておらず、指示に従いブラウザ検証は実施していない。"
+    }
+  }
+}

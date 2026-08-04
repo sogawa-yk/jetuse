@@ -1,0 +1,4 @@
+POST /api/tts {"text":"こんにちは","voice":"Yuki"} -> HTTP 200
+Content-Type: audio/mpeg, 6783 bytes, ID3v2.4.0 MPEG ADTS layer III v2 64kbps 24kHz Monaural
+(バイナリ本体はcodex-review入力のUTF-8制約のためe2e/外に退避:
+ runs/2026-07-13T0730_PORT-02/e2e-binary-evidence/scenario-tts.mp3)

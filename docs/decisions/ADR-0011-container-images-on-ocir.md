@@ -2,11 +2,14 @@
 
 日付: 2026-06-24
 状態: 承認済み（2026-06-24 ユーザーが選択肢Aを選択）
+更新: 2026-07-06 — ADR-0017 により push 先を4リージョン（kix/nrt/iad/ord）へ拡張し、
+`ocir_region_key` 入力を廃止（レジストリはデプロイリージョンから自動導出）。
+repo 手動管理・public 公開・ネームスペースベース参照の方針は維持。
 
 ## 背景
 
 ORMワンクリックスタックの初回デプロイ（`jetuse-dev` コンパートメント）が APPLY で失敗した。
-RMジョブログ（`docs/verification/ORM-OCIR-DEPLOY.md`）から2つの根本原因を特定:
+RMジョブログ（`docs/verification/jetuse-app/ORM-OCIR-DEPLOY.md`）から2つの根本原因を特定:
 
 1. **Container Instance (API)**: `image_url = ghcr.io/sogawa-yk/jetuse-api:latest` が private のため
    pull 認証エラー（`A container's image could not be pulled because ... requires authorization`）。

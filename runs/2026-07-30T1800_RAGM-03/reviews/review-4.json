@@ -1,0 +1,63 @@
+{
+  "review_n": 4,
+  "timestamp": "2026-07-31T01:26:09+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-4.input.diff",
+  "raw_output_path": "reviews/review-4.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker はありませんが、選択 backend の準備状態を無視した送信許可と、ファイル一覧取得失敗の隠蔽が残っています。認証情報・OCID・環境固有エンドポイントの混入、および既存 OCI リソースを変更する処理は差分内に確認されませんでした。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 2,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "RAGM03-005",
+      "severity": "major",
+      "file": "packages/web/src/pages/rag.tsx",
+      "line": 317,
+      "issue": "ADB を選択肢へ追加していますが、入力・送信可否の `ready` は選択 backend の状態ではなく `f.status === 'completed'` だけで決まります。Vector Store の取り込みが完了していれば、ADB が pending/error/disabled でも ADB へ質問でき、主要フローが実行時エラーまたは空結果になります。",
+      "suggestion": "`f.backends?.[backend] === 'indexed'` を基準に選択 backend ごとの readiness を計算し、pending/error/disabled では入力を無効化して理由を表示してください。4状態を切り替える画面テストも追加してください。"
+    },
+    {
+      "id": "RAGM03-006",
+      "severity": "major",
+      "file": "packages/web/src/pages/rag.tsx",
+      "line": 55,
+      "issue": "`/api/rag/files` が 401/503 や不正 JSON を返した場合、すべて空配列へ縮退して「まだ文書がありません」と表示します。白画面は防げますが、認証切れや DB 障害を文書ゼロと誤表示し、既存文書が消えたように見えます。",
+      "suggestion": "`r.ok` を検査し、401 は再認証、その他の失敗は既存一覧を保持したまま明示的な取得エラーを表示してください。503 JSON、502 HTML、通信失敗のテストを追加してください。"
+    },
+    {
+      "id": "RAGM03-007",
+      "severity": "minor",
+      "file": "packages/web/src/pages/rag/capabilityCatalog.ts",
+      "line": 54,
+      "issue": "コメントは「形が違えば null」としていますが、検証対象は最上位の `axes` と `backends` だけです。backend に `axes` がない部分応答なども型キャストを通過し、`BackendCapabilityPanel` の `be.axes[axis]` で例外となります。`support=yes` と `verified=false` の矛盾も画面では「使える」と表示されます。",
+      "suggestion": "axis 名、backend の label/role/axes、entry の support/verified/detail/evidence、および support と verified の整合性を実行時検証し、不正なカタログは null へ縮退させてください。"
+    },
+    {
+      "id": "RAGM03-008",
+      "severity": "minor",
+      "file": "packages/web/src/i18n/dict.ja.ts",
+      "line": 358,
+      "issue": "ADB を第4の選択肢として追加した一方、「?」ヘルプは依然として3方式と説明しており、参照する構成図にも ADB 自前索引がありません。新しい選択肢と公式な画面説明が矛盾します。英語辞書にも同じ不整合があります。",
+      "suggestion": "日英の `help.rag.desc` を4方式へ更新し、RAG構成図へ ADB の取り込み・検索経路を追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 2,
+    "adequacy": "insufficient",
+    "notes": "`scenario-1` の API カタログ応答と `scenario-2` の VS/ADB/SAI 表示切替は確認でき、最低2シナリオは満たしています。公開配備、ADB実検索、実データの状態バッジには SKIPPED.md の理由がありますが、選択 backend ごとの送信可否、ファイル一覧取得エラー、xlsx の実選択・アップロードは検証されておらず、差分全体の裏付けとしては不足しています。",
+    "live_check": {
+      "performed": false,
+      "target_url": "http://localhost:5173/#/rag",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "実ブラウザでの遷移を試みましたが、ブラウザ安全ポリシーが localhost へのアクセスを拒否し、代替手段による迂回も許可されなかったため実施できませんでした。アプリ障害としては判定していません。"
+    }
+  }
+}

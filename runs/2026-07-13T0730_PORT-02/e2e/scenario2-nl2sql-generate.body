@@ -1,0 +1,6 @@
+data: {"ka": 1}
+
+data: {"sql": "SELECT \n  T1.\"CALENDAR_MONTH_NAME\" AS \"月\",\n  SUM(T2.\"AMOUNT_SOLD\") AS \"売上合計\"\nFROM \n  \"SH\".\"TIMES\" T1\n  JOIN \"SH\".\"SALES\" T2 ON T1.\"TIME_ID\" = T2.\"TIME_ID\"\nGROUP BY \n  T1.\"CALENDAR_MONTH_NAME\""}
+
+data: [DONE]
+

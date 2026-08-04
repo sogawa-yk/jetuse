@@ -1,0 +1,47 @@
+{
+  "review_n": 4,
+  "timestamp": "2026-07-13T06:51:57+00:00",
+  "reviewer": "codex",
+  "model": "gpt-5.5",
+  "input_diff_path": "reviews/review-4.input.diff",
+  "raw_output_path": "reviews/review-4.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "静的差分はテスト用に `genai._signer` をスタブするだけで、本番コード・公開シグネチャ・秘密情報の新規混入は見当たりません。ただし、必須のライブ E2E で提示 URL が DNS 解決できず、ユーザー向け主要フローを検証できないため FAIL とします。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "runs/2026-07-10T0842_FIX-47/e2e/target_url.txt",
+      "line": 2,
+      "issue": "ライブ E2E の提示 URL `https://MASKED-GW.apigateway.us-chicago-1.oci.customer-oci.com/` を Playwright で開くと `net::ERR_NAME_NOT_RESOLVED` となり、アプリ UI や主要フローに到達できない。",
+      "suggestion": "レビュー用には解決可能な実 URL を提示し、初期表示と主要ユーザーフローを実ブラウザで再検証する。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "sufficient",
+    "notes": "添付証跡は RESULTS.md 上でシナリオ0(旧イメージ再現)、シナリオ1(PROJECT_OCID未指定で自動作成/RAG/STM)、シナリオ2(明示PROJECT_OCID)、シナリオ3(無効PROJECT_OCIDの503診断)を網羅し、SKIPPED.md もスキップなしを明記しているため、静的証跡としては十分。",
+    "live_check": {
+      "performed": true,
+      "target_url": "https://MASKED-GW.apigateway.us-chicago-1.oci.customer-oci.com/",
+      "result": "fail",
+      "scenarios": [
+        {
+          "name": "公開URL到達性",
+          "steps": "browser_navigate で提示 URL を開いた。",
+          "expected": "JetUse のユーザー向け画面または主要フロー入口が表示される。",
+          "observed": "`net::ERR_NAME_NOT_RESOLVED` により `masked-gw.apigateway.us-chicago-1.oci.customer-oci.com` を解決できず、画面要素確認や操作に進めなかった。",
+          "passed": false
+        }
+      ],
+      "notes": "ターゲット URL がマスク済みホストとして渡されており、実アプリへの到達確認は失敗した。"
+    }
+  }
+}

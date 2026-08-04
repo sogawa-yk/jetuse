@@ -1,0 +1,63 @@
+{
+  "review_n": 14,
+  "timestamp": "2026-07-29T21:01:45+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-14.input.diff",
+  "raw_output_path": "reviews/review-14.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "リソースプリンシパル化の主要経路と実環境 E2E は成立しており、blocker はありません。ただし、安全な片付けの根拠となる receipt／台帳の永続化と、一部の例外分類に改善が必要です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 2,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "ops/setup-dev-schema.py",
+      "line": 119,
+      "issue": "`CREATE USER` 後の ownership receipt を `Path.write_text()` で直接切り詰めているため、ENOSPC・プロセス停止・部分書き込みで既存 receipt 全体が破損し得る。事前の書き込みプローブは将来の書き込み成功を保証せず、driver は receipt のないユーザーを推測で回収しないため、作成済みユーザーが片付け不能な孤児になり得る。",
+      "suggestion": "同一ディレクトリの一時ファイルへ書いて flush/fsync 後に `os.replace()` する原子的更新へ変更する。CREATE 後の書き込み失敗を注入し、以前の receipt が保全され、作成物を回収または明示的に人間ゲートへ送れることもテストする。"
+    },
+    {
+      "id": "M-002",
+      "severity": "major",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 284,
+      "issue": "作成リソースの所有権台帳も直接上書きしている。更新中に停止すると JSON 全体が壊れ、`ledger()` 自体が失敗して teardown が起動できず、バケット・索引・ユーザーの所有証跡をまとめて失う可能性がある。",
+      "suggestion": "receipt と同様に一時ファイル＋fsync＋`os.replace()` で更新し、直前の正常版も保持する。中断・部分書き込み後に旧台帳から安全に teardown できるテストを追加する。"
+    },
+    {
+      "id": "m-001",
+      "severity": "minor",
+      "file": "ops/_adb.py",
+      "line": 230,
+      "issue": "`verify_login()` が全 `oracledb.DatabaseError` を認証失敗として `False` に変換するため、通信障害、タイムアウト、ウォレット不良なども「指定パスワードが違う」と誤診される。",
+      "suggestion": "ORA-01017 など実際の認証拒否だけを `False` にし、接続・構成・一時障害は元の例外を再送出する。各分類の単体テストも追加する。"
+    },
+    {
+      "id": "m-002",
+      "severity": "minor",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 311,
+      "issue": "`read_marker()` がすべての DatabaseError を「マーカーなし」と扱うため、権限不足や通信障害でも後続が CREATE/INSERT を試み、根本原因を隠したり既存マーカーを不整合にしたりする。",
+      "suggestion": "想定する ORA-00942 のみを不存在として扱い、それ以外は再送出する否定テストを追加する。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "sufficient",
+    "notes": "`runs/2026-07-29T1605_RP-01/e2e/` の4機能シナリオと否定シナリオを確認した。scenario-1 は ops 2本の2回連続実行、scenario-2 は RP による Object Storage 200、scenario-3 は2文書の索引・検索、scenario-4 は旧APIキー方式の ORA-20404 対照がいずれも PASS。guard.md は所有証跡不一致5ケースで非ゼロ終了かつリソース無傷、teardown.md と post-teardown-state.md は作成物の削除・再照会を示す。未配備の `/api/health` と既存スキーマ適用は SKIPPED.md に人間ゲートおよび既存リソース非変更という妥当な理由がある。deploy.log の `date` エラーはあるが、ADB は AVAILABLE で後続シナリオが実接続に成功しており主要結果には影響しない。receipt／台帳の書き込み障害経路は未検証。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲット URL が提供されていないため、指示どおりブラウザ E2E は未実施。"
+    }
+  }
+}

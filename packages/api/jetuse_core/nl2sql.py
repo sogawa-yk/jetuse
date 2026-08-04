@@ -19,10 +19,17 @@ import oracledb
 
 # SQLサニタイズ(_BANNED / sanitize_sql / SqlRejectedError)は jetuse_shared に一本化(P1b)。
 # 後方互換: 同名で再エクスポートし、既存の except SqlRejectedError / import を維持する。
-from jetuse_shared.sqlguard import _BANNED, SqlRejectedError, sanitize_sql  # noqa: F401
+# SqlBoundaryError / enforce_sql_boundary は層2の fail-closed SQL ゲート(specs/18 §4.3)。
+from jetuse_shared.sqlguard import (  # noqa: F401
+    _BANNED,
+    SqlBoundaryError,
+    SqlRejectedError,
+    enforce_sql_boundary,
+    sanitize_sql,
+)
 
 from .db import _wallet_dir  # ウォレット取得を共用
-from .genai import _signer
+from .oci_auth import httpx_auth
 from .settings import get_settings
 
 logger = logging.getLogger("jetuse.nl2sql")
@@ -47,8 +54,10 @@ def generate_sql(question: str) -> str:
     """SemanticStoreでNL→SQL生成(同期/非同期両対応)。実測30秒前後"""
     s = get_settings()
     if not s.semstore_ocid:
-        raise RuntimeError("SEMSTORE_OCID is not configured")
-    with httpx.Client(auth=_signer(), timeout=GENERATE_TIMEOUT) as client:
+        raise RuntimeError(
+            "SemanticStore 未構成(SEMSTORE_OCID)。Select AI を使うか構成してください"
+        )
+    with httpx.Client(auth=httpx_auth(), timeout=GENERATE_TIMEOUT) as client:
         res = client.post(
             f"{_base()}/semanticStores/{s.semstore_ocid}/actions/generateSqlFromNl",
             json={"inputNaturalLanguageQuery": question},
@@ -108,7 +117,7 @@ def _sh_profile_for_model(model: str) -> str:
 def create_profile(cur, prof: str, model: str, object_list: list[dict]) -> None:
     """DBMS_CLOUD_AI プロファイルを(あれば作り直して)作成する共通ヘルパ。
 
-    credential JETUSE_OCI_CRED と DBMS_CLOUD_AI 権限は ops/setup-select-ai.py 済み前提。
+    資格情報(OCI$RESOURCE_PRINCIPAL)と DBMS_CLOUD_AI 権限は ops/setup-select-ai.py 済み前提。
     DROP/CREATE_PROFILE は既定の call_timeout(10s)を超えることがある(特にADB再開直後)ため、
     この接続のタイムアウトを一時的に引き上げる。
     """
@@ -121,18 +130,29 @@ def create_profile(cur, prof: str, model: str, object_list: list[dict]) -> None:
         cur.execute("BEGIN DBMS_CLOUD_AI.DROP_PROFILE(:p); END;", p=prof)
     except Exception:  # noqa: BLE001
         pass
-    cur.execute(
-        "BEGIN DBMS_CLOUD_AI.CREATE_PROFILE(:p, :a); END;",
-        p=prof,
-        a=json.dumps({
-            "provider": "oci",
-            "credential_name": s.select_ai_credential,
-            "region": s.oci_region,
-            "model": model,
-            "object_list": object_list,
-            "comments": "true",
-        }),
-    )
+    try:
+        cur.execute(
+            "BEGIN DBMS_CLOUD_AI.CREATE_PROFILE(:p, :a); END;",
+            p=prof,
+            a=json.dumps({
+                "provider": "oci",
+                "credential_name": s.select_ai_credential,
+                "region": s.oci_region,
+                "model": model,
+                "object_list": object_list,
+                "comments": "true",
+            }),
+        )
+    except oracledb.DatabaseError as e:
+        # PORT-02: クレデンシャル/DG権限未整備がここに集約して落ちる。原因ヒントを付す。
+        raise RuntimeError(
+            f"Select AI プロファイル作成に失敗しました。DBMS_CLOUD_AI のクレデンシャル"
+            f"({s.select_ai_credential})が未整備の可能性があります。動的グループへの"
+            "generative-ai-family 権限、Object Storage バケットの read 権限、および"
+            "ENABLE_RESOURCE_PRINCIPAL の起動ログ(/api/health)を確認してください。"
+            f"ローカル実行(コンテナ外)なら .venv/bin/python ops/setup-select-ai.py "
+            f"--schema {s.adb_user} で当該スキーマへ有効化できます(ADR-0021)"
+        ) from e
 
 
 def _ensure_select_ai_profile(model: str) -> str:
@@ -177,6 +197,64 @@ def generate_sql_select_ai(
     if not sql:
         raise RuntimeError("Select AIがSQLを返しませんでした")
     return sql
+
+
+_SELECT_AI_RP_HINT = (
+    "Select AI(dbchat)の下地が未整備です。ADB で ENABLE_RESOURCE_PRINCIPAL + DBMS_CLOUD_AI 付与"
+    "(承認済み一回セットアップ: ops/setup-select-ai-rp.py)、および動的グループへの"
+    "generative-ai-family / Object Storage read 権限(IAM)を確認してください"
+)
+# 失敗は短命キャッシュ(ADB 起動直後/IAM 伝播中の一時失敗から回復する — codex review-2 M002)。
+_RP_PROBE_FAIL_TTL_S = 60
+_rp_probe_lock = threading.Lock()
+_rp_probe: dict[str, Any] = {"result": None, "at": 0.0}
+
+
+def _check_select_ai_ready() -> dict:
+    """**read-only** で Select AI(dbchat)の下地が整っているか判定する。
+
+    /api/health から呼ばれるため、プロファイル作成/DROP・DBMS_CLOUD_AI.GENERATE(課金)・
+    ADMIN/ENABLE_RESOURCE_PRINCIPAL・migrate は**一切行わない**(codex review-2 B001)。
+    データ辞書参照のみ: SELECT_AI_CREDENTIAL=OCI$RESOURCE_PRINCIPAL 構成で、承認済み一回
+    セットアップ(ops/setup-select-ai-rp.py = grants + ENABLE_RESOURCE_PRINCIPAL)が済んでいるか
+    を DBMS_CLOUD_AI の EXECUTE 権限の有無で見る(=RP 経路の下地が有効)。
+    """
+    if get_settings().select_ai_credential != "OCI$RESOURCE_PRINCIPAL":
+        return {"ok": None, "hint": "SELECT_AI_CREDENTIAL が OCI$RESOURCE_PRINCIPAL ではありません"}
+    from .db import connect
+
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM user_tab_privs_recd "
+            "WHERE table_name = 'DBMS_CLOUD_AI' AND privilege = 'EXECUTE'"
+        )
+        granted = (cur.fetchone() or [0])[0] > 0
+    return {"ok": True} if granted else {"ok": False, "hint": _SELECT_AI_RP_HINT}
+
+
+def select_ai_rp_status() -> dict:
+    """uvicorn プロセスで Select AI(dbchat)の下地を **read-only** で一度実測しキャッシュする。
+
+    bootstrap(別プロセス起動 = dev-app では未実行)の resource_principal_status に依存せず
+    /api/health を正すための軽量チェック。成功は長期キャッシュ、失敗は短命(TTL)キャッシュで
+    一時障害から回復する。lock 内で実測し並行初回でも 1 回だけ実行(codex review-2 B001/M002/M003)。
+    """
+    with _rp_probe_lock:
+        cached = _rp_probe["result"]
+        if cached is not None and (
+            cached.get("ok") is True
+            or (time.monotonic() - _rp_probe["at"]) < _RP_PROBE_FAIL_TTL_S
+        ):
+            return dict(cached)
+        try:
+            result = _check_select_ai_ready()
+        except Exception as e:  # noqa: BLE001 — 診断エンドポイントは落とさない
+            logger.info("select_ai readiness check failed: %s", str(e)[:200])
+            result = {"ok": False, "hint": _SELECT_AI_RP_HINT}
+        _rp_probe["result"] = result
+        _rp_probe["at"] = time.monotonic()
+        return dict(result)
 
 
 def _get_query_pool() -> oracledb.ConnectionPool:
@@ -316,29 +394,104 @@ def get_schema_info() -> dict[str, Any]:
     return _schema_cache
 
 
-def preview_table(table: str, limit: int = 20) -> dict[str, Any]:
+def sh_sample_status() -> dict[str, Any]:
+    """SHサンプルスキーマが読めるか(PORT-02)。bootstrapはSHへのgrantをしないため、
+    未整備ADBではALL_TABLESが空になり従来はサイレントに空表示していた — ここで検出する。
+    """
+    if get_schema_info()["tables"]:
+        return {"available": True}
+    return {
+        "available": False,
+        "reason": (
+            "SHサンプルスキーマが読み取れません(ADBのSHスキーマがPUBLIC公開されていない"
+            "可能性)。CSVデータセット取り込み(datasets)を利用してください"
+        ),
+    }
+
+
+def preview_table(table: str, limit: int = 20, *, owner_key: str | None = None) -> dict[str, Any]:
     """対象スキーマの既知テーブルの中身(サンプル行)を返す(ENH-02。read-only)。
 
     テーブル名は get_schema_info() の既知一覧で検証してから固定識別子で組み立てる
-    (任意SQLは受け付けない=インジェクション防止)。
+    (任意SQLは受け付けない=インジェクション防止)。owner_key は層2ゲートの呼び出し元
+    契約(specs/18 §4.3)= キーワード専用(既存の 1〜2 位置引数呼び出しと後方互換)。
     """
     valid = {t["name"] for t in get_schema_info()["tables"]}
     name = (table or "").strip().upper()
     if name not in valid:
         raise SqlRejectedError(f"未知のテーブル: {table}")
     n = max(1, min(int(limit), MAX_ROWS))
-    return execute_readonly(f'SELECT * FROM "{TARGET_SCHEMA}"."{name}" FETCH FIRST {n} ROWS ONLY')
+    return execute_readonly(
+        f'SELECT * FROM "{TARGET_SCHEMA}"."{name}" FETCH FIRST {n} ROWS ONLY',
+        owner_key=owner_key,
+    )
 
 
-def execute_readonly(sql: str) -> dict[str, Any]:
-    """読取専用ユーザーで実行し、行数上限・タイムアウト付きで結果を返す"""
+def execute_readonly(sql: str, owner_key: str | None = None) -> dict[str, Any]:
+    """読取専用ユーザーで実行し、行数上限・タイムアウト付きで結果を返す。
+
+    owner_key は呼び出し元契約(specs/18 §4.3 — 導出ヘルパー経由の owner キーまたは
+    DemoContext.namespace)。既定 None は owner なしモード(agent 経路・SH 等の固定
+    スキーマ照会)で **fail-closed**: 層2ゲートが JETUSE_DS_ 参照を全拒否し、dataset 表は
+    VPD の default-deny で必ず 0 行。既定値は公開シグネチャの後方互換のため維持する
+    (codex review-4 M002 — `execute_readonly(sql)` を TypeError にしない。省略時は最も安全な
+    owner なしモード)。
+
+    VPD コンテキスト契約(specs/18 §4.3): owner_key があれば SQL の parse 前に必ず
+    そのリクエストの owner で SET_CONTEXT を上書きし、設定失敗時は SQL を実行しない。
+    finally で CLEAR_CONTEXT してから接続を返却する(プール接続は再利用されるため、
+    clear に失敗した接続はプールへ返さず破棄する)。
+    """
+    from . import vpd  # 遅延 import(循環回避)
+    from .owner_keys import owner_key_gate
+
+    # 静的 allowlist 拒否(DB 非接触)を先に済ませ、DB へ渡す前に VPD 完全性を必須化する
+    # (specs/18 §4.3 — ポリシー欠落状態での fail-open を塞ぐ中央ゲート。SH 固定表照会も
+    # 含め、実際に SQL を実行する全経路がこのゲートを通る)。
     cleaned = sanitize_sql(sql)
-    with _get_query_pool().acquire() as conn:
+    # owner キー移行ゲートを登録簿参照・VPD 設定より前に通す(review-11 B003): route
+    # だけでなく Fn 経路(func.py)も execute_readonly を直接呼ぶため、共有チョークポイント
+    # で必須化する。未分類の予約接頭辞行が残る間は 503 で DB へ到達させない(legacy owner
+    # 衝突での越境読取を塞ぐ)。owner なしモード(agent/SH 固定照会)は対象外。
+    if owner_key is not None:
+        owner_key_gate()
+    vpd.integrity_gate()
+    # 層2 fail-closed SQL ゲート(specs/18 §4.3 — allowlist 方式): FROM/JOIN のテーブル参照は
+    # SH スキーマ(修飾)・当人の登録済み DS 表・DUAL・CTE だけを許可し、それ以外(未知
+    # synonym・別スキーマ・辞書ビュー・table function)は一律拒否。SH 照会は SemanticStore /
+    # Select AI とも常に `SH.<表>` 修飾で生成されるため素名の許可は不要(gate 側で SH 修飾を許可)。
+    # JETUSE_DS_ の登録簿照合は SQL が言及するときだけ引く。
+    allowed: set[str] = set()
+    if owner_key is not None and re.search(r"jetuse_ds_", cleaned, re.I):
+        from . import datasets  # 遅延 import(datasets → nl2sql の循環回避)
+
+        allowed = {t.upper() for t in datasets.owner_ds_tables(owner_key)}
+    enforce_sql_boundary(cleaned, allowed_tables=allowed,
+                         app_schema=get_settings().adb_user)
+    pool = _get_query_pool()
+    conn = pool.acquire()
+    drop = False
+    try:
         conn.call_timeout = EXECUTE_TIMEOUT_MS
-        cur = conn.cursor()
-        cur.execute(cleaned)
-        columns = [d[0] for d in cur.description]
-        rows = cur.fetchmany(MAX_ROWS + 1)
+        if owner_key is not None:
+            try:
+                vpd.set_owner_context(conn, owner_key)
+            except Exception:
+                # SET_CONTEXT 失敗時は SQL を実行せず、context 残留の恐れがある接続を破棄する
+                drop = True
+                raise
+        try:
+            cur = conn.cursor()
+            cur.execute(cleaned)
+            columns = [d[0] for d in cur.description]
+            rows = cur.fetchmany(MAX_ROWS + 1)
+        finally:
+            if owner_key is not None:
+                try:
+                    vpd.clear_owner_context(conn)
+                except Exception:
+                    drop = True  # コンテキスト残留の越境を防ぐ: この接続は再利用しない
+                    logger.exception("clear_owner_context failed (dropping connection)")
         truncated = len(rows) > MAX_ROWS
         return {
             "columns": columns,
@@ -349,3 +502,12 @@ def execute_readonly(sql: str) -> dict[str, Any]:
             "row_count": min(len(rows), MAX_ROWS),
             "truncated": truncated,
         }
+    finally:
+        try:
+            # oracledb の pooled connection の返却は pool.release(conn)(conn.release は無い)
+            if drop:
+                pool.drop(conn)
+            else:
+                pool.release(conn)
+        except Exception:  # noqa: BLE001
+            logger.exception("query connection return failed")

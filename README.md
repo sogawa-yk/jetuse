@@ -26,7 +26,19 @@ Identity Domain（OIDC）/ Dynamic Group / Policyを一括構築し、**OIDC登�
 - **入力**: 対象コンパートメント、テナンシのホームリージョン、prefix。パスワード類は自動生成し、イメージは公開 OCIR を既定使用。
 - **所要時間**: 初回は Autonomous Database 作成とDB初期化に約10〜15分。
 - **デプロイ後**: 出力の `app_url` を開き、`demo_username` / `demo_password`（出力）でログイン。
-- **前提**: Generative AI 対応リージョン、ADB・Identity Domain・Container Instance のクォータ、JetUse 専用コンパートメント。
+- **対応リージョン（2階層）**:
+  - **アプリ（イメージ提供）= 4リージョン**: 大阪（ap-osaka-1）/ 東京（ap-tokyo-1）/ アシュバーン（us-ashburn-1）/ シカゴ（us-chicago-1）。公開イメージを各リージョンのOCIRへ事前公開しており（OCI Functions は同一リージョンOCIRのイメージ必須）、スタックはデプロイリージョンのOCIRを自動選択します。対応外リージョンは plan 時に明示エラー（イメージを自リージョンOCIRへミラーし `api_image_url` と `fn_router_image` を指定すれば利用可 — Issue #55 / ADR-0017）。
+  - **GenAI（推論/agentic API）実証済 = 2リージョンのみ**: 大阪（ap-osaka-1）/ シカゴ（us-chicago-1）。RAG・会話メモリ・デモ生成はGenAIに依存します。東京/アシュバーンは**applyは通ってもGenAIが動きません**。承知の上で他リージョンへ進める場合のみ `allow_unvalidated_genai_region=true` を設定（plan時に明示エラーで停止します）。
+- **デプロイ前チェックリスト（別テナンシへ持ち出す場合）**:
+  - [ ] 対象リージョンをテナンシで**サブスクライブ**済み（未サブスクライブだと home リージョン導出/region_guard が失敗）
+  - [ ] **GenAI**（推論+agentic API）が対象リージョンで利用可（実証済=大阪/シカゴ。他は `allow_unvalidated_genai_region`）
+  - [ ] **ADB ECPU** のサービス枠 ≥ `adb_ecpu_count`（既定2。新規テナンシは枠0が普通→LimitExceeded）。`adb_db_version`(既定26ai)が対象リージョンで提供されること
+  - [ ] **Container Instance** の `ci_shape`（既定 CI.Standard.E4.Flex）が対象リージョンで提供されること
+  - [ ] **Functions / VCN** のサービス枠（アプリ/VCNの上限に余裕）
+  - [ ] `prefix` は英小文字始まり・ハイフン除去後15文字以内（VCN dns_label 上限）
+  - [ ] `ocir_namespace` は**既定のまま**（公開イメージの cross-tenancy pull 用。自テナンシへミラーした場合のみ上書き）
+  - [ ] `enable_auth=true` なら Identity Domain はテナンシの**ホームリージョン**に作成される（destroy が失敗する場合は手動で domain を deactivate → 再 destroy。`docs/guides/customize.md` 参照）
+  - [ ] NL2SQL(SQL Search)を使うなら `semstore_ocid` に既存 Semantic Store の OCID を設定（未設定だと503）
 - 権限・Dynamic Group一覧は [Public版 IAM要件](./docs/setup/public-iam-requirements.md)、IAM設定の詳細は [IAMガイド](./docs/setup/iam.md)、デプロイ手順は [Resource Managerガイド](./docs/setup/orm.md)。
 
 > ORM は Terraform のみを実行するため、コンテナイメージ（公開OCIR）・SPA配信・DB初期化・OIDC登録は
@@ -113,9 +125,9 @@ cd packages/api && AUTH_REQUIRED=false uvicorn service.main:app --port 8000
 # SPA（/api を localhost:8000 へプロキシ）
 cd packages/web && VITE_AUTH_REQUIRED=false npm run dev
 ```
-- コミット前: `ruff check . && pytest`（API） / `npm run build && npm run lint`（web）
+- コミット前: `make lint && make test && make build`（単一コマンド入口 = root `Makefile`。個別は `make help`）
 - 検証は実機確認主義（結果は `docs/verification/`）。複数人での実機E2Eは [docs/guides/dev-environments.md](./docs/guides/dev-environments.md)
-- ブランチとリリース: `main` = Public 正式版、`dev` = Internal 次期版。Public の変更は `main` から `dev` へ forward merge（[運用詳細](./docs/guides/branching-and-releases.md)）。
+- ブランチとリリース: `main` = Public 安定版（Deploy ボタンの配信元）、`public-dev` = Public 統合、`internal-dev` / `internal-stable` = Internal 側。Public の変更は `public-dev` へ入れ、リリース時に `main` へ（[運用詳細](./docs/guides/branching-and-releases.md)）。
 
 ## ドキュメント早見
 
@@ -131,4 +143,4 @@ cd packages/web && VITE_AUTH_REQUIRED=false npm run dev
 
 ## ライセンス / 位置づけ
 
-`main` は Public 正式版、`dev` は Internal 正式版の次期開発ラインとして運用する。利用条件はリポジトリのライセンスを参照。
+`main` は Public 安定版、`internal-stable` は Internal 正式版として運用する（開発は `public-dev` / `internal-dev`）。利用条件はリポジトリのライセンスを参照。

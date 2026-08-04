@@ -1,0 +1,47 @@
+[
+ {
+  "name": "OpenAI Agents SDK: エージェント作成",
+  "ok": true,
+  "detail": "200 {\"name\":\"port03-openai_agents\",\"description\":null,\"icon\":null,\"instructions\":\"日本語で簡潔に答える。時刻を聞かれたら必ず get_current_time ツール"
+ },
+ {
+  "name": "OpenAI Agents SDK: 「未設定」エラーが出ない",
+  "ok": true,
+  "detail": "data: {\"ka\": 1} data: {\"delta\": \"> 🛠 get_current_time 実行\\n\\n\"} data: {\"delta\": \"本日（2026年07月30日）は木曜日です。\"} data: [DONE] "
+ },
+ {
+  "name": "OpenAI Agents SDK: ツール実行を伴う応答（2.1s）",
+  "ok": true,
+  "detail": "data: {\"ka\": 1} data: {\"delta\": \"> 🛠 get_current_time 実行\\n\\n\"} data: {\"delta\": \"本日（2026年07月30日）は木曜日です。\"} data: [DONE] "
+ },
+ {
+  "name": "LangGraph: エージェント作成",
+  "ok": true,
+  "detail": "200 {\"name\":\"port03-langgraph\",\"description\":null,\"icon\":null,\"instructions\":\"日本語で簡潔に答える。時刻を聞かれたら必ず get_current_time ツールを使う。"
+ },
+ {
+  "name": "LangGraph: 「未設定」エラーが出ない",
+  "ok": true,
+  "detail": "data: {\"ka\": 1} data: {\"delta\": \"> 🛠 get_current_time 実行\\n\\n\"} data: {\"delta\": \"今日は木曜日です。\"} data: [DONE] "
+ },
+ {
+  "name": "LangGraph: ツール実行を伴う応答（2.3s）",
+  "ok": true,
+  "detail": "data: {\"ka\": 1} data: {\"delta\": \"> 🛠 get_current_time 実行\\n\\n\"} data: {\"delta\": \"今日は木曜日です。\"} data: [DONE] "
+ },
+ {
+  "name": "ADK: エージェント作成",
+  "ok": true,
+  "detail": "200 {\"name\":\"port03-adk\",\"description\":null,\"icon\":null,\"instructions\":\"日本語で簡潔に答える。時刻を聞かれたら必ず get_current_time ツールを使う。\",\"mod"
+ },
+ {
+  "name": "ADK: 「未設定」エラーが出ない",
+  "ok": true,
+  "detail": "data: {\"ka\": 1} data: {\"delta\": \"> 🛠 get_current_time 実行\\n\\n\"} data: {\"delta\": \"木曜日です。\"} data: [DONE] "
+ },
+ {
+  "name": "ADK: ツール実行を伴う応答（3.2s）",
+  "ok": true,
+  "detail": "data: {\"ka\": 1} data: {\"delta\": \"> 🛠 get_current_time 実行\\n\\n\"} data: {\"delta\": \"木曜日です。\"} data: [DONE] "
+ }
+]

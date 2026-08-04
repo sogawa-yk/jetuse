@@ -15,11 +15,14 @@ import httpx
 from openai import OpenAI
 from pydantic import BaseModel
 
+# os.environ を読む前に JETUSE_AGENT_CONFIG(JSON)を展開する(PORT-03)。import 順に意味がある。
+import agent_env  # noqa: F401, E402  (import 副作用が目的)
+
 # web_fetch(SSRF対策込み)/ web_search(DuckDuckGo)/ get_current_time は jetuse_shared に一本化(P1b)。
 # コンテナ側はここで jetuse_shared を呼ぶ薄い adapter にする(旧 inline コピーは廃止)。
 from jetuse_shared import webtools as _wt
 
-REGION = os.environ.get("OCI_REGION", "ap-osaka-1")
+REGION = os.environ.get("OCI_REGION", "us-chicago-1")
 COMPARTMENT = os.environ.get("COMPARTMENT_OCID", "")
 PROJECT_OCID = os.environ.get("PROJECT_OCID", "")
 BASE_URL = f"https://inference.generativeai.{REGION}.oci.oraclecloud.com/openai/v1"
@@ -35,43 +38,46 @@ def _signer():
     return OciUserPrincipalAuth()
 
 
-def _headers() -> dict:
-    # OpenAi-Project(Enterprise AIプロジェクトOCID)が無いと誤誘導エラー(ADR-0007)のため常時付与
+def _headers(project_ocid: str = "") -> dict:
+    # OpenAi-Project(Enterprise AIプロジェクトOCID)が無いと誤誘導エラー(ADR-0007)のため常時付与。
+    # 公開スタックではコンテナの env が空なので、アプリが解決済みの値を invoke ステートで
+    # 渡してくる(PORT-03)。引数を優先し、無ければ env にフォールバックする。
     h = {"CompartmentId": COMPARTMENT}
-    if PROJECT_OCID:
-        h["OpenAi-Project"] = PROJECT_OCID
+    project = project_ocid or PROJECT_OCID
+    if project:
+        h["OpenAi-Project"] = project
     return h
 
 
-def chat_client(timeout: float = 120.0) -> OpenAI:
+def chat_client(timeout: float = 120.0, project_ocid: str = "") -> OpenAI:
     """chat completions(ReActのLLM)用(同期)。"""
     return OpenAI(
         api_key="OCI",
         base_url=BASE_URL,
-        http_client=httpx.Client(auth=_signer(), headers=_headers(), timeout=timeout),
+        http_client=httpx.Client(
+            auth=_signer(), headers=_headers(project_ocid), timeout=timeout),
     )
 
 
-def async_chat_client(timeout: float = 120.0):
+def async_chat_client(timeout: float = 120.0, project_ocid: str = ""):
     """chat completions(非同期)。Agents SDK/ADK用。"""
     from openai import AsyncOpenAI
 
     return AsyncOpenAI(
         api_key="OCI",
         base_url=BASE_URL,
-        http_client=httpx.AsyncClient(auth=_signer(), headers=_headers(), timeout=timeout),
+        http_client=httpx.AsyncClient(
+            auth=_signer(), headers=_headers(project_ocid), timeout=timeout),
     )
 
 
-def _rag_client(timeout: float = 60.0) -> OpenAI:
+def _rag_client(timeout: float = 60.0, project_ocid: str = "") -> OpenAI:
     """Vector Store検索(DPホスト)。OpenAi-Projectヘッダ必須(FW-01b)。"""
-    headers = {"CompartmentId": COMPARTMENT}
-    if PROJECT_OCID:
-        headers["OpenAi-Project"] = PROJECT_OCID
     return OpenAI(
         api_key="OCI",
         base_url=BASE_URL,
-        http_client=httpx.Client(auth=_signer(), headers=headers, timeout=timeout),
+        http_client=httpx.Client(
+            auth=_signer(), headers=_headers(project_ocid), timeout=timeout),
     )
 
 
@@ -100,7 +106,7 @@ def _h_rag_search(args: dict, ctx: dict) -> str:
     store_id = ctx.get("rag_store_id")
     if not store_id:
         return json.dumps({"results": [], "note": "文書が登録されていません"}, ensure_ascii=False)
-    r = _rag_client().vector_stores.search(
+    r = _rag_client(project_ocid=ctx.get("project_ocid") or "").vector_stores.search(
         vector_store_id=store_id, query=args["query"], max_num_results=5)
     hits = []
     for item in getattr(r, "data", []) or []:
@@ -174,6 +180,8 @@ class InvokeRequest(BaseModel):
     input: str
     history: list[dict] = []  # [{"role":"user"/"assistant","content":str}]
     rag_store_id: str | None = None
+    # アプリ側が解決した Enterprise AI プロジェクト OCID。空なら env PROJECT_OCID を使う。
+    project_ocid: str = ""
     model: str = "openai.gpt-oss-120b"
     max_turns: int = 12
 

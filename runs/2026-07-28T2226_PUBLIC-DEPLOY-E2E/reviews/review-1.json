@@ -1,0 +1,95 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-07-28T22:31:36+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "実環境の管理者パスワード露出と、承認範囲外のテナンシ／コンパートメントへの IAM・リソース作成が blocker です。さらに E2E は変更後のコンテナを検証しておらず、health 状態共有と TTS フォールバックにも正確性・後方互換上の問題があります。",
+  "severity_counts": {
+    "blocker": 2,
+    "major": 5,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "runs/2026-07-28T2226_PUBLIC-DEPLOY-E2E/e2e/stack-outputs.txt",
+      "line": 4,
+      "issue": "実環境の demo_password が平文で残され、同じ証跡には実 URL、Identity Domain endpoint、ADB／Policy OCID、OIDC client ID も含まれています。本差分では demo が既定の管理者になるため、このパスワードは /admin へ到達できる実認証情報です。",
+      "suggestion": "対象パスワードを直ちにローテーションするか Stack を破棄してください。証跡からパスワード・OCID・実 endpoint を削除し、必要な環境値は git 管理外の .env／Secret Store に置いて、証跡生成時の自動マスキングと secret scan を追加してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "blocker",
+      "file": "runs/2026-07-28T2226_PUBLIC-DEPLOY-E2E/e2e/README.md",
+      "line": 3,
+      "issue": "証跡は承認済みの jetuse-dev ではなく、DEPLOYTEST テナンシの jetuse-test コンパートメントへ新 Stack を作成しています。Dynamic Group、Policy、Identity Domain を含む IAM／テナンシ変更について人間ゲートの証跡もなく、提示された実行許可範囲と一致しません。",
+      "suggestion": "承認済みの jetuse-dev で再実行するか、DEPLOYTEST／jetuse-test でのリソース作成と IAM 変更に対する明示的な人間承認を添付してください。作成物の一覧、既存リソースを変更していないこと、検証後の teardown 状態も記録してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "major",
+      "file": "runs/2026-07-28T2226_PUBLIC-DEPLOY-E2E/e2e/README.md",
+      "line": 7,
+      "issue": "結果は35/37 PASSで、dbchat health と TTS 合成が失敗しています。README自身が bootstrap／TTS変更を含むイメージは未配備と明記しているため、この差分の主要な2修正を裏づけていません。また scripts/package-orm-stacks.sh は git archive HEAD を使うため、「作業ツリーから作ったzip」がこの未コミット差分を含むことも commit SHAなしでは確認できません。",
+      "suggestion": "差分を特定 commit に固定して API image を再build/pushし、mutableな latest ではなく image digestを記録して再デプロイしてください。commit SHA、ORM zip hash、image digestを証跡へ追加し、37シナリオを再実行して全件PASSを示してください。未実施が残る場合だけ理由を SKIPPED.md に記載してください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/bootstrap.py",
+      "line": 53,
+      "issue": "RP状態ファイルは bootstrap 開始時に初期化されません。以前の実行が {\"ok\":true} を残した後、新しい bootstrap がADB接続前に失敗またはタイムアウトすると、uvicornは古い成功値を読み続け、今回の起動でも Select AI が利用可能だと誤報します。書き込みも truncate後の直接JSON書き込みなので、同時読取で一時的な壊れたJSONが見える境界条件があります。",
+      "suggestion": "bootstrap() の開始時に pending 状態を原子的に書き、タイムアウト時は false と原因を保存してください。書き込みは同一ディレクトリの一時ファイルへ出して os.replace し、古い true がある状態から恒久失敗する再起動テストも追加してください。"
+    },
+    {
+      "id": "F-005",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/health.py",
+      "line": 115,
+      "issue": "公開 health 応答の region は従来単一リージョン文字列でしたが、未指定時に \"us-chicago-1, us-phoenix-1\" のようなカンマ連結値へ変わります。有効なOCIリージョンとして解釈する既存クライアントを壊す後方互換性のない変更です。",
+      "suggestion": "既存の region は優先／解決済みの単一値として維持し、候補は candidate_regions のような新しい配列フィールドで返してください。旧レスポンス契約を固定するテストも追加してください。"
+    },
+    {
+      "id": "F-006",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/tts.py",
+      "line": 46,
+      "issue": "一度成功して _resolved_region が設定されると candidate_regions() はその1件だけを返します。そのリージョンが後から401/403/404になっても代替リージョンを試さないため、自動フォールバックは初回探索時しか機能せず、プロセス再起動までTTSが503になります。",
+      "suggestion": "自動モードでは解決済みリージョンを先頭にしつつ、deployment regionとPhoenixの未重複候補を後続に残してください。解決済みリージョンが利用不能になった2回目の呼び出しで別リージョンへ切り替わるテストを追加してください。"
+    },
+    {
+      "id": "F-007",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/health.py",
+      "line": 112,
+      "issue": "tts health は COMPARTMENT_OCID の存在だけで status=ok を返します。添付証跡でも capability: tts はokなのに、直後の実合成は503で失敗しており、監視とE2Eに明確な偽陽性が発生しています。docs/setup/orm.mdもこの値を「可用性」と説明しています。",
+      "suggestion": "実サービスを確認しない場合は status=ok ではなく configured／unverified 相当として表現し、直近の実合成成功・失敗と解決リージョンを状態へ反映してください。少なくとも文書を「設定充足状況」に改め、実合成失敗後にhealthがokを返さない契約テストを追加してください。"
+    },
+    {
+      "id": "F-008",
+      "severity": "minor",
+      "file": "docs/setup/public-iam-requirements.md",
+      "line": 75,
+      "issue": "「次の5つ」とありますが、コードブロックには response、conversation、vector-store、vectorstore-file、file、project の6 resource-typeが列挙されています。",
+      "suggestion": "「次の6つ」へ修正し、resource-type数とTerraform policy文の整合をドキュメントテストで確認してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 37,
+    "adequacy": "insufficient",
+    "notes": "証跡は runs/2026-07-28T2226_PUBLIC-DEPLOY-E2E/e2e/ の e2e-results.json、README.md、stack-outputs.txt。ログイン、health、5モデル、Conversations、RAG、DBチャット、OCR、STT、TTS、翻訳、管理画面、ページ描画の37シナリオ中35件PASS、2件FAILです。失敗は capability: dbchat（select_ai.ok=null）と TTS音声合成（HTTP 503）。READMEにより、両修正を含むコンテナイメージは未配備と判明しており、SKIPPED.mdもありません。また実行先は説明されたjetuse-devではなくDEPLOYTEST／jetuse-testで、証跡には実パスワード・OCID・endpointが含まれています。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLは提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

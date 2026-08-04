@@ -21,7 +21,9 @@ from jetuse_core import audit, nl2sql, tts
 from jetuse_core import presets as preset_repo
 from jetuse_core.auth import verify_token
 from jetuse_core.logging import configure
+from jetuse_core.owner_keys import OwnerKeyPreflightError, user_owner_key
 from jetuse_core.settings import get_settings
+from jetuse_core.vpd import DatasetsSecurityError
 
 configure()
 logger = logging.getLogger("jetuse.fn.router")
@@ -60,8 +62,23 @@ def handler(ctx, data: io.BytesIO):
         return _route(ctx, method, path, body, user.subject)
     except HTTPException as e:
         return _error(ctx, e.status_code, str(e.detail))
+    except DatasetsSecurityError:
+        # VPD 完全性ゲート未達は fail-closed(FastAPI ルートと同じ 503。500 にしない)
+        return _error(ctx, 503, "datasets security boundary incomplete (fail-closed)")
+    except OwnerKeyPreflightError:
+        # owner キー移行が未完(予約接頭辞行が未分類)= FastAPI ルートと同じ 503(500 にしない
+        # — execute_readonly が共有チョークポイントで送出。review-12 M002)
+        return _error(ctx, 503, "owner key migration pending (fail-closed)")
+    except nl2sql.SqlBoundaryError as e:
+        # 層2 SQL ゲートの越境拒否(specs/18 §4.3 — FastAPI ルートと同じ 403)
+        return _error(ctx, 403, str(e))
     except nl2sql.SqlRejectedError as e:
         return _error(ctx, 400, str(e))
+    except tts.TtsError as e:
+        # PORT-02: CI(FastAPI)側と同じ縮退(503+ヒント)。捕捉しないと下のExceptionで
+        # 生の"internal error"500に潰れヒントが失われる(ADR-0005: 二重実装の禁止)。
+        logger.warning("fn tts synthesize degraded: %s", e)
+        return _error(ctx, 503, str(e))
     except oracledb.Error as e:
         msg = str(e).splitlines()[0][:300]
         if "DPY-" in msg:
@@ -91,7 +108,16 @@ def _route(ctx, method: str, path: str, body: dict, owner: str):
 
     # --- dbchat (SQL-02/03) ---
     if path == "/api/dbchat/schema" and method == "GET":
-        return _json(ctx, nl2sql.get_schema_info())
+        # PORT-02: CI(FastAPI)側の /api/dbchat/schema と同じ契約に揃える
+        # (sample_available/sample_unavailable_reason。ADR-0005: 二重実装の禁止)。
+        info = nl2sql.get_schema_info()
+        sample = nl2sql.sh_sample_status()
+        return _json(ctx, {
+            **info,
+            "sample_available": sample["available"],
+            **({"sample_unavailable_reason": sample["reason"]}
+               if not sample["available"] else {}),
+        })
     # feedback 20260620 #3: Select AIで選択可能なモデル一覧(dbchatセグメントはFn経由のため要追加)
     if path == "/api/dbchat/select-ai-models" and method == "GET":
         return _json(ctx, {"models": nl2sql.SELECT_AI_MODELS,
@@ -100,7 +126,9 @@ def _route(ctx, method: str, path: str, body: dict, owner: str):
         sql = body.get("sql") or ""
         if not sql.strip() or len(sql) > 20000:
             return _error(ctx, 422, "sqlは必須(≤20000字)です")
-        result = nl2sql.execute_readonly(sql)
+        # VPD コンテキストを本人の owner で設定(FastAPI ルートと同じ規則 — user_owner_key
+        # を通さないと default-deny で本人 dataset も 0 行になる)
+        result = nl2sql.execute_readonly(sql, owner_key=user_owner_key(owner))
         logger.info("fn dbchat executed rows=%s user=%s", result["row_count"], owner)
         audit.log_event(owner, "dbchat", meta=f"rows={result['row_count']}")
         return _json(ctx, result)

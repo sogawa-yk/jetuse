@@ -1,0 +1,55 @@
+{
+  "review_n": 9,
+  "timestamp": "2026-07-13T08:52:44+00:00",
+  "reviewer": "codex",
+  "model": "gpt-5.5",
+  "input_diff_path": "reviews/review-9.input.diff",
+  "raw_output_path": "reviews/review-9.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "差分は診断・縮退の追加として概ね方向性は妥当ですが、モデル不可の判定がOCI Project/権限エラーをモデル不在として汚染しうる点と、AUTH_MODEガードがOpenAI互換クライアント側に届いていない点が残っています。実環境E2E証跡は空で、PORT-02の実テナンシ差分を裏づける検証としては不足です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 2,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/chat.py",
+      "line": 583,
+      "issue": "Responses系の通常チャット呼び出しも暗黙にOpenAi-Project/compartmentヘッダを使うため、401/403/404はモデル不在だけでなく、PROJECT_OCIDの削除・権限不足・compartment不一致でも発生し得ます。この条件でmark_unavailableすると、5分間そのモデルがプロセス全体で利用不可扱いになり、実原因を隠して通常チャットはフォールバック、RAG/会話メモリ系は誤った「モデル利用不可」になります。",
+      "suggestion": "APIStatusErrorのbody/codeを見てモデル不在とProject/compartment/IAMエラーを分離するか、少なくともResponses系のProject付き呼び出しではmark_unavailableしないでください。デフォルトProjectの404/403でモデル可用性を汚染しない回帰テストも追加してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/genai.py",
+      "line": 29,
+      "issue": "追加されたload_local_oci_config()はOCI SDKクライアントには使われていますが、make_inference_client()/make_cp_client()/nl2sql.generate_sql()が使う_signer()はAUTH_MODE未設定時に従来どおりOciUserPrincipalAuth()を直接返します。コンテナで~/.oci/configが無いケースでは、PORT-02で狙っているactionableなRuntimeErrorに変換されず、主要なチャット/RAG/SQL Search経路が生の認証設定エラーで落ちる可能性があります。",
+      "suggestion": "_signer()でもAUTH_MODE!=resource_principalの場合にload_local_oci_config()相当の事前検証または例外ラップを行い、OpenAI互換クライアント経路でも同じヒントが返るようにしてください。ヘルパ単体だけでなくmake_inference_clientまたは_signer経由のテストを追加してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "minor",
+      "file": "packages/api/service/routes/dbchat.py",
+      "line": 56,
+      "issue": "effective_backendは監査ログ用の実効値として導入されていますが、target=='datasets'かつbackend未指定のときは実際にはSelect AIプロファイル経由で生成するのに、audit.log_eventには'sql_search'が記録されます。",
+      "suggestion": "datasets分岐内でeffective_backendを'select_ai'または'datasets/select_ai'に更新し、監査ログが実際の生成経路を表すようにしてください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "insufficient",
+    "notes": "runs/2026-07-13T0730_PORT-02/e2e は空と明記されており、デプロイ後の実環境シナリオは確認できません。最低2本の実環境シナリオやSKIPPED.mdによる未実施理由が無いため、TTS未購読、AUTH_MODE漏れ、SEMSTORE未設定時のdbchat切替、/api/healthの実テナンシ診断といったPORT-02の主張はE2Eでは裏づけられていません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されておらず、指示に従ってブラウザE2Eは実施していません。"
+    }
+  }
+}

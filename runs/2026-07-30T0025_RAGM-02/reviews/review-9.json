@@ -1,0 +1,55 @@
+{
+  "review_n": 9,
+  "timestamp": "2026-07-30T03:09:23+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-9.input.diff",
+  "raw_output_path": "reviews/review-9.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "削除時の ORA-00942 処理により、部分マイグレーション状態では台帳だけを削除して検索可能なチャンクを残す blocker があります。E2E は多数の正常・否定シナリオを含みますが、この経路と同時取り込みの実競合を十分に裏づけていません。認証情報や OCID 実値のコミットは確認されませんでした。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 1,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "packages/api/jetuse_core/rag.py",
+      "line": 149,
+      "issue": "`delete_chunks()` から上がるすべての ORA-00942 を「017 未適用でチャンク表が無い」と解釈して台帳削除を commit しています。017 適用済み・018 未適用の部分マイグレーションでは、チャンク表の照会後に `rag_adb_docs` へのアクセスが ORA-00942 となるため、`rag_files` だけが削除され、検索可能なチャンクが残ります。API は削除成功を返すため、削除済み文書が回答へ混入し続けます。",
+      "suggestion": "チャンク表自体の不在だけを型付き例外（例: `AdbChunksTableAbsent`）へ変換し、それ以外の ORA-00942 は再送出してトランザクションを rollback してください。017 のみ適用された状態で削除し、台帳行とチャンクの双方が残ることを確認するテストも追加してください。"
+    },
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "spikes/ragm02/e2e.py",
+      "line": 414,
+      "issue": "シナリオ7は `ThreadPoolExecutor` へ2件を投入するだけで、版採番のクリティカルセクションが実際に重なったことを確認していません。逐次実行でも版 1.0/2.0・現行版1件という同じ結果になるうえ、台帳行の準備には2スレッドで同じ `conn` を共有しており、実運用の独立リクエストを忠実に再現していません。したがって「初回競合をレジストリ行ロックで直列化した」という主張の証跡になっていません。",
+      "suggestion": "各ファイルの `rag_files` 行を事前に用意し、各 worker は独立接続を使用してください。さらに barrier/test hook で両 worker を `_lock_doc()` 直前まで進め、一方がレジストリ行ロックを保持している間に他方が待機することを時刻または状態照会で確認してから解放し、最終版を検証してください。"
+    },
+    {
+      "id": "m-001",
+      "severity": "minor",
+      "file": "docs/verification/RAGM-02.md",
+      "line": 80,
+      "issue": "「実装どおりの索引構成では2回とも PRE-FILTER」とありますが、添付証跡で実装の `search_sql()` と `BTREE_INDEXES` を使った `scale-appshape` は1回分だけです。もう一方の `scale-filters` のB木索引後計画は IN-FILTER であり、2回の安定性を裏づけていません。",
+      "suggestion": "新規投入ごとに `scale_appshape.py` を実行した2本の証跡を添付するか、現状の証跡に合わせて「実装形状での1回の計測では PRE-FILTER」に記述を修正してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 13,
+    "adequacy": "insufficient",
+    "notes": "`e2e/scenario-1.md`〜`scenario-7.md` の7本と `e2e/guard.md` の否定6本はいずれも PASS で、クリーンマイグレーション、50,000チャンクのスケール測定、片付け証跡もあります。ただし017のみ適用された部分マイグレーション中の削除経路が未検証で、現実に台帳だけを削除できる blocker が残っています。またシナリオ7はクリティカルセクションの重なりを証明せず、PRE-FILTERを2回確認したという記述も添付証跡では裏づけられていません。SKIPPED.md の配備済み環境・実アップロードAPI等の未実施理由自体は妥当です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲット URL が提供されていないため、指示どおりブラウザ E2E は実施していません。"
+    }
+  }
+}

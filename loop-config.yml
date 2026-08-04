@@ -24,6 +24,30 @@ stage_runner:
   report_at: stage_completion                    # ステージ完了で1回だけ人間へ報告・チェック。
   stage_token_budget: 20000000                   # ステージ全体のトークン天井（タスクごとの budget に上乗せ）。
 
+# 人間向け報告書（HTML）の出力パイプ（ADR-0018）。報告書は仕様でも証跡でもなく「読み物」なので、
+# リポジトリに閉じず読む人の環境に置く。リポジトリが持つのは様式（task-packet-template.html）と
+# 中身と証跡（runs/）だけ。置き場の解決は各自のホーム側（~/.claude）スキルに委ねる。
+# 接点の契約は docs/guides/report-pipe.md（入力=完成済みHTML+topic / 出力=絶対パス+埋め込み記法）。
+report:
+  # **報告書はオーケストレータが書く**（2026-08-01 変更）。ループは HTML を作らない。
+  # 理由: 双方が作って二重になり、かつ実装の文脈に近すぎて実装者視点（判定・差分・findings の
+  # 羅列）になりやすかった。施主の評価は「オーケストレータが書いたものの方が読みやすい」。
+  writer: orchestrator        # orchestrator | loop（loop は 2026-08-01 に廃止）
+  # ループは停止時に「構造化した事実」を最終メッセージで返すだけ（loop-protocol の
+  # 「完了ゲートで人間へ返すもの」）。HTML 生成・レンダリング確認・配置は行わない＝その分の
+  # トークンを使わない。STATE.md には従来どおり全部書く（ローカル・完了時に runs/ へ写す）。
+
+  # 以下はオーケストレータが報告書を書くときの規約（ループは読まなくてよい）。
+  style_guide: ".claude/skills/loop-protocol/references/report-style.md"
+  naming: "<YYYY-MM-DD>_<内容がわかるタイトル>.html"
+  purpose:
+    report:   reports         # 読み物（完了報告・調査結果・説明）→ _renders/reports/
+    decision: decisions       # 承認を問うもの → _renders/decisions/
+  pipe: personal_skill        # ホーム側 ~/.claude/skills/preview（配置先の解決）
+  mode: place_only            # 完成済み HTML をそのまま配置させる
+  fallback: artifact          # 配置できないときの退避。作業は止めない
+  render_check: ".claude/skills/loop-protocol/scripts/check_report_render.sh"  # 提示前に PNG を目視
+
 review:
   reviewer: codex
   # 空文字なら codex の ~/.codex/config.toml の既定モデルを使う。
@@ -33,11 +57,13 @@ review:
   blocker_blocks_completion: true
 
 # ponytail(DietrichGebert/ponytail)統合: maker 側の実装最小化規律。採点は Codex のまま(判定を動かさない)。
-# loop-protocol 手順2(実装時の ponytail 適用)/手順2.5(codex 前の ponytail-review 自己短縮)が参照する。
+# loop-protocol「実装規律」(実装時の ponytail 適用)が参照する。
 ponytail:
   enabled: true
   intensity: full       # lite | full | ultra。実装時 ponytail の既定強度(ultra は要件まで削るため人間明示時のみ)
-  self_review: true     # codex-review 前に ponytail-review を当て runs/<id>/reviews/ponytail-<n>.txt に証跡(非採点)
+  # 2026-07-28: Opus 5 系はプロンプトなしで自己修正するため、codex-review 前の ponytail-review
+  # 自己レビューは既定オフ(公式 Opus 5 プロンプティングガイド「タスクのスコープと過剰な検証」準拠)。
+  self_review: false
 
 # Superpowers(obra/Superpowers)統合: 開発者規律の「層」を無改造 install して合成(C案・施主承認 2026-06-30)。
 # こちらのループは採点(Codex)/実環境E2Eゲート/fail-closed/loop-doctor の「強制と運用の殻」を担い、
@@ -46,15 +72,16 @@ ponytail:
 #       /plugin marketplace add obra/superpowers-marketplace && /plugin install superpowers@superpowers-marketplace
 superpowers:
   enabled: true
-  # 毎ターンの実装で踏む規律(歯は付けない=採点は Codex のまま)。loop-protocol 手順2 が参照。
+  # 毎ターンの実装で踏む規律(歯は付けない=採点は Codex のまま)。loop-protocol「実装規律」が参照。
   per_turn_skills:
     - superpowers:test-driven-development        # 非自明ロジックは RED-GREEN-REFACTOR。実環境E2E証跡と相補。
-  # タスク特性で随時 reach する規律。loop-protocol 手順2 / stage・loop-runner の起票前段。
+  # タスク特性で随時 reach する規律。loop-protocol「実装規律」/ stage・loop-runner の起票前段。
+  # 2026-07-28: verification-before-completion は削除。Opus 5 系は指示なしで完了前に自己検証する
+  # ため重複コストになる(公式ガイド「タスクのスコープと過剰な検証」)。完了の担保は Codex 採点＋実環境 E2E ゲート。
   on_demand_skills:
     - superpowers:brainstorming                  # 要件が曖昧なとき(着手前の設計詰め)
     - superpowers:writing-plans                  # 多段タスクの分解(タスク起票の前段)
     - superpowers:systematic-debugging           # 不具合の根本原因解析(symptom でなく root cause)
-    - superpowers:verification-before-completion # 完了主張前の自己検証(こちらの実環境E2Eゲートの前段)
 
 budget:
   max_turns: 20
@@ -65,7 +92,11 @@ budget:
 # 共有しないため、複数の loop を同時に回しても互いの変更を壊さない。
 worktree:
   enabled: true                       # 推奨起動経路。start-loop.sh <task> で worktree 起動。
-  base_branch: dev                    # 既定の派生元(=作業の根)。Experience Builder 系列は main 派生の dev。
+  base_branch: public-dev             # 既定の派生元(=作業の根)。**共有側に倒す**(ADR-0028)。
+                                      # 旧既定は dev(=現 internal-dev) だったが、CLAUDE.md の
+                                      # 「共有物は Public 起点」と食い違い、ループの成果物が必ず
+                                      # Internal 側に着地していた(2026-07 の docs 整理の実害)。
+                                      # 内部固有タスクは BASE_BRANCH=internal-dev で上書きする。
                                       # 依存連鎖は BASE_BRANCH=feat/<dep> で上書き。
   root: ""                            # worktree 配置先。空なら <repo>/../<repo名>-loops。
                                       # 上書きは LOOP_WORKTREE_ROOT 環境変数（loop-config は書き換えない）。
@@ -73,7 +104,7 @@ worktree:
                                       # LOOP_SKIP_BOOTSTRAP=1 で無効化。
 
 # 本リポジトリはモノレポ。area ごとにテスト/lint コマンドが異なる。
-# /goal 完了条件には「変更した area の」コマンドを当てる（goal_template の {test_cmd}）。
+# goal 完了条件には「変更した area の」コマンドを当てる（goal_template の {test_cmd}）。
 areas:
   web:
     path: packages/web
@@ -81,7 +112,7 @@ areas:
     lint_cmd: "npm --prefix packages/web run lint"
     build_cmd: "npm --prefix packages/web run build"
     # 完了ゲートの実環境デプロイ（jetuse-dev の固定 loop 環境を再利用）。
-    deploy_cmd: "ops/dev-env-up.sh loop"
+    deploy_cmd: "ops/dev-env-up.sh loop --apply"
     # E2E はデプロイURLに対する複数シナリオ。具体は tasks/<id>.md の「E2E シナリオ」に従う。
     e2e_cmd: ""
   api:
@@ -92,6 +123,40 @@ areas:
     deploy_cmd: "ops/start-adb-if-stopped.sh && .venv/bin/python -m jetuse_core.migrate"
     # E2E は実 ADB への CRUD 往復・冪等再適用など。具体は tasks/<id>.md の「E2E シナリオ」に従う。
     e2e_cmd: ""
+
+  infra:
+    path: infra
+    # **CI の terraform ジョブと同じものを 1 本にまとめてある**（fmt / validate /
+    # modules の terraform test / hosted-agent の CLI smoke）。いずれも mock を使い
+    # 資格情報も課金も発生しない。`terraform validate` は構文と整合性を見るが
+    # **書式は見ない**ので fmt と両方要る（AGT-06 で fmt だけが CI で落ちた）。
+    # 検査は lint_cmd に集約しているので test_cmd は空。
+    test_cmd: ""
+    lint_cmd: "ops/check-infra.sh"
+    # infra の配備は terraform apply ＝ 人間ゲート。ループは実行しない
+    deploy_cmd: ""
+    e2e_cmd: ""
+
+# **`deploy_cmd` / `test_cmd` / `lint_cmd` / `e2e_cmd` に定義された操作は人間ゲートではない**
+# （2026-08-01 追記・PREP-03 の実害を受けて）。これらは本設定が実行を指示している通常フローで、
+# その実行に個別の承認証跡を求めない。求めると、実環境 E2E をするタスクは毎回同じ blocker で
+# 止まる（PREP-03 は `ops/start-adb-if-stopped.sh` による共有 ADB の起動を「既存リソースの
+# 状態変更＝人間ゲート」と判定され、**10 ラウンド一貫して同じ blocker**のまま停止した）。
+# 人間ゲートは下記 `stage_runner.hard_gates`（push / PR / apply / 課金 / IAM / ADR 承認）と
+# コミットに限る。**ここに無い操作を新たにゲート扱いしない。**
+# ただし `deploy_cmd` 等に**書かれていない**破壊的操作（DROP・destroy・削除）は従来どおりゲート。
+#
+# **例外（2026-08-02 追記・AGT-04 の実害を受けて）: 検証自身が作った `jetuse-spike-` 接頭辞の
+# リソースの削除は人間ゲートではない。** CLAUDE.md「環境・認証の扱い」が
+# 「検証用リソースの作成・削除（`jetuse-spike-` プレフィックス必須）」をエージェントに
+# 明示的に許可しており、規約どおりの操作である。E2E は再実行のたびに前回の残骸を消せないと
+# 冪等にならず、消さずに増やすと課金が積み上がる。
+# 条件（すべて満たすこと。ひとつでも欠けたらゲート）:
+#   1. 接頭辞 `jetuse-spike-` が付いたもの、または**その run が自分で登録した行**だけを消す
+#   2. run 固有スキーマ / dev コンパートメントの内側に閉じている
+#   3. 消した対象を E2E 証跡（`runs/<run-id>/e2e/`）に記録する（無言で消さない）
+# **他人の資産・共有資産・接頭辞の無いものの削除は、従来どおり人間ゲート。**
+# AGT-04 では、この明文化が無いために review-4〜9 が同じ論点で停止した（PREP-03 と同じ形）。
 
 # 実環境 E2E（jetuse-dev の実リソースを使った End-to-End 検証）。
 # Codex はコードを実行できない（read-only sandbox）。よって Claude が deploy+E2E を実施して

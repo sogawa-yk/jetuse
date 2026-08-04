@@ -1,0 +1,2 @@
+# FIX-47 E2E deployment (jetuse:test / us-chicago-1, AUTH off)
+https://MASKED-GW.apigateway.us-chicago-1.oci.customer-oci.com/

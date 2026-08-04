@@ -1,0 +1,9 @@
+{
+  "turn": 1,
+  "timestamp": "2026-08-01T12:33:32+09:00",
+  "action_summary": "(loop-protocol 側で追記可)",
+  "files_changed": ["docs/tips.md", "docs/verification/PREP-03.md", "packages/api/jetuse_core/docunderstand.py", "packages/api/jetuse_core/extract_scan.py", "packages/api/jetuse_core/rag.py", "packages/api/jetuse_core/rag_adb.py", "packages/api/jetuse_core/rag_opensearch.py", "packages/api/service/routes/rag.py", "packages/api/tests/test_demo_routes.py", "packages/api/tests/test_docunderstand.py", "packages/api/tests/test_extract_scan.py", "packages/api/tests/test_project_resolution.py", "packages/api/tests/test_rag.py", "packages/api/tests/test_rag_adb.py", "packages/web/src/i18n/dict.en.ts", "packages/web/src/i18n/dict.ja.ts", "packages/web/src/pages/rag/uploadFormats.test.ts", "packages/web/src/pages/rag/uploadFormats.ts", "specs/09-rag.md", "spikes/prep03/e2e.py", "spikes/prep03/fixtures.py", "spikes/prep03/teardown.py", "spikes/prep03/vlm_check.py", "tasks/PREP-03.md"],
+  "diff_path": "diffs/turn-1.diff",
+  "review_ref": "reviews/review-9.json",
+  "goal_checker": { "verdict": "(/goal 判定モデルが記録)", "reason": "" }
+}

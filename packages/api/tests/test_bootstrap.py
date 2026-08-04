@@ -17,14 +17,26 @@ class FakeErr:
 
 
 class FakeCursor:
-    def __init__(self, fail_create_user: bool = False):
+    def __init__(
+        self,
+        fail_create_user: bool = False,
+        fail_rp: bool = False,
+        fail_alter_password_reuse: bool = False,
+    ):
         self.executed: list[str] = []
         self._fail_create_user = fail_create_user
+        self._fail_rp = fail_rp
+        self._fail_alter_password_reuse = fail_alter_password_reuse
 
     def execute(self, sql, **kw):
         self.executed.append(sql.strip())
-        if self._fail_create_user and sql.strip().startswith("CREATE USER JETUSE_APP"):
+        if self._fail_create_user and sql.strip().startswith("CREATE USER "):
             raise oracledb.DatabaseError(FakeErr(1920))  # user already exists
+        if self._fail_alter_password_reuse and sql.strip().startswith("ALTER USER ") \
+                and "IDENTIFIED BY" in sql:
+            raise oracledb.DatabaseError(FakeErr(28007))  # password cannot be reused
+        if self._fail_rp and "ENABLE_RESOURCE_PRINCIPAL" in sql:
+            raise oracledb.DatabaseError(FakeErr(20000))
 
 
 class FakeConn:
@@ -52,9 +64,11 @@ def _settings() -> Settings:
 
 
 @pytest.fixture
-def patched(monkeypatch):
+def patched(monkeypatch, tmp_path):
     monkeypatch.setenv("ADB_ADMIN_PASSWORD", "Admin#Pw1")
-    monkeypatch.setattr(bootstrap, "_wallet_dir", lambda s: "/tmp/wallet")
+    monkeypatch.setattr(bootstrap, "_wallet_dir", lambda s: "/tmp/wallet")  # noqa: S108
+    # RP状態はプロセス跨ぎ共有のためファイルに書かれる。共有/tmpを汚さないよう隔離する。
+    monkeypatch.setattr(bootstrap, "_RP_STATUS_FILE", str(tmp_path / "rp-status.json"))
     return monkeypatch
 
 
@@ -81,6 +95,33 @@ def test_provision_idempotent_when_user_exists(patched):
     assert 'ALTER USER JETUSE_APP IDENTIFIED BY "App#Pw1"' in joined
 
 
+def test_provision_survives_password_reuse_on_restart(patched):
+    """FIX-58: コンテナ再起動時は同じパスワードでの ALTER USER が ORA-28007 になる。
+    ここで失敗すると bootstrap 全体が諦めて migrate も RP 検証も走らないため、
+    「すでに目的のパスワード」として続行できること。"""
+    cur = FakeCursor(fail_create_user=True, fail_alter_password_reuse=True)
+    patched.setattr(oracledb, "connect", lambda **kw: FakeConn(cur))
+    bootstrap._provision(_settings())
+    joined = "\n".join(cur.executed)
+    assert "ENABLE_RESOURCE_PRINCIPAL" in joined  # 最後まで到達している
+    assert bootstrap.resource_principal_status()["ok"] is True
+
+
+def test_provision_raises_when_reused_password_cannot_log_in(patched):
+    """ORA-28007 は「履歴にある」であって「現在のパスワード」とは限らないため、
+    実ログインで裏取りし、入れなければ失敗として扱う(黙って進めない)。"""
+    cur = FakeCursor(fail_create_user=True, fail_alter_password_reuse=True)
+
+    def connect(**kw):
+        if kw.get("user") == "JETUSE_APP":
+            raise oracledb.DatabaseError(FakeErr(1017))  # invalid credential
+        return FakeConn(cur)
+
+    patched.setattr(oracledb, "connect", connect)
+    with pytest.raises(oracledb.DatabaseError):
+        bootstrap._provision(_settings())
+
+
 def test_provision_skips_when_passwords_missing(patched, monkeypatch):
     monkeypatch.delenv("ADB_ADMIN_PASSWORD", raising=False)
     called = {"connect": False}
@@ -88,6 +129,23 @@ def test_provision_skips_when_passwords_missing(patched, monkeypatch):
                     lambda **kw: called.__setitem__("connect", True) or FakeConn(FakeCursor()))
     bootstrap._provision(_settings())
     assert called["connect"] is False  # ADMINパスワード無しなら接続しない
+
+
+def test_provision_success_reports_rp_status_ok(patched):
+    # PORT-02: Select AI可視化(/api/health が読む resource_principal_status())
+    cur = FakeCursor()
+    patched.setattr(oracledb, "connect", lambda **kw: FakeConn(cur))
+    bootstrap._provision(_settings())
+    assert bootstrap.resource_principal_status() == {"ok": True}
+
+
+def test_provision_rp_failure_reports_hint(patched):
+    cur = FakeCursor(fail_rp=True)
+    patched.setattr(oracledb, "connect", lambda **kw: FakeConn(cur))
+    bootstrap._provision(_settings())
+    status = bootstrap.resource_principal_status()
+    assert status["ok"] is False
+    assert "generative-ai-family" in status["hint"]
 
 
 def test_bootstrap_runs_migrate(patched, monkeypatch):
@@ -98,3 +156,29 @@ def test_bootstrap_runs_migrate(patched, monkeypatch):
     monkeypatch.setattr(mig, "migrate", lambda: applied.__setitem__("v", True) or ["0001"])
     bootstrap.bootstrap()
     assert applied["v"] is True
+
+
+def test_provision_marks_rp_not_ok_when_settings_missing(patched, monkeypatch):
+    """FIX-58 F005: 設定不足で bootstrap を抜けると、起動時に書いた ok=None(実行中)が
+    残り health が永久に「実行中」になる。理由つきで false を確定させる。"""
+    monkeypatch.delenv("ADB_ADMIN_PASSWORD", raising=False)
+    patched.setattr(oracledb, "connect", lambda **kw: FakeConn(FakeCursor()))
+    bootstrap._set_resource_principal_status(None, "bootstrap 実行中")
+    bootstrap._provision(_settings())
+    status = bootstrap.resource_principal_status()
+    assert status["ok"] is False
+    assert "ADB_ADMIN_PASSWORD" in status["hint"]
+
+
+def test_bootstrap_timeout_records_failure_in_status_file(patched, monkeypatch):
+    """タイムアウトで諦めたときも「実行中」のままにしない(原因つきで false)。"""
+    def boom(_settings):
+        raise RuntimeError("DPY-4000: ADB unreachable")
+
+    patched.setattr(bootstrap, "_provision", boom)
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_TIMEOUT_S", 0)
+    bootstrap.bootstrap()
+    status = bootstrap.resource_principal_status()
+    assert status["ok"] is False
+    assert "タイムアウト" in status["hint"]
+    assert "DPY-4000" in status["hint"]

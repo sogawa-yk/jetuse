@@ -1,0 +1,63 @@
+{
+  "review_n": 3,
+  "timestamp": "2026-07-30T18:39:22+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-3.input.diff",
+  "raw_output_path": "reviews/review-3.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker はありませんが、公開APIが提供しないADBフィルタ能力の過大表示と、主要なxlsxフローをUIから開始できない問題があります。認証情報、OCID、環境固有エンドポイントのコミットや既存OCIリソース変更は差分内に確認されませんでした。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 2,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "RAGM03-001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/capabilities.py",
+      "line": 107,
+      "issue": "ADBのfilter_expressivenessをyesとしていますが、公開チャットAPIはadb指定時のrag_filtersを400で拒否し、rag_adb.generate()もcurrent_version='Y'を固定しています。画面や外部API利用者は記載されたversion/file/sheet/kindによる絞り込みを利用できず、機械可読カタログが公開機能を過大表示しています。",
+      "suggestion": "ADB用の型付きフィルタをChatRequestからrag_adb.generate/searchへ渡せるよう実装してAPIテストを追加するか、現状はsupportをlimitedに下げて「公開APIで使えるのは既定の現行版フィルタのみ」と明記してください。"
+    },
+    {
+      "id": "RAGM03-002",
+      "severity": "major",
+      "file": "packages/web/src/pages/rag.tsx",
+      "line": 316,
+      "issue": "ADB選択肢と能力パネルはxlsxのセル範囲出典を主要能力として示しますが、同画面のfile inputはaccept='.pdf,.txt,.md'のままで、対応形式の文言にもxlsxがありません。APIはxlsxを受理する一方、ユーザーはその主要フローを画面から開始できません。",
+      "suggestion": "file inputのacceptと日英のrag.supportedへxlsxを追加し、xlsx選択・アップロード後にADBを選んでセル範囲付き引用を得るUI/E2Eテストを追加してください。"
+    },
+    {
+      "id": "RAGM03-003",
+      "severity": "minor",
+      "file": "packages/web/src/pages/rag.tsx",
+      "line": 316,
+      "issue": "ADBを第4のバックエンドとして追加した一方、画面の「?」ヘルプは日英とも依然として3方式と説明し、参照するRAG構成図にもADB自前索引の経路がありません。",
+      "suggestion": "日英のhelp.rag.descを4方式へ更新し、usecase-rag構成図にもADB自前索引の取り込み・検索経路を追加してください。"
+    },
+    {
+      "id": "RAGM03-004",
+      "severity": "minor",
+      "file": "packages/web/src/pages/rag/capabilityCatalog.ts",
+      "line": 54,
+      "issue": "「形が違えばnull」としていますが、検証しているのはaxes/backendsの外形だけです。例えばbackend要素にaxesがない部分応答も型キャストを通過し、BackendCapabilityPanelのbe.axes[axis]で例外となってRAGページを落とします。",
+      "suggestion": "axis名、support値、各backendのlabel/role/axes、各entryの文字列・booleanまで実行時検証してから返し、部分的・不正なレスポンスがnullへ縮退するテストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 2,
+    "adequacy": "sufficient",
+    "notes": "scenario-1はGET /api/capabilitiesをPASS（runs/2026-07-30T1800_RAGM-03/e2e/scenario-1.mdおよびscenario-1.capabilities.json）、scenario-2はVS→ADB→SAIの表示切替をPASS（scenario-2.md、3件のsnapshot、docs/verification/e2e-screenshots/の画像）。公開配備、実データのADBバッジ、ADB実検索、VPD/JOINはSKIPPED.mdに理由と代替・既存証跡が明記されています。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "指定されたhttp://localhost:5173/#/ragへのnavigationがブラウザ側の安全ポリシーで拒否され、禁止された迂回手段へ切り替えられなかったため、今回のライブ確認は未実施です。これはアプリ障害としては判定していません。"
+    }
+  }
+}

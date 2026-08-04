@@ -1,0 +1,70 @@
+{
+  "review_n": 3,
+  "timestamp": "2026-07-13T06:14:09+00:00",
+  "reviewer": "codex",
+  "model": "gpt-5.5",
+  "input_diff_path": "reviews/review-3.input.diff",
+  "raw_output_path": "reviews/review-3.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "主要な修正意図は実装され、添付 E2E とライブブラウザ確認でも RAG health/upload/index/delete のハッピーパスは通っています。ただし、失敗経路でリソースを先に作る副作用と、project 自動作成の競合、進捗キューの古い blocked 状態は修正が必要です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 3,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag.py",
+      "line": 217,
+      "issue": "`ensure_store()` が `OpenAi-Project` を解決する前に CP vector store を作成します。PROJECT_OCID 未解決、権限不足、無効 project の場合でも先に実リソースが作られ、その後 503/502 になるため、DB 未登録または誤登録の孤立 vector store が残り得ます。",
+      "suggestion": "`resolve_project_ocid()` または `make_inference_client(with_project=True)` を CP `vector_stores.create()` より前に実行し、project/認可エラーではリソース作成前に fail-fast してください。DP 伝播待ちの catch も NotFound の一時的伝播だけに限定し、401/403/無効 project の 404 は再送出するテストを追加してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/genai.py",
+      "line": 123,
+      "issue": "project 検索が ACTIVE のみを採用し、未 ACTIVE の既存 `jetuse-project` を待たずに `_create_project()` へ進みます。複数プロセス・複数コンテナの初回アクセスや CP 作成直後の状態差で、同一コンパートメントに project が重複作成される可能性があります。",
+      "suggestion": "display_name 等で既存の非終端 project も検出して ACTIVE まで待つ、または作成時に idempotency token 相当を使って重複作成を避けてください。少なくとも CREATING/UPDATING 相当の project がある場合に新規作成しない単体テストを追加してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "major",
+      "file": "tasks/FIX47-PROGRESS.md",
+      "line": 17,
+      "issue": "このファイルは「loop-runner / stage-runner の単一の真実源」と書かれていますが、FIX-47 の status が `blocked` のままで、行 25 以降も 2026-07-10 時点の E2E 未実施状態を正として残しています。添付 RESULTS.md と docs/verification では 2026-07-13 に全シナリオ完了とされており、後続 PORT-01/PORT-02 の進行判定を誤らせます。",
+      "suggestion": "FIX-47 の status を `done` など現在状態に更新し、古い blocked 注記は履歴として明確に畳むか、2026-07-13 の E2E 完了内容に差し替えてください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "sufficient",
+    "notes": "添付証跡 `runs/2026-07-10T0842_FIX-47/e2e/RESULTS.md` は、シナリオ0 再現、シナリオ1 自動作成 RAG/STM、シナリオ2 明示 PROJECT_OCID、シナリオ3 無効 PROJECT_OCID の 4 本を示し、`SKIPPED.md` もスキップなしを明記しています。静的証跡としては十分です。なお添付ログには実 OCID/実エンドポイントが含まれるため、`runs/` をコミット対象にしない運用は維持してください。",
+    "live_check": {
+      "performed": true,
+      "target_url": "https://MASKED-GW.apigateway.us-chicago-1.oci.customer-oci.com/",
+      "result": "pass",
+      "scenarios": [
+        {
+          "name": "RAG health smoke",
+          "steps": "browser_navigate でルートを開き、snapshot で title=JetUse を確認。その後 browser_evaluate で `/api/rag/health` と `/api/rag/files` を fetch。",
+          "expected": "SPA がロードし、health が 200 で project/control_plane/data_plane すべて ok。files も 200。",
+          "observed": "ルートは title `JetUse`。`/api/rag/health` は 200 で `ok:true`、project source は `env`、CP/DP は ok。`/api/rag/files` も 200。コンソール warning/error なし。",
+          "passed": true
+        },
+        {
+          "name": "RAG upload/index/delete happy path",
+          "steps": "browser_evaluate で small markdown を FormData POST `/api/rag/files`、`/api/rag/files` を 10 秒間隔でポーリングし、最後に DELETE `/api/rag/files/{id}` で後始末。",
+          "expected": "upload が 200、一覧に表示され、短時間で completed/indexed になり、delete が 200 で一覧から消える。",
+          "observed": "POST は 200 で `processing`。3 回目のポーリングで `completed` / `indexed`。DELETE は 200 `{deleted:true}`、後続 list で対象 id は消滅。全 `/api/rag` ネットワーク要求は 200。",
+          "passed": true
+        }
+      ],
+      "notes": "ライブ確認では主要ユーザー向け RAG 経路は壊れていませんでした。ネガティブ PROJECT_OCID 注入はブラウザから安全に変更できる範囲外のため、添付 E2E のシナリオ3で評価しました。"
+    }
+  }
+}

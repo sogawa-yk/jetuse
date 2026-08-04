@@ -37,10 +37,36 @@ dist/
 .DS_Store
 tmp/
 
-# spike audio artifacts
-spikes/data/*.mp3
-spikes/data/*.wav
+# ループ実行履歴・E2E証跡(環境依存の識別子を含みうる — コミットしない。STATE.md/docs は別)
+runs/
+
+# Obsidian 出力先の絶対パス（環境依存・共有しない・ハンドオフ ch.5）
+.obsidian-dir
+
+# spike audio artifacts (archived)
+docs/archive/spikes/data/*.mp3
+docs/archive/spikes/data/*.wav
 .playwright-mcp/
 
 # 個人フィードバック原文はリポジトリに含めない(ローカル管理)
 /docs/feedbacks/
+
+# loop 成果物（stage-runner 統合で混入防止）
+.current_run_id
+
+# 人間向け報告書 HTML（ADR-0018）。報告書は仕様でも証跡でもなく「読み物」なので、
+# 原本は runs/ に生成しつつ git には入れず、報告パイプで各自の閲覧環境へ配置する。
+runs/**/*.html
+docs/verification/*.html
+
+# 無人 claude 実行ログ（ヘッドレス委譲・ハンドオフ ch.4）
+.agent-runs/
+
+# SPIKE-M1 の検証リソース台帳（OCID を含む運用状態。証跡ではない）
+.spike-m1-registry.json
+
+# ループの「現在状態」。タスクごとの worktree が同じパスを全面上書きするため、追跡すると
+# 並列ループを main へ入れるたびに必ず衝突する（実例: SPIKE-M1 / RP-01 / RAGM-02 で 3 回）。
+# 上位ループ(stage-runner)は元からコミット対象外にしており、その規律に揃える。
+# 不変の履歴は runs/<run-id>/ にあり、完了時に runs/<run-id>/STATE.md へ写しを残す。
+STATE.md

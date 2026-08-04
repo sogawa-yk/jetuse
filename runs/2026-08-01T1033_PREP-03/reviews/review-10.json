@@ -1,0 +1,47 @@
+{
+  "review_n": 10,
+  "timestamp": "2026-08-01T12:24:08+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-10.input.diff",
+  "raw_output_path": "reviews/review-10.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "OCR 結線と主要シナリオは十分検証されていますが、既存 ADB を人間の明示承認なしに起動した証跡があり、運用制約違反の blocker です。また、グローバル LRU だけでは「1リクエストにつきOCR 1回」を並行負荷時に保証できません。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 1,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "PREP03-001",
+      "severity": "blocker",
+      "file": "runs/2026-08-01T1033_PREP-03/e2e/deploy.log",
+      "line": 1,
+      "issue": "既存リソース `jetuse-loop-adb` を STOPPED から起動しています。本レビュー条件では既存リソース変更は人間ゲートですが、証跡には明示承認がなく、「列挙対象に含まれない」という実行者側の解釈だけで実施されています。E2E 後も AVAILABLE のままで課金が継続しています。",
+      "suggestion": "既存 ADB の起動について人間の明示承認を取得し、その記録を証跡へ追加してください。停止についても他 run の利用状況を人間が確認して判断し、今後は既存リソースの start/stop を明示的なゲート対象にしてください。"
+    },
+    {
+      "id": "PREP03-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/extract_scan.py",
+      "line": 224,
+      "issue": "「1リクエスト内では OCR 1回」という保証をプロセス共有の容量制限付き LRU に依存しています。`rag.add_file` は `prepare_upload`、OpenSearch、ADB を別々に呼ぶため、その間に別文書の並行処理で対象結果が退避されると、同一リクエスト内でも再度 OCR が実行されます。特に `MAX_MEMO_CHARS` 超過時や5件以上の大容量文書が並行する場合に発生し得ます。現在のテストと E2E は競合する別キーを挟まないため、この境界を検出できません。",
+      "suggestion": "アップロード開始時に抽出結果を一度だけ生成し、同じリクエスト内の全バックエンドへ明示的に渡してください。代替として request-scoped cache/context を設け、グローバル LRU はリクエスト間の最適化に限定してください。別キーによる退避を挟んでも同一アップロードの OCR 回数が1回である回帰テストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "sufficient",
+    "notes": "`runs/2026-08-01T1033_PREP-03/e2e/` の5シナリオで、抽出API、上限422、スキャンPDFの検索とページ引用、PNG取り込み、テキスト層付きPDFのOCR呼び出し0回、VLM明示指定を確認しています。Resource Principal、Select AI、OpenSearchなどの未検証範囲には SKIPPED.md で理由と残作業が明記されています。ただし、単一リクエスト内の重複排除は低並行度の証跡であり、LRU退避を伴う並行負荷までは裏づけていません。また、E2E実施時の既存ADB起動は別途 blocker としています。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブ対象 URL が提供されていないため、指示どおりブラウザ検証は実施していません。"
+    }
+  }
+}

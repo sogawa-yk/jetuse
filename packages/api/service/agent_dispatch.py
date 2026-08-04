@@ -16,11 +16,12 @@ import logging
 
 from fastapi.responses import StreamingResponse
 
-from jetuse_core import audit, hosted_agent, rag, select_ai_agent
+from jetuse_core import audit, genai, hosted_agent, rag, select_ai_agent
 from jetuse_core import conversations as conv_repo
 from jetuse_core import tools as tool_registry
 from jetuse_core.auth import AuthContext
 from jetuse_core.models import MODELS
+from jetuse_core.owner_keys import user_owner_key
 
 from .schemas import ChatRequest
 from .sse import KEEPALIVE_FRAME, KEEPALIVE_SECONDS, SSE_HEADERS
@@ -49,9 +50,11 @@ def select_ai_stream_response(
             await asyncio.to_thread(
                 conv_repo.append_message, req.conversation_id, "user", sai_q
             )
+        # owner キーは必ず user_owner_key を通す(予約接頭辞 sub が demo owner と衝突し、
+        # RAG tool から demo profile を越境参照するのを防ぐ — rag_search と同じ規則)
         fut = asyncio.ensure_future(asyncio.to_thread(
             lambda: select_ai_agent.run(
-                user.subject, aid, sai_q, role=sai_role, tools=sai_tools)))
+                user_owner_key(user.subject), aid, sai_q, role=sai_role, tools=sai_tools)))
         try:
             while True:
                 done, _ = await asyncio.wait({fut}, timeout=KEEPALIVE_SECONDS)
@@ -81,6 +84,16 @@ def select_ai_stream_response(
     )
 
 
+def _error_stream(message: str) -> StreamingResponse:
+    """理由を1フレームで返して閉じる SSE。UI は error をそのまま表示する。"""
+
+    async def gen():
+        yield f"data: {json.dumps({'error': message}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+
 async def hosted_agent_stream_response(
     req: ChatRequest, user: AuthContext, agent_def: dict
 ) -> StreamingResponse:
@@ -90,6 +103,13 @@ async def hosted_agent_stream_response(
     非ストリーミングinvokeを keepalive 付きで待ち、tool_trace+本文をdeltaで流す。
     """
     sdk = hosted_agent.normalize_sdk(agent_def.get("framework"))
+    # 未配備の判定を最初に行う。RAG store 参照や project 自動作成といった副作用を
+    # 走らせてから落ちると、「認証無効 / 対象外リージョン / SDK 未配備」という本当の理由が
+    # 別のエラーに隠れる(PORT-03)。
+    avail = hosted_agent.availability()
+    if not avail["sdks"].get(sdk, False):
+        return _error_stream(avail["reason"] or "このSDKのエージェントは配備されていません")
+
     last_user = req.messages[-1].content
     history = [
         {"role": m.role, "content": m.content}
@@ -98,14 +118,31 @@ async def hosted_agent_stream_response(
     enabled = [t for t in (agent_def.get("enabled_tools") or []) if t in CONTAINER_TOOLS]
     rag_store_id = None
     if tool_registry.RAG_SEARCH in enabled:
-        rag_store_id = await asyncio.to_thread(rag.get_store_id, user.subject)
+        # 資源キーは通常 RAG ルートと同じ owner キーヘルパーを必ず通す(specs/18 §3.2.1 —
+        # sub='demo_<uuid>' が demo namespace の store と衝突するのを防ぐ)。
+        rag_store_id = await asyncio.to_thread(
+            rag.resolve_store_for_read, user_owner_key(user.subject))
     model_key = agent_def.get("model")
+    # コンテナ側の env の PROJECT_OCID は公開スタックでは空(Terraform に解決結果を戻せない)。
+    # OpenAi-Project が無いと 3SDK の LLM 呼び出しと rag_search が揃って失敗するため、
+    # **API 側で解決した値を state に載せて渡す**(PORT-03)。
+    # エージェントに Project が割り当てられていればそれを優先する(SPIKE-05: エージェント単位で
+    # 会話・記憶を分離する契約。自動解決で上書きすると分離が壊れる)。
+    project_ocid = (agent_def.get("project_ocid") or "").strip()
+    if not project_ocid:
+        try:
+            project_ocid = await asyncio.to_thread(genai.resolve_project_ocid)
+        except genai.ProjectResolutionError as e:
+            # 空の OpenAi-Project で invoke しても後段で別のHTTPエラーになるだけで、
+            # ProjectResolutionError が持つ復旧手順が利用者に届かない(FIX-47 と同じ方針)。
+            return _error_stream(f"エージェントを実行できません: {e}")
     state = {
         "system_prompt": agent_def.get("instructions") or "",
         "enabled_tools": enabled,
         "input": last_user,
         "history": history,
         "rag_store_id": rag_store_id,
+        "project_ocid": project_ocid,
         "model": MODELS[model_key].oci_id if model_key in MODELS else "openai.gpt-oss-120b",
     }
 
@@ -140,7 +177,9 @@ async def hosted_agent_stream_response(
                 None, None, "ok", sdk,
             )
         except hosted_agent.HostedAgentNotConfigured as e:
-            err = {"error": f"エージェント未設定: {e}"}
+            # 例外メッセージ自体が「なぜ使えないか・どうすれば使えるか」を含む(PORT-03)。
+            # 内部の欠落キー名は hosted_agent 側でログにだけ出す。
+            err = {"error": str(e)}
             yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
         except Exception as e:
             logger.exception("hosted agent invoke failed")

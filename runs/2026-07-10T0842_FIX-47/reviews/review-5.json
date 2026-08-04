@@ -1,0 +1,45 @@
+{
+  "review_n": 5,
+  "timestamp": "2026-07-13T06:55:26+00:00",
+  "reviewer": "codex",
+  "model": "gpt-5.5",
+  "input_diff_path": "reviews/review-5.input.diff",
+  "raw_output_path": "reviews/review-5.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "差分はテスト内で genai._signer をスタブする変更のみで、本番コード・公開シグネチャ・環境依存値のコミットはありません。既存の PROJECT_OCID 解決テストの意図とも整合しており、ブロッカー相当の問題は見つかりませんでした。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "sufficient",
+    "notes": "添付証跡は、旧イメージでの Issue #47 再現、PROJECT_OCID 未指定での自動作成/RAG/STM、明示 PROJECT_OCID、無効 PROJECT_OCID のネガティブケースを含む。SKIPPED.md はスキップなしを明記しており、local-plan-test.log などの失敗ログも REVIEWER-CONTEXT.md で過去の切り分け記録として説明されているため、完了主張を妨げる不足とは判断しない。",
+    "live_check": {
+      "performed": true,
+      "target_url": "https://MASKED-GW.apigateway.us-chicago-1.oci.customer-oci.com",
+      "result": "pass",
+      "scenarios": [
+        {
+          "name": "ルートページ表示とRAG health確認",
+          "steps": "browser_navigate で TARGET_URL を開き、browser_snapshot と browser_evaluate でタイトル、主要テキスト、/api/rag/health、console warning/error を確認。",
+          "expected": "SPA が表示され、主要UIが存在し、RAG health が 200/ok=true を返し、致命的な console エラーがない。",
+          "observed": "Page Title は JetUse。ホームのユースケース一覧と RAGチャット導線が表示された。/api/rag/health は status=200、ok=true、project.source=env、control_plane/data_plane とも ok。console warning/error は 0。",
+          "passed": true
+        },
+        {
+          "name": "RAGチャット画面表示",
+          "steps": "RAGチャットリンクをクリックし、browser_snapshot と browser_evaluate で画面テキストと状態を確認。",
+          "expected": "RAGチャット画面が表示され、文書リスト、アップロード導線、質問UIが存在し、エラー表示がない。",
+          "observed": "#/rag に遷移し、対応形式、s2-doc.md、mkfile-probe.md、左の文書について質問してください、送信が表示された。console warning/error は 0。",
+          "passed": true
+        }
+      ],
+      "notes": "今回のdiffはテストfixtureのみでデプロイ済みユーザー向けコードを変更していないため、ライブE2Eは非破壊の表示確認と health API 確認に限定した。"
+    }
+  }
+}

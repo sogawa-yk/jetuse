@@ -4,8 +4,11 @@ resource "oci_identity_domain" "this" {
   compartment_id = var.compartment_ocid
   display_name   = "${var.prefix}-domain"
   description    = "JetUse app end-user authentication (OIDC PKCE)"
-  home_region    = var.region
-  license_type   = "free"
+  # Identity Domain はテナンシのホームリージョンにしか作れない。deployリージョンを
+  # そのまま渡すと home_region≠テナンシホームで作成が失敗しうる(可搬性)。
+  # home_region が空なら従来どおり region にフォールバック(後方互換)。
+  home_region  = var.home_region != "" ? var.home_region : var.region
+  license_type = "free"
 
   # destroy前に非アクティブ化(ACTIVEなドメインは削除できず destroy が失敗するため)。
   # 依存順序により、配下のOIDCアプリ削除(非アクティブ化込み)の後にここが走る。

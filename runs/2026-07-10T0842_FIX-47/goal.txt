@@ -1,0 +1,1 @@
+tasks/FIX-47.md の完了条件（codex PASS + api test/lint 緑 + jetuse:test 実環境E2E）

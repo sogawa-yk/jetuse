@@ -1,0 +1,39 @@
+{
+  "review_n": 10,
+  "timestamp": "2026-08-04T17:14:19+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-10.input.diff",
+  "raw_output_path": "reviews/review-10.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "4長期ブランチへの展開自体は妥当ですが、マージ後にリモート作業ブランチが削除された場合、Internal/Public 統合済み worktree を未出荷と誤判定します。認証情報・OCID・エンドポイント実値や、OCIリソース変更は含まれていません。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 1,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "major",
+      "file": "ops/stalled.py",
+      "line": 106,
+      "issue": "取り込み判定が `origin/<作業ブランチ>` の存在を前提にしています。PRマージ後にリモート作業ブランチが削除されると `merged` は false になり、フォールバックも `origin/main..HEAD` だけを見るため、HEADが `public-dev` や `internal-dev` に完全に取り込まれていても、それらが未リリースなら `ahead` が残って `unshipped` と誤判定されます。",
+      "suggestion": "作業ブランチのリモートrefではなく、`git merge-base --is-ancestor HEAD origin/<long-branch>` を4長期ブランチそれぞれに対して実行して取り込みを判定してください。少なくとも、リモート作業ブランチ削除後に `public-dev` へ取り込み済みのケースと、`internal-dev` へ取り込み済みのケースを一時Gitリポジトリでテストしてください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "`runs/2026-08-04T1626_BRANCH-LAYOUT/e2e/` は空です。本差分はローカルGit/worktree状態を読む運用スクリプトのみの変更で、jetuse-devへのデプロイや実環境E2Eは対象外と判断します。一方、変更した4長期ブランチ判定を裏づける単体テスト証跡も提示されていません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

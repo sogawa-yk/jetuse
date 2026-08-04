@@ -1,0 +1,21 @@
+ponytail-review (maker self-review, non-scoring) — PORT-01 infra portability diff
+Scope: over-engineering/complexity only (correctness routed to Codex).
+
+locals.tf:
+  L: genai_validated_region_keys — used once, but named+commented to pair with
+     existing ocir_supported_region_keys (consistency). Keep.
+  L: home_region local — providers.tf computes the same for a provider alias but
+     a provider config can't be referenced; local is required. try(...,var.region)
+     guards the RM-OBO null case (docs/tips.md 2026-07-13). Keep.
+variables.tf / schema.yaml:
+  allow_unvalidated_genai_region, ci_shape, adb_db_version, adb_ecpu_count,
+  semstore_ocid — each maps 1:1 to a task work-item (2/6/4/4/7). Not speculative.
+  prefix validation — input validation at trust boundary (prefix→dns_label). Keep.
+adb/main.tf:
+  replace_triggered_by=[db_name] — root-cause fix for documented apply footgun
+  (tips 2026-07-13, tagged PORT-01). One line. Keep.
+object-storage/spa-bucket:
+  time_expires relative + ignore_changes — task item 3 anticipates ignore_changes.
+  Minimal; no new provider (avoided hashicorp/time by using timestamp()+ignore).
+
+net: -0 lines possible. Lean already. Ship.

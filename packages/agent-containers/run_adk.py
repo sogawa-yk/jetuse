@@ -62,13 +62,16 @@ def _to_tools(llm_request):
 
 
 class OciLlm(BaseLlm):
+    # アプリが解決した Enterprise AI プロジェクト OCID(PORT-03)。空なら env にフォールバック。
+    project_ocid: str = ""
+
     async def generate_content_async(self, llm_request, stream: bool = False):
         messages = _to_messages(llm_request)
         tools = _to_tools(llm_request)
         kwargs = {"model": self.model, "messages": messages, "temperature": 0.2}
         if tools:
             kwargs["tools"] = tools
-        client = ac.chat_client()
+        client = ac.chat_client(project_ocid=self.project_ocid)
         resp = await asyncio.to_thread(lambda: client.chat.completions.create(**kwargs))
         msg = resp.choices[0].message
         parts = []
@@ -135,10 +138,10 @@ def _build_tools(enabled, ctx, trace):
 
 
 async def run(req: ac.InvokeRequest) -> ac.InvokeResponse:
-    ctx = {"rag_store_id": req.rag_store_id}
+    ctx = {"rag_store_id": req.rag_store_id, "project_ocid": req.project_ocid}
     trace: list[ac.ToolCallTrace] = []
     agent = Agent(
-        name="jetuse_agent", model=OciLlm(model=req.model),
+        name="jetuse_agent", model=OciLlm(model=req.model, project_ocid=req.project_ocid),
         instruction=req.system_prompt.strip() or DEFAULT_INSTRUCTIONS,
         tools=_build_tools(req.enabled_tools, ctx, trace))
     runner = InMemoryRunner(agent=agent, app_name="jetuse")

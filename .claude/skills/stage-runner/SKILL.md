@@ -8,8 +8,14 @@ description: STAGE<N>-PROGRESS.md のステージ全体を自走で実装し切�
 各タスクの中身は `loop-protocol` / `codex-review` に従う。loop-runner との違いは1点:
 **人間ゲートをタスク単位ではなくステージ境界に集約する**。ステージ内の波はあなたが自動で繋ぐ。
 
+> **既定のレビュー粒度は per-task（`loop-runner`）**（施主決定 2026-07-23）。1タスク＝小さい diff＝
+> HTML タスクパケットで実際にレビューできる。stage-runner は**「ステージ丸ごと自走・最後に1回」を
+> 明示的に頼まれたときだけ**使う（+11,000 行を一度に承認する形はレビュー不能なので既定にしない）。
+> stage モードを使う場合でも、下記のとおり**各タスクの HTML パケットを報告パイプで並べて置き、
+> override/residual はステージ報告の最上段バナーに立てて**、例外が埋もれないようにする。
+
 - 進捗の単一の真実源: `tasks/STAGE<N>-PROGRESS.md`（順序・依存・ゲート・status）。
-- 自動統合の隔離先: **ステージ専用ローカルブランチ `feat/stage-<N>`**（`feat/loop-engineering` から分岐）。
+- 自動統合の隔離先: **ステージ専用ローカルブランチ `feat/stage-<N>`**（`loop-config.yml` の `worktree.base_branch`＝`public-dev` から分岐。内部固有ステージは `BASE_BRANCH=internal-dev`）。
   ここにだけ commit+merge する。**リモート push / base への PR / apply は一切しない**ので、
   人間チェック前に base もリモートも汚れない。
 - 設定は `loop-config.yml` の `stage_runner:` ブロック。
@@ -35,7 +41,8 @@ description: STAGE<N>-PROGRESS.md のステージ全体を自走で実装し切�
    4. 統合後、`STAGE<N>-PROGRESS.md` の当該タスクを **status=done** に更新する（人間承認を待たない＝ここが loop-runner との差）。
    5. 1 に戻る。
 3. **ステージ報告で停止**（ヒューマンゲート）。`references/stage-report-template.md` に従い
-   `runs/_stages/<stage>/REPORT.md` を書き、人間に提示して**チェックを仰ぐ**。**自分で base へ PR/push しない**。
+   `runs/_stages/<stage>/REPORT.md`（証跡・markdown）を書き、**同じ内容を HTML 1枚にして報告パイプで
+   配置**する（下記「ステージ報告」）。人間に提示して**チェックを仰ぐ**。**自分で base へ PR/push しない**。
 
 ## 自動統合（PASS タスク → ステージブランチ）
 `.claude/skills/stage-runner/scripts/integrate_task.sh <stage> <task>` を使う。これは:
@@ -55,28 +62,38 @@ description: STAGE<N>-PROGRESS.md のステージ全体を自走で実装し切�
 4. **不能/FAIL なら** `git merge --abort` して当該タスクを status=`blocked`（理由=統合衝突）にし、ステージ報告で提示。
 
 ## ハードゲート（自走中も必ず停止・越えない）
-`loop-config.yml` `stage_runner.hard_gates`:
-- **push**（リモート push） / **pr_to_base**（base への PR・merge） / **terraform_apply**（apply・課金） /
-  **billing** / **iam_identity**（IAM・Identity Domain） / **adr_approval**（真の決定を伴う ADR 承認）。
+ゲート一覧の単一真実源は `loop-config.yml` の `stage_runner.hard_gates`（push / base への PR /
+apply・課金 / IAM / ADR 承認 の系統）。ここに列挙を複製しない＝変更は loop-config 側だけで行う。
 
-当該ゲートに当たったタスクは**越えずに** status=`blocked`、理由を記録して他タスクを進める。
+当該ゲートに当たったタスクは status=`blocked` にし、理由を記録して他タスクを進める。
 - **ADR**: ドラフト作成は進めてよい（成果物）。**承認**は越えない＝ステージ報告でまとめて提示。
   ただしテナンシ/IAM/ポリシー系 ADR はドラフト時点でも慎重に扱い、判断を仰ぐ。
 - **デモ品質ゲート**（SBA 系・HBD-05 等）: 自動では合格判定しない。実装・E2E まで進めて
   **ステージ報告で一括レビュー**を仰ぐ（＝ご要望の「ステージ完了時に1回チェック」）。
 
 ## ステージ報告（出口・ヒューマンゲート）
-`runs/_stages/<stage>/REPORT.md` に集約して提示する（テンプレ: `references/stage-report-template.md`）:
-- 全タスクの {status, review_verdict, E2E 結果, 証跡パス `runs/<run-id>/e2e/`}。
+`runs/_stages/<stage>/REPORT.md` に集約する（テンプレ: `references/stage-report-template.md`）。
+これは**証跡側の原本**。人間に見せる面は、同じ内容を HTML 1枚（`runs/_stages/<stage>/REPORT.html`）に
+起こして**報告パイプで配置**する（書き方は `loop-protocol/references/report-style.md` に従い、
+提示前に `check_report_render.sh` でレンダリングを目視確認する）（`loop-config.yml` の `report`・topic は `report.topic.stage`＝
+`<stage>-report`。契約は `docs/guides/report-pipe.md`）。各タスクのパケットも同じ場所に置かれているので、
+人間は1フォルダでステージ全体を読める。REPORT.md には配置先の絶対パスと生成日時を記す。
+
+報告は「索引＋例外の集約」に徹し、必要な実質だけを書く（埋め草セクション・重複要約で水増ししない。
+各タスクの詳細は HTML パケット側にある）:
+- **判断が要る事項を最上段バナーに**：どのタスクで override / 未対応 residual / 後続未起票があるか。
+  例外を表の1セルに埋めない（SP3-03 の 18×FAIL override が埋もれた失敗の是正）。例外が無ければ「なし」。
+- 全タスクの {status, review_verdict, E2E 結果, **配置後のパケット名 `<TASK>.html`（同フォルダ）**}。
+  各タスクの詳細レビューはパケット側で行う（ステージ報告は索引＋例外の集約）。
 - 統合ブランチ `feat/stage-<N>` の差分サマリ（base 比）。
 - **残ハードゲート一覧**（push/PR・apply・ADR 承認・blocked タスク）＝人間が次に何を承認すれば base へ出せるか。
 - 人間は `feat/stage-<N>` を見てチェック → 承認後に **base への PR / push** を人間（または別途指示）で実施。
 
 ## 原則
-- **隔離**: 自動統合は `feat/stage-<N>` 限定。リモート/base/apply には絶対に出さない。
-- **ゲートは飛ばさない**: タスク単位ゲートをステージ境界に集約するだけ。push/PR/apply/ADR/IAM は据え置きで停止。
-- **証跡主義**: タスクごとに Codex PASS＋実環境 E2E 必須。統合後も test/lint 緑を再確認。
-- **むやみに増やさない**: ステージ worktree は1本、loop ADB は再利用（タスクは `JETUSE_<task>` スキーマ隔離）。
+- 隔離: 自動統合は `feat/stage-<N>` 限定。リモート/base/apply はハードゲートの先＝人間が行う。
+- ゲートはタスク単位からステージ境界へ集約するだけで、hard_gates は据え置きで停止する。
+- 証跡主義: タスクごとに Codex PASS＋実環境 E2E。統合後も test/lint 緑を再確認する。
+- ステージ worktree は1本、loop ADB は再利用（タスクは `JETUSE_<task>` スキーマ隔離）。
 - 後始末: ステージ承認・base マージ後に `end-loop.sh <task>` で各タスク worktree を、
   `git worktree remove` で統合 worktree を撤去する。
 

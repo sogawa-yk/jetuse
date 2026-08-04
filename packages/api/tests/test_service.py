@@ -20,6 +20,30 @@ def test_healthz():
     assert res.json() == {"status": "ok"}
 
 
+def test_api_health():
+    # gateway は /api/* しか CI へルートしないため、/api 配下の health が smoke の契約(SP3-07)。
+    # main→dev 同期で capability health(PORT-02)に一本化 — smoke 契約は「HTTP 200」のみ
+    # (ops/deploy-dev-app.sh も 200|401 判定)。body は機能別 readiness を返す。
+    res = client.get("/api/health")
+    assert res.status_code == 200
+    # NOTE(SYNC-01): "agents" は本同期の前から capability_health() に在ったが期待集合に
+    # 反映漏れしていた(dev 側の既存不整合。main は health まわりを一切変えていない)。
+    # 同期とは無関係の 1 行修正。
+    assert set(res.json()["capabilities"]) == {
+        "chat", "rag", "dbchat", "speech", "ocr", "tts", "agents",
+    }
+
+
+def test_gen_proxy_mounted_with_allowlist():
+    # sign_proxy は API プロセス内 mount(SP3-07 配備像)。未知モデル 403 = allowlist が生きている証拠
+    res = client.post(
+        "/gen-proxy/v1/chat/completions",
+        content=b'{"model": "not-allowed"}',
+        headers={"content-type": "application/json"})
+    assert res.status_code == 403
+    assert res.json()["error"] == "model_not_allowed"
+
+
 def test_sse_ping_streams_events_with_keepalive():
     res = client.get("/api/chat/ping", params={"events": 3, "delay": 0})
     assert res.status_code == 200
@@ -41,6 +65,24 @@ def test_auth_required_rejects_missing_token(monkeypatch):
 def test_auth_required_fails_closed_without_oidc_config(monkeypatch):
     # OIDC未設定のままトークンを出されても素通りさせない(fail-closed)
     monkeypatch.setenv("AUTH_REQUIRED", "true")
+    # 空文字を明示する(delenv だと Settings が .env から拾い直し、OIDC を設定済みの開発機で落ちる)
+    monkeypatch.setenv("OIDC_ISSUER", "")
+    monkeypatch.setenv("OIDC_JWKS_URL", "")
     get_settings.cache_clear()
     res = client.get("/api/chat/ping", headers={"Authorization": "Bearer dummy"})
     assert res.status_code == 500
+
+
+def test_max_tool_hops_rejects_boolean():
+    """`true` が 1 として通らないこと(AGT-04 review-10)。
+
+    bool は int の派生なので、素の int 宣言だと JSON の真偽値が黙って 1 になる。
+    上限の指定に真偽値が来るのは誤りで、**API 境界で断る**のが
+    `chat.resolve_max_tool_hops` の bool 拒否と揃った挙動。
+    """
+    res = client.post("/api/chat/stream", json={
+        "model": "gpt-oss-120b",
+        "messages": [{"role": "user", "content": "x"}],
+        "agent": True, "max_tool_hops": True,
+    })
+    assert res.status_code == 422

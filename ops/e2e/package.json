@@ -1,0 +1,7 @@
+{
+  "name": "jetuse-e2e",
+  "private": true,
+  "type": "module",
+  "description": "公開スタックのデプロイ結果に対する実ブラウザ E2E（FIX-58 で作成）",
+  "devDependencies": { "playwright": "^1.50.0" }
+}

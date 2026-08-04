@@ -1,0 +1,87 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-07-30T01:08:57+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "検証用スキーマの所有確認が再作成を一意に識別できず、確認後の差し替えも検出せずに `DROP USER ... CASCADE` へ進めるため blocker です。また、本番検索 SQL が近似検索を指定しておらず、添付された HNSW のスケール証跡は実装経路を裏づけていません。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 5,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "spikes/ragm02/common.py",
+      "line": 195,
+      "issue": "所有台帳の識別子が `DB_NAME:SCHEMA:作成時刻（秒精度）` だけです。同じ秒に同名ユーザーが再作成されると別リソースを同一と誤認でき、さらに teardown は照合後から `DROP USER ... CASCADE` 直前まで再照合しないため、途中で差し替えられた既存スキーマも削除し得ます。添付の guard は作成時刻を明示的に異なる値へ変えたケースしか検証していません。",
+      "suggestion": "スキーマ名を run 固有のランダム名にし、CREATE 直後に `USER_ID` とランダムなマーカーを receipt として記録してください。GRANT および DROP の直前にも `USER_ID`・作成時刻・マーカーを再照合し、1項目でも不一致なら破壊操作を行わない否定 E2Eを追加してください。"
+    },
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag_adb.py",
+      "line": 292,
+      "issue": "実アプリの検索は `FETCH FIRST` であり、スケール検証が使用した `FETCH APPROX FIRST` ではありません。この SQL は検証コード上でも「厳密検索」として扱われているため、実アプリでは HNSW と PRE-FILTER 用 B木索引が使われず、50,000件で確認した計画・性能が本番経路へ反映されません。",
+      "suggestion": "近似検索を採用するなら実装を `FETCH APPROX FIRST ... WITH TARGET ACCURACY ...` に合わせ、その完全に同じ SQL で実行計画と recall を再取得してください。厳密検索を意図するなら、ベクタ索引利用と PRE-FILTER に関する実装・完了主張を撤回してください。"
+    },
+    {
+      "id": "M-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag.py",
+      "line": 284,
+      "issue": "ADB への取り込み・削除を例外握り潰しの best-effort にしていますが、再試行可能な永続状態がありません。取り込み失敗は `pending` のまま永久に検索対象にならず、削除失敗は先に `rag_files` 行がコミット済みであるため、API上は削除成功なのに ADB のチャンクが残って以後の回答へ混入します。",
+      "suggestion": "バックエンド別の処理状態と再試行ジョブを永続化してください。削除時は tombstone または outbox を残し、ADB 行の不在確認まで追跡できるようにし、失敗を成功として返さないでください。取り込み失敗には `error` 状態と明示的な再試行経路も必要です。"
+    },
+    {
+      "id": "M-003",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/migrations/017_rag_adb.sql",
+      "line": 20,
+      "issue": "1つの migration に CREATE TABLE と3本の CREATE INDEX をまとめています。Oracle DDL は暗黙コミットされるため、途中の索引作成が失敗すると表だけが残る一方で `schema_migrations` には記録されず、次回は先頭の CREATE TABLE が ORA-00955 になって復旧不能です。添付 E2E も `applied: (up to date)` で、clean schema への適用を検証していません。",
+      "suggestion": "表と各索引を個別の migration バージョンへ分割してください。あるいは既存オブジェクトの定義を検証したうえで安全に再開できる migration runner を実装し、各文の失敗位置からの再実行テストを追加してください。"
+    },
+    {
+      "id": "M-004",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag_adb.py",
+      "line": 107,
+      "issue": "上限を超える単一行を分割しないため、最大20MBのアップロード全体が1チャンクになり得ます。埋め込み側は入力を2000文字で切る一方、`generate()` は CLOB 本文全体をプロンプトへ連結するため、検索表現と引用本文が食い違い、モデルのコンテキスト上限超過で回答が失敗します。",
+      "suggestion": "長い行も bounded size へ分割し、`L1` に加えて文字オフセット等を出典へ記録してください。さらに生成前にトークン予算でコンテキストを制限し、最大サイズ・単一行・複数巨大ヒットの境界テストを追加してください。"
+    },
+    {
+      "id": "M-005",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag_adb.py",
+      "line": 171,
+      "issue": "版番号の MAX 取得、旧版化、現行版 INSERT の間にロックや一意制約がありません。同じ owner・filename の同時取り込みでは同じ版番号を採番し、複数行集合が同時に `current_version='Y'` となり、generate が新旧双方を根拠にする可能性があります。",
+      "suggestion": "owner_sub・doc_file ごとの版管理行を作って `SELECT ... FOR UPDATE` で直列化するか、現行版を一意にする function-based unique indexと競合時リトライを導入してください。同時取り込みテストも追加してください。"
+    },
+    {
+      "id": "m-001",
+      "severity": "minor",
+      "file": "spikes/ragm02/e2e.py",
+      "line": 236,
+      "issue": "シナリオ4の PASS 条件は回答が空でないことしか確認せず、期待する現行版の値「600」や旧版値「300」が混入していないことを検証していません。誤答でも E2E が PASS します。",
+      "suggestion": "回答に期待値600が含まれ、旧版値300が含まれないことを検証してください。citations についても全件が `current_version='Y'` かつ期待する file_id・version であることを固定してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "insufficient",
+    "notes": "scenario-1〜4 と guard の計5本はいずれも証跡上 PASS で、scale/ には50,000件・20クエリ・HNSW構築57秒・PRE-FILTER・recallの記録があり、teardown も EXIT=0 です。SKIPPED.md の数十万件、VPD、ブラウザ、配備環境等の未実施理由は明記されています。ただし scale/appshape が使う `FETCH APPROX FIRST` は本番 `rag_adb.search()` の `FETCH FIRST` と異なるため索引利用の主張を裏づけず、migration は up-to-date で fresh apply 未検証、scenario-4 は実HTTP経路ではなく `generate()` の直接呼び出し、guard は同秒再作成・照合後差し替えを未検証です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲット URL が提供されておらず、指示に従いブラウザツールは使用していません。"
+    }
+  }
+}

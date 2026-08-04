@@ -1,0 +1,55 @@
+{
+  "review_n": 13,
+  "timestamp": "2026-07-29T20:49:02+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-13.input.diff",
+  "raw_output_path": "reviews/review-13.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "Resource Principal の正常系4シナリオと片付け結果は確認できました。しかし、ユーザーおよびバケットの作成直後の競合で他者のリソースを所有物と誤認・変更し得る経路が残るため FAIL です。",
+  "severity_counts": {
+    "blocker": 2,
+    "major": 1,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "ops/setup-dev-schema.py",
+      "line": 84,
+      "issue": "CREATE USER と USER_ID 取得を同じ PL/SQL ブロックにまとめても、CREATE USER の暗黙コミット後から DBA_USERS の SELECT までの排他性はありません。この間に別セッションが DROP・同名再作成すると、再作成されたユーザーの USER_ID を created_by_this_run=true の receipt として記録し、E2E teardown が他者のユーザーを削除し得ます。コード自身もサーバー内の窓が残ると認識していますが、後続照合は誤って取得した同じ USER_ID と比較するため検出できません。",
+      "suggestion": "作成時に設定した未知のパスワードを所有証明に使い、CREATE SESSION 付与後にその資格情報で新規接続して SYS_CONTEXT('USERENV','SESSION_USERID') を取得してください。その値を DBA_USERS と照合して receipt に記録し、CREATE 後・識別子取得前の DROP／同名再作成を再現する競合テストも追加してください。"
+    },
+    {
+      "id": "B-002",
+      "severity": "blocker",
+      "file": "runs/2026-07-29T1605_RP-01/e2e/driver.py",
+      "line": 567,
+      "issue": "create_bucket の応答を台帳化した後、現在のバケットがその etag・作成時刻と一致するか再確認せず put_object を実行しています。応答取得後にバケットが削除・同名再作成されると、他者のバケットへ検証文書を書き込みます。teardown 時の照合は削除を防ぐだけで、既存リソースへの書き込みを取り消せません。",
+      "suggestion": "作成応答を記録した直後と各変更操作前に bucket_identity が台帳と完全一致することを必須化してください。run tag も16-bitではなく十分長い乱数にし、作成応答後の削除・同名再作成を注入して put_object が一度も呼ばれないことを検証してください。"
+    },
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "ops/setup-dev-schema.py",
+      "line": 64,
+      "issue": "DDL 前の receipt 検証は外側が JSON 配列であることしか確認しません。例えば `[\"broken\"]` は通過しますが、CREATE USER 後の `_write_receipt()` で `e.get()` が AttributeError となり、作成済みユーザーの所有証跡が残りません。また、事前の open 成功は後続の write_text 成功を保証しません。",
+      "suggestion": "DDL 前に各配列要素と必須フィールドまで検証してください。receipt は一時ファイルへの書き込み・fsync・原子的置換で保存し、保存失敗時にも検証済み SESSION_USERID を使って即時回収できる経路、ならびに有効JSONだが要素形式が不正なケースと書き込み失敗のテストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 9,
+    "adequacy": "insufficient",
+    "notes": "主要4シナリオは scenario-1.md（セットアップ2回の冪等性）、scenario-2.md（Object Storage 200）、scenario-3.md（Select AI索引・2文書検索）、scenario-4.md（旧APIキー資格情報との対照）がすべてPASS。guard.mdの5否定ケースと teardown.md／post-teardown-state.md も成功し、SKIPPED.md の未配備理由には人間ゲートとして妥当性があります。ただし、guard は所有権確立後の台帳改変だけで、B-001のCREATE直後の再作成とB-002のバケット作成応答後の再作成を検証していないため、安全性の裏付けとしては不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されておらず、明示指示に従いブラウザ検証は実施していません。"
+    }
+  }
+}

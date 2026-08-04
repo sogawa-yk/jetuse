@@ -1,0 +1,10 @@
+# 2c: ADB 選択・ADB 取り込み済みが 1 件ある（送信可）
+- list:
+  - listitem: 📄 jetuse-spike-ragm04-ADB取り込み済み.md   # ✓VS ✓ADB
+  - listitem: 📄 jetuse-spike-ragm04-未取り込み.md        # ✓VS ⏳ADB
+- generic:
+  - combobox "rag backend":
+    - option "ADB — Oracle AI Database（自前索引）" [selected]
+  - textbox "文書について質問（Shift+Enterで改行）"      # disabled 属性なし = 入力できる
+  - button "送信" [disabled]                            # 入力が空のときだけ disabled
+- paragraph: 左の文書について質問してください            # ready 時のヒント文

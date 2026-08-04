@@ -25,6 +25,12 @@ variable "enable_runtime_policy" {
   default     = true
 }
 
+variable "enable_project_autocreate" {
+  description = "Allow the runtime to discover and auto-create the GenerativeAiProject required by the OpenAi-Project header (adds 'manage generative-ai-project'). Off by default; the public ORM stack enables it together with PROJECT_AUTOCREATE (FIX-47)."
+  type        = bool
+  default     = false
+}
+
 variable "enable_semantic_store" {
   description = "Create the dynamic group and policies required by OCI Generative AI semantic stores (SQL Search)."
   type        = bool
@@ -35,6 +41,14 @@ variable "existing_dynamic_group" {
   description = "Name of the pre-existing dynamic group referenced by the runtime policy when enable_dynamic_group is false. Its matching rule must cover Container Instances, Functions and ADB (and semantic stores when enable_semantic_store is true)."
   type        = string
   default     = ""
+}
+
+# PORT-03: ホスト型エージェントを配備する呼び出し元だけが true にする。既定 false で
+# 既存呼び出し元(environments/dev 等)の Dynamic Group は従来どおり。
+variable "include_hosted_agent_principals" {
+  description = "Include generativeaihostedapplication / generativeaihosteddeployment in the runtime dynamic group (only when the caller deploys JetUse hosted agents)."
+  type        = bool
+  default     = false
 }
 
 variable "create_deployer_policy" {

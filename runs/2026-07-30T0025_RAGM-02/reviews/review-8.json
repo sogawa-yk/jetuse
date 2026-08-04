@@ -1,0 +1,79 @@
+{
+  "review_n": 8,
+  "timestamp": "2026-07-30T02:58:19+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-8.input.diff",
+  "raw_output_path": "reviews/review-8.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "固定名スキーマの所有証跡を別主体へ誤って引き継げる blocker があるため FAIL です。機能・スケール E2E は広範ですが、この復旧経路と同時削除競合は未検証です。認証情報や OCID のコミットは差分内に確認できませんでした。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 3,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": "spikes/ragm02/setup_schema.py",
+      "line": 104,
+      "issue": "CREATE USER 後のパスワード確認より先に、名前で再取得した USER_ID を所有台帳へ保存しています。この間に固定名ユーザーが別主体へ作り直されると、その別ユーザーの識別値が台帳化されます。パスワード確認は失敗しても台帳が残るため、次回実行では「既存かつ空マーカー同士が一致」と判定され、パスワードを再確認せず GRANT・ACL・Resource Principal を付与できます。",
+      "suggestion": "台帳に pending/verified 状態を持たせ、空マーカーの receipt は所有証明として再利用しないでください。再開時は生成済みパスワードの一致と USER_ID の再照合を最初の DDL 前に必須化し、「パスワード不一致で中止→別主体の同名ユーザーが存在したまま再実行」の否定 E2E を追加してください。"
+    },
+    {
+      "id": "M-001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag_adb.py",
+      "line": 93,
+      "issue": "availability() は 017 のチャンク表しか確認しないため、018/019 が未適用の部分マイグレーション状態も READY になります。起動時マイグレーションは API と並行して進むため、017 適用前のアップロードは黙ってスキップされ、017 のみ適用済みなら取り込みとエラー記録が失敗し、いずれも後から永続的な pending になります。",
+      "suggestion": "3 表すべての存在を readiness 条件にし、部分適用は明示的な migration-incomplete 状態として扱ってください。起動中のアップロードは outbox に残して後で再試行するか、マイグレーション完了まで ADB 取り込みを受理しない構成にしてください。"
+    },
+    {
+      "id": "M-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag_adb.py",
+      "line": 466,
+      "issue": "削除時は文書レジストリをロックせず、削除後に残存版を読み直して昇格しています。同じ文書の現行版と直前版を別接続から同時削除すると、現行版側が削除中の直前版を昇格対象として選んだ後、その UPDATE が 0 行になり、さらに古い残存版が N のまま残る競合があり得ます。",
+      "suggestion": "対象 doc_file ごとに rag_adb_docs 行を SELECT ... FOR UPDATE してから削除・昇格し、取り込みと同じロック順序で直列化してください。現行版と旧版を2接続で同時削除し、残存最新版が必ず Y になる実 DB テストも追加してください。"
+    },
+    {
+      "id": "M-003",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag_adb.py",
+      "line": 160,
+      "issue": "MAX_CHUNKS の判定前に PDF 全ページの抽出結果と全チャンクをリストへ展開します。20MB の圧縮 PDF は抽出後に大幅膨張できるため、2,000チャンク上限がメモリ・処理時間の上限として機能せず、並行アップロードでプロセスを枯渇させる可能性があります。",
+      "suggestion": "ページ・抽出文字・チャンクを逐次処理し、MAX_CHUNKS+1 または総抽出文字数の上限に達した時点で中止してください。ページ数や展開後サイズにも上限を設け、高膨張 PDF の境界テストを追加してください。"
+    },
+    {
+      "id": "m-001",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/rag.py",
+      "line": 291,
+      "issue": "新しい doc_key() はバイト長を考慮しますが、その前に _insert_file() が filename[:400] を rag_files.filename VARCHAR2(400) へ保存します。BYTE セマンティクスでは長い日本語ファイル名がここで ORA-12899 となり、ADB 用の正規化処理へ到達しません。追加テストは _insert_file を monkeypatch しているため検出できません。",
+      "suggestion": "rag_files 側もバイト境界で正規化するか、列を明示的な CHAR セマンティクスへ移行してください。マルチバイト長名を実際の add_file 経路へ通すテストを追加してください。"
+    },
+    {
+      "id": "m-002",
+      "severity": "minor",
+      "file": "spikes/ragm02/teardown.py",
+      "line": 70,
+      "issue": "ユーザーが既に不在かつ ACL が 0 件の再実行経路では、ローカルの wallet・secrets.json・ledger.json を削除せず終了します。DROP USER 成功後から purge_local_secrets() 前に停止した場合、再実行しても認証資材を回収できません。",
+      "suggestion": "--yes --human-approved の実行でユーザーと ACL がともに不在なら、この早期終了経路でも purge_local_secrets() を呼び、再実行時のクリーンアップをテストしてください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 13,
+    "adequacy": "insufficient",
+    "notes": "機能シナリオ7本と安全ガード6本を確認し、クリーンマイグレーション、50,000チャンクの索引・recall 証跡も評価しました。最低2本の要件は十分に超え、SKIPPED.md のブラウザ・配備環境・実アップロード API を省略した理由も明記されています。ただし、パスワード不一致後の再実行、同一文書の複数版同時削除、バックグラウンド/部分マイグレーション中のアップロード、高膨張 PDF は未検証で、差分の安全性・原子性の主張を完全には裏づけません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザ E2E は実施していません。"
+    }
+  }
+}

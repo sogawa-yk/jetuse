@@ -4,12 +4,15 @@ run "full_public_iam_contract" {
   command = plan
 
   variables {
-    tenancy_ocid           = "ocid1.tenancy.oc1..publiciamtest"
-    compartment_ocid       = "ocid1.compartment.oc1..publiciamtest"
-    prefix                 = "jetuse-spike-iam01"
-    enable_semantic_store  = true
-    create_deployer_policy = true
-    deployer_group_subject = "Default/JetUseDeployers"
+    tenancy_ocid              = "ocid1.tenancy.oc1..publiciamtest"
+    compartment_ocid          = "ocid1.compartment.oc1..publiciamtest"
+    prefix                    = "jetuse-spike-iam01"
+    enable_semantic_store     = true
+    enable_project_autocreate = true
+    create_deployer_policy    = true
+    deployer_group_subject    = "Default/JetUseDeployers"
+
+    include_hosted_agent_principals = true
   }
 
   assert {
@@ -17,13 +20,18 @@ run "full_public_iam_contract" {
     error_message = "Runtime dynamic group name must use the configured prefix."
   }
 
+  # PORT-03: ホスト型エージェントのコンテナも resource principal で GenAI/ADB を呼ぶため
+  # runtime DG に含める。ADB は専用 DG に分離したままであること。
   assert {
     condition = (
       strcontains(oci_identity_dynamic_group.runtime[0].matching_rule, "resource.type='computecontainerinstance'") &&
       strcontains(oci_identity_dynamic_group.runtime[0].matching_rule, "resource.type='fnfunc'") &&
+      strcontains(oci_identity_dynamic_group.runtime[0].matching_rule, "resource.type='generativeaihostedapplication'") &&
+      strcontains(oci_identity_dynamic_group.runtime[0].matching_rule, "resource.type='generativeaihostedapplicationiam'") &&
+      strcontains(oci_identity_dynamic_group.runtime[0].matching_rule, "resource.type='generativeaihosteddeployment'") &&
       !strcontains(oci_identity_dynamic_group.runtime[0].matching_rule, "resource.type='autonomousdatabase'")
     )
-    error_message = "Runtime dynamic group must contain only Container Instances and Functions principals."
+    error_message = "Runtime dynamic group must contain the Container Instance, Functions and hosted agent principals."
   }
 
   assert {
@@ -37,13 +45,36 @@ run "full_public_iam_contract" {
   }
 
   assert {
-    condition     = length(oci_identity_policy.runtime[0].statements) == 22
-    error_message = "Full Public runtime policy must contain the reviewed 22 statements."
+    condition     = length(oci_identity_policy.runtime[0].statements) == 27
+    error_message = "Full Public runtime policy must contain the reviewed 27 statements."
+  }
+
+  # PORT-03: 公式 "Permissions for Deploying Applications" が要求する2文。
+  # read vss-family が欠けると Hosted Deployment が脆弱性スキャン待ちのまま ACTIVE にならない。
+  assert {
+    condition = alltrue([for st in ["read repos", "read vss-family"] :
+      contains(oci_identity_policy.runtime[0].statements, "Allow dynamic-group jetuse-spike-iam01-runtime-dg to ${st} in compartment id ocid1.compartment.oc1..publiciamtest")
+    ])
+    error_message = "Hosted agent deployment requires repo read and vulnerability scan read for the runtime dynamic group."
   }
 
   assert {
     condition     = contains(oci_identity_policy.runtime[0].statements, "Allow dynamic-group jetuse-spike-iam01-runtime-dg to manage generative-ai-vector-store in compartment id ocid1.compartment.oc1..publiciamtest")
     error_message = "Runtime policy must allow application-managed Vector Stores."
+  }
+
+  # FIX-58: agentic API(Responses/Conversations)は generative-ai-family に含まれない独立
+  # resource-type。欠けると既定チャットモデル・RAG回答・会話メモリが resource principal で 404 になる。
+  assert {
+    condition = alltrue([for rt in ["generative-ai-response", "generative-ai-conversation"] :
+      contains(oci_identity_policy.runtime[0].statements, "Allow dynamic-group jetuse-spike-iam01-runtime-dg to manage ${rt} in compartment id ocid1.compartment.oc1..publiciamtest")
+    ])
+    error_message = "Runtime policy must allow the agentic API resource types (response / conversation)."
+  }
+
+  assert {
+    condition     = contains(oci_identity_policy.runtime[0].statements, "Allow dynamic-group jetuse-spike-iam01-runtime-dg to manage generative-ai-project in compartment id ocid1.compartment.oc1..publiciamtest")
+    error_message = "Runtime policy must allow GenerativeAiProject auto-creation when enable_project_autocreate=true (FIX-47)."
   }
 
   assert {
@@ -94,8 +125,13 @@ run "minimal_without_semantic_store_or_deployer_policy" {
   }
 
   assert {
-    condition     = length(oci_identity_policy.runtime[0].statements) == 17
+    condition     = length(oci_identity_policy.runtime[0].statements) == 19
     error_message = "Minimal runtime policy must contain runtime and ADB statements only."
+  }
+
+  assert {
+    condition     = alltrue([for s in oci_identity_policy.runtime[0].statements : !strcontains(s, "generative-ai-project")])
+    error_message = "generative-ai-project must be omitted when enable_project_autocreate is default(false)."
   }
 
   assert {
@@ -232,5 +268,31 @@ run "runtime_iam_fully_disabled" {
       length(oci_identity_policy.runtime_tenancy) == 0
     )
     error_message = "All runtime IAM resources must be omitted when both controls are disabled."
+  }
+}
+
+# PORT-03: ホスト型リソースの DG 追加は opt-in。既定(false)では従来どおりの matching rule で、
+# 同一コンパートメントの無関係な Hosted Application に JetUse のランタイム権限が及ばないこと。
+run "hosted_agent_principals_are_opt_in" {
+  command = plan
+
+  variables {
+    tenancy_ocid     = "ocid1.tenancy.oc1..publiciamtest"
+    compartment_ocid = "ocid1.compartment.oc1..publiciamtest"
+    prefix           = "jetuse-spike-iam01"
+  }
+
+  assert {
+    condition = (
+      strcontains(oci_identity_dynamic_group.runtime[0].matching_rule, "resource.type='computecontainerinstance'") &&
+      strcontains(oci_identity_dynamic_group.runtime[0].matching_rule, "resource.type='fnfunc'") &&
+      !strcontains(oci_identity_dynamic_group.runtime[0].matching_rule, "generativeaihosted")
+    )
+    error_message = "Hosted agent principals must stay out of the runtime dynamic group unless the caller opts in."
+  }
+
+  assert {
+    condition     = alltrue([for s in oci_identity_policy.runtime[0].statements : !strcontains(s, "vss-family") && !strcontains(s, "read repos")])
+    error_message = "Hosted agent deployment permissions must not be granted unless the caller opts in."
   }
 }

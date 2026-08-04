@@ -1,0 +1,63 @@
+{
+  "review_n": 2,
+  "timestamp": "2026-07-13T08:03:41+00:00",
+  "reviewer": "codex",
+  "model": "gpt-5.5",
+  "input_diff_path": "reviews/review-2.input.diff",
+  "raw_output_path": "reviews/review-2.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "差分内に認証情報・OCID・エンドポイント実値のコミットは見当たりません。ただし、追加された health ルートの実装ファイルが差分に含まれておらず、クリーンチェックアウトで API 起動不能になる blocker があります。実環境 E2E 証跡も空で、OCI 連携・health・フォールバック挙動の裏づけとして不十分です。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 3,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "packages/api/service/main.py",
+      "line": 75,
+      "issue": "`from .routes import health` と `app.include_router(health.router)` を追加していますが、提供された差分には `packages/api/service/routes/health.py` や依存する `packages/api/jetuse_core/health.py` の追加が含まれていません。クリーンなリポジトリでは import 時点で API が起動しません。",
+      "suggestion": "health ルートと core health 実装を同じ差分に含めるか、未実装ならこの import/router 追加を戻してください。CI では untracked file に依存しない状態で import/startup テストを通してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "packages/api/service/routes/chat.py",
+      "line": 88,
+      "issue": "既定モデルが unavailable の場合、fallback は `MODELS[k].api == \"chat\"` の最初のモデルを選びます。既定モデル `gpt-oss-120b` は responses-family なので、RAG/agent/OCI conversation など responses 前提のリクエストが chat-family に差し替わり、その後 400 になったり機能が落ちたりします。",
+      "suggestion": "fallback は元モデルと同じ API family と必要機能（agent/rag/images/reasoning 等）を満たすモデルに限定してください。代替がない場合は SSE の unavailable エラーを返し、HTTP 400 の機能不一致に変換しないでください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/bootstrap.py",
+      "line": 31,
+      "issue": "`_rp_status` の初期値が `{\"ok\": True}` のため、bootstrap が未実行・設定不足で `_provision` が早期 return・タイムアウトした場合でも `/api/health` 側では Select AI resource principal が成功したように見える可能性があります。",
+      "suggestion": "初期状態を unknown/degraded として表現するか、`_provision` の skip/timeout 時に明示的な hint 付きで not ok に更新してください。既存環境を許容するなら health 側で「未確認」と「成功」を区別してください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "major",
+      "file": "runs/2026-07-13T0730_PORT-02/e2e",
+      "line": 1,
+      "issue": "実環境 E2E 証跡が空です。今回の差分は OCI 認証フォールバック、Select AI/resource principal health、TTS、DBChat、チャットモデル fallback など実環境依存の挙動を変更しており、最低2シナリオの証跡なしでは完了主張を裏づけられません。",
+      "suggestion": "jetuse-dev で少なくとも `/api/health`、DBChat sample/datasets、chat default unavailable fallback、TTS degraded のうち主要経路2本以上を実行し、ログ・HTTP 応答・画面/CLI 証跡を `runs/<run-id>/e2e/` に残してください。未実施範囲がある場合は `SKIPPED.md` に理由を記載してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-07-13T0730_PORT-02/e2e` は空と記載されており、レビュー可能な実環境 E2E 証跡はありません。OCI 実サービス連携を含む差分の主張を裏づけるには不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲット URL が提供されていないため、指示どおり実ブラウザ E2E は実施していません。"
+    }
+  }
+}

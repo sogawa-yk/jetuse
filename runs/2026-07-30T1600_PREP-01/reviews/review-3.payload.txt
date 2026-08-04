@@ -1,0 +1,2714 @@
+diff --git a/STATE.md b/STATE.md
+index 5a96cdd..0ef6066 100644
+--- a/STATE.md
++++ b/STATE.md
+@@ -1,238 +1,60 @@
+-# STATE — RAGM-02（Oracle AI Database バックエンド `adb` の追加）
++# STATE — PREP-01（xlsx の前処理（セル位置つき抽出）と取り込み口）
+ 
+-- task: RAGM-02
+-- run_id: 2026-07-30T0025_RAGM-02
+-- branch: feat/RAGM-02（base: main。共有物のため dev ではなく main 起点）
++- task: PREP-01
++- run_id: 2026-07-30T1600_PREP-01
++- branch: feat/PREP-01（base: main。共有物のため main 起点）
+ - area: api
+-- review_verdict: **PASS**（review-11。blocker 0 / major 3 / minor 2・E2E adequacy=sufficient）
+-- last_review_ref: runs/2026-07-30T0025_RAGM-02/reviews/review-11.json
++- review_verdict: **FAIL**（review-1。blocker 2 = 新規ファイルが diff に載っていない / E2E 未実施。両方このターンで解消済み → 再レビュー待ち）
++- last_review_ref: runs/2026-07-30T1600_PREP-01/reviews/review-1.json
+ - updated_at: 2026-07-30
+ 
+ ## やったこと
+ 
+-### 1. 前提のスケール検証（実装より前に実施・タスク指定）
++### 実装（入口だけを足す。RAGM-01 / RAGM-02 の配管は作り直していない）
+ 
+-`spikes/ragm02/` を新設し、共有 loop ADB の検証用スキーマで
+-**50,000 チャンク**を投入して測った（ADB は増やさず、共有 loop ADB 内の **run 固有スキーマ**
+-`JETUSE_RAGM02_<乱数>` で RAGM-01 と隔離）。
+-レポート `docs/verification/RAGM-02.md`、ログ `runs/2026-07-30T0025_RAGM-02/e2e/scale/`。
++- `packages/api/jetuse_core/extract_xlsx.py`（新規）: `openpyxl` を **read_only + data_only** で開き、
++  シートごとに**連続する非空セルの矩形**（空行・行の飛びが区切り）を 1 チャンクにして
++  `sheet`（シート名）と `cells`（A1 形式）を付ける。テキスト化は行ごとにタブ区切り。
++  上限（`workbook_bytes` 10MB / `chunks` 1,000 / `chunk_chars` 2,000）は**切り詰めずに拒否**し、
++  どの上限かを `limit=<名前>` として例外本文に持つ（ルート側で 422）。
++  上限に収まらない塊は**行境界で分割**する（分割は切り詰めではない）。
++- `rag.ALLOWED_EXTENSIONS` に `.xlsx`。`rag.prepare_upload()` が xlsx だけ
++  「抽出テキスト（`<原名>.xlsx.txt`）+ **ファイル単位**の属性」に変換する。
++  台帳の表示名・原本バックアップ・`sha256` は元の xlsx のまま。
++- `rag_adb.chunk_units()` が xlsx を `extract_xlsx` へ振り分け（出典が行番号 → セル範囲に）。
++- `rag_opensearch._extract_text()` も抽出経由に（xlsx を UTF-8 デコードして文字化け本文を入れない）。
++- `POST /api/extract`（新規・要認証）: 取り込まずに `{filename, chunk_count, chunks}` を返す。
++- 単体テスト: `tests/test_extract_xlsx.py`（16 件）+ `tests/test_rag.py` に 13 件追加。全 524 件パス・ruff クリーン。
+ 
+-- HNSW 索引は作れた（57 秒）。SPIKE-M1 の 10 行では届かなかった「索引が実際に使われる状態」に到達。
+-- **メタデータ絞り込み付きでも索引は使えるが、素の表では計画が実行ごとに揺れた**
+-  （投入からやり直した 2 回の計測で全件走査と `HNSW SCAN IN-FILTER` の両方が出た）。
+-  **フィルタ列に B木索引 + `owner_sub` 込みで絞ると 2 回とも `HNSW SCAN PRE-FILTER`** で安定。
+-  → `rag_adb.ensure_indexes()` が B木 3 本を作る（マイグレーションには置かない = 下記）。
+-  ラウンド3 は**実装の `search_sql()` が返す SQL そのもの**で測っている。
+-- ベクタ索引が無いときは同じ SQL が厳密検索へ落ちて結果が一致する（実測）。索引作成の失敗で
+-  取り込みを止めない設計の根拠。
+-- `TARGET ACCURACY` 80 以上で recall@10 = 1.00（70 では最低 0.80）。索引の既定 95 は据え置き。
+-- レイテンシは厳密 18〜91 ms / 近似 18〜86 ms。この規模では速度は方式選択の決め手にならない。
++### 能力差を隠していない（ADR-0020 の決定内容）
+ 
+-### 2. 実装（新規モジュール。既存 3 バックエンドは未変更）
++マネージド Vector Store の属性は**ファイル単位**なので、`sheet` / `cells` は
++`(ブック全体: N シート)` / `(ブック全体)` になる。1 チャンク = 1 ファイルへ割って
++「セル単位で返る」ように見せる細工はしていない。導出値の利用者上書きも 422 で断る
++（上書きできると能力差を偽装できるため。review-1 F-003 の対応）。
+ 
+-- `packages/api/jetuse_core/rag_adb.py`: チャンク化（行を跨がず、チャンクごとに `sheet` と
+-  行範囲 `L{開始}:L{終了}` を出典として持つ）→ クライアント側埋め込み → 投入、
+-  「メタデータ絞り込み + ベクタ類似検索」を 1 本の SQL、構造化出典つき citations、`generate()`。
+-- `migrations/017_rag_adb.sql`: 本文 + メタ列 + `JSON` + `VECTOR(1024, FLOAT32)`（**CREATE TABLE 1 文だけ**。
+-  索引は `ensure_indexes()` が冪等に作る）。
+-- `rag_backend='adb'` を `ChatRequest` とチャットの RAG ディスパッチに追加。
+-  ディスパッチは `NON_RESPONSES_RAG_BACKENDS`（モジュール表）へ整理し、`generate` は呼び出し時に引く。
+-- `rag.attach_backend_status()` に `adb` 欄（`indexed` / `pending` / `disabled`）、
+-  `add_file` から best-effort で取り込み。削除は台帳行と同一トランザクション（`_delete_row`）。
+-- 単体テスト `packages/api/tests/test_rag_adb.py`（55 件）。
++### 実環境 E2E（4 シナリオすべて PASS）
+ 
+-### 3. 決めたこと（根拠つき）
+-
+-**埋め込みはクライアント側**。DB 内埋め込み（`UTL_TO_EMBEDDING`）は `OCI$RESOURCE_PRINCIPAL` では
+-ORA-24247 で通らず（ACL に connect/resolve/http を付けても不可・実測）、`DBMS_VECTOR_CHAIN.CREATE_CREDENTIAL`
+-による **API キーの DB 内資格証明**が要る＝ADR-0021 が廃止した経路のため、**実装に入れなかった**
+-（使えない選択肢を設定で残さない）。ADR-0020 の未解決事項に結論を追記。
+-
+-## E2E（実 ADB・run 固有スキーマで隔離）
++隔離: 共有 loop ADB の run 固有スキーマ `JETUSE_PREP01_<乱数>`（ADB は増やしていない）。
++OCI 側は `jetuse-spike-prep01-` 接頭辞。架空データのみ。スクリプトは `spikes/prep01/`。
+ 
+ | # | シナリオ | 結果 | 証跡 |
+ |---|---|---|---|
+-| 1 | 同一ファイル由来の 3 チャンクが**別々の** cells（`L1:L4` / `L4:L6` / `L6:L7`）を返す | PASS | `e2e/scenario-1.md` |
+-| 2 | 業務表（文書管理台帳）と JOIN したベクタ検索が 1 クエリで成立・機密文書は除外 | PASS | `e2e/scenario-2.md` |
+-| 3 | 版フィルタの対照（無し: 旧版 6 件 / `current_version='Y'`: 0 件） | PASS | `e2e/scenario-3.md` |
+-| 4 | アプリ経路（`POST /api/chat/stream` の ASGI 統合テスト・相手は実 ADB / 実 LLM）で回答（v2 の 600 を返し旧版 300 を含まない）+ citations 後方互換 + バッジ | PASS | `e2e/scenario-4.md` |
+-| 5 | 削除の原子性（台帳行とチャンクが同一トランザクションで消える） | PASS | `e2e/scenario-5.md` |
+-| 6 | 現行版を削除すると**旧版が現行へ戻る**（2.0 削除 → 1.0 が現行に） | PASS | `e2e/scenario-6.md` |
+-| 7 | **同名ファイルの同時取り込み**（2 接続・実行区間が重なったことも確認）で版 1.0/2.0 に分かれ、現行版は 1 つ | PASS | `e2e/scenario-7.md` |
+-| 否定 | 安全ガード 6 件（作り直し / **同秒作り直し** / 台帳空 / **最終照合前の差し替え** / **既存再利用時に権限を変えずに中止**）で非ゼロ終了 | PASS | `e2e/guard.md` |
+-
+-マイグレーションの**クリーン適用**（001〜019。空スキーマへ順に適用し 3 表の存在を確認）も証跡に残した（`e2e/migrate.md`）。
+-
+-- 実施しなかった範囲と理由: `e2e/SKIPPED.md`
+-- 検証用リソースは削除済み（`e2e/teardown.md`。50,000 行の検証表を含むスキーマごと）。
+-  本タスクのスクリプトが打つ `DROP USER` は `JETUSE_RAGM02` の 1 か所だけであることを証跡に併記
+-- `.venv/bin/pytest packages/api/tests` **460 passed** / `.venv/bin/ruff check packages/api spikes` クリーン
+-
+-## 実機で踏んだ落とし穴（`docs/tips.md` に追記済み）
+-
+-- `:file` をバインド名にすると `ORA-01745`（予約語衝突）。接頭辞 `flt_` を付ける実装に変更し、単体テストで固定。
+-- 同一セッションで DDL を打った直後の最初の `EXPLAIN PLAN` は `ORA-00900` になる。1 回引き直せば通る。
+-  握り潰すと「計画取得不可」で証跡が空になり、測っていないのに測ったように見える（実際に一度そうなった）。
+-- メタデータ絞り込みとベクタ索引の関係（上記 1）。
+-
+-## review-1（FAIL: blocker 1 / major 5 / minor 1）への対応
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001: 所有台帳が `DB_NAME:SCHEMA:作成時刻(秒)` だけで、同秒の作り直しを見分けられない。DROP 直前の再照合も無い | 台帳を **USER_ID + 作成時刻 + run 固有のマーカー表**の 3 点に変更し、**開始時と `DROP USER` 直前の 2 回**照合する。否定 E2E を 5 件に拡張（同秒作り直し相当・**実際に race を起こす TOCTOU** を含む。いずれも exit≠0 でリソース無傷） |
+-| M-001: 実装は `FETCH FIRST`（厳密）なのに検証は `FETCH APPROX FIRST` で測っており、索引利用の主張を裏づけない | 実装を `FETCH APPROX FIRST` に統一し、`search_sql()` を公開。**検証スクリプトが同じ関数から SQL を得る**ようにして、50,000 行で計画と recall を取り直した（ラウンド3） |
+-| M-002: 取り込み・削除の best-effort で、削除は API 成功なのにチャンクが残りうる | 削除を**台帳行と同一トランザクション**に（`rag.py:_delete_row`）。失敗すれば commit しない＝削除は失敗として返る。実 DB のシナリオ 5 と単体テスト 2 件で固定。取り込みの自動リトライは未実装で残課題として明記 |
+-| M-003: 1 migration に CREATE TABLE + 索引 3 本。途中失敗で再実行不能になる | 017 を **CREATE TABLE 1 文だけ**にし、索引は `ensure_indexes()` が冪等に作る。クリーン適用（001〜017）を証跡に追加 |
+-| M-004: 上限超えの 1 行が分割されず、埋め込みの 2000 文字切り詰めと食い違う／生成の文脈が破裂する | 長い行を**文字オフセット付き**（`L12c1-800`）で分割。生成へ渡す文脈も 1 ヒット 1,200 文字で上限。境界テストを追加 |
+-| M-005: 版採番に競合対策が無い | 既存行を `FOR UPDATE` でロックしてから採番。初回同時取り込みだけは直列化できない旨を docstring と限界に明記 |
+-| m-001: シナリオ4 が回答内容を検証していない | HTTP 経路に変更し、**現行版の 600 を含み旧版の 300 を含まない**ことと citations が全件現行版であることを判定条件に |
+-
+-## review-2（FAIL: blocker 2 / major 3 / minor 3）への対応
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001: `setup_schema` の既存再利用が USER_ID・作成時刻しか見ずに GRANT / ACL / RP 付与を打つ | **最初の DDL の前に**マーカーを含む 3 点照合。否定 E2E に G6（既存再利用でマーカー不一致 → 権限が 1 つも変わらず中止）を追加 |
+-| B-002: 削除時の `enabled()` が接続失敗を False に丸め、チャンク削除だけ飛ばして台帳行を commit しうる | 可用性チェックを外し、**同じ cursor で必ず** `delete_chunks` を実行。許すのは表が無い場合（ORA-00942）だけ。単体テスト 2 件を追加 |
+-| M-001: 台帳の記録が全 GRANT 成功後で、途中失敗すると所有不明のスキーマが残る | **CREATE USER の直後**に receipt を記録し、マーカーは後から追記する（空マーカー同士の一致は許容） |
+-| M-002: HTTP E2E がアップロード API 経路（`add_file` → `rag_adb.ingest`）を通っていない | 配線を単体テストで固定（有効時に呼ぶ / 無効時は呼ばない / 取り込み失敗でもアップロードは成功）。実アップロード API を実行しない理由は `SKIPPED.md` に明記 |
+-| M-003: teardown の ACL 削除がホスト・権限の指定違いで ORA-01927、かつ ACL 残存でも成功終了 | 残っているときだけ**付与と同じホスト・権限**で削除し、**ユーザー 0 件かつ ACL 0 件**でのみ成功終了。実測では `DROP USER` で同時に消える |
+-| m-001: 400 文字超のファイル名で採番・旧版化・INSERT の値がずれる | `doc_file` を 1 か所で正規化して全処理で共有。境界テストを追加 |
+-| m-002: ADR / spec の「B木索引が無い限り使われない」が証跡と矛盾 | 「素の表では計画が不安定 / B木 + owner で PRE-FILTER が安定」に修正。反映先も `ensure_indexes()` と明記 |
+-| m-003: `AdbBackendUnavailable` は 503 と書いてあるが実際は SSE の error フレーム | docstring を実装どおりに修正し、表が無いときに型付き例外が上がることを単体テストで固定 |
+-
+-## review-3（FAIL: blocker 2 / major 5）への対応
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001 / B-002: 固定名スキーマに対する自動 `DROP USER` / `CREATE USER` は、最終照合と実行の間に作り直されると別主体を触りうる。run 固有名にせよ | **スキーマ名はタスク指定の固定名**（`JETUSE_RAGM02` で隔離せよ）なので変更しない。Codex が示した代替（「固定名なら原子性を主張しない」）を採り、G5 の記述を「**最終照合より前**の差し替えを検出する」に修正し、残る窓を `SKIPPED.md` と報告書の「判断が要る事項」へ**受容した残リスク**として明示。`setup_schema` 側は最初の DDL 前に 3 点照合（G6）で塞いだ |
+-| M-001: 現行版を削除しても旧版が `N` のままで検索不能になる | 削除と同一トランザクションで**最新の残存版を現行へ昇格**。単体テスト 3 件 + 実 DB のシナリオ 6 |
+-| M-002: 同名ファイルの初回同時取り込みが両方 1.0 / 現行版になる | 文書レジストリ `rag_adb_docs`（018・PK=(owner,doc_file)）の行を作ってからロックして採番。初回競合も直列化される |
+-| M-003: 0 チャンク・取り込み失敗が永久に `pending` で区別できない | レジストリに `status` / `error` を持たせ、バッジに **`error`** を追加。0 チャンク（本文を取り出せない PDF 等）と例外の両方を記録。単体テスト 4 件 |
+-| M-004: チャンク長判定が改行と overlap を数えず上限を超える | 保存する本文（改行込み）で判定し、overlap も上限内に縮退。空行大量・上限近傍のテストを追加 |
+-| M-005: 「TOCTOU 検証済み」は言い過ぎ | STATE・`guard.md`・`SKIPPED.md`・検証レポートの記述を実際に検証した内容へ修正（上記 B-001 と同じ） |
+-
+-## review-4（FAIL: blocker 1 / major 6 / minor 1）への対応
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001: 固定名スキーマの自動 CREATE/DROP に閉じられない競合窓がある | Codex の代替案（「固定名なら自動 DROP を人間ゲートへ移す」）を採用。**`teardown.py` は `--yes` に加えて `--human-approved` が必須**になり、ループからは呼ばない。`setup_schema` は最初の DDL 前に 3 点照合。**run 固有名にするかはタスク指定（`JETUSE_RAGM02` で隔離）の変更**なので人間の判断事項として報告 |
+-| M-001: PDF 以外を全部 UTF-8 で読むので DOCX / 画像が文字化け本文として indexed になる | 対応形式を `.txt` / `.md` / `.pdf` に明示。未対応・UTF-8 で読めない入力は取り込まず `error` として記録。単体テスト 2 件 |
+-| M-002: `filename[:400]` を文書キーにしており、先頭が同じ別ファイルが統合される / BYTE セマンティクスで溢れる | `doc_key()` を新設。**バイト長**で切り、切ったときは原名のハッシュを付ける（衝突しない）。境界テスト追加 |
+-| M-003: 取り込み状態が文書単位で、後続の取り込みが前の失敗を上書きする | 状態表を **`file_id` 単位**（`rag_adb_ingest` / 019）へ分離。文書レジストリ（018）は版のロック専用に |
+-| M-004: 否定シナリオが `RAGM02_HOME` ごと複製してウォレット・パスワードを増やし、消していない | `RAGM02_LEDGER_PATH` で**台帳だけ**差し替える方式に変更（秘密を複製しない）。一時台帳は実行後に必ず削除 |
+-| M-005: ユーザー不在時に早期 return するので、ACL の消し残しを再実行で回収できない | ユーザーの有無に関わらず ACL 残存を点検し、残っていれば削除。**ユーザー 0 件かつ ACL 0 件**でのみ成功終了 |
+-| M-006: 初回同時取り込みの直列化が SQL 文字列の確認だけで実証されていない | **実 ADB の 2 接続で同時取り込み**（E2E シナリオ 7）。版 1.0 / 2.0 に分かれ、現行版は 1 つ、レジストリは 1 行 |
+-| m-001: `backends.adb` の状態一覧に `error` が無い | 仕様（`specs/09-rag.md`）・コード内コメント・`SKIPPED.md`・検証レポートを `indexed` / `pending` / `error` / `disabled` に統一 |
+-
+-## review-5（FAIL: blocker 1 / major 3 / minor 1）への対応
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001: `CREATE USER` と所有証拠の記録が別 SQL で、間に作り直されると別主体を台帳へ採用しうる | ① **`setup_schema.py` も人間ゲート**（`--human-approved` 必須）にし、自動実行の経路から外した ② `CREATE USER` の直後に**自分が生成したパスワードでログインできること**を確かめてから権限を付ける（別主体が作り直していれば必ず失敗する）③ ログイン確認の直後に台帳へ記録（途中失敗からの復旧可能性）。run 固有名にするかは**タスク指定の変更**なので人間の判断事項として報告 |
+-| M-001: `enabled()` が接続瞬断も「無効」に丸め、その間のアップロードが記録も残らず消える | 可用性を **`ready` / `absent` / `unavailable` の三値**に。`unavailable` はそのファイルを `error` として記録する（復旧後に気づける）。単体テスト 3 件 |
+-| M-002: 20MB のアップロードで全チャンクのベクタを一括保持する | 埋め込みと INSERT を **200 チャンクずつの有界バッチ**に。バッチ境界を跨ぐ規模の単体テストを追加 |
+-| M-003: `migrate.md` が「up to date」でクリーン適用を示していない | **空スキーマへ 001〜019 を適用**した証跡に差し替え、`RAG_ADB_CHUNKS` / `RAG_ADB_DOCS` / `RAG_ADB_INGEST` の 3 表の存在確認も記録 |
+-| m-001: レジストリ INSERT が全 `IntegrityError` を握り潰す | **ORA-00001 だけ**を競合として許し、他は再送出。ロック後に行が無ければ明示的に失敗。単体テスト 2 件 |
+-
+-## review-6（FAIL: blocker 1 / major 2）への対応
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001: 取り込みと削除が別トランザクションで、取り込み中に削除すると「削除成功なのに後からチャンクが commit される」 | 取り込みは**台帳行（`rag_files`）を `FOR UPDATE` で押さえてから**チャンクを作り、行が無ければ 1 行も作らず中止（`IngestAborted`）。削除側も同じ行を `FOR UPDATE` で取る＝両者が直列化される。単体テスト追加。E2E も実運用と同じ順序（台帳行 → 取り込み）に統一 |
+-| M-001: 可用性を一度 READY で覚えるため、その後の障害を検出できない | **キャッシュを廃止**（毎回問い合わせる）。「一度 READY を見た後に接続断 → UNAVAILABLE になる」テストを追加 |
+-| M-002: G6 の setup 実行に `--human-approved` が無く、人間ゲートで止まっただけの証跡だった | フラグを渡して所有権照合まで到達させ、**停止理由が「マーカーが不一致」であること**も判定条件に加えた（証跡: `停止理由=所有権照合:True`） |
+-
+-## review-7（FAIL: blocker 1 / major 5 / minor 2）への対応
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001: ログイン確認の前に `GRANT CREATE SESSION` を打っており「他人のスキーマに権限を付けない」が成立していない | **権限を 1 つも付けずに**パスワード一致だけで同一性を判定する（`ORA-01045`= 権限不足＝資格情報は正しい / `ORA-01017`= 別主体、を区別）。`CREATE USER` 直後に receipt を永続化してから判定する |
+-| M-001: DB 接続とロックを保持したまま外部の埋め込み API を待ち、プール（最大 4）が枯渇しうる | **埋め込みはトランザクションの外**で完了させ、そのあと短いトランザクションで台帳行ロック → INSERT。1 ファイル 2,000 チャンクの上限も追加（ベクタ保持量と時間の上限）。順序を固定する単体テスト追加 |
+-| M-002: 障害中の `mark_unavailable()` は同じ落ちた DB へ書くので握り潰される | 記録は best-effort のままだが、`SKIPPED.md` / レポートに「全断中のアップロードは `pending` のまま残り、再アップロードで取り込まれる」と明記（恒久対策の outbox は後続） |
+-| M-003: agent と rag の排他検査が RAG ディスパッチより後で、`agent + adb` が素通りする | 排他検査を**ディスパッチより前**に移動（`agent` / `agent_id` の双方）。非Responses系 3 経路すべてに効く |
+-| M-004: 所有台帳を `write_text` で直接切り詰めており、途中で壊れると回収不能 | 同ディレクトリの 0600 一時ファイルへ書いて fsync → `os.replace` の**原子的更新**に（秘密ファイルも同じ） |
+-| M-005: シナリオ4 を「実 HTTP 経路」と書いているが実体はプロセス内 ASGI | 表記を**「ASGI 統合テスト」**に修正し、配備環境での実ネットワーク検証は未実施として `SKIPPED.md` に残した |
+-| m-001: 片付け後もローカルにウォレット・パスワードが残る | DB 側が完全に片付いたときだけ、ウォレット・秘密・台帳を削除する（失敗が残るときは回収のため保持） |
+-| m-002: バッジのテストが実 DB へ接続しうる | `errored_file_ids` / `enabled` を monkeypatch し、DB に触れないよう固定 |
+-
+-## review-8（FAIL: blocker 1 / major 3 / minor 2）への対応
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001: パスワード確認前に台帳へ receipt を書くので、確認に失敗しても次回「空マーカー同士が一致」で再利用されうる | 台帳に **`verified` 状態**を持たせ、作成直後は `verified=false`。**未検証の receipt は所有証明として再利用しない**（照合が必ず落ちる）。既存再利用の経路でも**毎回パスワード一致を取り直す**。中断からの復旧用に `--reverify --human-approved`（DDL を打たずに再検証するだけ）を追加 |
+-| M-001: `availability()` が 017 だけ見るので、部分適用中も READY になる | **3 表そろって初めて READY**。部分適用は `unavailable`（= そのファイルを error として残す）、未導入は `absent`。3 状態のテスト追加 |
+-| M-002: 削除・昇格が文書レジストリをロックせず、同時削除で「全部 N」が残りうる | 削除も**取り込みと同じロック順序**（文書レジストリ行 → チャンク）に乗せた。順序を固定する単体テスト追加 |
+-| M-003: `MAX_CHUNKS` 判定の前に PDF 全頁を展開するので上限が効かない | 抽出を**逐次（ジェネレータ）**にし、頁ごとに累計文字数を見て `MAX_EXTRACT_CHARS` で打ち切る。チャンク数も生成しながら打ち切る |
+-| m-001: `rag_files.filename` を文字数で切っており、長い日本語名で ORA-12899 になりうる | 台帳側も**バイト境界**で切る（`_fit()`） |
+-| m-002: DROP 済み・ACL 0 件の再実行経路でローカル資材が残る | その経路でも `purge_local_secrets()` を呼ぶ |
+-
+-## review-9（FAIL: blocker 1 / major 1 / minor 1）への対応
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001: 削除時の `ORA-00942` 握り潰しが広すぎ、017 のみ適用の**部分適用**でも台帳行だけ commit されてチャンクが残る | 「チャンク表が無い（＝未導入）」だけを**同じ接続で明示的に判定**して 0 件返し、それ以外の表欠落（部分適用）は**失敗させる**。単体テスト 2 件（未導入は許容 / 部分適用は commit しない） |
+-| M-001: シナリオ7 が「実際に競合した」ことを示していない（逐次実行でも同じ結果） | 台帳行を**競争の前に**用意し、`threading.Barrier` で 2 スレッドを同時に突入させ、**実行区間が時間的に重なったこと**（`overlapped=True`）も判定条件にした |
+-| m-001: 「実装どおりの構成で 2 回とも PRE-FILTER」は証跡と食い違う（その形の計測は 1 回） | 検証レポートを実測どおりに修正（「メタデータ列に索引がある構成では 2 回とも索引が使われた。実装どおりの形（PRE-FILTER）の計測は 1 回」） |
+-
+-## review-10（FAIL: blocker 1 / major 4）への対応と、停止の理由
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001: 否定テストが `--yes --human-approved` を自動付与しており、人間ゲートを迂回している | 破壊を伴うケース（G5）は **`RAGM02_GUARD_DESTRUCTIVE=1` の明示 opt-in でだけ**実行するようにし、既定は dry-run（所有権照合までは同じ経路）。**ただしこれは review-4 の指摘（「否定シナリオなのだから実削除を試させよ」）と逆向き**で、両立させるにはスキーマ名を run 固有にするしかない（= タスク指定の変更） |
+-| M-001: 原本バックアップのキーだけ正規化前の名前を使い、長い名前で消し残る | バックアップ / 削除の両方を台帳と同じ正規化名（`_fit()`）に統一 |
+-| M-002: 部分マイグレーション中は失敗の記録先（019）自体が無く、記録できない | 恒久対策（永続 outbox と再開ジョブ）は範囲外。`SKIPPED.md` に残課題として明記 |
+-| M-003: DDL 成功 → 履歴 INSERT 前に停止すると再実行が ORA-00955 になる | **マイグレーションランナー（`jetuse_core/migrate.py`）の既存設計**に由来（001〜016 も同じ）。1 ファイル 1 DDL で影響を最小化したうえで、ランナーの回復設計はリポジトリ全体の後続課題として `SKIPPED.md` に記載 |
+-| M-004: シナリオ7 の同期点が `ingest()` 入口で、版採番の critical section の重なりを直接示していない | 実測は「2 スレッドの実行区間が重なったうえで版が 1.0/2.0 に分かれ現行版が 1 つ」まで。直接示すには製品コードにテスト用フックが要るため、限界として `SKIPPED.md` に明記 |
+-
+-**停止の理由**: 10 ラウンドで製品コードの指摘（版の昇格・削除の原子性・部分適用・
+-チャンク境界・競合・形式ゲート等）はすべて解消した。残る blocker は
+-**検証用ハーネスが固定名スキーマ `JETUSE_RAGM02` を自動で作成・削除すること**に集約され、
+-Codex の構造的な解決案（run 固有のスキーマ名）は**タスク指定（「タスク専用スキーマ
+-JETUSE_RAGM02 で隔離すること」）の変更**にあたる。さらに review-4 と review-10 の指摘は
+-互いに逆向き（実削除を試せ / 実削除のフラグをテストから立てるな）で、固定名のままでは
+-両立しない。よって **FAIL override の判断を人間に仰いで停止**する（loop-protocol 手順7）。
+-
+-## review-10 への追加対応（オーケストレータ承認 2026-07-30 を受けて）
+-
+-判断1・2 の回答: **override はしない / 指示を「共有 loop ADB 内の run 固有スキーマ名で隔離」へ変更**。
+-これを受けて正攻法で解消した。
+-
+-| 指摘 | 対応 |
+-|---|---|
+-| B-001（review-3〜10 で繰り返し出ていた固定名スキーマの TOCTOU） | **スキーマ名を run 固有（`JETUSE_RAGM02_<乱数>`）にした**。同名を作る他主体がいないので窓が構造的に消える。ADB は増やしていない（隔離はスキーマのみ）。既存があれば中止する形・3 点照合・DROP 直前の再照合は維持 |
+-| review-4 と review-10 の相反（実削除を試させよ / テストが人間ゲートのフラグを立てるな） | **両立した**。否定シナリオは `teardown.py --yes` の**実削除を実際に試させる**（review-4）。run 固有名なので人間ゲート自体が不要になり、テストがフラグを立てる問題も消えた（review-10）。`RAGM02_GUARD_DESTRUCTIVE` の opt-in は撤去 |
+-| setup / teardown の人間ゲート | 固定名に起因する措置だったので撤回。破壊操作の明示フラグ `--yes` は CLAUDE.md の規約どおり維持 |
+-| M-001（正規化名の統一） | 対応済みを維持 |
+-| M-002 / M-003 / M-004 | 範囲外・限界として `SKIPPED.md` に明記（部分適用中の再送キュー / マイグレーションランナー全体の回復設計 / 同期点の粒度） |
+-
+-証跡はスケール検証（3 ラウンド）・E2E（7 シナリオ）・ガード（6 件）とも **run 固有スキーマで
+-最初から通しで再取得**した。片付け後、共有 ADB に `JETUSE_RAGM02%` は 1 つも残っていない。
+-
+-## review-11: **PASS**（blocker 0 / major 3 / minor 2・E2E adequacy=sufficient）
+-
+-固定名スキーマを run 固有名にしたことで、review-3〜10 で繰り返し出ていた B-001 系の指摘が解消し、
+-11 ラウンド目で PASS。停止規律（loop-protocol 手順6）に従い、PASS 後は非 blocker を追わない。
+-
+-### PASS 後に行った修正（**コードは変更していない。文書と証跡のみ**）
+-
+-Codex の major 2 件は「引き渡す文書そのものの正確さ」だったので直した:
+-
+-- RAGM02-002: 検証レポートの数値が添付証跡と不一致 → **証跡（`scale/*.json`・ログ）と一致する数値へ全面的に直した**
+-- RAGM02-003: 片付け手順の記述が実装と逆（`--human-approved` 必須と書いてあった）→ 実装どおり（`--yes` のみ）へ
+-- 証跡の混在（旧固定名の setup / teardown ログ）→ **setup → スケール 3 ラウンド → E2E → ガード → 片付けを
+-  単一の run 固有スキーマで通しで取り直し**、証跡セットを 1 本化
++| 0 | `POST /api/extract` が取り込まずに返す / 上限超過 422（`limit=chunks`） | PASS | `e2e/scenario-0.md` |
++| 1 | `adb`: 同一ファイルの引用がチャンクごとに違う（`制約 C5:E6` / `改訂履歴 A1:C2` …） | PASS | `e2e/scenario-1.md` |
++| 2 | `vector_store`: 属性はファイル単位 + **素の xlsx は 400 `unsupported_file`**（実測） | PASS | `e2e/scenario-2.md` |
++| 3 | 版フィルタ `current_version='Y'` が xlsx 由来のチャンクにも効く | PASS | `e2e/scenario-3.md` |
+ 
+-### residual（未対応・後続トリアージ）
++レポート `docs/verification/PREP-01.md` / 実施しなかった範囲は `e2e/SKIPPED.md`。
+ 
+-| id | 位置 | 内容 |
+-|---|---|---|
+-| RAGM02-001 (major) | `jetuse_core/rag_adb.py:365` | `_mark_failed()` が `rag_files` をロックせず別トランザクションで状態を書くため、失敗記録と削除が競合すると取り込み状態の行が孤児として残りうる |
+-| RAGM02-004 (minor) | `jetuse_core/rag.py:418` | `enabled()` が `absent` と `unavailable` の両方で False になり、DB 障害中もバッジが `disabled`（=未導入）に見える |
+-| RAGM02-005 (minor) | `jetuse_core/rag_adb.py:316` | `error VARCHAR2(1000)` に対しエラー文を 1000 **文字**で切っており、日本語だと ORA-12899 になりうる |
++## 未完 / 残課題
+ 
+-（M-002 部分適用中の再送キュー / M-003 マイグレーションランナー全体の回復設計 /
+-M-004 同時取り込みの同期点の粒度は `e2e/SKIPPED.md` に限界として記載済み）
++- **`select_ai` と xlsx 原本**（後続タスクとして起票が要る）: `.xlsx` 許可により原本が
++  Object Storage に載るが、Select AI は DB 側パイプラインが原本を読むためアプリ側の抽出を通らない。
++- `opensearch` 経路の xlsx は単体テストのみ（この環境では disabled）。
++- OCI 側の検証資源と検証スキーマの片付け: `spikes/prep01/teardown.py --yes` →
++  `spikes/ragm02/teardown.py --yes`。
+ 
+-## 残タスク
++## 人間ゲート
+ 
+-- 人間ゲート: コミット / PR / push（未実施）
++- コミット / PR / push（未実施）。
+diff --git a/docs/verification/PREP-01.md b/docs/verification/PREP-01.md
+new file mode 100644
+index 0000000..6292df5
+--- /dev/null
++++ b/docs/verification/PREP-01.md
+@@ -0,0 +1,156 @@
++# PREP-01 検証レポート: xlsx の前処理（セル位置つき抽出）と取り込み口
++
++実施日: 2026-07-30 / リージョン: ap-osaka-1 / 対象: `adb` と `vector_store` の両バックエンド
++仕様の正本: `docs/decisions/ADR-0020-rag-metadata-backend.md` / `specs/09-rag.md` [PREP-01]
++実測の前提: `docs/verification/SPIKE-M1.md` ①-a（マネージドの属性はファイル単位）・③（ADB はチャンク単位）
++証跡: `runs/2026-07-30T1600_PREP-01/e2e/`（実施しなかった範囲は同ディレクトリの `SKIPPED.md`）
++
++## 結論（先に）
++
++**xlsx を投げると、シート名とセル範囲を持ったチャンクとして取り込める。**
++実環境（実 OCI Generative AI + 実 ADB）で確認した。
++
++1. `adb` バックエンドでは、1 ファイルの引用が**チャンクごとに異なる出典**を返す
++   （`制約 C5:E6` / `制約 C40:E40` / `改訂履歴 A1:C2` / `API一覧 B12:D14`）。
++   「仕様書 v2.0 の『制約』シートの C5:E6 が根拠」まで返せる状態になった。
++2. マネージド Vector Store は**ファイル単位**のままである（`sheet="(ブック全体: 3 シート)"` /
++   `cells="(ブック全体)"`）。**この差は隠していない**。
++3. 版フィルタ（`current_version='Y'`）は xlsx 由来のチャンクにも効く。
++
++## 新しく分かったこと（一次情報）
++
++### マネージド Vector Store は xlsx を受け付けない（実測）
++
++素の xlsx を `files.create` → `vector_stores.files.create` に流すと 400 で断られる
++（`runs/.../e2e/scenario-2.md` (a)）:
++
++```
++BadRequestError: 400 - {'error': {'code': 'unsupported_file',
++  'message': "Unsupported file type 'xlsx' found for file-kix-… ", 'type': 'unsupported_file'}}
++```
++
++SPIKE-03 の docx（`Unsupported file type 'docx'`）と同じ扱い。つまり **xlsx はアプリ側の
++前処理が必須**であり、本タスクの抽出はマネージド経路にとっても前提条件だった。
++そこで取り込み時は、抽出したテキストを `<原名>.xlsx.txt` として Files API へ渡す。
++台帳の表示名・Object Storage の原本バックアップ・`sha256` は**元の xlsx のまま**にしてある
++（利用者に見える名前と、出典のハッシュは原本を指す）。
++
++### 属性はやはりファイル単位（①-a の追試）
++
++同じブックを取り込んだ 2 ファイル（v1.0 / v2.0）の属性はそれぞれ 1 種類だけで、
++チャンクがいくつできても増えない。実 API の RAG 応答でも、同一ファイル由来の引用が持つ
++(シート, セル範囲) は**常に 1 種類**だった（`scenario-2.md` (c)）。
++
++| | `adb` | `vector_store`（マネージド） |
++|---|---|---|
++| 出典の粒度 | **チャンク単位**（シート名 + セル範囲） | **ファイル単位**（1 ファイル 1 種類） |
++| 実測値の例 | `制約 C5:E6` / `改訂履歴 A1:C2` | `(ブック全体: 3 シート)` / `(ブック全体)` |
++| 取り込み形式 | 原本の xlsx をアプリ側で抽出 | 抽出テキスト（`.xlsx.txt`）。素の xlsx は 400 |
++
++**「マネージドでもセル単位で返る」ように見せる細工（1 チャンク = 1 ファイルへの分割等）はしていない。**
++差があること自体が ADR-0020 の決定内容であり、その可視化は RAGM-03 の担当。
++
++## 実装（何を足したか）
++
++| 変更 | 内容 |
++|---|---|
++| `jetuse_core/extract_xlsx.py`（新規） | 抽出の唯一の実体。`openpyxl` を **`read_only=True, data_only=True`** で開き、シートごとに**連続する非空セルの矩形**を 1 チャンクにして `sheet` / `cells`（A1 形式）を付ける。ファイル単位の属性（`file_attributes`）とテキスト化（`render_text`）もここ |
++| `jetuse_core/rag.py` | `ALLOWED_EXTENSIONS` に `.xlsx`。`prepare_upload()` が xlsx だけ「抽出テキスト + ファイル単位属性」に変換する。導出した `sheet` / `cells` を**利用者指定で上書きさせない**（422） |
++| `jetuse_core/rag_adb.py` | `chunk_units()` が xlsx を `extract_xlsx` へ振り分ける（出典が行番号ではなくセル範囲になる。返る形は同じ `{sheet, cells, text}`） |
++| `jetuse_core/rag_opensearch.py` | xlsx をそのまま UTF-8 デコードして文字化け本文を投入しないよう抽出経由に |
++| `service/routes/rag.py` | `POST /api/extract`（取り込まずに抽出結果を返す）。xlsx の上限超過・壊れたブックを 422 に正規化 |
++
++### 決めたこと 1: 上限超過は切り詰めずに 422 で拒否する
++
++| 上限 | 値 | 理由 |
++|---|---|---|
++| `workbook_bytes` | 10 MB | xlsx は zip。展開後（共有文字列 + シート XML）は桁で大きいので、汎用の 20MB より手前で止める |
++| `uncompressed_bytes` | 100 MB | 圧縮率で殴られない（zip bomb）。zip の各エントリの合計を**開く前**に見る |
++| `rows` | 200,000 | チャンクにならないまま延々と行を読ませない |
++| `chunks` | 1,000 | ベクタの同時保持量と取り込み時間の上限 |
++| `chunk_chars` | 2,000 | 埋め込み API の切り詰め位置に合わせる（本文と検索表現をずらさない） |
++
++**行もチャンクも逐次処理し、上限は 1 件作るたびに見る。** 塊を丸ごとメモリへ溜めてから数えると、
++上限内のファイル（密なシート 1 枚）でも API worker を落とせる（review-2 の blocker 指摘）。
++同時に保持するのは「作りかけの 1 チャンク分の行」と確定済みチャンク列だけで、どちらも上限で抑えてある。
++
++detail に `limit=<名前>` を書く（実測: `チャンク数が上限を超えました(> 1)。… (limit=chunks)`）。
++**黙って一部だけ取り込まない。** 一部だけ入ると、利用者からは「取り込めたのに根拠が出ない」と
++区別が付かない（RAGM-01 で属性の切り詰めを禁じたのと同じ理由）。
++
++なお、上限に収まらない**塊は行境界で分割する**（切り詰めではない。分割後のチャンクは自分の
++行範囲を `cells` に持つ）。拒否するのは「1 行だけで上限を超える」場合だけ。
++
++### 決めたこと 2: 表構造の復元はしない
++
++結合セルは左上のセルだけが値を持つ（`read_only` の素の挙動）。ヘッダ推定も列の意味解釈もしない。
++まず**位置が取れること**を優先した（タスクの非ゴール）。テキスト化は行ごとにタブ区切り、
++塊の左端から埋めるので列はずれない。
++
++### 決めたこと 3: 壊れたブックは 500 ではなく 422
++
++`read_only` の反復は遅延実行なので、シート XML の破損は**行を読んでいる最中**に初めて現れる。
++開くときだけを try で囲っても 500 が漏れる。抽出の全区間（開く → 全シートの反復）を
++`UnsupportedWorkbook` への変換境界で囲い、zip としては正しいがシート XML が壊れたブックで
++テストを固定した。
++
++### 決めたこと 4: `kind` は両バックエンドで同じ値にする
++
++取り込み時に指定した分類（`kind="spec"`）を ADB 側にも渡す。渡さないと、同じファイルが
++マネージドでは `spec`、ADB では既定の `doc` になり、**分類での絞り込みがバックエンドを
++変えた瞬間に結果を変える**。あわせて `kind` は 32 文字以内の文字列に限った
++（ADB の列が `VARCHAR2(32)`。片方だけ通る長さを受け付けない）。
++
++### 決めたこと 5: `select_ai` の xlsx は `pending` ではなく `error`
++
++Select AI の索引はバケットの**原本**を DB 側が読むので、アプリ側の抽出を通らない。
++xlsx は索引に載らないため、取り込み状況バッジを `pending`（= いつか入る）のままにすると
++永久に入らないことに誰も気づけない。`rag.SELECT_AI_EXTENSIONS`（pdf / txt / md）に無い形式は
++`error` を返す。実機での挙動確認は未実施（`SKIPPED.md` §2・残課題）。
++
++### 決めたこと 6: キャッシュの無い数式セルは空扱い
++
++`data_only=True` は Excel が保存した**値のキャッシュ**を読む。openpyxl などで生成したブックの
++数式セルはキャッシュを持たないので `None` になる。数式そのものは取り込まない（`=SUM(...)` を
++本文に混ぜても検索の役に立たない）。単体テストで固定した。
++
++## 実環境 E2E
++
++隔離: 共有 loop ADB（`jetuse-loop-adb`）の **run 固有スキーマ `JETUSE_PREP01_<乱数>`**（ADB は増やしていない）。
++OCI 側の検証用資源は `jetuse-spike-prep01-` 接頭辞（Vector Store・アップロードするファイル名）。
++データは**架空**の在庫連携 API 仕様書（複数シート・空シート・結合セル・数式セル・空白領域つき）。
++顧客データは使っていない。スクリプトは `spikes/prep01/`。
++
++| # | シナリオ | 結果 | 証跡 |
++|---|---|---|---|
++| 0 | `POST /api/extract` が取り込まずに抽出結果を返す / 上限超過が 422 | PASS | `e2e/scenario-0.md` |
++| 1 | `adb`: 同一ファイルの引用が**チャンクごとに異なるシート / セル範囲**を持つ | PASS | `e2e/scenario-1.md` |
++| 2 | `vector_store`: 同じファイルの属性が**ファイル単位**（+ 素の xlsx は 400） | PASS | `e2e/scenario-2.md` |
++| 3 | 版フィルタが xlsx 由来のチャンクにも効く（v1.0 が 0 件になる） | PASS | `e2e/scenario-3.md` |
++
++シナリオ 1 の実 API 応答（`POST /api/chat/stream` / `rag_backend="adb"`）の引用:
++
++```json
++{"chunk_id": "…-2", "file": "…サンプル在庫連携API仕様書.xlsx", "version": "2.0",
++ "sheet": "制約", "cells": "C5:E6", "kind": "doc", "current_version": "Y"}
++```
++
++同じ質問をマネージド側（既定の `vector_store`）に投げたときの引用:
++
++```json
++{"file": "…サンプル在庫連携API仕様書.xlsx", "version": "2.0",
++ "sheet": "(ブック全体: 3 シート)", "cells": "(ブック全体)", "kind": "spec"}
++```
++
++実施しなかった範囲（配備済みインスタンスへの実ネットワーク経路 / `select_ai` / `opensearch`）は
++`runs/2026-07-30T1600_PREP-01/e2e/SKIPPED.md` に理由を書いた。
++
++## 残課題
++
++- **`select_ai` バックエンドと xlsx 原本**（要起票）。バッジ上は `error` として正直に出す
++  ようにしたが、実機で「索引がどう扱うか」「抽出テキストを別オブジェクトとして投入すべきか」は
++  未確認（この環境では Select AI の索引が未作成。作成に数十分と ADMIN セットアップが要る）。
++- `opensearch` 経路の xlsx は単体テストのみ（この環境では無効）。
++- 抽出の粒度（矩形の切り方）は「空行・行の飛びで区切る」だけ。列方向に離れた 2 つの表を
++  同じ行範囲に置くと 1 チャンクにまとまる。案件で必要になったら `POST /api/extract` の結果を
++  使って呼び出し側で組み直せる（そのための口）。
+diff --git a/packages/api/jetuse_core/extract_xlsx.py b/packages/api/jetuse_core/extract_xlsx.py
+new file mode 100644
+index 0000000..5bd800b
+--- /dev/null
++++ b/packages/api/jetuse_core/extract_xlsx.py
+@@ -0,0 +1,356 @@
++"""xlsx の前処理: シート名とセル範囲つきのチャンク抽出(PREP-01 / ADR-0020)。
++
++「仕様書 v2.0 の『制約』シート C5:E5 が根拠」まで返せるようにするための**入口**。
++メタデータの配管(`rag_metadata.ATTRIBUTE_KEYS` / `rag_adb` のチャンク単位の列)は
++RAGM-01 / RAGM-02 で完成しているので、ここは抽出だけを担う。
++
++出典の粒度はバックエンドで**違う**(ADR-0020 の決定内容そのもの):
++
++| バックエンド | xlsx の出典粒度 |
++|---|---|
++| `adb` | **チャンク単位**。シートとセル範囲がチャンクごとに異なる |
++| `vector_store`(マネージド) | **ファイル単位**。属性は 1 ファイルに 1 種類(SPIKE-M1 ①-a 実測) |
++
++そのため `file_attributes()` はファイル全体を表す値を返す。**チャンクごとの sheet / cells を
++マネージド側の属性に載せることはできない**(1 チャンク = 1 ファイルに割って
++「セル単位で返る」ように見せる細工はしない — 能力差を隠さないこと自体が決定事項)。
++
++読み方は `read_only=True, data_only=True`:
++- `read_only`: 大きなブックを一度にメモリへ展開しない(行を逐次読む)。
++- `data_only`: 数式ではなく**値**(Excel が保存したキャッシュ)を取る。キャッシュが無い
++  数式セル(openpyxl で書いたブック等)は `None` = 空セル扱いになる。
++
++上限を超えたら**切り詰めずに拒否する**(`ExtractionLimitError` → ルート側で 422)。
++黙って一部だけ取り込むと、利用者からは「取り込めたのに根拠が出ない」と区別が付かない
++(RAGM-01 で属性の切り詰めを禁じたのと同じ理由)。
++"""
++
++import contextlib
++import datetime
++import io
++import re
++import zipfile
++from typing import Any
++from xml.etree import ElementTree
++
++# 上限(超過は切り詰めずに拒否する)。
++# xlsx は zip なので、生バイト数より展開後(共有文字列 + シート XML)が桁で大きい。
++# 汎用アップロード上限(`rag.MAX_BYTES` = 20MB)より手前で止める。
++MAX_WORKBOOK_BYTES = 10 * 1024 * 1024
++# 展開後(zip 内の各エントリの合計)の上限。**圧縮率で殴られないため**に、開く前に見る。
++# 10MB の zip は数百 MB に展開されうる(zip bomb)。
++MAX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
++# 走査する非空行の上限。上のバイト上限を通っても、行数だけが多いシートは
++# 「チャンクにならないまま延々と読む」ことができてしまう。
++MAX_ROWS = 200_000
++MAX_CHUNKS = 1_000
++# 1 チャンクの文字数。埋め込み API は先頭 2,000 文字で切るので、保存本文もそこで揃える
++# (超える塊を作ると、本文と検索表現が食い違う)。
++MAX_CHUNK_CHARS = 2_000
++
++# ファイル単位の属性(マネージド Vector Store 用)で「ブック全体」を表す値。
++WORKBOOK_SHEET = "(ブック全体: {n} シート)"
++WORKBOOK_CELLS = "(ブック全体)"
++
++XLSX_EXT = ".xlsx"
++
++_A1 = re.compile(r"^([A-Z]+)(\d+)$")
++
++
++def is_xlsx(filename: str) -> bool:
++    """取り込み経路の分岐点(拡張子の判定はここ 1 か所に置く)。"""
++    return (filename or "").lower().endswith(XLSX_EXT)
++
++
++class XlsxExtractError(ValueError):
++    """xlsx を抽出できない。ルート側で 422 に正規化する。"""
++
++
++class UnsupportedWorkbook(XlsxExtractError):
++    """xlsx として開けない(壊れている / 別形式 / 暗号化)。"""
++
++
++class EmptyWorkbook(XlsxExtractError):
++    """開けたが本文が 1 文字も無い。取り込み経路では拒否する(空の本文を送らない)。"""
++
++
++class ExtractionLimitError(XlsxExtractError):
++    """上限超過。**どの上限か**を `limit` と本文の両方に持つ(422 の detail に出す)。"""
++
++    def __init__(self, limit: str, message: str):
++        super().__init__(f"{message} (limit={limit})")
++        self.limit = limit
++
++
++def extract(filename: str, content: bytes) -> list[dict[str, Any]]:
++    """xlsx を `{sheet, cells, text}` のチャンク列にする。
++
++    シートごとに**連続する非空セルの矩形**(空行 / 行の飛びで区切られる塊)を 1 チャンクに
++    まとめ、`sheet`(シート名)と `cells`(A1 形式。例 `B12:F48`)を付ける。
++    1 チャンクが上限文字数に収まらないときは**行境界で分割**する(切り詰めない。
++    分割した各チャンクは自分の行範囲を `cells` に持つ)。
++
++    **行もチャンクも逐次処理し、上限は 1 件作るたびに見る**。塊を丸ごとメモリに溜めてから
++    数えると、上限内のファイルでも(密なシート 1 枚で数十万行)worker を落とせる。
++    同時に保持するのは「作りかけの 1 チャンク分の行」と、確定したチャンク列だけ
++    (どちらも上限で抑えてある)。
++    """
++    if len(content) > MAX_WORKBOOK_BYTES:
++        raise ExtractionLimitError(
++            "workbook_bytes",
++            f"ブックのバイト数が上限を超えました({len(content)} > {MAX_WORKBOOK_BYTES} バイト)",
++        )
++    _check_uncompressed(content)
++    workbook = _open(content)
++    chunks: list[dict[str, Any]] = []
++    try:
++        with _normalised_errors():
++            budget = _Budget()
++            for sheet in workbook.worksheets:
++                for chunk in _sheet_chunks(sheet, budget):
++                    chunks.append(chunk)
++                    if len(chunks) > MAX_CHUNKS:
++                        # 全部展開しきってから数えない(上限を超えた時点で止める)
++                        raise ExtractionLimitError(
++                            "chunks",
++                            f"チャンク数が上限を超えました(> {MAX_CHUNKS})。"
++                            "シートを分けるかファイルを分割してください",
++                        )
++    finally:
++        workbook.close()
++    return chunks
++
++
++def file_attributes(chunks: list[dict[str, Any]]) -> dict[str, str]:
++    """マネージド Vector Store へ渡す**ファイル単位**の属性(`sheet` / `cells`)。
++
++    属性はファイル単位でしか保持されない(SPIKE-M1 ①-a)。1 ファイルが複数チャンクに
++    割れても属性は 1 種類なので、ここが返せるのは「そのファイル全体の範囲」だけである。
++    単一シートなら実際の外接範囲、複数シートなら「ブック全体」であることを明示する。
++    """
++    if not chunks:
++        return {}
++    sheets = list(dict.fromkeys(c["sheet"] for c in chunks))
++    if len(sheets) > 1:
++        return {"sheet": WORKBOOK_SHEET.format(n=len(sheets)), "cells": WORKBOOK_CELLS}
++    bounds = [_parse_range(c["cells"]) for c in chunks]
++    return {
++        "sheet": sheets[0],
++        "cells": _a1_range(
++            min(b[0] for b in bounds), min(b[1] for b in bounds),
++            max(b[2] for b in bounds), max(b[3] for b in bounds),
++        ),
++    }
++
++
++def render_text(chunks: list[dict[str, Any]]) -> str:
++    """マネージド Vector Store へ渡す本文(テキスト化)。
++
++    マネージド側は xlsx を受け付けない(SPIKE-03 で docx が `Unsupported file type`。
++    xlsx も同じ扱いであることは PREP-01 の E2E で実測する)ため、抽出結果をテキストとして
++    渡す。見出しに出典を書くが、**属性はファイル単位のまま**であり、これでチャンクごとの
++    属性が持てるようになるわけではない。
++    """
++    return "\n\n".join(f"[{c['sheet']} {c['cells']}]\n{c['text']}" for c in chunks)
++
++
++# --- 読み取り -----------------------------------------------------------------
++
++# openpyxl は「壊れたブック」を複数の型で投げてくる(zip 層 / XML 層 / 内部構造)。
++# 500 として漏らすと、壊れたファイル 1 つでルートの契約(不正な入力は 422)が破れる。
++_BROKEN = (zipfile.BadZipFile, ElementTree.ParseError, KeyError, ValueError, TypeError,
++           AttributeError, IndexError, OSError)
++
++
++@contextlib.contextmanager
++def _normalised_errors():
++    """壊れたブック由来の例外を `UnsupportedWorkbook` に寄せる(上限超過は素通し)。
++
++    **開くときだけでなく、行を読んでいる最中も**必要。`read_only` の反復は遅延実行なので、
++    シート XML の破損は `iter_rows()` の途中で初めて現れる。
++    """
++    try:
++        yield
++    except XlsxExtractError:
++        raise  # 上限超過・空ブックは「壊れている」ではない
++    except _BROKEN as e:
++        raise UnsupportedWorkbook(f"xlsx として読めませんでした: {type(e).__name__}") from e
++
++
++def _check_uncompressed(content: bytes) -> None:
++    """展開後の合計サイズを**開く前に**見る(圧縮率で殴られないため)。"""
++    with _normalised_errors(), zipfile.ZipFile(io.BytesIO(content)) as archive:
++        total = sum(info.file_size for info in archive.infolist())
++    if total > MAX_UNCOMPRESSED_BYTES:
++        raise ExtractionLimitError(
++            "uncompressed_bytes",
++            f"展開後のサイズが上限を超えました({total} > {MAX_UNCOMPRESSED_BYTES} バイト)",
++        )
++
++
++class _Budget:
++    """1 回の抽出で走査してよい非空行の残り(0 になったら上限として拒否する)。"""
++
++    def __init__(self) -> None:
++        self.rows = MAX_ROWS
++
++    def spend_row(self) -> None:
++        self.rows -= 1
++        if self.rows < 0:
++            raise ExtractionLimitError(
++                "rows",
++                f"走査した行数が上限を超えました(> {MAX_ROWS} 行)。ファイルを分割してください",
++            )
++
++
++def _open(content: bytes):
++    from openpyxl import load_workbook
++    from openpyxl.utils.exceptions import InvalidFileException
++
++    try:
++        with _normalised_errors():
++            return load_workbook(io.BytesIO(content), read_only=True, data_only=True)
++    except InvalidFileException as e:
++        raise UnsupportedWorkbook(f"xlsx として読めませんでした: {type(e).__name__}") from e
++
++
++def _cell_text(value: Any) -> str:
++    """セルの値を 1 つの文字列にする(表構造の復元はしない)。"""
++    if value is None:
++        return ""
++    if isinstance(value, bool):
++        return "TRUE" if value else "FALSE"
++    if isinstance(value, float):
++        # Excel の数値は float で返る。5.0 を "5.0" と書くと表として読みにくい
++        return str(int(value)) if value.is_integer() else str(value)
++    if isinstance(value, datetime.datetime):
++        # Excel の日付は時刻つきの datetime で返る。0 時ちょうどは日付だけを書く
++        # (「2026-07-30」を「2026-07-30T00:00:00」と書くと表として読みにくい)
++        return value.date().isoformat() if value.time() == datetime.time() else value.isoformat()
++    if isinstance(value, datetime.date | datetime.time):
++        return value.isoformat()
++    return str(value).strip()
++
++
++def _column_index(cell: Any) -> int | None:
++    """セルの列番号。`read_only` の穴埋め(`EmptyCell`)は座標を持たないので None。"""
++    col = getattr(cell, "column", None)
++    if isinstance(col, int):
++        return col
++    if isinstance(col, str):
++        from openpyxl.utils import column_index_from_string
++
++        return column_index_from_string(col)
++    return None
++
++
++def _rows(sheet):
++    """`(行番号, {列番号: 文字列})` を**非空行だけ**返す。
++
++    行番号は必ずセル自身(`cell.row`)から取る。`read_only` では空行が詰められることが
++    あり、列挙の順番を行番号と見なすと出典がずれる。
++    """
++    try:
++        iterator = sheet.iter_rows()
++    except ValueError:
++        # 空シートは寸法を決められずに ValueError になることがある(read_only)
++        return
++    for row in iterator:
++        values: dict[int, str] = {}
++        index: int | None = None
++        for cell in row:
++            col = _column_index(cell)
++            if col is None:
++                continue
++            text = _cell_text(cell.value)
++            if not text:
++                continue  # 結合セルの 2 つ目以降・キャッシュの無い数式セルもここに落ちる
++            values[col] = text
++            if index is None:
++                index = cell.row
++        if values and index is not None:
++            yield index, values
++
++
++def _line(min_col: int, values: dict[int, str]) -> str:
++    """1 行をタブ区切りにする(チャンクの左端から埋めるので列がずれない)。"""
++    return "\t".join(values.get(col, "") for col in range(min_col, max(values) + 1))
++
++
++def _sheet_chunks(sheet, budget: _Budget):
++    """1 シートを**逐次**チャンクにする(塊全体をメモリに溜めない)。
++
++    区切りは 2 つ: (a) 空行 / 行の飛び = 別の矩形、(b) 上限文字数 = 行境界で分割。
++    保持するのは作りかけの 1 チャンク分の行だけ（上限文字数で抑えられる）。
++    """
++    buffer: list[tuple[int, dict[int, str]]] = []
++    min_col: int | None = None
++    size = 0
++    previous: int | None = None
++    for index, values in _rows(sheet):
++        budget.spend_row()
++        if buffer and previous is not None and index != previous + 1:
++            yield _chunk(sheet.title, buffer, min_col)
++            buffer, min_col, size = [], None, 0
++        row_min = min(values)
++        if min_col is not None and row_min < min_col:
++            # 左に広がった: 既存行の描画幅が変わるので測り直す(行数はチャンク内に収まる)
++            min_col = row_min
++            size = sum(len(_line(min_col, v)) for _, v in buffer) + max(len(buffer) - 1, 0)
++        new_min = row_min if min_col is None else min_col
++        line_length = len(_line(new_min, values))
++        if line_length > MAX_CHUNK_CHARS:
++            # 1 行だけで上限を超える。行を切ると出典(セル範囲)が本文と対応しなくなるので、
++            # 切り詰めずに拒否する
++            raise ExtractionLimitError(
++                "chunk_chars",
++                f"1 行が上限文字数を超えました(シート '{sheet.title}' の {index} 行目: "
++                f"{line_length} > {MAX_CHUNK_CHARS} 文字)",
++            )
++        if buffer and size + 1 + line_length > MAX_CHUNK_CHARS:
++            yield _chunk(sheet.title, buffer, min_col)
++            buffer, min_col, size = [], None, 0
++            new_min = row_min
++            line_length = len(_line(new_min, values))
++        buffer.append((index, values))
++        min_col = new_min
++        size += line_length + (1 if size else 0)
++        previous = index
++    if buffer:
++        yield _chunk(sheet.title, buffer, min_col)
++
++
++def _chunk(sheet: str, buffer: list[tuple[int, dict[int, str]]], min_col: int | None) -> dict:
++    left = min_col if min_col is not None else min(min(values) for _, values in buffer)
++    max_col = max(max(values) for _, values in buffer)
++    return {
++        "sheet": sheet,
++        "cells": _a1_range(left, buffer[0][0], max_col, buffer[-1][0]),
++        "text": "\n".join(_line(left, values) for _, values in buffer),
++    }
++
++
++# --- A1 表記 ------------------------------------------------------------------
++
++
++def _a1_range(min_col: int, min_row: int, max_col: int, max_row: int) -> str:
++    from openpyxl.utils import get_column_letter
++
++    start = f"{get_column_letter(min_col)}{min_row}"
++    end = f"{get_column_letter(max_col)}{max_row}"
++    return start if start == end else f"{start}:{end}"
++
++
++def _parse_range(cells: str) -> tuple[int, int, int, int]:
++    """`B12:F48` / `C5` を `(min_col, min_row, max_col, max_row)` に戻す。"""
++    from openpyxl.utils import column_index_from_string
++
++    parts = cells.split(":")
++    bounds = []
++    for part in parts:
++        m = _A1.match(part.strip().upper())
++        if not m:
++            raise ValueError(f"A1 形式として読めない範囲: {cells}")
++        bounds.append((column_index_from_string(m.group(1)), int(m.group(2))))
++    (c1, r1), (c2, r2) = (bounds[0], bounds[-1])
++    return (min(c1, c2), min(r1, r2), max(c1, c2), max(r1, r2))
+diff --git a/packages/api/jetuse_core/rag.py b/packages/api/jetuse_core/rag.py
+index 018eac1..02d9ea8 100644
+--- a/packages/api/jetuse_core/rag.py
++++ b/packages/api/jetuse_core/rag.py
+@@ -15,14 +15,14 @@ from typing import Any
+ import oracledb
+ from openai import NotFoundError
+ 
+-from . import rag_metadata
++from . import extract_xlsx, rag_metadata
+ from .db import connect
+ from .genai import make_cp_client, make_inference_client, resolve_project_ocid
+ from .settings import get_settings
+ 
+ logger = logging.getLogger("jetuse.rag")
+ 
+-ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md"}
++ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md", extract_xlsx.XLSX_EXT}
+ MAX_BYTES = 20 * 1024 * 1024
+ 
+ 
+@@ -286,6 +286,30 @@ def build_attributes(
+     return rag_metadata.normalize_attributes({**base, **(attributes or {})})
+ 
+ 
++def prepare_upload(filename: str, content: bytes) -> tuple[str, bytes, dict[str, str]]:
++    """マネージド Vector Store へ渡す `(ファイル名, 本文, ファイル単位の属性)`(PREP-01)。
++
++    xlsx だけ変換する。マネージド側は Office 形式を受け付けない(SPIKE-03: docx は
++    `Unsupported file type`。xlsx も同じであることは PREP-01 の E2E で実測した)ので、
++    抽出したテキストを渡す。
++
++    **属性はファイル単位にしかできない**(SPIKE-M1 ①-a: 1 ファイルが複数チャンクに割れても
++    属性は 1 種類)。したがって返す `sheet` / `cells` は「そのファイル全体」を表す値であり、
++    チャンクごとのセル範囲ではない。セル単位の出典が要るなら `adb` バックエンドを使う
++    (この能力差が ADR-0020 の決定内容。1 チャンク = 1 ファイルに割って
++    「セル単位で返る」ように見せる細工はしない)。
++    """
++    if not extract_xlsx.is_xlsx(filename):
++        return filename, content, {}
++    chunks = extract_xlsx.extract(filename, content)
++    if not chunks:
++        raise extract_xlsx.EmptyWorkbook(
++            "シートから本文を抽出できませんでした(空のブック)"
++        )
++    return (f"{filename}.txt", extract_xlsx.render_text(chunks).encode("utf-8"),
++            extract_xlsx.file_attributes(chunks))
++
++
+ def add_file(
+     owner: str, filename: str, content: bytes, attributes: dict[str, Any] | None = None
+ ) -> dict[str, Any]:
+@@ -293,13 +317,26 @@ def add_file(
+ 
+     attributes は出典の構造化と版フィルタのためのメタデータ(RAGM-01)。
+     不正な属性は `rag_metadata.MetadataError`(ルート側で 422)で、OCI を呼ぶ前に弾く。
++    xlsx は抽出を通してから渡す(PREP-01)。上限超過は `extract_xlsx.ExtractionLimitError`
++    (ルート側で 422)で、こちらも OCI を呼ぶ前に弾く。
+     """
+-    attrs = build_attributes(filename, content, attributes)  # 送信前に検証(失敗時は未実行)
++    # 台帳・原本バックアップ・sha256 は**元のファイル**のまま(変換するのは送信する本文だけ)
++    upload_name, upload_bytes, derived = prepare_upload(filename, content)
++    conflicting = sorted(set(derived) & set(attributes or {}))
++    if conflicting:
++        # 導出値を利用者指定で上書きさせない。上書きを許すと、複数シートのブックに
++        # 特定のセル範囲を付けて「マネージドでもセル単位で返る」ように見せられてしまう
++        # (ADR-0020 が隠すなと決めた能力差そのもの)。黙って捨てずに 422 で断る
++        raise rag_metadata.MetadataError(
++            f"xlsx では {', '.join(conflicting)} は抽出結果から決まります(指定できません)。"
++            "チャンク単位のセル範囲が要るなら adb バックエンドを使ってください"
++        )
++    attrs = build_attributes(filename, content, {**(attributes or {}), **derived})
+     vs_id = ensure_store(owner)
+     file_id = _uid()
+     _backup_original(owner, file_id, filename, content)
+     dp = make_inference_client(with_project=True)
+-    f = dp.files.create(file=(filename, content), purpose="assistants")
++    f = dp.files.create(file=(upload_name, upload_bytes), purpose="assistants")
+     # CP completed直後はDP側にstoreが未伝播で404になる(SPIKE-03)。デモは箱ごとに新規store
+     # なので初回uploadが通常経路 — 有界リトライで吸収する(SP1-03 REV-005)。
+     for attempt in range(6):
+@@ -340,7 +377,11 @@ def add_file(
+ 
+         state = rag_adb.availability()
+         if state == rag_adb.READY:
+-            rag_adb.ingest(owner, file_id, filename, content)
++            # `kind` は**両バックエンドで同じ値**にする。ここを既定値のままにすると、
++            # 同じファイルがマネージド側では kind='spec'、ADB 側では kind='doc' になり、
++            # 分類での絞り込みがバックエンドを変えた瞬間に結果を変える(review-2 PREP01-004)
++            rag_adb.ingest(owner, file_id, filename, content,
++                           **({"kind": str(attrs["kind"])} if "kind" in attrs else {}))
+         elif state == rag_adb.UNAVAILABLE:
+             # 「表が無い(未導入)」と「今つながらない」を区別する。後者を黙って飛ばすと、
+             # 復旧後もそのファイルだけ取り込まれないまま誰も気づけない。
+@@ -380,6 +421,15 @@ def refresh_statuses(owner: str, files: list[dict[str, Any]]) -> list[dict[str,
+ # Vector Storeのファイル状態をバックエンド共通の語彙へ
+ _VS_MAP = {"completed": "indexed", "processing": "pending", "failed": "error"}
+ 
++# Select AI が原本から読める形式(RAG-03 / SPIKE-08 の構成で索引に載る形式)。
++# xlsx は入らない — 索引はバケットの原本を DB 側が読むので、PREP-01 の抽出を通らない。
++SELECT_AI_EXTENSIONS = {".pdf", ".txt", ".md"}
++
++
++def _select_ai_supports(filename: str) -> bool:
++    name = (filename or "").lower()
++    return any(name.endswith(ext) for ext in SELECT_AI_EXTENSIONS)
++
+ 
+ def resolve_citation_filenames(owner: str, citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+     """引用のファイル名を、こちらで保持する元のファイル名に置換する。
+@@ -410,7 +460,10 @@ def attach_backend_status(owner: str, files: list[dict[str, Any]]) -> list[dict[
+ 
+     backends[*] = "indexed" | "pending" | "error" | "disabled"
+     - vector_store: Files API/Vector Storeの処理状態
+-    - select_ai: ベクトル索引($VECTAB)に存在するか(refresh_rate間隔で同期=反映が遅い)
++    - select_ai: ベクトル索引($VECTAB)に存在するか(refresh_rate間隔で同期=反映が遅い)。
++      **原本をDB側(DBMS_CLOUD_AI)が読む方式**なので、アプリ側の抽出(PREP-01)を通らない。
++      Select AI が読めない形式(xlsx)は永久に索引へ現れないため、"pending" ではなく
++      "error" として出す(いつか入る、という嘘の期待を作らない — review-2 PREP01-002)
+     - opensearch: indexに存在するか(取り込みは同期=即時)。無効時は disabled
+     - adb: 自前チャンク表に存在するか(取り込みは同期=即時)。取り込みに失敗した/本文を
+       取り出せなかったファイルは error。表が無い環境は disabled(RAGM-02)
+@@ -449,7 +502,9 @@ def attach_backend_status(owner: str, files: list[dict[str, Any]]) -> list[dict[
+         fid = f["id"]
+         f["backends"] = {
+             "vector_store": _VS_MAP.get(f.get("status", ""), "pending"),
+-            "select_ai": "indexed" if fid in sai_ids else "pending",
++            "select_ai": ("indexed" if fid in sai_ids
++                          else "pending" if _select_ai_supports(f.get("filename", ""))
++                          else "error"),
+             "opensearch": ("disabled" if not os_enabled
+                            else ("indexed" if fid in os_ids else "pending")),
+             "adb": ("disabled" if not adb_enabled
+diff --git a/packages/api/jetuse_core/rag_adb.py b/packages/api/jetuse_core/rag_adb.py
+index 5fee475..9a6807f 100644
+--- a/packages/api/jetuse_core/rag_adb.py
++++ b/packages/api/jetuse_core/rag_adb.py
+@@ -26,6 +26,7 @@ from typing import Any
+ 
+ import oracledb
+ 
++from . import extract_xlsx
+ from .db import connect
+ from .embeddings import embed
+ from .genai import make_inference_client
+@@ -130,8 +131,9 @@ class TooLarge(ValueError):
+ def _segments(filename: str, content: bytes):
+     """(出典の見出し, 本文) を**逐次**返す。PDF は頁ごと、テキストは 1 本。
+ 
+-    **対応拡張子を明示する**。何でも UTF-8 として読むと、DOCX / XLSX / 画像が
++    **対応拡張子を明示する**。何でも UTF-8 として読むと、DOCX / 画像が
+     文字化けした本文として "indexed" になり、利用者には正常に見えてしまう。
++    xlsx はここへ来ない(`chunk_units` が `extract_xlsx` へ振り分ける)。
+     PDF は頁を 1 つずつ読み、抽出済みの総文字数が上限を超えたらそこで打ち切る
+     （圧縮 PDF は 20MB でも展開後に桁違いに膨らみうるため、全頁を先に展開しない）。
+     """
+@@ -181,7 +183,18 @@ def chunk_units(filename: str, content: bytes) -> list[dict[str, Any]]:
+ 
+     通常は行を跨いで切らない(行番号で出典を示すため)。1 行が上限を超えるときだけ
+     その行を文字オフセットで分割する(`L12c1-800`)。本文は切り詰めない。
++    xlsx は `extract_xlsx` が担当し、出典は行番号ではなく**シート名 + セル範囲**になる
++    (PREP-01)。返す形は同じ `{sheet, cells, text}`。
+     """
++    if extract_xlsx.is_xlsx(filename):
++        # xlsx はシート名 + セル範囲つきで抽出する(PREP-01)。行番号ではなく実際の
++        # セル範囲が `cells` に入るので、引用は「制約シート C5:E5」まで返せる。
++        try:
++            return extract_xlsx.extract(filename, content)
++        except extract_xlsx.ExtractionLimitError as e:
++            raise TooLarge(str(e)) from e
++        except extract_xlsx.XlsxExtractError as e:
++            raise UnsupportedDocument(str(e)) from e
+     units: list[dict[str, Any]] = []
+     for sheet, text in _segments(filename, content):
+         if len(units) > MAX_CHUNKS:
+diff --git a/packages/api/jetuse_core/rag_metadata.py b/packages/api/jetuse_core/rag_metadata.py
+index 91ae1ac..4dece84 100644
+--- a/packages/api/jetuse_core/rag_metadata.py
++++ b/packages/api/jetuse_core/rag_metadata.py
+@@ -23,6 +23,10 @@ ATTRIBUTE_KEYS: tuple[str, ...] = (
+ 
+ MAX_ATTRIBUTE_KEYS = 16          # ①-d: Metadata must not contain more than 16 key-value pairs
+ MAX_ATTRIBUTE_VALUE_CHARS = 512  # ①-d: exceeds max length of 512 characters
++# `kind` だけは **ADB 側の列幅**(`rag_adb_chunks.kind VARCHAR2(32)`)に合わせて短く保つ。
++# 同じ値を両バックエンドへ入れるので(PREP-01)、片方だけ入る長さを受け付けると
++# 「マネージドでは絞れるのに ADB では取り込み自体が失敗する」というズレが起きる。
++MAX_KIND_CHARS = 32
+ MAX_FILTER_DEPTH = 5             # 複合フィルタの入れ子上限(病的な入力の打ち切り)
+ 
+ _COMPARISON_TYPES = frozenset({"eq", "ne", "gt", "gte", "lt", "lte"})
+@@ -78,6 +82,11 @@ def normalize_attributes(raw: Any) -> dict[str, str | int | float | bool]:
+         if value is None or (isinstance(value, str) and not value.strip()):
+             continue  # 値が無いメタはキーごと省く
+         out[key] = _check_scalar(value, f"attribute '{key}'")
++        if key == "kind" and (not isinstance(value, str) or len(value) > MAX_KIND_CHARS):
++            raise MetadataError(
++                f"attribute 'kind' must be a string of at most {MAX_KIND_CHARS} characters "
++                "(the adb backend stores it in a VARCHAR2(32) column)"
++            )
+     if len(out) > MAX_ATTRIBUTE_KEYS:
+         raise MetadataError(
+             f"attributes must not contain more than {MAX_ATTRIBUTE_KEYS} key-value pairs"
+diff --git a/packages/api/jetuse_core/rag_opensearch.py b/packages/api/jetuse_core/rag_opensearch.py
+index f83c56e..4dd8139 100644
+--- a/packages/api/jetuse_core/rag_opensearch.py
++++ b/packages/api/jetuse_core/rag_opensearch.py
+@@ -58,6 +58,12 @@ def _extract_text(filename: str, content: bytes) -> str:
+ 
+         reader = PdfReader(io.BytesIO(content))
+         return "\n".join((p.extract_text() or "") for p in reader.pages)
++    if name.endswith(".xlsx"):
++        # xlsx は zip なので、そのまま decode すると文字化けした本文が "indexed" になる
++        # (利用者には正常に見える)。抽出したテキストを渡す(PREP-01)。
++        from . import extract_xlsx
++
++        return extract_xlsx.render_text(extract_xlsx.extract(filename, content))
+     return content.decode("utf-8", errors="replace")
+ 
+ 
+diff --git a/packages/api/pyproject.toml b/packages/api/pyproject.toml
+index 3d1ebc0..d3e57ee 100644
+--- a/packages/api/pyproject.toml
++++ b/packages/api/pyproject.toml
+@@ -23,6 +23,8 @@ dependencies = [
+   "langgraph>=1,<2",
+   "langchain-openai>=1",
+   "pypdf>=5",
++  # xlsx の前処理(PREP-01)。read_only + data_only で行を逐次読む
++  "openpyxl>=3.1",
+   "pymupdf>=1.24",
+   # プラグイン署名(PLG-01, ed25519)で直接利用。Ed25519PublicKey.public_bytes_raw は 43.0 以降。
+   "cryptography>=43",
+diff --git a/packages/api/service/routes/rag.py b/packages/api/service/routes/rag.py
+index 512a4e9..7267ed5 100644
+--- a/packages/api/service/routes/rag.py
++++ b/packages/api/service/routes/rag.py
+@@ -13,7 +13,7 @@ from typing import Annotated
+ from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+ from openai import APIStatusError
+ 
+-from jetuse_core import rag, rag_metadata
++from jetuse_core import extract_xlsx, rag, rag_adb, rag_metadata
+ from jetuse_core.auth import AuthContext, require_user
+ from jetuse_core.genai import ProjectResolutionError
+ 
+@@ -36,6 +36,14 @@ async def _rag_call(fn, *args):
+         # 取り込み側で補完する属性(長すぎるファイル名由来の file 等)も 422 に正規化する。
+         # 500 のまま漏らすと API 契約(不正な属性は 422)が破れる — レビュー F-002
+         raise HTTPException(status_code=422, detail=str(e)) from e
++    except (rag_adb.TooLarge, rag_adb.UnsupportedDocument) as e:
++        # 抽出口(POST /api/extract)で本文を取り出せない・上限を超えた場合。
++        # 取り込み経路(add_file)はこれらを内部で握って best-effort にしているので影響しない
++        raise HTTPException(status_code=422, detail=str(e)) from e
++    except extract_xlsx.XlsxExtractError as e:
++        # xlsx の上限超過・壊れたブック(PREP-01)。**切り詰めて一部だけ取り込まない**ので、
++        # どの上限に当たったかを detail に載せて 422 で返す
++        raise HTTPException(status_code=422, detail=str(e)) from e
+     except rag.StoreNotReadyError as e:
+         raise HTTPException(
+             status_code=503, detail="vector store not ready, retry later"
+@@ -77,25 +85,46 @@ def _parse_attributes(raw: str | None) -> dict:
+         raise HTTPException(status_code=422, detail=str(e)) from e
+ 
+ 
+-async def upload_file_response(
+-    ns: str, file: UploadFile, attributes: str | None = None
+-) -> dict:
++async def _read_upload(file: UploadFile) -> tuple[str, bytes]:
++    """アップロード共通の入口(拡張子・サイズ・空)。取り込みと抽出で同じ条件にする。"""
+     name = pathlib.Path(file.filename or "untitled").name
+     ext = pathlib.Path(name).suffix.lower()
+     if ext not in rag.ALLOWED_EXTENSIONS:
+-        detail = f"unsupported file type '{ext}'. allowed: pdf/txt/md"
++        detail = f"unsupported file type '{ext}'. allowed: pdf/txt/md/xlsx"
+         if ext == ".docx":
+             detail += " (docxはVector Store非対応 — SPIKE-03)"
+         raise HTTPException(status_code=422, detail=detail)
+-    attrs = _parse_attributes(attributes)  # 読み込み前に弾く(不正なら OCI を呼ばない)
+     content = await file.read()
+     if len(content) > rag.MAX_BYTES:
+         raise HTTPException(status_code=413, detail="file too large (max 20MB)")
+     if not content:
+         raise HTTPException(status_code=422, detail="empty file")
++    return name, content
++
++
++async def upload_file_response(
++    ns: str, file: UploadFile, attributes: str | None = None
++) -> dict:
++    attrs = _parse_attributes(attributes)  # 読み込み前に弾く(不正なら OCI を呼ばない)
++    name, content = await _read_upload(file)
+     return await _rag_call(rag.add_file, ns, name, content, attrs)
+ 
+ 
++async def extract_response(file: UploadFile) -> dict:
++    """取り込まずに抽出結果だけ返す(PREP-01 層1 の公開)。
++
++    投入されるチャンクそのもの(`adb` バックエンドが作るのと同じ `{sheet, cells, text}`)を
++    返す。案件側が独自の構造化を挟みたいときの口で、**このエンドポイントは何も保存しない**。
++    """
++    name, content = await _read_upload(file)
++    return await _rag_call(_extract, name, content)
++
++
++def _extract(name: str, content: bytes) -> dict:
++    chunks = rag_adb.chunk_units(name, content)
++    return {"filename": name, "chunk_count": len(chunks), "chunks": chunks}
++
++
+ async def delete_file_response(ns: str, file_id: str) -> dict:
+     if not await _rag_call(rag.delete_file, ns, file_id):
+         raise HTTPException(status_code=404, detail="file not found")
+@@ -129,6 +158,14 @@ async def upload_rag_file(
+     return await upload_file_response(user.subject, file, attributes)
+ 
+ 
++@router.post("/api/extract")
++async def extract_document(
++    file: UploadFile, user: Annotated[AuthContext, Depends(require_user)]
++):
++    """抽出だけ行い、取り込みはしない(PREP-01)。認証・サイズ上限はアップロードと同じ。"""
++    return await extract_response(file)
++
++
+ @router.delete("/api/rag/files/{file_id}")
+ async def delete_rag_file(
+     file_id: str, user: Annotated[AuthContext, Depends(require_user)]
+diff --git a/packages/api/tests/test_extract_xlsx.py b/packages/api/tests/test_extract_xlsx.py
+new file mode 100644
+index 0000000..d8551da
+--- /dev/null
++++ b/packages/api/tests/test_extract_xlsx.py
+@@ -0,0 +1,243 @@
++"""xlsx 抽出(PREP-01)の単体テスト。
++
++固定したいのは 4 つ:
++1. **チャンクごとに異なる sheet / cells** が付く(adb バックエンドの出典粒度)。
++2. マネージド Vector Store 向けの属性は**ファイル単位**である(チャンク単位に見せない)。
++3. 上限超過は**切り詰めずに拒否**し、どの上限かが分かる。
++4. 空シート・結合セル・数式セル・巨大な空白領域で落ちない。
++"""
++
++import io
++
++import pytest
++from openpyxl import Workbook
++
++from jetuse_core import extract_xlsx
++
++
++def build(sheets: dict[str, list[tuple[str, object]]], *, merge: dict[str, str] | None = None,
++          formula: dict[str, str] | None = None) -> bytes:
++    """架空のブックを作る(セル参照 → 値の指定)。顧客データは使わない。"""
++    wb = Workbook()
++    wb.remove(wb.active)
++    for title, cells in sheets.items():
++        ws = wb.create_sheet(title)
++        for ref, value in cells:
++            ws[ref] = value
++        if merge and title in merge:
++            ws.merge_cells(merge[title])
++        if formula and title in formula:
++            ws[formula[title]] = "=SUM(B1:B9)"
++    buf = io.BytesIO()
++    wb.save(buf)
++    return buf.getvalue()
++
++
++SPEC = {
++    "API一覧": [
++        ("B12", "エンドポイント"), ("C12", "メソッド"), ("D12", "説明"),
++        ("B13", "/v1/inventory"), ("C13", "GET"), ("D13", "在庫照会"),
++    ],
++    "制約": [
++        ("C5", "レート制限"), ("D5", "600 req/min"), ("E5", "超過時は429"),
++    ],
++    "空シート": [],
++}
++
++
++def test_chunks_carry_sheet_and_cells():
++    chunks = extract_xlsx.extract("サンプル仕様書.xlsx", build(SPEC))
++    by_sheet = {c["sheet"]: c for c in chunks}
++    assert set(by_sheet) == {"API一覧", "制約"}          # 空シートはチャンクを作らない
++    assert by_sheet["API一覧"]["cells"] == "B12:D13"
++    assert by_sheet["制約"]["cells"] == "C5:E5"
++    assert "600 req/min" in by_sheet["制約"]["text"]
++    assert by_sheet["API一覧"]["text"].splitlines()[0] == "エンドポイント\tメソッド\t説明"
++    # チャンクごとに出典が異なる(= adb バックエンドで「どのセルが根拠か」を返せる)
++    assert len({c["cells"] for c in chunks}) == len(chunks)
++
++
++def test_blank_rows_split_blocks_and_keep_row_numbers():
++    content = build({"S": [("A1", "見出し"), ("A2", "本文"), ("A10", "別の塊"), ("B10", "値")]})
++    chunks = extract_xlsx.extract("a.xlsx", content)
++    assert [c["cells"] for c in chunks] == ["A1:A2", "A10:B10"]
++
++
++def test_empty_workbook_yields_no_chunks():
++    assert extract_xlsx.extract("empty.xlsx", build({"空1": [], "空2": []})) == []
++
++
++def test_merged_cells_do_not_crash():
++    content = build({"S": [("A1", "結合された見出し"), ("A2", "値")]}, merge={"S": "A1:C1"})
++    chunks = extract_xlsx.extract("merged.xlsx", content)
++    assert len(chunks) == 1
++    # 結合セルは左上だけが値を持つ(意味の解釈はしない = 非ゴール)
++    assert chunks[0]["cells"] == "A1:A2"
++    assert "結合された見出し" in chunks[0]["text"]
++
++
++def test_formula_without_cached_value_is_treated_as_empty():
++    """data_only=True では、キャッシュの無い数式セルは None で返る(落ちないこと)。"""
++    content = build({"S": [("A1", "合計"), ("B1", 10), ("B2", 20)]}, formula={"S": "B3"})
++    chunks = extract_xlsx.extract("formula.xlsx", content)
++    assert len(chunks) == 1
++    assert "=SUM" not in chunks[0]["text"]        # 数式そのものは取り込まない
++    assert chunks[0]["cells"] == "A1:B2"
++
++
++def test_large_blank_region_does_not_crash():
++    content = build({"S": [("A1", "先頭"), ("A5000", "末尾")]})
++    chunks = extract_xlsx.extract("sparse.xlsx", content)
++    assert [c["cells"] for c in chunks] == ["A1", "A5000"]
++
++
++def test_values_are_normalised():
++    import datetime
++
++    content = build({"S": [
++        ("A1", 5.0), ("B1", 1.5), ("C1", True), ("D1", datetime.date(2026, 7, 30)),
++        ("E1", "  余白つき  "),
++    ]})
++    assert extract_xlsx.extract("v.xlsx", content)[0]["text"] == (
++        "5\t1.5\tTRUE\t2026-07-30\t余白つき"
++    )
++
++
++# --- 上限(切り詰めずに拒否する) ----------------------------------------------
++
++
++def test_workbook_bytes_limit_is_rejected(monkeypatch):
++    monkeypatch.setattr(extract_xlsx, "MAX_WORKBOOK_BYTES", 10)
++    with pytest.raises(extract_xlsx.ExtractionLimitError) as e:
++        extract_xlsx.extract("big.xlsx", build(SPEC))
++    assert e.value.limit == "workbook_bytes"
++    assert "limit=workbook_bytes" in str(e.value)
++
++
++def test_chunk_count_limit_is_rejected(monkeypatch):
++    monkeypatch.setattr(extract_xlsx, "MAX_CHUNKS", 2)
++    rows = [(f"A{n}", f"値{n}") for n in range(1, 20, 2)]  # 空行で区切られた 10 個の塊
++    with pytest.raises(extract_xlsx.ExtractionLimitError) as e:
++        extract_xlsx.extract("many.xlsx", build({"S": rows}))
++    assert e.value.limit == "chunks"
++
++
++def test_chunk_chars_limit_is_rejected(monkeypatch):
++    monkeypatch.setattr(extract_xlsx, "MAX_CHUNK_CHARS", 100)
++    with pytest.raises(extract_xlsx.ExtractionLimitError) as e:
++        extract_xlsx.extract("wide.xlsx", build({"S": [("A1", "あ" * 200)]}))
++    assert e.value.limit == "chunk_chars"
++    assert "1 行" in str(e.value) and "S" in str(e.value)
++
++
++def test_long_block_is_split_at_row_boundary_not_truncated(monkeypatch):
++    """上限に収まらない塊は**行境界で分割**する(本文は落とさない・出典は行範囲で残す)。"""
++    monkeypatch.setattr(extract_xlsx, "MAX_CHUNK_CHARS", 50)
++    rows = [(f"A{n}", "あ" * 20) for n in range(1, 7)]
++    chunks = extract_xlsx.extract("long.xlsx", build({"S": rows}))
++    assert len(chunks) == 3
++    assert [c["cells"] for c in chunks] == ["A1:A2", "A3:A4", "A5:A6"]
++    assert all(len(c["text"]) <= 50 for c in chunks)
++    assert sum(c["text"].count("あ") for c in chunks) == 6 * 20   # 1 文字も落ちていない
++
++
++def test_non_xlsx_bytes_are_rejected():
++    with pytest.raises(extract_xlsx.UnsupportedWorkbook):
++        extract_xlsx.extract("fake.xlsx", b"%PDF-1.7 not really a workbook")
++
++
++# --- マネージド Vector Store 用の属性は「ファイル単位」 ------------------------
++
++
++def test_file_attributes_are_file_level_for_multi_sheet_workbook():
++    """複数シートのブックは、属性が**ファイル単位**であることを値として明示する。
++
++    マネージド側の属性は 1 ファイルに 1 種類しか持てない(SPIKE-M1 ①-a)。
++    チャンクの sheet / cells をそのまま載せると「セル単位で返る」という誤解を作るため、
++    ブック全体を表す値にする(能力差を隠さない = ADR-0020 の決定内容)。
++    """
++    chunks = extract_xlsx.extract("spec.xlsx", build(SPEC))
++    attrs = extract_xlsx.file_attributes(chunks)
++    assert attrs == {"sheet": "(ブック全体: 2 シート)", "cells": "(ブック全体)"}
++    assert attrs["cells"] not in {c["cells"] for c in chunks}
++
++
++def test_file_attributes_use_bounding_range_for_single_sheet():
++    content = build({"制約": [("C5", "レート制限"), ("E5", "600"), ("C9", "保持期間"),
++                              ("E9", "13か月")]})
++    chunks = extract_xlsx.extract("one.xlsx", content)
++    assert len(chunks) == 2
++    assert extract_xlsx.file_attributes(chunks) == {"sheet": "制約", "cells": "C5:E9"}
++
++
++def test_file_attributes_of_empty_workbook_is_empty():
++    assert extract_xlsx.file_attributes([]) == {}
++
++
++def test_render_text_keeps_all_chunks():
++    chunks = extract_xlsx.extract("spec.xlsx", build(SPEC))
++    text = extract_xlsx.render_text(chunks)
++    assert all(c["text"] in text for c in chunks)
++    assert "[制約 C5:E5]" in text
++
++
++# --- 壊れたブック・巨大なブックで 500 を漏らさない（review-2 PREP01-001/003） ---
++
++
++def _corrupt_sheet_xml(content: bytes) -> bytes:
++    """zip としては正しいが、シート XML が壊れているブックを作る。"""
++    import zipfile
++
++    out = io.BytesIO()
++    with zipfile.ZipFile(io.BytesIO(content)) as src, zipfile.ZipFile(out, "w") as dst:
++        for info in src.infolist():
++            data = src.read(info.filename)
++            if info.filename.startswith("xl/worksheets/"):
++                data = b"<worksheet><sheetData><row r=\"1\"><c"   # 途中で切れた XML
++            dst.writestr(info, data)
++    return out.getvalue()
++
++
++def test_broken_sheet_xml_is_rejected_not_raised_as_500():
++    """`read_only` の反復は遅延実行なので、破損は行を読んでいる最中に初めて現れる。"""
++    with pytest.raises(extract_xlsx.UnsupportedWorkbook):
++        extract_xlsx.extract("corrupt.xlsx", _corrupt_sheet_xml(build(SPEC)))
++
++
++def test_uncompressed_size_limit_is_rejected(monkeypatch):
++    """圧縮率で殴られない（zip bomb）。展開後の合計を開く前に見る。"""
++    monkeypatch.setattr(extract_xlsx, "MAX_UNCOMPRESSED_BYTES", 100)
++    with pytest.raises(extract_xlsx.ExtractionLimitError) as e:
++        extract_xlsx.extract("bomb.xlsx", build(SPEC))
++    assert e.value.limit == "uncompressed_bytes"
++
++
++def test_row_budget_limit_is_rejected(monkeypatch):
++    """チャンクにならないまま延々と行を読む形（1 行 1 塊が延々続く等）で止まる。"""
++    monkeypatch.setattr(extract_xlsx, "MAX_ROWS", 3)
++    with pytest.raises(extract_xlsx.ExtractionLimitError) as e:
++        extract_xlsx.extract("many-rows.xlsx", build({"S": [(f"A{n}", f"値{n}")
++                                                            for n in range(1, 30)]}))
++    assert e.value.limit == "rows"
++
++
++def test_chunk_limit_stops_before_materialising_everything(monkeypatch):
++    """上限は「1 チャンク作るたび」に見る（全部作ってから数えない）。
++
++    1 つの塊が上限文字数で多数のチャンクに割れる形でも、`MAX_CHUNKS` を超えた時点で止まる。
++    """
++    monkeypatch.setattr(extract_xlsx, "MAX_CHUNK_CHARS", 30)
++    monkeypatch.setattr(extract_xlsx, "MAX_CHUNKS", 3)
++    rows = [(f"A{n}", "あ" * 20) for n in range(1, 60)]  # 連続する 1 塊 → 約 59 チャンク
++    with pytest.raises(extract_xlsx.ExtractionLimitError) as e:
++        extract_xlsx.extract("dense.xlsx", build({"S": rows}))
++    assert e.value.limit == "chunks"
++
++
++def test_row_that_extends_left_keeps_columns_aligned():
++    """チャンクの途中で左に広がっても、列の対応が崩れない（描画幅の測り直し）。"""
++    content = build({"S": [("C1", "右のみ"), ("A2", "左"), ("B2", "中"), ("C2", "右")]})
++    chunks = extract_xlsx.extract("left.xlsx", content)
++    assert len(chunks) == 1
++    assert chunks[0]["cells"] == "A1:C2"
++    assert chunks[0]["text"] == "\t\t右のみ\n左\t中\t右"
+diff --git a/packages/api/tests/test_rag.py b/packages/api/tests/test_rag.py
+index 847abc3..948723f 100644
+--- a/packages/api/tests/test_rag.py
++++ b/packages/api/tests/test_rag.py
+@@ -7,6 +7,9 @@ from fastapi.testclient import TestClient
+ 
+ import service.main as service_main
+ from jetuse_core.chat import _extract_citations
++
++# 差し替え前の実体（autouse の fake_rag が module 属性を上書きするので import 時に掴む）
++from jetuse_core.rag import add_file as real_add_file
+ from service.main import app
+ 
+ client = TestClient(app)
+@@ -432,3 +435,242 @@ def test_upload_without_attributes_stays_backward_compatible(fake_rag):
+     res = client.post("/api/rag/files", files={"file": ("a.md", b"x", "text/markdown")})
+     assert res.status_code == 200
+     assert fake_rag.last_attributes == {}
++
++
++# --- xlsx の取り込み口と抽出口(PREP-01) ---------------------------------------
++
++
++def _workbook() -> bytes:
++    """架空の仕様書ブック(複数シート)。顧客データは使わない。"""
++    from tests.test_extract_xlsx import SPEC, build
++
++    return build(SPEC)
++
++
++def test_upload_accepts_xlsx(fake_rag):
++    res = client.post(
++        "/api/rag/files",
++        files={"file": ("サンプル仕様書.xlsx", _workbook(),
++                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
++    )
++    assert res.status_code == 200
++    assert res.json()["filename"] == "サンプル仕様書.xlsx"
++
++
++def _use_real_add_file(monkeypatch):
++    """xlsx の検証は `rag.add_file` の先頭(OCI を呼ぶ前)で走るので、本物を使って確かめる。"""
++    monkeypatch.setattr(service_main.rag, "add_file", real_add_file)
++
++
++def test_upload_rejects_broken_xlsx_with_422(monkeypatch):
++    _use_real_add_file(monkeypatch)
++    res = client.post("/api/rag/files", files={"file": ("broken.xlsx", b"not a zip", "x")})
++    assert res.status_code == 422
++    assert "xlsx" in res.json()["detail"]
++
++
++def test_unsupported_type_message_lists_xlsx():
++    res = client.post("/api/rag/files", files={"file": ("a.pptx", b"x", "x")})
++    assert res.status_code == 422 and "pdf/txt/md/xlsx" in res.json()["detail"]
++
++
++def test_extract_returns_chunks_without_ingesting(fake_rag):
++    res = client.post(
++        "/api/extract", files={"file": ("サンプル仕様書.xlsx", _workbook(), "x")}
++    )
++    assert res.status_code == 200
++    body = res.json()
++    assert body["filename"] == "サンプル仕様書.xlsx"
++    assert body["chunk_count"] == len(body["chunks"]) == 2
++    assert {c["cells"] for c in body["chunks"]} == {"B12:D13", "C5:E5"}
++    assert [c["sheet"] for c in body["chunks"]] == ["API一覧", "制約"]
++    # 取り込みは起きない(台帳にファイルが増えない)
++    assert fake_rag.files == {}
++
++
++def test_extract_works_for_text_files_too():
++    res = client.post("/api/extract", files={"file": ("note.md", "# 見出し\n本文".encode(), "x")})
++    assert res.status_code == 200
++    assert res.json()["chunks"][0]["sheet"] == "本文"
++
++
++def test_extract_rejects_limit_excess_with_422_naming_the_limit(monkeypatch):
++    """上限超過は**切り詰めず**に 422。どの上限かが detail から分かる。"""
++    from jetuse_core import extract_xlsx
++
++    monkeypatch.setattr(extract_xlsx, "MAX_CHUNKS", 1)
++    res = client.post("/api/extract", files={"file": ("spec.xlsx", _workbook(), "x")})
++    assert res.status_code == 422
++    assert "limit=chunks" in res.json()["detail"]
++
++
++def test_extract_requires_supported_extension():
++    assert client.post(
++        "/api/extract", files={"file": ("a.docx", b"x", "x")}
++    ).status_code == 422
++
++
++def test_upload_rejects_xlsx_over_chunk_char_limit(monkeypatch):
++    from jetuse_core import extract_xlsx
++    from tests.test_extract_xlsx import build
++
++    monkeypatch.setattr(extract_xlsx, "MAX_CHUNK_CHARS", 50)
++    _use_real_add_file(monkeypatch)
++    res = client.post(
++        "/api/rag/files",
++        files={"file": ("wide.xlsx", build({"制約": [("A1", "あ" * 100)]}), "x")},
++    )
++    assert res.status_code == 422 and "limit=chunk_chars" in res.json()["detail"]
++
++
++# --- マネージド側へ渡す形(ファイル単位の属性)。実 OCI は E2E で確認する -------
++
++
++def test_prepare_upload_converts_xlsx_to_text_with_file_level_attributes():
++    """マネージド Vector Store は Office 形式を受け付けない(SPIKE-03)ので抽出テキストを渡す。
++
++    そのとき属性は**ファイル単位**にしかできない(SPIKE-M1 ①-a)。チャンクごとの
++    セル範囲を載せて「セル単位で返る」ように見せない。
++    """
++    from jetuse_core import rag as rag_module
++
++    name, body, attrs = rag_module.prepare_upload("サンプル仕様書.xlsx", _workbook())
++    assert name == "サンプル仕様書.xlsx.txt"
++    assert "600 req/min" in body.decode()
++    assert attrs == {"sheet": "(ブック全体: 2 シート)", "cells": "(ブック全体)"}
++
++
++def test_prepare_upload_passes_through_non_xlsx():
++    from jetuse_core import rag as rag_module
++
++    assert rag_module.prepare_upload("a.md", b"# x") == ("a.md", b"# x", {})
++
++
++def test_prepare_upload_rejects_empty_workbook():
++    from jetuse_core import extract_xlsx
++    from jetuse_core import rag as rag_module
++    from tests.test_extract_xlsx import build
++
++    with pytest.raises(extract_xlsx.EmptyWorkbook):
++        rag_module.prepare_upload("empty.xlsx", build({"空": []}))
++
++
++def test_upload_rejects_user_supplied_sheet_or_cells_for_xlsx(monkeypatch):
++    """導出したファイル単位の属性を利用者指定で上書きさせない(能力差の偽装を防ぐ)。"""
++    _use_real_add_file(monkeypatch)
++    res = client.post(
++        "/api/rag/files",
++        files={"file": ("spec.xlsx", _workbook(), "x")},
++        data={"attributes": '{"sheet": "制約", "cells": "C5:E5", "version": "2.0"}'},
++    )
++    assert res.status_code == 422
++    detail = res.json()["detail"]
++    assert "cells" in detail and "sheet" in detail and "adb" in detail
++
++
++def test_upload_keeps_other_attributes_for_xlsx(monkeypatch):
++    """`sheet` / `cells` 以外(版・分類)は従来どおり利用者指定が通る。"""
++    from jetuse_core import rag as rag_module
++
++    sent: dict = {}
++    monkeypatch.setattr(rag_module, "ensure_store", lambda owner: "vs_fake")
++    monkeypatch.setattr(rag_module, "_backup_original", lambda *a: None)
++    monkeypatch.setattr(rag_module, "_insert_file", lambda *a: None)
++    monkeypatch.setattr(rag_module, "make_inference_client", lambda **kw: _FakeDp(sent))
++    _use_real_add_file(monkeypatch)
++    res = client.post(
++        "/api/rag/files",
++        files={"file": ("spec.xlsx", _workbook(), "x")},
++        data={"attributes": '{"version": "2.0", "kind": "spec"}'},
++    )
++    assert res.status_code == 200
++    assert sent["upload_name"] == "spec.xlsx.txt"
++    assert sent["attributes"]["version"] == "2.0" and sent["attributes"]["kind"] == "spec"
++    # 出典は**ファイル単位**(SPIKE-M1 ①-a)。チャンクごとのセル範囲は載らない
++    assert sent["attributes"]["sheet"] == "(ブック全体: 2 シート)"
++    assert sent["attributes"]["cells"] == "(ブック全体)"
++    assert sent["attributes"]["file"] == "spec.xlsx"          # 台帳の表示名は元の xlsx
++
++
++class _FakeDp:
++    """Files API / Vector Store の最小スタブ(実 OCI 呼び出しは E2E で確認する)。"""
++
++    def __init__(self, sent: dict):
++        self.sent = sent
++        outer = self
++
++        class Files:
++            def create(self, *, file, purpose):
++                outer.sent["upload_name"] = file[0]
++                outer.sent["upload_bytes"] = file[1]
++                return SimpleNamespace(id="file-fake")
++
++        class VsFiles:
++            def create(self, *, vector_store_id, file_id, attributes):
++                outer.sent["attributes"] = attributes
++
++        self.files = Files()
++        self.vector_stores = SimpleNamespace(files=VsFiles())
++
++
++def test_kind_is_passed_to_the_adb_backend(monkeypatch):
++    """同じ `kind` を両バックエンドへ入れる（分類の絞り込みがバックエンドで食い違わない）。"""
++    from jetuse_core import rag as rag_module
++    from jetuse_core import rag_adb
++
++    sent: dict = {}
++    seen: dict = {}
++    monkeypatch.setattr(rag_module, "ensure_store", lambda owner: "vs_fake")
++    monkeypatch.setattr(rag_module, "_backup_original", lambda *a: None)
++    monkeypatch.setattr(rag_module, "_insert_file", lambda *a: None)
++    monkeypatch.setattr(rag_module, "make_inference_client", lambda **kw: _FakeDp(sent))
++    monkeypatch.setattr(rag_adb, "availability", lambda: rag_adb.READY)
++    monkeypatch.setattr(rag_adb, "ingest",
++                        lambda owner, fid, name, body, *, kind="doc": seen.update(kind=kind))
++    _use_real_add_file(monkeypatch)
++    res = client.post(
++        "/api/rag/files",
++        files={"file": ("spec.xlsx", _workbook(), "x")},
++        data={"attributes": '{"kind": "spec"}'},
++    )
++    assert res.status_code == 200
++    assert seen["kind"] == "spec" == sent["attributes"]["kind"]
++
++
++def test_kind_longer_than_the_adb_column_is_rejected():
++    """`kind` は ADB 側が VARCHAR2(32)。片方だけ通る長さを受け付けない。"""
++    res = client.post(
++        "/api/rag/files",
++        files={"file": ("a.md", b"x", "text/markdown")},
++        data={"attributes": '{"kind": "' + "k" * 33 + '"}'},
++    )
++    assert res.status_code == 422 and "32" in res.json()["detail"]
++
++
++def test_select_ai_badge_is_error_for_formats_it_cannot_read(monkeypatch):
++    """Select AI は原本を DB 側が読む。xlsx は索引に載らないので "pending" にしない。"""
++    import jetuse_core.rag_adb as radb
++    import jetuse_core.rag_opensearch as ros
++    import jetuse_core.rag_select_ai as rsa
++    from jetuse_core import rag as rag_module
++
++    monkeypatch.setattr(rsa, "indexed_file_ids", lambda owner: set())
++    monkeypatch.setattr(ros, "enabled", lambda: False)
++    monkeypatch.setattr(radb, "enabled", lambda: True)
++    monkeypatch.setattr(radb, "indexed_file_ids", lambda owner: {"f1"})
++    monkeypatch.setattr(radb, "errored_file_ids", lambda owner: set())
++    files = [{"id": "f1", "filename": "spec.xlsx", "status": "completed"},
++             {"id": "f2", "filename": "policy.md", "status": "completed"}]
++    out = rag_module.attach_backend_status("u", files)
++    assert out[0]["backends"]["select_ai"] == "error"    # xlsx は載らない
++    assert out[0]["backends"]["adb"] == "indexed"        # adb には載っている
++    assert out[1]["backends"]["select_ai"] == "pending"  # md は同期待ち
++
++
++def test_opensearch_extracts_xlsx_instead_of_decoding_bytes():
++    """xlsx をそのまま UTF-8 デコードして文字化け本文を投入しない。"""
++    from jetuse_core import rag_opensearch
++
++    text = rag_opensearch._extract_text("spec.xlsx", _workbook())
++    assert "600 req/min" in text and "[制約 C5:E5]" in text
++    assert "�" not in text
+diff --git a/specs/09-rag.md b/specs/09-rag.md
+index 53e5299..e4d5388 100644
+--- a/specs/09-rag.md
++++ b/specs/09-rag.md
+@@ -16,7 +16,7 @@
+ 
+ - **ベクトルストアはユーザーごとに1つ**を遅延作成（`RAG_STORES(owner_sub PK, vector_store_id)`、migration 005）。共有ナレッジベースはPhase 4出口で要否判断
+ - `RAG_FILES(id PK, owner_sub, filename, oci_file_id, status, bytes, error, created_at)` — 表示名と状態の正はADB
+-- アップロードフロー: multipart受信（**20MB上限、拡張子 pdf/txt/md のみ**。docxは「未対応(SPIKE-03)」を明示エラー）→ Object Storageへ原本バックアップ（`{RAG_BUCKET}/rag/{owner}/{file_id}_{filename}`、ベストエフォート）→ Files API（purpose=assistants）→ `vector_stores.files.create`（ファイル単位）→ ADB記録（status=processing）
++- アップロードフロー: multipart受信（**20MB上限、拡張子 pdf/txt/md/xlsx のみ**。docxは「未対応(SPIKE-03)」を明示エラー）→ Object Storageへ原本バックアップ（`{RAG_BUCKET}/rag/{owner}/{file_id}_{filename}`、ベストエフォート）→ Files API（purpose=assistants）→ `vector_stores.files.create`（ファイル単位）→ ADB記録（status=processing）
+ - 状態: 一覧取得時にprocessingの行だけDPへ `files.retrieve` して completed/failed を反映
+ - 削除: VSから除去→Files API削除→OS原本削除（ベストエフォート）→ADB削除
+ 
+@@ -34,7 +34,47 @@
+   `0` / `False` は値として残す。
+ - 上限（キー16 / 値512文字 / 入れ子不可 — SPIKE-M1 ①-d）超過と未知キーは **422 で拒否**（切り詰めない。
+   値が変わるとフィルタが静かに外れ、「該当なし」と区別できなくなる）。
+-- 属性は**ファイル単位**（①-a）。チャンク単位の出典が要る文書は 1 チャンク = 1 ファイルで取り込む。
++- 属性は**ファイル単位**（①-a）。チャンク単位の出典が要る文書は 1 チャンク = 1 ファイルで取り込む
++  （**xlsx ではこの回避策を採らない** — PREP-01。セル単位の出典が要るなら `adb` バックエンドを使う）。
++
++### [PREP-01] xlsx の前処理（セル位置つき抽出）2026-07-30追記
++
++対応形式と**出典の粒度**。粒度はバックエンドで違い、その差は隠さない（ADR-0020 の決定内容そのもの。
++可視化は RAGM-03 の担当）。
++
++| 形式 | `adb` の出典 | `vector_store`（マネージド）の属性 |
++|---|---|---|
++| txt / md | チャンク単位（行範囲 `L12:L20`） | **ファイル単位**（1 ファイル 1 種類） |
++| pdf | チャンク単位（`p.3` + 行範囲） | **ファイル単位** |
++| **xlsx** | **チャンク単位（シート名 + セル範囲 `C5:E5`）** | **ファイル単位**（`sheet` / `cells` は「そのファイル全体」を表す値） |
++
++- 抽出は `jetuse_core/extract_xlsx.py`。**openpyxl を `read_only=True, data_only=True`** で開く
++  （大きなブックを一度に展開しない／数式ではなく値を取る。キャッシュの無い数式セルは空扱い）。
++  シートごとに**連続する非空セルの矩形**（空行・行の飛びが区切り）を 1 チャンクにし、
++  `sheet`（シート名）と `cells`（A1 形式）を付ける。テキスト化は行ごとにタブ区切り。
++  結合セルは左上だけが値を持つ（**意味の解釈・ヘッダ推定はしない**）。
++- 上限（超過は**切り詰めずに 422**。detail に `limit=<名前>` を書く）:
++  ブック 10MB（`workbook_bytes`。xlsx は zip なので汎用 20MB より手前で止める）/
++  展開後 100MB（`uncompressed_bytes`。zip の各エントリの合計を**開く前**に見る）/
++  走査行 200,000（`rows`）/ 総チャンク 1,000（`chunks`）/ 1 チャンク 2,000 文字（`chunk_chars`。
++  埋め込み API の切り詰め位置に合わせる。上限に収まらない塊は**行境界で分割**し、
++  1 行だけで超える場合のみ拒否）。
++  **行もチャンクも逐次処理し、上限は 1 件作るたびに見る**（塊を丸ごとメモリに溜めない）。
++  壊れたブック（zip は正しいがシート XML が壊れている等）は、開く時だけでなく
++  **行を読んでいる最中の例外も** `UnsupportedWorkbook` に正規化して 422 にする。
++- `vector_store` への取り込みは、抽出テキストを `<原名>.xlsx.txt` として Files API へ渡す
++  （マネージド側は Office 形式を受け付けない — SPIKE-03 の docx と同じ。実測は `docs/verification/PREP-01.md`）。
++  台帳の表示名・原本バックアップ・`sha256` は**元の xlsx** のまま。
++  属性の `sheet` / `cells` は単一シートなら外接範囲、複数シートなら `(ブック全体: N シート)` / `(ブック全体)`。
++  **1 チャンク = 1 ファイルに割って「セル単位で返る」ように見せる細工はしない。**
++- `kind` は**両バックエンドに同じ値**を入れる（マネージドの属性と ADB の `kind` 列）。
++  そのため `kind` は 32 文字以内の文字列に限る（ADB 側が `VARCHAR2(32)`。超過は 422）。
++- **`select_ai` は xlsx を扱えない**。索引はバケットの**原本**を DB 側（`DBMS_CLOUD_AI`）が
++  読むので、アプリ側の抽出を通らない。取り込み状況バッジは `pending`（いつか入る）ではなく
++  **`error`** を返す（嘘の期待を作らない）。対応形式は `rag.SELECT_AI_EXTENSIONS`。
++- `POST /api/extract`（新規）: ファイルを渡すと**取り込まずに**抽出結果
++  `{filename, chunk_count, chunks:[{sheet, cells, text}]}` を返す。案件側が独自の構造化を挟むための口。
++  認証・拡張子・サイズ上限はアップロードと同じ。返るチャンクは `adb` へ投入されるものと同一。
+ 
+ ## [RAG-02] RAGチャット
+ 
+diff --git a/spikes/prep01/e2e.py b/spikes/prep01/e2e.py
+new file mode 100644
+index 0000000..ab36023
+--- /dev/null
++++ b/spikes/prep01/e2e.py
+@@ -0,0 +1,498 @@
++"""PREP-01 の実環境 E2E（tasks/PREP-01.md の「E2E シナリオ」）。
++
++**実装（`jetuse_core.extract_xlsx` / `rag` / `rag_adb` と FastAPI ルート）をそのまま呼ぶ**。
++検証用の別実装は書かない。相手の ADB・OCI Generative AI（Files / Vector Stores / 埋め込み /
++生成）はすべて実物。
++
++  0. 抽出口 `POST /api/extract`（取り込まない）
++  1. `adb` バックエンド: xlsx 由来のチャンクが**チャンクごとに異なるシート / セル範囲**を返す
++  2. `vector_store`（マネージド）: 同じファイルの属性が**ファイル単位**になる（能力差の証跡）
++  3. 版フィルタ（`current_version='Y'`）が xlsx 由来のチャンクにも効く
++
++隔離: 共有 loop ADB の **run 固有スキーマ**（`JETUSE_PREP01_<乱数>`。ADB は増やさない）。
++OCI 側の検証用資源は `jetuse-spike-prep01-` 接頭辞。所有台帳・ウォレット・接続ガードは
++RAGM-02 の検証共通部（`spikes/ragm02/common.py`）をそのまま再利用する（env で接頭辞だけ差し替え）。
++
++実行（`E=SPIKE_SCHEMA_PREFIX=JETUSE_PREP01 SPIKE_HOME=/tmp/jetuse-prep01`,
++      `P=PYTHONPATH=spikes/ragm02:spikes/prep01:packages/api`）:
++  env $E $P .venv/bin/python spikes/ragm02/setup_schema.py   # スキーマ作成（台帳つき）
++  env $E $P .venv/bin/python spikes/prep01/e2e.py
++片付け:
++  env $E $P .venv/bin/python spikes/prep01/teardown.py --yes  # OCI 側（ファイル・箱）
++  env $E $P .venv/bin/python spikes/ragm02/teardown.py --yes  # ADB スキーマ
++"""
++
++import json
++import os
++import re
++import sys
++import time
++
++from common import ROOT, banner, connect_schema, prepare_env, require_schema, secret
++from fixtures import DOC_NAME, PREFIX, RATE_LIMIT, workbook
++
++SCHEMA = require_schema()
++OWNER = "dev-user"  # 認証無効時の AuthContext.subject（HTTP 経路の名前空間）
++QUESTION = "レート制限は1分あたり何リクエストですか"
++
++EVIDENCE = ROOT / "runs" / (ROOT / ".current_run_id").read_text().strip() / "e2e"
++
++
++_IDS = re.compile(
++    r"(ocid1\.[a-z0-9]+\.[a-z0-9-]*\.[a-z0-9-]*\.|file-kix-|vs_kix_)[a-zA-Z0-9_-]{8,}"
++)
++
++
++def write(name: str, text: str) -> None:
++    """証跡を書く。OCI 側の識別子は**先頭だけ残して伏せる**（実値をリポジトリに残さない）。"""
++    EVIDENCE.mkdir(parents=True, exist_ok=True)
++    (EVIDENCE / name).write_text(_IDS.sub(lambda m: m.group(1) + "…", text))
++    print(f"  wrote {EVIDENCE / name}")
++
++
++def fence(text: str) -> str:
++    return "```\n" + (text.rstrip() or "(なし)") + "\n```"
++
++
++def mask(value: str | None) -> str:
++    """OCI 側の識別子は先頭だけ残す（実値をリポジトリに残さない）。"""
++    if not value:
++        return "(なし)"
++    return value[:12] + "…" if len(value) > 12 else value
++
++
++def use_task_schema() -> None:
++    """`jetuse_core.db` の接続先をこの run のスキーマへ向ける（他タスクの資源に触れない）。"""
++    prepare_env()  # ADB_WALLET_* / ADB_DSN / ADB_COMPARTMENT_OCID（= 承認済み根の直下 dev）
++    os.environ["ADB_USER"] = SCHEMA
++    os.environ["ADB_PASSWORD"] = secret("schema_password")
++    # OCI 側も **dev コンパートメント**に閉じる（loop-config の e2e.compartment）。
++    # `.env` の COMPARTMENT_OCID は親（jetuse）を指しており、そこには ACTIVE な
++    # GenerativeAiProject も loop の資源も無い（Vector Store を親側に作ってしまう）。
++    os.environ["COMPARTMENT_OCID"] = os.environ["ADB_COMPARTMENT_OCID"]
++    from jetuse_core.settings import get_settings
++
++    get_settings.cache_clear()
++    if get_settings().adb_user != SCHEMA:
++        sys.exit(f"接続先スキーマが {get_settings().adb_user}。E2E は {SCHEMA} でしか実行しない。")
++
++
++def ensure_spike_store() -> str:
++    """検証用の Vector Store（`jetuse-spike-prep01-<run>`）を用意し、登録簿に載せる。
++
++    `rag.ensure_store()` が作る名前（`jetuse-rag-<owner>`）では検証用の接頭辞規約を
++    満たせないので、**先に接頭辞つきで作って登録簿へ入れる**。以後 `rag.add_file` は
++    この箱を使う（アプリ経路そのものは変えていない）。
++    """
++    from jetuse_core import rag
++    from jetuse_core.genai import make_cp_client, make_inference_client
++
++    existing = rag.get_store_id(OWNER)
++    if existing:
++        return existing
++    name = f"{PREFIX}-{SCHEMA.rsplit('_', 1)[-1].lower()}"
++    cp = make_cp_client()
++    vs = cp.vector_stores.create(name=name, metadata={"owner": OWNER})
++    for _ in range(30):
++        if cp.vector_stores.retrieve(vector_store_id=vs.id).status == "completed":
++            break
++        time.sleep(2)
++    dp = make_inference_client(with_project=True)
++    for _ in range(30):
++        try:
++            dp.vector_stores.files.list(vector_store_id=vs.id)
++            break
++        except Exception:
++            time.sleep(2)
++    rag._save_store_id(OWNER, vs.id)
++    print(f"  検証用 Vector Store: {name} ({mask(vs.id)})")
++    return vs.id
++
++
++def upload(client, version: str) -> dict:
++    """アプリのアップロード経路（`POST /api/rag/files`）で取り込む。"""
++    res = client.post(
++        "/api/rag/files",
++        files={"file": (DOC_NAME, workbook(version),
++                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
++        data={"attributes": json.dumps({"version": version, "kind": "spec"})},
++    )
++    if res.status_code != 200:
++        sys.exit(f"アップロードが失敗した: {res.status_code} {res.text[:400]}")
++    return res.json()
++
++
++def wait_completed(client, file_id: str, timeout: int = 300) -> dict:
++    """マネージド側の処理完了を待つ（一覧取得が processing の行を DP へ問い合わせる）。"""
++    deadline = time.time() + timeout
++    row: dict = {}
++    while time.time() < deadline:
++        files = client.get("/api/rag/files").json()["files"]
++        row = next((f for f in files if f["id"] == file_id), {})
++        if row.get("status") in ("completed", "failed"):
++            return row
++        time.sleep(5)
++    return row
++
++
++# --- シナリオ ------------------------------------------------------------------
++
++
++def scenario_0(client) -> bool:
++    """抽出口: 取り込まずに `{sheet, cells, text}` を返す。"""
++    banner("シナリオ0: POST /api/extract（抽出のみ・取り込みなし）")
++    before = len(client.get("/api/rag/files").json()["files"])
++    res = client.post("/api/extract", files={"file": (DOC_NAME, workbook("2.0"), "x")})
++    after = len(client.get("/api/rag/files").json()["files"])
++    body = res.json()
++    chunks = body.get("chunks", [])
++    rows = "\n".join(f"{c['sheet']} | {c['cells']} | {c['text'][:38].splitlines()[0]}..."
++                     for c in chunks)
++    sheets = [c["sheet"] for c in chunks]
++    distinct = len({(c["sheet"], c["cells"]) for c in chunks}) == len(chunks)
++    ok = (res.status_code == 200 and len(chunks) >= 3 and distinct
++          and "作業用" not in sheets and after == before)
++
++    # 上限超過（切り詰めない）も同じ口で確認する
++    from jetuse_core import extract_xlsx
++
++    original = extract_xlsx.MAX_CHUNKS
++    extract_xlsx.MAX_CHUNKS = 1
++    try:
++        over = client.post("/api/extract", files={"file": (DOC_NAME, workbook("2.0"), "x")})
++    finally:
++        extract_xlsx.MAX_CHUNKS = original
++    limit_ok = over.status_code == 422 and "limit=chunks" in over.json().get("detail", "")
++
++    write("scenario-0.md", f"""# シナリオ0 — 抽出口 `POST /api/extract`（取り込まない）
++
++架空の仕様書ブック `{DOC_NAME}`（複数シート・空シート・結合セル・数式セル・空白領域つき）を
++実 API に渡した。**保存はしない**ことを、前後のファイル一覧の件数で確認している。
++
++- HTTP ステータス: **{res.status_code}** / チャンク数: **{body.get('chunk_count')}**
++- 取り込み前後のファイル数: {before} → {after}（増えていないこと）
++
++{fence(rows)}
++
++- シート名とセル範囲がチャンクごとに異なる: **{distinct}**
++- 空シート `作業用` はチャンクを作らない: **{'作業用' not in sheets}**
++
++## 上限超過（切り詰めずに拒否する）
++
++一時的に総チャンク上限を 1 に落として同じファイルを投げた:
++
++- HTTP ステータス: **{over.status_code}**（期待 422）
++- detail: `{over.json().get('detail', '')}`（どの上限かが書かれていること）
++
++判定: **{'PASS' if ok and limit_ok else 'FAIL'}**
++""")
++    return ok and limit_ok
++
++
++def scenario_1(client, rag_adb) -> bool:
++    """adb: チャンクごとに異なるシート / セル範囲が引用に載る。"""
++    banner("シナリオ1: adb バックエンド（チャンク単位の出典）")
++    # 現行版だけを見る（既定の生成経路と同じ絞り込み）。版フィルタ無しだと同名文書の
++    # 旧版チャンクが混ざり、同じセル範囲が版違いで 2 度出てくる（それはシナリオ3 の主題）
++    hits = rag_adb.search(OWNER, QUESTION, k=5,
++                          filters={"file": DOC_NAME, "current_version": "Y"})
++    rows = "\n".join(f"{h['source']['chunk_id']} | sheet={h['source']['sheet']}"
++                     f" | cells={h['source']['cells']} | score={h['score']}"
++                     f" | {h['text'][:36].splitlines()[0]}..." for h in hits)
++    pairs = [(h["source"]["sheet"], h["source"]["cells"]) for h in hits]
++    distinct = len(set(pairs)) == len(pairs)
++    same_file = len({h["source"]["file"] for h in hits}) == 1
++    cell_shaped = all(any(ch.isalpha() for ch in c) and any(ch.isdigit() for ch in c)
++                      for _, c in pairs)
++
++    res = client.post("/api/chat/stream", json={
++        "model": "gpt-oss-120b", "messages": [{"role": "user", "content": QUESTION}],
++        "rag": True, "rag_backend": "adb",
++    })
++    frames = [json.loads(ln[6:]) for ln in res.text.splitlines()
++              if ln.startswith("data: ") and ln[6:].strip() not in ("[DONE]", "")]
++    answer = "".join(f.get("delta", "") for f in frames)
++    cites = next((f["citations"] for f in frames if "citations" in f), [])
++    cite_pairs = [(c["source"]["sheet"], c["source"]["cells"]) for c in cites]
++    cite_distinct = len(set(cite_pairs)) == len(cite_pairs) and len(cites) >= 2
++    # 取り込み時に渡した分類（kind）が ADB 側の列にも入っていること。既定値のままだと
++    # 「マネージドでは spec、ADB では doc」になり、分類での絞り込みがバックエンドで食い違う
++    kinds = {h["source"]["kind"] for h in hits}
++    kind_matches = kinds == {"spec"}
++    ok = (bool(hits) and distinct and same_file and cell_shaped and cite_distinct
++          and kind_matches)
++
++    write("scenario-1.md", f"""# シナリオ1 — `adb`: 出典は**チャンク単位**（シート + セル範囲）
++
++同じ 1 ファイル `{DOC_NAME}` を取り込んだ結果を検索した（アップロードはアプリ経路
++`POST /api/rag/files`。取り込みは `rag.add_file` → `rag_adb.ingest`）。
++
++## 検索（`rag_adb.search` / `current_version='Y'`）
++
++{fence(rows)}
++
++- すべて**同一ファイル**由来: **{same_file}**
++- (シート, セル範囲) がすべて異なる: **{distinct}** → `{pairs}`
++- セル範囲が A1 形式（列 + 行）である: **{cell_shaped}**
++- 取り込み時の分類 `kind="spec"` が ADB 側にも入っている: **{kind_matches}**
++  （実際: `{sorted(kinds)}`）
++
++## 実 API 経路（`POST /api/chat/stream` / `rag_backend="adb"`）
++
++質問: `{QUESTION}`
++
++{fence(answer)}
++
++引用（`citations[].source`）:
++
++{fence(json.dumps(cites, ensure_ascii=False, indent=2)[:1800])}
++
++- 引用の (シート, セル範囲) がチャンクごとに異なる: **{cite_distinct}**
++
++判定: **{'PASS' if ok else 'FAIL'}**
++
++> これは `adb` バックエンドだけの粒度である。マネージド Vector Store は属性が
++> **ファイル単位**（SPIKE-M1 ①-a）で、同じファイルの全チャンクが同じ出典しか返せない
++> （シナリオ2 で実測）。
++""")
++    return ok
++
++
++def scenario_2(client, files: list[dict]) -> bool:
++    """vector_store: 同じファイルの属性が**ファイル単位**であることの証跡。"""
++    banner("シナリオ2: vector_store（マネージドの属性はファイル単位）")
++    from jetuse_core import rag
++    from jetuse_core.genai import make_inference_client
++
++    dp = make_inference_client(with_project=True)
++    vs_id = rag.get_store_id(OWNER)
++
++    # (a) マネージド側が xlsx をそのまま受け付けるか（前処理が要る理由の実測）
++    raw_probe = "(未実施)"
++    probe_file_id = None
++    try:
++        probe = dp.files.create(file=(DOC_NAME, workbook("2.0")), purpose="assistants")
++        probe_file_id = probe.id
++        dp.vector_stores.files.create(vector_store_id=vs_id, file_id=probe.id,
++                                      attributes={"file": DOC_NAME})
++        for _ in range(30):
++            vf = dp.vector_stores.files.retrieve(vector_store_id=vs_id, file_id=probe.id)
++            if vf.status not in ("in_progress", "queued"):
++                break
++            time.sleep(5)
++        raw_probe = f"status={vf.status} last_error={getattr(vf, 'last_error', None)}"
++    except Exception as e:  # noqa: BLE001 — 何が返るかの実測そのものが目的
++        raw_probe = f"{type(e).__name__}: {str(e)[:300]}"
++    finally:
++        if probe_file_id:
++            try:
++                dp.vector_stores.files.delete(vector_store_id=vs_id, file_id=probe_file_id)
++            except Exception:
++                pass
++            try:
++                dp.files.delete(probe_file_id)
++            except Exception:
++                pass
++
++    # (b) 実装経路で取り込んだファイルの属性（ファイル単位で 1 種類）
++    rows = []
++    attrs_by_file = {}
++    statuses = []
++    for f in files:
++        vf = dp.vector_stores.files.retrieve(vector_store_id=vs_id, file_id=f["oci_file_id"])
++        attrs_by_file[f["id"]] = dict(vf.attributes or {})
++        statuses.append(vf.status)
++        rows.append(f"{mask(f['oci_file_id'])} | status={vf.status} | "
++                    f"attributes={json.dumps(dict(vf.attributes or {}), ensure_ascii=False)}")
++
++    # (c) 実 API の RAG 応答（file_search）で引用の出典を見る
++    res = client.post("/api/chat/stream", json={
++        "model": "gpt-oss-120b", "messages": [{"role": "user", "content": QUESTION}],
++        "rag": True,
++    })
++    frames = [json.loads(ln[6:]) for ln in res.text.splitlines()
++              if ln.startswith("data: ") and ln[6:].strip() not in ("[DONE]", "")]
++    answer = "".join(f.get("delta", "") for f in frames)
++    cites = next((f["citations"] for f in frames if "citations" in f), [])
++    per_file: dict[str, set] = {}
++    for c in cites:
++        source = c.get("source") or {}
++        per_file.setdefault(c.get("file_id", "?"), set()).add(
++            (source.get("sheet"), source.get("cells"))
++        )
++    file_level_citations = all(len(v) == 1 for v in per_file.values()) if per_file else None
++
++    variants = {mask(k): len(v) for k, v in per_file.items()}
++    workbook_marker = all(
++        a.get("cells") == "(ブック全体)" and a.get("sheet", "").startswith("(ブック全体")
++        for a in attrs_by_file.values()
++    )
++    # **主要条件はすべて必須にする**（引用が 0 件でも PASS になる緩い判定にしない）
++    probe_rejected = "unsupported_file" in raw_probe
++    all_completed = bool(statuses) and set(statuses) == {"completed"}
++    ok = (bool(attrs_by_file) and workbook_marker and probe_rejected and all_completed
++          and bool(cites) and file_level_citations is True)
++
++    write("scenario-2.md", f"""# シナリオ2 — `vector_store`: 属性は**ファイル単位**（能力差の証跡）
++
++シナリオ1 と**同じファイル**をマネージド Vector Store 側で見た。ADR-0020 の決定
++（2 バックエンドの能力差）の裏付けになる部分なので、3 つの角度から記録する。
++
++## (a) マネージド側は xlsx をそのまま受け付けるか
++
++`files.create(...xlsx...)` → `vector_stores.files.create` を素の xlsx で試した結果:
++
++{fence(raw_probe)}
++
++→ だから取り込み経路では**抽出したテキストを `<原名>.xlsx.txt` として渡す**
++（SPIKE-03 で docx が `Unsupported file type` だったのと同じ扱い）。
++素の xlsx が `unsupported_file` で断られた: **{probe_rejected}**（この行が判定条件）
++
++## (b) 取り込んだファイルの属性（`vector_stores.files.retrieve`）
++
++{fence(chr(10).join(rows))}
++
++- `sheet` / `cells` が**ブック全体**を表す値になっている: **{workbook_marker}**
++- 取り込み状態がすべて `completed`: **{all_completed}**（実際: `{statuses}`）
++- 1 ファイルにつき属性は **1 種類**。チャンクが何個できても増えない（SPIKE-M1 ①-a）
++
++## (c) 実 API の RAG 応答（`POST /api/chat/stream` / 既定の `vector_store`）
++
++質問: `{QUESTION}`
++
++{fence(answer)}
++
++引用:
++
++{fence(json.dumps(cites, ensure_ascii=False, indent=2)[:1500])}
++
++- 引用の件数: **{len(cites)}**（0 件なら判定は FAIL）
++- 同一ファイル由来の引用が持つ (シート, セル範囲) の種類数: `{variants}`
++  → **1 種類だけ**であること（= 属性はファイル単位）: **{file_level_citations}**
++
++判定: **{'PASS' if ok else 'FAIL'}**
++
++> **この差は隠さない。** 「マネージドでもセル単位で返る」ように見せる実装
++> （1 チャンク = 1 ファイルへ無理に分割する等）はしていない。セル単位の出典が要るなら
++> `adb` バックエンドを選ぶ、というのが ADR-0020 の決定内容そのものである（可視化は RAGM-03）。
++""")
++    return ok
++
++
++def scenario_3(rag_adb) -> bool:
++    """版フィルタが xlsx 由来のチャンクにも効く。"""
++    banner("シナリオ3: 版フィルタ（current_version='Y'）")
++    no_filter = rag_adb.search(OWNER, QUESTION, k=10, filters={"file": DOC_NAME})
++    filtered = rag_adb.search(OWNER, QUESTION, k=10,
++                              filters={"file": DOC_NAME, "current_version": "Y"})
++
++    def fmt(hits):
++        return "\n".join(
++            f"{h['source']['chunk_id']} | version={h['source']['version']}"
++            f" | current={h['source']['current_version']}"
++            f" | {h['source']['sheet']} {h['source']['cells']}"
++            f" | {h['text'][:30].splitlines()[0]}..." for h in hits)
++
++    stale_all = [h["source"]["chunk_id"] for h in no_filter
++                 if h["source"]["current_version"] == "N"]
++    stale_filtered = [h["source"]["chunk_id"] for h in filtered
++                      if h["source"]["current_version"] == "N"]
++    old_value = RATE_LIMIT["1.0"].split()[0]
++    new_value = RATE_LIMIT["2.0"].split()[0]
++    old_in_all = any(old_value in h["text"] for h in no_filter)
++    old_in_filtered = any(old_value in h["text"] for h in filtered)
++    new_in_filtered = any(new_value in h["text"] for h in filtered)
++    ok = (bool(stale_all) and not stale_filtered and bool(filtered)
++          and old_in_all and not old_in_filtered and new_in_filtered)
++
++    write("scenario-3.md", f"""# シナリオ3 — 版フィルタが xlsx 由来のチャンクにも効く
++
++同名の xlsx を v1.0 → v2.0 の順にアップロードした（再取り込みで旧チャンクは
++`current_version='N'` に落ちる）。制約シートの「レート制限」だけが
++{RATE_LIMIT['1.0']} → {RATE_LIMIT['2.0']} に変わっている。
++
++## A: フィルタ無し（対照）
++
++{fence(fmt(no_filter))}
++
++旧版のヒット: **{len(stale_all)} 件** `{stale_all}`
++
++本文に旧値 {old_value} を含む: **{old_in_all}**
++
++## B: `current_version='Y'`
++
++{fence(fmt(filtered))}
++
++旧版のヒット: **{len(stale_filtered)} 件** / 旧値 {old_value} を含む: **{old_in_filtered}** /
++現行値 {new_value} を含む: **{new_in_filtered}**
++
++判定: **{'PASS' if ok else 'FAIL'}**（A で旧版が返り、B では 0 件になること）
++""")
++    return ok
++
++
++def main() -> None:
++    use_task_schema()
++    conn = connect_schema()  # 台帳ゲート（自分が作ったスキーマか）を通す
++
++    banner("マイグレーション適用（deploy 相当）")
++    from jetuse_core.migrate import migrate
++
++    applied = migrate()
++    print(f"  applied: {applied or '(up to date)'}")
++
++    from fastapi.testclient import TestClient
++    from jetuse_core import rag, rag_adb
++    from service.main import app
++
++    client = TestClient(app)
++
++    # 前回の残りを消してから始める（対照の件数が積み上がらないように）
++    cur = conn.cursor()
++    for table in (rag_adb.TABLE, rag_adb.DOC_TABLE, rag_adb.INGEST_TABLE):
++        cur.execute(f"DELETE FROM {table} WHERE owner_sub = :o", o=OWNER)
++    conn.commit()
++    for row in rag.list_files(OWNER):
++        rag.delete_file(OWNER, row["id"])
++
++    ensure_spike_store()
++
++    banner("アップロード（v1.0 → v2.0・アプリ経路）")
++    uploaded = [upload(client, "1.0"), upload(client, "2.0")]
++    files = []
++    for u in uploaded:
++        row = wait_completed(client, u["id"])
++        print(f"  {u['id']}: status={row.get('status')} backends={row.get('backends')}")
++        files.append({**u, "oci_file_id": row.get("oci_file_id"),
++                      "status": row.get("status"), "backends": row.get("backends")})
++    write("upload.md", f"""# アップロード（実 API・アプリ経路）
++
++`POST /api/rag/files`（multipart + `attributes`）に架空の xlsx を v1.0 → v2.0 の順で投げた。
++
++{fence(chr(10).join(f"{f['filename']} v{v} | file_id={f['id']} | "
++                    f"oci_file={mask(f['oci_file_id'])} | status={f['status']} | "
++                    f"backends={f['backends']}"
++                    for f, v in zip(files, ('1.0', '2.0'), strict=True)))}
++
++- `backends.vector_store` = マネージド側の処理状態 / `backends.adb` = 自前索引の取り込み状態
++- スキーマ: `{SCHEMA}`（共有 loop ADB 内の run 固有スキーマ。ADB は増やしていない）
++""")
++
++    results = {
++        "0": scenario_0(client),
++        "1": scenario_1(client, rag_adb),
++        "2": scenario_2(client, files),
++        "3": scenario_3(rag_adb),
++    }
++    banner("結果")
++    for k, v in results.items():
++        print(f"  シナリオ{k}: {'PASS' if v else 'FAIL'}")
++    write("summary.md", "# E2E 結果一覧\n\n" + "\n".join(
++        f"- シナリオ{k}: **{'PASS' if v else 'FAIL'}** → `scenario-{k}.md`"
++        for k, v in results.items()) + "\n")
++    conn.close()
++    sys.exit(0 if all(results.values()) else 1)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/spikes/prep01/fixtures.py b/spikes/prep01/fixtures.py
+new file mode 100644
+index 0000000..da1eb2f
+--- /dev/null
++++ b/spikes/prep01/fixtures.py
+@@ -0,0 +1,61 @@
++"""PREP-01 の E2E で使う**架空**の仕様書ブック（顧客データは使わない）。
++
++わざと扱いにくい要素を入れてある: 複数シート / 空シート / 結合セル /
++キャッシュの無い数式セル / 大きな空白領域（行の飛び）。
++v1 と v2 は「レート制限」の値だけが違い、版フィルタの対照に使える。
++"""
++
++import io
++
++from openpyxl import Workbook
++
++# OCI 側・検証用の資源には接頭辞を付ける（CLAUDE.md の運用規約）
++PREFIX = "jetuse-spike-prep01"
++DOC_NAME = f"{PREFIX}-サンプル在庫連携API仕様書.xlsx"
++
++RATE_LIMIT = {"1.0": "300 req/min", "2.0": "600 req/min"}
++
++
++def workbook(version: str) -> bytes:
++    wb = Workbook()
++    wb.remove(wb.active)
++
++    api = wb.create_sheet("API一覧")
++    api["B12"] = "エンドポイント"
++    api["C12"] = "メソッド"
++    api["D12"] = "説明"
++    api["B13"] = "/v1/inventory"
++    api["C13"] = "GET"
++    api["D13"] = "在庫数と引当可能数を返す在庫照会API"
++    api["B14"] = "/v1/shipments"
++    api["C14"] = "POST"
++    api["D14"] = "出荷指示を登録する"
++
++    seigen = wb.create_sheet("制約")
++    seigen["A1"] = "本仕様書の制約事項"          # 結合セルの見出し
++    seigen.merge_cells("A1:E1")
++    seigen["C5"] = "レート制限"
++    seigen["D5"] = RATE_LIMIT[version]
++    seigen["E5"] = "超過時は HTTP 429 を返す"
++    seigen["C6"] = "データ保持期間"
++    seigen["D6"] = "13か月"
++    seigen["E6"] = "明細データが対象"
++    # 大きな空白領域を挟んだ別の塊（別チャンクになること）
++    seigen["C40"] = "同時接続数"
++    seigen["D40"] = "50"
++    seigen["E40"] = "IP 単位で計数する"
++    seigen["D41"] = "=SUM(D40:D40)"            # 値のキャッシュが無い数式セル
++
++    rev = wb.create_sheet("改訂履歴")
++    rev["A1"] = "版"
++    rev["B1"] = "日付"
++    rev["C1"] = "内容"
++    rev["A2"] = version
++    rev["B2"] = "2026-07-30"
++    rev["C2"] = f"レート制限を {RATE_LIMIT[version]} に改訂"
++
++    wb.create_sheet("作業用")                   # 空シート（チャンクを作らないこと）
++
++    buf = io.BytesIO()
++    wb.save(buf)
++    return buf.getvalue()
+diff --git a/spikes/prep01/teardown.py b/spikes/prep01/teardown.py
+new file mode 100644
+index 0000000..d7074b4
+--- /dev/null
++++ b/spikes/prep01/teardown.py
+@@ -0,0 +1,71 @@
++"""PREP-01 の OCI 側検証資源を片付ける（既定は dry-run。実削除は `--yes`）。
++
++消すのは **この run が作ったもの**だけ:
++- アップロードした RAG ファイル（Vector Store 内のファイル・Files API・Object Storage 原本・
++  ADB のチャンク）= `rag.delete_file` と同じ経路
++- 接頭辞 `jetuse-spike-prep01-` で始まる Vector Store のうち、**この run のスキーマ名の
++  接尾辞を持つもの**（他タスク・他 run の箱は名前が一致しないので触らない）
++
++ADB スキーマ自体の片付けは `spikes/ragm02/teardown.py --yes`（所有台帳ゲートつき）で行う。
++
++実行: PYTHONPATH=spikes/ragm02:spikes/prep01:packages/api .venv/bin/python \
++        spikes/prep01/teardown.py [--yes]
++"""
++
++import sys
++
++from common import banner, connect_schema, require_schema
++from e2e import OWNER, mask, use_task_schema
++from fixtures import PREFIX
++
++SCHEMA = require_schema()
++
++
++def main() -> None:
++    apply = "--yes" in sys.argv
++    use_task_schema()
++    connect_schema().close()  # 台帳ゲート（自分が作ったスキーマか）を通す
++
++    from jetuse_core import rag
++    from jetuse_core.genai import make_cp_client
++
++    expected_name = f"{PREFIX}-{SCHEMA.rsplit('_', 1)[-1].lower()}"
++    files = rag.list_files(OWNER)
++    store_id = rag.get_store_id(OWNER)
++
++    # **何かを消す前に**所有を確かめる（fail-closed）。ファイル削除は Vector Store 内の
++    # ファイル・Files API・Object Storage 原本まで消すので、箱の身元が確認できない状態で
++    # 1 件でも消すと、他タスクの資源を壊してから止まることになる。
++    cp = make_cp_client()
++    if store_id:
++        actual = cp.vector_stores.retrieve(vector_store_id=store_id).name
++        if actual != expected_name:
++            sys.exit(f"Vector Store の名前が一致しない（{actual} != {expected_name}）。"
++                     "何も削除せずに中止する。")
++    elif files:
++        sys.exit("登録簿に Vector Store が無いのにファイルが残っている。"
++                 "身元を確かめられないので何も削除せずに中止する。")
++    # ファイル名にも run 接頭辞を要求する（この run が上げたものだけを消す）
++    foreign = [f["filename"] for f in files if not f["filename"].startswith(PREFIX)]
++    if foreign:
++        sys.exit(f"接頭辞 {PREFIX} を持たないファイルが混ざっている: {foreign[:3]}。"
++                 "何も削除せずに中止する。")
++
++    banner("削除対象")
++    for f in files:
++        print(f"  file {f['id']} {f['filename']} ({mask(f['oci_file_id'])})")
++    print(f"  vector store {mask(store_id)}（名前: {expected_name} — 照合済み）")
++    if not apply:
++        print("\ndry-run。実削除は --yes を付けて実行する")
++        return
++
++    for f in files:
++        print(f"  削除: {f['id']} -> {rag.delete_file(OWNER, f['id'])}")
++    if store_id:
++        cp.vector_stores.delete(vector_store_id=store_id)
++        print(f"  Vector Store 削除: {expected_name}")
++    print("\ndone（ADB スキーマは spikes/ragm02/teardown.py --yes で片付ける）")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/spikes/ragm02/common.py b/spikes/ragm02/common.py
+index bed85a9..75fb7cf 100644
+--- a/spikes/ragm02/common.py
++++ b/spikes/ragm02/common.py
+@@ -25,8 +25,13 @@ sys.path.insert(0, str(ROOT / "ops"))
+ 
+ import _adb as adb  # noqa: E402  ops の接続・fail-closed ゲートを再利用する
+ 
+-SCHEMA_PREFIX = "JETUSE_RAGM02"
+-HOME = pathlib.Path(os.environ.get("RAGM02_HOME", "/tmp/jetuse-ragm02"))
++# 接頭辞と保管先は env で差し替えられる（**後続タスクがこの台帳ゲートごと再利用するため**。
++# PREP-01 は SPIKE_SCHEMA_PREFIX=JETUSE_PREP01 / SPIKE_HOME=/tmp/jetuse-prep01 で使う）。
++# 既定値は RAGM-02 のままなので、RAGM-02 の手順書はそのまま動く。
++SCHEMA_PREFIX = os.environ.get("SPIKE_SCHEMA_PREFIX", "JETUSE_RAGM02")
++HOME = pathlib.Path(
++    os.environ.get("SPIKE_HOME") or os.environ.get("RAGM02_HOME", "/tmp/jetuse-ragm02")
++)
+ EMBED_MODEL = "cohere.embed-multilingual-v3.0"
+ EMBED_DIM = 1024
+ 
+@@ -37,8 +42,9 @@ def _schema_path() -> pathlib.Path:
+ 
+ def resolve_schema() -> str:
+     """この run のスキーマ名。env → `RAGM02_HOME/schema.txt` の順。未作成なら空。"""
+-    if os.environ.get("RAGM02_SCHEMA"):
+-        return os.environ["RAGM02_SCHEMA"].strip().upper()
++    override = os.environ.get("SPIKE_SCHEMA") or os.environ.get("RAGM02_SCHEMA")
++    if override:
++        return override.strip().upper()
+     path = _schema_path()
+     return path.read_text().strip().upper() if path.exists() else ""
+ 
+
+
+===== 実環境 E2E 証跡 (jetuse-dev / Codex は実行せず証跡を評価する) =====
+--- runs/2026-07-30T1600_PREP-01/e2e/scenario-0.md ---
+# シナリオ0 — 抽出口 `POST /api/extract`（取り込まない）
+
+架空の仕様書ブック `jetuse-spike-prep01-サンプル在庫連携API仕様書.xlsx`（複数シート・空シート・結合セル・数式セル・空白領域つき）を
+実 API に渡した。**保存はしない**ことを、前後のファイル一覧の件数で確認している。
+
+- HTTP ステータス: **200** / チャンク数: **5**
+- 取り込み前後のファイル数: 2 → 2（増えていないこと）
+
+```
+API一覧 | B12:D14 | エンドポイント	メソッド	説明...
+制約 | A1 | 本仕様書の制約事項...
+制約 | C5:E6 | レート制限	600 req/min	超過時は HTTP 429 を返す...
+制約 | C40:E40 | 同時接続数	50	IP 単位で計数する...
+改訂履歴 | A1:C2 | 版	日付	内容...
+```
+
+- シート名とセル範囲がチャンクごとに異なる: **True**
+- 空シート `作業用` はチャンクを作らない: **True**
+
+## 上限超過（切り詰めずに拒否する）
+
+一時的に総チャンク上限を 1 に落として同じファイルを投げた:
+
+- HTTP ステータス: **422**（期待 422）
+- detail: `チャンク数が上限を超えました(> 1)。シートを分けるかファイルを分割してください (limit=chunks)`（どの上限かが書かれていること）
+
+判定: **PASS**
+
+--- runs/2026-07-30T1600_PREP-01/e2e/scenario-1.md ---
+# シナリオ1 — `adb`: 出典は**チャンク単位**（シート + セル範囲）
+
+同じ 1 ファイル `jetuse-spike-prep01-サンプル在庫連携API仕様書.xlsx` を取り込んだ結果を検索した（アップロードはアプリ経路
+`POST /api/rag/files`。取り込みは `rag.add_file` → `rag_adb.ingest`）。
+
+## 検索（`rag_adb.search` / `current_version='Y'`）
+
+```
+de062a26-e351-4e00-bae0-3c71cb2bda28-2 | sheet=制約 | cells=C5:E6 | score=0.6126 | レート制限	600 req/min	超過時は HTTP 429 を返す...
+de062a26-e351-4e00-bae0-3c71cb2bda28-4 | sheet=改訂履歴 | cells=A1:C2 | score=0.6057 | 版	日付	内容...
+de062a26-e351-4e00-bae0-3c71cb2bda28-3 | sheet=制約 | cells=C40:E40 | score=0.4633 | 同時接続数	50	IP 単位で計数する...
+de062a26-e351-4e00-bae0-3c71cb2bda28-1 | sheet=制約 | cells=A1 | score=0.4264 | 本仕様書の制約事項...
+de062a26-e351-4e00-bae0-3c71cb2bda28-0 | sheet=API一覧 | cells=B12:D14 | score=0.3902 | エンドポイント	メソッド	説明...
+```
+
+- すべて**同一ファイル**由来: **True**
+- (シート, セル範囲) がすべて異なる: **True** → `[('制約', 'C5:E6'), ('改訂履歴', 'A1:C2'), ('制約', 'C40:E40'), ('制約', 'A1'), ('API一覧', 'B12:D14')]`
+- セル範囲が A1 形式（列 + 行）である: **True**
+- 取り込み時の分類 `kind="spec"` が ADB 側にも入っている: **True**
+  （実際: `['spec']`）
+
+## 実 API 経路（`POST /api/chat/stream` / `rag_backend="adb"`）
+
+質問: `レート制限は1分あたり何リクエストですか`
+
+```
+600 req/min です。超過した場合は HTTP 429 を返します。
+```
+
+引用（`citations[].source`）:
+
+```
+[
+  {
+    "file_id": "de062a26-e351-4e00-bae0-3c71cb2bda28",
+    "filename": "jetuse-spike-prep01-サンプル在庫連携API仕様書.xlsx",
+    "score": 0.6126,
+    "source": {
+      "chunk_id": "de062a26-e351-4e00-bae0-3c71cb2bda28-2",
+      "chunk_no": 2,
+      "file": "jetuse-spike-prep01-サンプル在庫連携API仕様書.xlsx",
+      "version": "2.0",
+      "sheet": "制約",
+      "cells": "C5:E6",
+      "sha256": "ff13f8aa0db8",
+      "kind": "spec",
+      "current_version": "Y",
+      "attributes": {
+        "source": "upload",
+        "ext": "xlsx"
+      }
+    },
+    "text": "レート制限\t600 req/min\t超過時は HTTP 429 を返す\nデータ保持期間\t13か月\t明細データが対象"
+  },
+  {
+    "file_id": "de062a26-e351-4e00-bae0-3c71cb2bda28",
+    "filename": "jetuse-spike-prep01-サンプル在庫連携API仕様書.xlsx",
+    "score": 0.6057,
+    "source": {
+      "chunk_id": "de062a26-e351-4e00-bae0-3c71cb2bda28-4",
+      "chunk_no": 4,
+      "file": "jetuse-spike-prep01-サンプル在庫連携API仕様書.xlsx",
+      "version": "2.0",
+      "sheet": "改訂履歴",
+      "cells": "A1:C2",
+      "sha256": "ff13f8aa0db8",
+      "kind": "spec",
+      "current_version": "Y",
+      "attributes": {
+        "source": "upload",
+        "ext": "xlsx"
+      }
+    },
+    "text": "版\t日付\t内容\n2.0\t2026-07-30\tレート制限を 600 req/min に改訂"
+  },
+  {
+    "file_id": "de062a26-e351-4e00-bae0-3c71cb2bda28",
+    "filename": "jetuse-spike-prep01-サンプル在庫連携API仕様書.xlsx",
+    "score": 0.4633,
+    "source": {
+      "chunk_id": "de062a26-e351-4e00-bae0-3c71cb2bda28-3",
+      "chunk_no": 3,
+      "file": "jetuse-spike-prep01-サンプル在庫連携API仕様書.xlsx",
+      "version": "2.0",
+      "sheet": "制約",
+      "cells": "C40:E40",
+      "sha256": "ff13f8aa0db8",
+      "kind": "spec",
+      "current_version": "Y",
+      "attributes": {
+        "source": "upload",
+        "ext": "xlsx"
+      }
+    },
+    "text": "同時接続数\t50\tIP 単位で計数する"
+  },
+```
+
+- 引用の (シート, セル範囲) がチャンクごとに異なる: **True**
+
+判定: **PASS**
+
+> これは `adb` バックエンドだけの粒度である。マネージド Vector Store は属性が
+> **ファイル単位**（SPIKE-M1 ①-a）で、同じファイルの全チャンクが同じ出典しか返せない
+> （シナリオ2 で実測）。
+
+--- runs/2026-07-30T1600_PREP-01/e2e/scenario-2.md ---
+# シナリオ2 — `vector_store`: 属性は**ファイル単位**（能力差の証跡）
+
+シナリオ1 と**同じファイル**をマネージド Vector Store 側で見た。ADR-0020 の決定
+（2 バックエンドの能力差）の裏付けになる部分なので、3 つの角度から記録する。
+
+## (a) マネージド側は xlsx をそのまま受け付けるか
+
+`files.create(...xlsx...)` → `vector_stores.files.create` を素の xlsx で試した結果:
+
+```
+BadRequestError: Error code: 400 - {'error': {'code': 'unsupported_file', 'message': "Unsupported file type 'xlsx' found for file-kix-… ", 'param': None, 'type': 'unsupported_file', 'valid': True}}
+```
+
+→ だから取り込み経路では**抽出したテキストを `<原名>.xlsx.txt` として渡す**
+（SPIKE-03 で docx が `Unsupported file type` だったのと同じ扱い）。
+素の xlsx が `unsupported_file` で断られた: **True**（この行が判定条件）
+
+## (b) 取り込んだファイルの属性（`vector_stores.files.retrieve`）
+
+```
+file-kix-409… | status=completed | attributes={"file": "jetuse-spike-prep01-サンプル在庫連携API仕様書.xlsx", "sha256": "5e879ddeebd717d9e590bb84c1f3e245b6a01a08b25ad95657f7a36e5e096301", "version": "1.0", "kind": "spec", "sheet": "(ブック全体: 3 シート)", "cells": "(ブック全体)"}
+file-kix-136… | status=completed | attributes={"file": "jetuse-spike-prep01-サンプル在庫連携API仕様書.xlsx", "sha256": "ff13f8aa0db80399c2494a95f506975bf7f6d83909b62bff909be5c3d742c841", "version": "2.0", "kind": "spec", "sheet": "(ブック全体: 3 シート)", "cells": "(ブック全体)"}
+```
+
+- `sheet` / `cells` が**ブック全体**を表す値になっている: **True**
+- 取り込み状態がすべて `completed`: **True**（実際: `['completed', 'completed']`）
+- 1 ファイルにつき属性は **1 種類**。チャンクが何個できても増えない（SPIKE-M1 ①-a）
+
+## (c) 実 API の RAG 応答（`POST /api/chat/stream` / 既定の `vector_store`）
+
+質問: `レート制限は1分あたり何リクエストですか`
+
+```
+アップロードされた **「jetuse‑spike‑prep01‑サンプル在庫連携API仕様書.xlsx」** の制約項目に記載されています。
+
+- **バージョン 2.0（2026‑07‑30）** では  
+  「レート制限 **600 req/min** 超過時は HTTP 429 を返す」​【jetuse‑spike‑prep01‑サンプル在庫連携API仕様書.xlsx (版 2.0)】  
+- 以前の **バージョン 1.0（2026‑07‑30）** では  
+  「レート制限 **300 req/min** 超過時は HTTP 429 を返す」​【jetuse‑spike‑prep01‑サンプル在庫連携API仕様書.xlsx (版 1.0)】  
+
+したがって、最新の仕様（版 2.0）におけるレート制限は **1 分あたり 600 リクエスト** です。
+```
+
+引用:
+
+```
+[
+  {
+    "file_id": "file-kix-…",
+    "filename": "jetuse-spike-prep01-サンプル在庫連携API仕様書.xlsx",
+    "score": 0.74,
+    "source": {
+      "file": "jetuse-spike-prep01-サンプル在庫連携API仕様書.xlsx",
+      "sha256": "ff13f8aa0db80399c2494a95f506975bf7f6d83909b62bff909be5c3d742c841",
+      "version": "2.0",
+      "kind": "spec",
+      "sheet": "(ブック全体: 3 シート)",
+      "cells": "(ブック全体)"
+    },
+    "text": "[API一覧 B12:D14] エンドポイント メソッド 説明 /v1/inventory GET 在庫数と引当可能数を返す在庫照会API /v1/shipments POST 出荷指示を登録する [制約 A1] 本仕様書の制約事項 [制約 C5:E6] レート制限 600 req/min 超過時は HTTP 429 を返す データ保持期間 13か月 明細データが対象\n\n[制約 C40:E40] 同時接続数 50 IP 単位で計数する\n\n[改訂履歴 A1:C2] 版 日付 内容 2.0 2026-07-30 レート制限を 600 req/min に改訂",
+    "chunk_id": "0_71c2649b-8d97-4f02-b7da-3fd9beeaeb21"
+  },
+  {
+    "file_id": "file-kix-…",
+    "filename": "jetuse-spike-prep01-サンプル在庫連携API仕様書.xlsx",
+    "score": 0.735,
+    "source": {
+      "file": "jetuse-spike-prep01-サンプル在庫連携API仕様書.xlsx",
+      "sha256": "5e879ddeebd717d9e590bb84c1f3e245b6a01a08b25ad95657f7a36e5e096301",
+      "version": "1.0",
+      "kind": "spec",
+      "sheet": "(ブック全体: 3 シート)",
+      "cells": "(ブック全体)"
+    },
+    "text": "[API一覧 B12:D14] エンドポイント メソッド 説明 /v1/inventory GET 在庫数と引当可能数を返す在庫照会API /v1/shipments POST 出荷指示を登録する [制約 A1] 本仕様書の制約事項 [制約 C5:E6] レート制限 300 req/min 超過時は HTTP 429 を返す データ保持期間 13か月 明細データが対象 [制約 C40:E40] 同時接続数 50 IP 単位で計数する\n\n[改訂履歴 A1:C2] 版 日付 内容 1.0 2026-07-30 レート制限を 300 req/min に改訂",
+    "chunk_i
+```
+
+- 引用の件数: **2**（0 件なら判定は FAIL）
+- 同一ファイル由来の引用が持つ (シート, セル範囲) の種類数: `{'file-kix-136…': 1, 'file-kix-409…': 1}`
+  → **1 種類だけ**であること（= 属性はファイル単位）: **True**
+
+判定: **PASS**
+
+> **この差は隠さない。** 「マネージドでもセル単位で返る」ように見せる実装
+> （1 チャンク = 1 ファイルへ無理に分割する等）はしていない。セル単位の出典が要るなら
+> `adb` バックエンドを選ぶ、というのが ADR-0020 の決定内容そのものである（可視化は RAGM-03）。
+
+--- runs/2026-07-30T1600_PREP-01/e2e/scenario-3.md ---
+# シナリオ3 — 版フィルタが xlsx 由来のチャンクにも効く
+
+同名の xlsx を v1.0 → v2.0 の順にアップロードした（再取り込みで旧チャンクは
+`current_version='N'` に落ちる）。制約シートの「レート制限」だけが
+300 req/min → 600 req/min に変わっている。
+
+## A: フィルタ無し（対照）
+
+```
+851ec78d-0101-46b8-a33a-4e6240fb7043-4 | version=1.0 | current=N | 改訂履歴 A1:C2 | 版	日付	内容...
+de062a26-e351-4e00-bae0-3c71cb2bda28-2 | version=2.0 | current=Y | 制約 C5:E6 | レート制限	600 req/min	超過時は HTTP 42...
+de062a26-e351-4e00-bae0-3c71cb2bda28-4 | version=2.0 | current=Y | 改訂履歴 A1:C2 | 版	日付	内容...
+851ec78d-0101-46b8-a33a-4e6240fb7043-2 | version=1.0 | current=N | 制約 C5:E6 | レート制限	300 req/min	超過時は HTTP 42...
+851ec78d-0101-46b8-a33a-4e6240fb7043-3 | version=1.0 | current=N | 制約 C40:E40 | 同時接続数	50	IP 単位で計数する...
+de062a26-e351-4e00-bae0-3c71cb2bda28-3 | version=2.0 | current=Y | 制約 C40:E40 | 同時接続数	50	IP 単位で計数する...
+851ec78d-0101-46b8-a33a-4e6240fb7043-1 | version=1.0 | current=N | 制約 A1 | 本仕様書の制約事項...
+de062a26-e351-4e00-bae0-3c71cb2bda28-1 | version=2.0 | current=Y | 制約 A1 | 本仕様書の制約事項...
+851ec78d-0101-46b8-a33a-4e6240fb7043-0 | version=1.0 | current=N | API一覧 B12:D14 | エンドポイント	メソッド	説明...
+de062a26-e351-4e00-bae0-3c71cb2bda28-0 | version=2.0 | current=Y | API一覧 B12:D14 | エンドポイント	メソッド	説明...
+```
+
+旧版のヒット: **5 件** `['851ec78d-0101-46b8-a33a-4e6240fb7043-4', '851ec78d-0101-46b8-a33a-4e6240fb7043-2', '851ec78d-0101-46b8-a33a-4e6240fb7043-3', '851ec78d-0101-46b8-a33a-4e6240fb7043-1', '851ec78d-0101-46b8-a33a-4e6240fb7043-0']`
+
+本文に旧値 300 を含む: **True**
+
+## B: `current_version='Y'`
+
+```
+de062a26-e351-4e00-bae0-3c71cb2bda28-2 | version=2.0 | current=Y | 制約 C5:E6 | レート制限	600 req/min	超過時は HTTP 42...
+de062a26-e351-4e00-bae0-3c71cb2bda28-4 | version=2.0 | current=Y | 改訂履歴 A1:C2 | 版	日付	内容...
+de062a26-e351-4e00-bae0-3c71cb2bda28-3 | version=2.0 | current=Y | 制約 C40:E40 | 同時接続数	50	IP 単位で計数する...
+de062a26-e351-4e00-bae0-3c71cb2bda28-1 | version=2.0 | current=Y | 制約 A1 | 本仕様書の制約事項...
+de062a26-e351-4e00-bae0-3c71cb2bda28-0 | version=2.0 | current=Y | API一覧 B12:D14 | エンドポイント	メソッド	説明...
+```
+
+旧版のヒット: **0 件** / 旧値 300 を含む: **False** /
+現行値 600 を含む: **True**
+
+判定: **PASS**（A で旧版が返り、B では 0 件になること）
+
+--- runs/2026-07-30T1600_PREP-01/e2e/SKIPPED.md ---
+# 実施しなかった範囲と理由（PREP-01）
+
+無言のスキップはしない。以下は**意図的に実施していない**範囲。
+
+## 1. 配備済みインスタンスへの実ネットワーク E2E（LB / 認証 / Resource Principal）
+
+実施したのは **プロセス内 ASGI**（`fastapi.testclient.TestClient`）からの実 API 呼び出しで、
+相手側（OCI Generative AI の Files / Vector Stores / 埋め込み / 生成、および ADB）はすべて実物。
+公開 LB・API Gateway・Identity Domain 認証・`AUTH_MODE=resource_principal` は通っていない。
+
+理由: 本タスクの変更は API パッケージ内（xlsx 抽出・取り込み口・`POST /api/extract`）に閉じており、
+配備形態に依存する要素（LB / 認証 / 署名方式）を触っていない。それらの経路は
+`docs/verification/PUBLIC-DEPLOY-E2E.md` で別途担保されている。
+`loop-config.yml` の api area の `deploy_cmd` は「実 ADB へのマイグレーション適用」であり、
+それは実施済み（`upload.md` の冒頭・`migrate` 出力）。
+
+## 2. `select_ai` バックエンドでの xlsx（**扱いは決めた / 実機検証は未実施**）
+
+Select AI は Object Storage 上の**原本**を DB 側（`DBMS_CLOUD_AI` のパイプライン）が取り込む方式で、
+本タスクが足した抽出（アプリ側）を通らない。`.xlsx` を許可したことで原本の xlsx がバケットに載る。
+
+そのため、**取り込み状況バッジで xlsx を `error` として返す**ようにした
+（`rag.SELECT_AI_EXTENSIONS` = pdf / txt / md。`pending` のままにすると「いつか索引に入る」という
+嘘の期待を作り、永久に入らないことに誰も気づけない）。単体テストで固定済み。
+
+実機での確認（Select AI の索引が xlsx をどう扱うか、抽出テキストを別オブジェクトとして
+投入すべきか）は未実施。この環境では Select AI のプロファイル / 索引が未作成で、
+作成には数十分と ADMIN セットアップ（`ops/setup-select-ai.py`）が要るため、本タスクでは行わない。
+→ 後続タスクとして起票が要る（`docs/verification/PREP-01.md` の「残課題」）。
+
+## 3. `opensearch` バックエンドでの xlsx
+
+この環境では無効（`backends.opensearch = disabled`。`upload.md` 参照）。
+xlsx をそのまま UTF-8 デコードして文字化け本文を投入しないよう
+`rag_opensearch._extract_text` を抽出経由に直したが、**実機では確認していない**（単体テストのみ）。
+
+## 4. 能力差の UI 表示 / OCR / docx / pptx
+
+いずれも本タスクの非ゴール（UI は RAGM-03、他形式は別タスク）。実装もしていない。
+
+--- runs/2026-07-30T1600_PREP-01/e2e/summary.md ---
+# E2E 結果一覧
+
+- シナリオ0: **PASS** → `scenario-0.md`
+- シナリオ1: **PASS** → `scenario-1.md`
+- シナリオ2: **PASS** → `scenario-2.md`
+- シナリオ3: **PASS** → `scenario-3.md`
+
+--- runs/2026-07-30T1600_PREP-01/e2e/upload.md ---
+# アップロード（実 API・アプリ経路）
+
+`POST /api/rag/files`（multipart + `attributes`）に架空の xlsx を v1.0 → v2.0 の順で投げた。
+
+```
+jetuse-spike-prep01-サンプル在庫連携API仕様書.xlsx v1.0 | file_id=851ec78d-0101-46b8-a33a-4e6240fb7043 | oci_file=file-kix-409… | status=completed | backends={'vector_store': 'indexed', 'select_ai': 'error', 'opensearch': 'disabled', 'adb': 'indexed'}
+jetuse-spike-prep01-サンプル在庫連携API仕様書.xlsx v2.0 | file_id=de062a26-e351-4e00-bae0-3c71cb2bda28 | oci_file=file-kix-136… | status=completed | backends={'vector_store': 'indexed', 'select_ai': 'error', 'opensearch': 'disabled', 'adb': 'indexed'}
+```
+
+- `backends.vector_store` = マネージド側の処理状態 / `backends.adb` = 自前索引の取り込み状態
+- スキーマ: `JETUSE_PREP01_E48127`（共有 loop ADB 内の run 固有スキーマ。ADB は増やしていない）
+

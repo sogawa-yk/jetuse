@@ -1,0 +1,55 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-08-04T16:29:48+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "ステージ起動経路の実装が旧 `dev` を既定値のまま使用しており、4ブランチ移行の中核動作と矛盾するため FAIL です。ブランチ判定のローカル実行が実質スキップされる問題と、パス分類の競合もあります。認証情報・OCID・エンドポイント実値の追加は確認されません。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 1,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "blocker",
+      "file": ".claude/loop/start-stage.sh",
+      "line": 11,
+      "issue": "コメントと運用資料は既定の根を `public-dev` に変更していますが、実際に呼び出される `.claude/skills/stage-runner/scripts/begin_stage.sh` は依然として `BASE=\"${BASE_BRANCH:-dev}\"` です。`BASE_BRANCH` 省略時は、旧 `dev` が残っていれば誤った枝から統合ブランチを作成し、無ければステージ起動自体が失敗します。",
+      "suggestion": "`begin_stage.sh` の既定値を `public-dev` に変更し、コメントも更新してください。あわせて `BASE_BRANCH` 未指定時に `public-dev`、指定時に `internal-dev` から分岐する回帰テストを追加してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "Makefile",
+      "line": 22,
+      "issue": "通常のローカル `make lint` では `GITHUB_BASE_REF` が設定されないため、`check-branch-base.sh` は「base ブランチが不明」として常に成功終了します。CLAUDE.md が主張するローカル lint での起点検査が実効せず、誤った起点は PR 作成後まで検出されません。",
+      "suggestion": "ローカル用に検査対象 base を確実に渡せる `BRANCH_BASE` などを設け、不明時は明示的に検査不能として失敗させるか、現在ブランチの設定・upstream から対象 base を解決してください。CI、引数指定、環境変数指定、base 不明の各ケースをテストしてください。"
+    },
+    {
+      "id": "F003",
+      "severity": "minor",
+      "file": "ops/check-branch-base.sh",
+      "line": 88,
+      "issue": "`is_neutral` を先に評価するため、`internal-only-paths.txt` に明示された `docs/verification/demo-platform/` は常に neutral 扱いとなり、internal 件数へ到達しません。このパスと共有物を変更した正当な混在 PR が「共有物のみ」と誤判定されます。",
+      "suggestion": "Internal 固有判定を neutral 判定より先に行うか、`docs/verification/demo-platform/` を一覧から除外して仕様を一本化してください。internal-only、neutral、両者に一致するパスを含む組み合わせテストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "指定された `runs/2026-08-04T1626_BRANCH-LAYOUT/e2e/` は空で、実行シナリオや結果はありません。本差分はブランチ運用・Git worktree・CI 判定の変更であり、jetuse-dev へのデプロイを伴う実環境 E2E は対象外と判断します。一方、shell スクリプトのローカル統合テスト証跡もなく、上記の既定ブランチ不整合と分類競合を検出できていません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+# 2d: SAI 選択（2 件とも SAI は pending → 送信不可）
+- generic:
+  - combobox "rag backend":
+    - option "VS — Vector Store / File Search"
+    - option "ADB — Oracle AI Database（自前索引）"
+    - option "SAI — Select AI with RAG" [selected]
+    - option "OS — OpenSearch"
+  - textbox "文書をアップロードすると質問できます（取り込み完了後）" [disabled]
+  - button "送信" [disabled]

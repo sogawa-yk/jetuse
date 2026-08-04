@@ -15,8 +15,16 @@ maker/checker をツールをまたいで分離するための中核スキル。
    - 構造化結果を `runs/<run-id>/reviews/review-<n>.json` に、生イベントを `review-<n>.raw.txt` に保存。
    - 標準出力の最終行に `VERDICT: PASS|FAIL` とJSONパスを表示する。
 3. スクリプトが書いた `review-<n>.json` を読み、その verdict / severity_counts / findings を確認する。
-   blocker が1件でもあれば verdict は FAIL（スキーマ側で強制。手で緩めない）。
+   blocker が1件でもあれば verdict は FAIL（スキーマ側で強制）。判定は Codex のものであり、
+   Claude は結果を STATE.md へ転記するだけ（見せ方は整えてよいが、verdict は動かさない）。
 4. STATE.md の `review_verdict` と `last_review_ref` を、いま得た結果で更新する。
+5. **findings をタスクパケットへ渡す（露出は例外だけ）。** 完了ゲートで作る HTML タスクパケット
+   （`loop-protocol` 参照）への転記ルール:
+   - **clean PASS（例外なし）**: パケットには**判定1行のみ**（`PASS (review-N) / blocker0 major0`）。
+     全 findings は `<details class="aud">` 監査用テーブルに畳む＝人間の必読ではない。バナーは出さない。
+   - **FAIL を override して統合する / 未対応 residual を残す**ときだけ、その決定に関わる**具体 findings
+     （id・severity・file:line・issue）と理由**をパケットの「判断が要る事項」バナーへ inline する。
+     これが唯一「人間が Codex 指摘を読む」ケース（SP3-03 の 18×FAIL override が表の1セルに埋もれた失敗の是正）。
 
 > スキーマで JSON を直接生成させているため、生出力からの手動抽出は不要。
 > 抽出に失敗した／JSON が空のときだけ `review-<n>.raw.txt` を読んで原因を確認する。
@@ -46,13 +54,7 @@ Codex 自身が実ブラウザで diff 関連の主要フローを**独立検証
 > 注: jetuse-dev の公開 LB は自 IP 限定のため、この dev インスタンスから到達できる URL を渡すこと。
 > 公開インターネット一般（例: example.com）は egress が制限され得る。
 
-## レビュー観点（スクリプトのプロンプトに埋め込み済み）
-- 正確性・境界条件・エラー処理・後方互換（公開シグネチャ）・テスト網羅。
-- **実環境 E2E**: 添付された E2E 証跡が diff の主張を裏づけているか。複数シナリオ（最低2本）を
-  網羅しているか。デプロイ/E2E 未実施なのに完了を主張していないか。未実施範囲は `e2e/SKIPPED.md`
-  に正当な理由があるか。証跡が無い／不十分なまま完了を主張していれば指摘する。
-- 本リポジトリ固有: 認証情報やテナンシ/コンパートメント OCID・エンドポイント実値を
-  コミットしていないか（`.env` 管理の逸脱）。既存リソースを参照のみに留めているか
-  （jetuse-dev への開発リソース作成は承認済み。IAM/テナンシ変更・既存リソース変更は人間ゲート）。
-- 重大度を blocker / major / minor で必ず分類し、各指摘に `file:line` と修正案を付ける。
-- 見逃しより過剰報告を許容するが、minor を blocker に格上げしない。
+## レビュー観点
+Codex に渡す評価観点（正確性・E2E 証跡の十分性・本リポジトリ固有の秘匿値/リソース規約・
+severity 分類）の正本は `scripts/run_codex_review.sh` の `INSTRUCTIONS` 変数。観点を変えるときは
+そこ（と `scripts/review-schema.json`）を loop-doctor 経由で編集する。本ファイルには重複記載しない。

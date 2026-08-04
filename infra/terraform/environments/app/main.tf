@@ -30,6 +30,9 @@ module "container_instance" {
     ADB_USER       = var.adb_user
     ADB_QUERY_USER = var.adb_query_user
     LOG_OCID       = data.terraform_remote_state.shared.outputs.app_log_id
+    # DB 内の資格情報は ADB 自身の身分に統一(ADR-0021)。ops/setup-dev-schema.py が
+    # ENABLE_RESOURCE_PRINCIPAL 済み。tfvars 側で上書きさせない(APIキー版へ戻す事故を塞ぐ)。
+    SELECT_AI_CREDENTIAL = "OCI$RESOURCE_PRINCIPAL"
   })
 }
 

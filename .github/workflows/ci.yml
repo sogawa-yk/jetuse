@@ -2,10 +2,27 @@ name: ci
 
 on:
   push:
-    branches: [main, dev]
+    # 4ブランチ体制(ADR-0028): main=Public 安定 / public-dev=Public 統合
+    # internal-dev=Internal 統合 / internal-stable=Internal 安定
+    branches: [main, public-dev, internal-dev, internal-stable]
   pull_request:
 
 jobs:
+  branch-base:
+    # 共有物を internal 側の枝に入れると Public へ届かず両系統が乖離する(2026-07 の実害)。
+    # 規律だけでは再発するので機械で止める。判定の実体は ops/check-branch-base.sh。
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 既定の浅い checkout だと merge-base が取れず、検査が丸ごとスキップされる
+          fetch-depth: 0
+      - name: check branch base
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+        run: ops/check-branch-base.sh
+
   api:
     runs-on: ubuntu-latest
     defaults:
@@ -66,6 +83,14 @@ jobs:
         run: |
           terraform init -backend=false -input=false
           terraform test
+      - name: test hosted agent module contract
+        working-directory: infra/terraform/modules/hosted-agent
+        run: |
+          terraform init -backend=false -input=false
+          terraform test
+      - name: test hosted agent CLI scripts
+        # terraform test は local-exec を実行しないので、シェル側の判断はモックで確認する
+        run: sh infra/terraform/modules/hosted-agent/scripts/smoke_test.sh
       - name: Build Deploy to OCI archive
         run: bash scripts/package-orm-stacks.sh "$RUNNER_TEMP/orm-packages"
       - name: Validate packaged JetUse stack

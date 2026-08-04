@@ -5,10 +5,12 @@
 - ウォレットは非公開バケットから resource principal で取得
 
 必要env: SEMSTORE_OCID / ADB_DSN / ADB_QUERY_PASSWORD / ADB_WALLET_PASSWORD /
-        ADB_WALLET_BUCKET / ADB_WALLET_OBJECT(既定 adb_wallet.zip)
+        ADB_WALLET_BUCKET / ADB_WALLET_OBJECT(既定 adb_wallet.zip) /
+        ADB_WALLET_BASE64(公開スタックは base64 テキストで置くため true)
 jetuse-dg(RP)に「対象バケットのobject read」+ generative-ai-family が必要(IAM)。
 """
 
+import base64
 import io
 import os
 import pathlib
@@ -18,12 +20,20 @@ import zipfile
 
 import httpx
 
+# os.environ を読む前に JETUSE_AGENT_CONFIG(JSON)を展開する(PORT-03)。import 順に意味がある。
+import agent_env  # noqa: F401  (import 副作用が目的)
+
 # SQLサニタイズ(SELECT/WITHガード)は jetuse_shared に一本化(P1b)。
 # jetuse_shared.sanitize_sql は SqlRejectedError(ValueError サブクラス)を送出するため、
 # 旧 _sanitize の ValueError catch 経路(run_tool の except Exception)は挙動不変。
+# enforce_sql_boundary は層2 fail-closed SQL ゲートの owner なしモード(specs/18 §4.3 —
+# 本コンテナは execute_readonly を通らず JETUSE_QUERY へ直結する独立経路のため、
+# JETUSE_DS_/辞書/パッケージを全拒否して SH 照会という本来用途だけを通す。
+# データ行は VPD の fail-closed が遮断する)。
+from jetuse_shared.sqlguard import enforce_sql_boundary
 from jetuse_shared.sqlguard import sanitize_sql as _sanitize
 
-REGION = os.environ.get("OCI_REGION", "ap-osaka-1")
+REGION = os.environ.get("OCI_REGION", "us-chicago-1")
 SEMSTORE = os.environ.get("SEMSTORE_OCID", "")
 WALLET_CACHE = "/tmp/adb_wallet"
 
@@ -57,7 +67,13 @@ def _wallet_dir() -> str:
     obj = client.get_object(
         ns, os.environ["ADB_WALLET_BUCKET"],
         os.environ.get("ADB_WALLET_OBJECT", "adb_wallet.zip"))
-    zipfile.ZipFile(io.BytesIO(obj.data.content)).extractall(dest)
+    content = obj.data.content
+    # 公開スタック(ORM)はウォレットを **base64 テキスト**でバケットへ置く。そのまま unzip すると
+    # BadZipFile になり query_database が丸ごと落ちるため、API 側(jetuse_core/db.py)と同じ
+    # ADB_WALLET_BASE64 でデコードする(PORT-03)。
+    if os.environ.get("ADB_WALLET_BASE64", "").lower() in ("1", "true", "yes"):
+        content = base64.b64decode(content)
+    zipfile.ZipFile(io.BytesIO(content)).extractall(dest)
     return str(dest)
 
 
@@ -108,6 +124,7 @@ def generate_sql(question: str) -> str:
 def query_database(question: str) -> dict:
     sql = generate_sql(question)
     cleaned = _sanitize(sql)
+    enforce_sql_boundary(cleaned)  # owner なしモード(層2 — specs/18 §4.3)
     with _query_pool().acquire() as conn:
         conn.call_timeout = 30_000
         cur = conn.cursor()

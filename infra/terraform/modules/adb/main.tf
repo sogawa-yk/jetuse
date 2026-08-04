@@ -24,4 +24,11 @@ resource "oci_database_autonomous_database_wallet" "this" {
   password               = var.wallet_password
   generate_type          = "SINGLE"
   base64_encode_content  = true
+
+  lifecycle {
+    # prefix 変更 → db_name の in-place rename でサービス名(<dbname>_low)は変わるが
+    # autonomous_database_id は不変なため wallet が再生成されず stale になり接続断(DPY-4000)。
+    # db_name 変更時にウォレットを作り直す(docs/tips.md 2026-07-13 / PORT-01)。
+    replace_triggered_by = [oci_database_autonomous_database.this.db_name]
+  }
 }

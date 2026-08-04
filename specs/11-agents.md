@@ -19,8 +19,58 @@
 `/api/chat/stream` 拡張: `agent: bool`（ツール有効化）+ `auto_tools: bool`（自動実行）
 
 - **都度承認モード（既定）**: モデルがfunction_callを出したらSSEで `{"tool_call": {name, label, arguments, call_id}}` を送ってストリーム終了。UIが承認カードを表示 → 承認時 `POST /api/agent/execute-tool` で実行し結果を受領 → UIが履歴+`tool_results`（function_call+output のペア）付きで再度 `/api/chat/stream` を呼ぶ → 続きが streaming される（さらにツール呼び出しがあれば繰り返し）
-- **自動実行モード**: サーバー側で function_call → handler実行 → output提出 を**最大5ホップ**ループ。途中経過をSSEイベント（tool_call / tool_result）で逐次通知
+- **自動実行モード**: サーバー側で function_call → handler実行 → output提出 を**ホップ上限**までループ。途中経過をSSEイベント（tool_call / tool_result）で逐次通知。上限は設定可能（AGT-04。下記「ツール往復の上限」）
 - 拒否時: UIが `function_call_output` に「ユーザーがツール実行を拒否しました」を入れて継続（モデルがツールなしで回答）
+
+### ツール往復の上限（AGT-04・ADR-0025）
+
+1 ホップ = モデル 1 往復。業務 API を順に呼ぶ手続き（実案件のデモは API 8 本）は固定 5 ホップでは
+入口にも届かなかったため、上限を設定可能にする。
+
+- 既定は `AGENT_MAX_TOOL_HOPS`（既定値 `AGENT_MAX_TOOL_HOPS_DEFAULT`）。要求ごとに
+  `max_tool_hops` で上書きできる（エージェント要求以外で指定したら 400。保存済み
+  エージェント `agent_id` は別ディスパッチなので 400）
+- 上限は**ツールを渡した往復の数**。上限到達時の「ツールなしの最終回答」は上限の外側の
+  1 往復（1 要求の最大往復数は上限 + 1）。この往復の `usage` も流す
+- **天井** `AGENT_MAX_TOOL_HOPS_CEILING` を超える値は**拒否**する（要求は 422 / 設定値は 400）。
+  クランプしない＝「上げたのに効かない」を作らない
+- 承認モードの累計ツール結果の上限は `max(16, ホップ上限)`（ホップ上限だけ上げても
+  承認モードが先に打ち切られないように連動する）
+- **上限に当たったら黙って打ち切らない**: `{"notice": …, "limit_reached": {"reason", "limit"}}`
+  を流し、同じ文面を `delta` にも出す（現行 UI は `notice` を描かないため）。
+  `reason` は `max_tool_hops` / `max_tool_results` / `max_doc_searches`
+
+### 文書検索の予算（AGT-05・ADR-0026）
+
+**文書検索はホップを消費しない。** ホップを消費するのは**業務の操作**（外部HTTPツール・MCP・
+組込ツール）を含む往復だけで、`adb` 経路の `rag_search` は別枠で数える
+（`AGENT_MAX_DOC_SEARCHES`。既定値 `AGENT_MAX_DOC_SEARCHES_DEFAULT`）。
+`vector_store` 経路の built-in はもともと消費しないので**挙動不変**。
+
+- 検索と業務の操作が同じ往復に混ざったら、消費するホップは **1**
+- 承認往復をまたぐ累計上限（`max(16, ホップ上限)`）**からも検索を除く**
+- 検索の上限に達しても**手続きは打ち切らない**。`rag_search` をそのターンのツールから外し、
+  `reason=max_doc_searches` の `limit_reached` を流して業務の操作は続ける
+- **上限を跨いだ回のバッチは切り詰めない**（出した `function_call` には必ず結果を返す）。
+  実際の検索回数は上限をわずかに超えうる
+- 上限後に `rag_search` が呼ばれても**実行せず理由を返す**（上限が空振りしないように）。
+  その往復は業務の操作と同じ扱いでホップを消費する
+- 承認往復では、送り返された `tool_results` の検索件数を**引き継いで**数える
+- 1 ターンの往復数の上界は **ホップ上限 + 検索の上限 + 1**（最後のツールなし回答）
+- 要求ごとに検索の上限を指定する口は無い。ただし**天井** `AGENT_MAX_DOC_SEARCHES_CEILING`
+  は持つ（超える設定値は拒否）。承認往復で送り返せる `tool_results` の件数枠を
+  **ホップ天井 + 検索天井**にするため（検索がホップの予算から外れた以上、ホップ天井だけでは
+  検索を挟む継続が 422 で詰まる）。この件数枠は上界ではなく安全弁（1 往復から複数の
+  `function_call` が返りうる）
+- **上限値は既定 40 / 天井 80**（ADR-0026 §2・2026-08-02 人間ゲートで承認）。
+  根拠は実測「1 API あたり 3〜5 回 × API 8 本 = 24〜40」の**上端**。
+  上限に達しても手続きは死なないので、余らせるより届かせる側に倒す。
+  env `AGENT_MAX_DOC_SEARCHES` で変更できる
+- **同じ検索の繰り返しは検知して知らせる**（ADR-0026 §4 案 B・同承認）。
+  表記ゆれ（前後の空白・大小・連続空白）だけの違いは同じ検索とみなし、
+  2 回目以降に `notice` と `repeated_search` イベントを出す。
+  **結果はそのまま返す**（握り潰すと、モデルは「調べた」と思ったまま結果を得られない）。
+  引数を解析できないものは反復判定の対象にしない
 
 ### 制約・ガード
 
@@ -43,7 +93,9 @@
 
 「ツールが少なくエージェント感がない」フィードバックへの対応。アプリ既存機能をツール化する。
 
-- **rag_search**: ユーザーのRAG文書検索。実体は**file_search built-in**（ユーザーのVector Storeを接続）— 選択時のみtools配列に注入。文書未アップロード時は注入しない（UIに注記）
+- **rag_search**: ユーザーのRAG文書検索。既定の実体は**file_search built-in**（ユーザーのVector Storeを接続）— 選択時のみtools配列に注入。文書未アップロード時は注入しない（UIに注記）
+  - **バックエンド選択（AGT-04・ADR-0025）**: 要求の `agent_rag_backend`（既定 `vector_store` ＝挙動不変 / `adb`）。`vector_store` 以外を指定するときは `enabled_tools` に `rag_search` が要る（無いと検索自体が行われないので 400）。`adb` では `rag_search` を **function tool** として実装し `rag_adb.search`（現行版のみ）を呼ぶ。結果に**チャンク単位の出典**（`source.sheet` / `source.cells` / `version` / `chunk_id`）が載り、`citations` イベントとしても流れる。読み取り専用なので承認は不要（`requires_approval=False`）。adb が使えないときは要求を 400 で断る。built-in 経路は置き換えない（増やすだけ）
+  - **AGT-05 で改訂**: どちらの経路でも**文書検索はホップを消費しない**（`adb` の function tool は別枠の上限で数える — 上記「文書検索の予算」/ ADR-0026）。かつては `adb` だけが 1 回の検索で 1 ホップを消費し、予算の約 8 割を検索が食っていた
 - **query_database**: NL2SQL（SQL Search生成→JETUSE_QUERY読取専用実行、既存の多層ガード再利用）。結果は最大20行をJSONで返す。生成に30秒程度かかる旨をdescriptionに明記
 - **get_current_time**: 現在日時(JST)。LLMの日付誤りを防ぐ
 - **承認パーティション**: `requires_approval=False` のツール（get_current_time/query_database — 読取専用でガード済み）は**都度承認モードでもサーバー側で自動実行**。外部送信を伴うweb_search/web_fetchは従来どおり承認制。安全/要承認が同一バッチに混在した場合は全件承認制にフォールバック（ステートレス継続で安全側の結果が失われるのを防ぐ）
@@ -100,6 +152,43 @@ OCI Enterprise AIの**ホスト型アプリケーション**: OCIRのコンテ�
 - 実機確定: inbound-auth-configは必須かつIDCS一択 / 環境変数typeはPLAINTEXT / deploymentのlifecycle-stateにCLI未知enum（NEEDS_ATTENTION）あり→raw-requestで監視 / イメージpullに `read repos` ポリシー+動的グループ追加が必要（適用済み・反映5〜10分） / **invoke URL（未文書）= `https://inference...oci.oraclecloud.com/20251112/hostedApplications/{OCID}/actions/invoke/{パス}`、IDCS Bearer認証**
 - 状態: **完了（2026-06-12 invoke E2E成功・6.3秒・リソースプリンシパルでLLM呼び出し動作）**。アプリ統合（エンドポイントをツールとして呼ぶ）は**Phase 9（エージェントFW対応）の実行基盤**として実施
 - 詳細: docs/verification/agt-04.md
+
+### [PORT-03] 公開スタックからの配備（2026-07-29 実装）
+
+公開 ORM スタックが 3SDK のホスト型エージェントを**手動作業ゼロ**で配備する。
+配備条件は `enable_hosted_agents=true` かつ **認証有効**（OAuth の発行元が要る）かつ
+**デプロイ先が大阪 / シカゴ**（エージェント画像の push 先かつ GenAI 実証済み）。
+条件を満たさない構成では作らず、`GET /api/health` の `capabilities.agents` が
+`disabled`（意図的な未配備。全体の `ok` には影響させない）を返す。
+配備したのに設定が欠けている場合だけ `unavailable`（＝故障）とする。
+
+**作成手段は暫定的に OCI CLI を使う。provider が修正されたら標準 resource へ戻す。**
+
+- 理由と戻す条件・手順は **ADR-0019 の追記節が正本**。要約すると、oracle/oci 8.24.0 の
+  `oci_generative_ai_hosted_application` は work request の完了判定を誤り（`HOSTED_APPLICATION`
+  と `hostedapplication` の照合ミスマッチ）、リソースが正常に作られても必ず失敗扱いになり、
+  tainted → 削除 → 再作成で収束しない。
+- 現行の構成: 作成・削除は `infra/terraform/modules/hosted-agent/scripts/{ensure,delete}_agent.sh`
+  （`oci raw-request`）、OCID の参照は data source `oci_generative_ai_hosted_applications`。
+  作成したリソースには所有者タグ `jetuse-owner` と設定指紋 `jetuse-config` を付け、
+  **タグが一致しないリソースには触れない**（同名の既存リソースを取り込まない・削除しない）。
+- 戻すときは state 移行（CLI で作った実体は state に無い）を必ず用意する。
+- 追跡は **Issue #98**（provider 修正後に標準 resource へ戻す）。
+
+その他の実機確定事項:
+
+- コンテナ設定は **`JETUSE_AGENT_CONFIG`（JSON オブジェクト1本）** で渡し、コンテナ側
+  `agent_env.py` が `os.environ` へ展開する。1変数ずつ渡すと**値に引用符が残る**
+  （provider が JSON 検証だけしてアンマーシャルせず送り、API も verbatim 保存するため）。
+- API / Functions ルーター / 3SDK エージェントの画像は**単一の `image_tag`** で揃える。
+  invoke ステート（`project_ocid` 等）の契約を共有するため、別リリースに割ってはいけない。
+- runtime Dynamic Group には `generativeaihostedapplication` /
+  `generativeaihostedapplicationiam` / `generativeaihosteddeployment` の3種と、
+  `read repos` / `read vss-family` が要る（公式の配備要件）。
+- ACTIVE な Deployment は直接削除できず、Application 削除でカスケードされる。
+- コールドスタート（`min_replica=0`）は 35分アイドル後で 5.5〜6.4 秒。
+  `hosted_agent.py` の httpx timeout（180秒）で足りる。
+- 検証: `docs/verification/PORT-03.md`
 ## [AGT-05] 長期メモリ統合【必須】（2026-06-11実装）
 
 SPIKE-10b（ユーザー指摘による再調査）で実機確定した方式:

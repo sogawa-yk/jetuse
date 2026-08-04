@@ -1,0 +1,79 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-08-01T20:29:04+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "外部HTTPツールの基本フローは動作していますが、任意の Vault Secret OCID を指定してバックエンド権限で読み出し、任意の外部URLへ送信できる confused-deputy 脆弱性があります。型検証、選択ツールの解決、検証資源の削除範囲にも修正が必要です。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 3,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "TOOL-01-001",
+      "severity": "blocker",
+      "file": "packages/api/jetuse_core/http_tools.py",
+      "line": 250,
+      "issue": "利用者が指定した auth_secret_ocid を所有権・許可リスト・コンパートメント確認なしでバックエンドの OCI 権限により読み出し、同じ利用者が指定した任意の公開URLへ送信します。ワークロードが参照可能な別利用者・運用用 Secret の OCID を知る利用者は、その値を自分のエンドポイントへ流出させられます。E2E scenario-2 はこの一連の動作を実証していますが、指定者がその Secret を利用してよいかは検証していません。",
+      "suggestion": "クライアントから Vault OCID を直接受け取らず、所有者付きの資格情報レジストリIDを受け取る設計にしてください。少なくとも Secret の compartment/tag/管理台帳をサーバー側で照合し、現在の利用者に明示的に割り当てられた Secret だけを読み出せるようにし、他利用者の Secret を使う否定テストを追加してください。"
+    },
+    {
+      "id": "TOOL-01-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/tools.py",
+      "line": 176,
+      "issue": "JSON Schema の integer と number を同じ isinstance(v, (int, float)) で検証しているため、integer 引数にも 1.5 が通ります。登録されたスキーマと実際の入力保証が一致せず、整数を前提とする業務APIへ不正な値を送信できます。",
+      "suggestion": "integer は bool を除く int のみ、number は bool を除く int/float として別々に検証し、integer=1.5 の拒否テストを追加してください。NaN/Infinityも許可しないことを推奨します。"
+    },
+    {
+      "id": "TOOL-01-003",
+      "severity": "major",
+      "file": "packages/api/service/routes/chat.py",
+      "line": 308,
+      "issue": "指定された http_tool_ids の一部または全部が削除済み・他人所有・不正でも、取得できた行だけでエージェント実行を続行します。必要なツールが黙って外れた状態でモデルが回答するため、業務APIを参照せずにもっともらしい回答を生成する可能性があります。",
+      "suggestion": "重複を正規化した要求ID集合と取得行集合を比較し、1件でも解決できなければ情報を漏らさない一律の400/404で停止してください。他人所有ID、削除済みID、混在IDのテストも追加してください。"
+    },
+    {
+      "id": "TOOL-01-004",
+      "severity": "major",
+      "file": "spikes/tool01/teardown.py",
+      "line": 59,
+      "issue": "teardown は run 固有ではない固定名 jetuse-spike-tool01-apikey を検索し、--yes で削除予約します。一方、この Secret は e2e.py と検証文書で「人が一度だけ作った」既存資源と説明されており、この run が作成したことを示す所有台帳やタグ確認がありません。別runや人が管理する既存Secretを削除する可能性があり、「既存リソースは参照のみ」に反します。",
+      "suggestion": "既存の手動作成Secretは削除対象から外してください。run側で作成・削除するならrun固有名と所有台帳/tagを使用し、OCIDが当該runの台帳に記録されたものと一致する場合だけ削除予約してください。"
+    },
+    {
+      "id": "TOOL-01-005",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/http_tools.py",
+      "line": 104,
+      "issue": "required の各要素が文字列か確認する前に辞書キーとの包含判定を行うため、required=[{}] のようなJSONを送ると unhashable type により500になります。また、property定義内の未対応JSON SchemaキーワードをそのままモデルAPIへ転送しており、「検証しきれるサブセットのみ」という説明と一致しません。",
+      "suggestion": "required の要素を文字列かつ重複なしとして先に検証してください。property定義も許可するキーを明示して再構築するか、未対応キーを400で拒否し、異常スキーマのルートテストを追加してください。"
+    },
+    {
+      "id": "TOOL-01-006",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/http_tools.py",
+      "line": 263,
+      "issue": "実行時URL再検証と Vault 読み出しが HttpToolCallError の境界外です。SsrfBlockedErrorやVault障害は execute_with の汎用例外処理に入り、/api/agent/execute-tool がHTTP 200の output内エラーとして返すため、タイムアウトやサイズ超過の400応答と不整合になります。",
+      "suggestion": "実行時検証と資格情報取得を call_tool の例外変換範囲に含め、秘密を露出しない HttpToolCallError に正規化してください。DNS変更による拒否、名前解決失敗、Vault障害を公開ルート経由で検証してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "insufficient",
+    "notes": "runs/2026-08-01T2002_TOOL-01/e2e/ の scenario-1〜5 は、外部ツール呼び出し、Vaultヘッダ配送、危険URL拒否、タイムアウト、サイズ上限を実環境で確認しており、最低2シナリオの条件は満たしています。SKIPPED.md のブラウザ・UI・DNSリバインディング未実施理由も明示されています。ただし、任意の未所有Vault Secret OCIDを指定できる経路、他人所有・欠落tool ID、integerへの小数入力、実行時SSRF再検証の公開API応答は未検証で、特に認証情報の認可を裏づけるには不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されておらず、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

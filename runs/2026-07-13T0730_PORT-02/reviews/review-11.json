@@ -1,0 +1,63 @@
+{
+  "review_n": 11,
+  "timestamp": "2026-07-13T09:11:10+00:00",
+  "reviewer": "codex",
+  "model": "gpt-5.5",
+  "input_diff_path": "reviews/review-11.input.diff",
+  "raw_output_path": "reviews/review-11.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "機能追加自体は概ねテストされていますが、health集約の状態判定と副作用に実運用上のリスクがあります。特に `/api/health` がRAGのproject自動作成経路を踏み得る点と、dbchatの前提条件を単純集約して利用不能状態をdegraded扱いする点は修正推奨です。実環境E2E証跡は空で、不十分です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 4,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/health.py",
+      "line": 48,
+      "issue": "`/api/health` が `rag.health_check()` を呼び、内部で `resolve_project_ocid()` が `PROJECT_AUTOCREATE=true` 時に Generative AI project を作成し得ます。GETのreadiness/診断エンドポイントがリソース作成を起こすのは、実環境での参照専用・人間ゲート方針と相性が悪く、ヘルスチェックのポーリングだけで開発リソースが増える可能性があります。",
+      "suggestion": "集約healthではread-onlyなRAG検査を使ってください。例: `resolve_project_ocid(autocreate=False)` 相当を追加する、または `/api/health` ではproject未設定をhintとして返し、作成は明示的なRAG操作か既存の承認済み経路に限定してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/health.py",
+      "line": 76,
+      "issue": "`dbchat_health()` が `semantic_store`、`select_ai`、`sample_data` を単純に `_agg()` しているため、実際にはどのdbchatフローも使えない組み合わせでも `degraded` になります。例: `SEMSTORE_OCID` 未設定、Select AI未検証/失敗、SHサンプルだけ存在、という状態では生成バックエンドが無いのに `sample_data.ok=True` だけで unavailable になりません。",
+      "suggestion": "前提条件ではなく実際に成立するフローで集約してください。例: `sample_flow = sample_data.ok and (semantic_store.ok or select_ai.ok)`、`datasets_flow = select_ai.ok` を計算し、両方falseなら `unavailable`、一部のみtrueなら `degraded`、全期待フローtrueなら `ok` にしてください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/models.py",
+      "line": 82,
+      "issue": "`model_status()` が参照時に期限切れエントリを削除して `available=True` に戻すため、`/api/health` や `/api/chat/models` のような単なる照会でもモデル可用性状態を変更します。TTL後の実リクエストで再試行する設計は妥当ですが、一覧・healthのポーリングだけで利用可能表示に戻るため、実際の再試行成功を確認しないままUI/診断結果が回復したように見えます。",
+      "suggestion": "照会用のpeekと、実リクエスト前のretry解禁を分けてください。例: `model_status(expire=False)` をhealth/list用に使い、`/api/chat/stream` の実呼び出し経路だけで期限切れを解除する、または `retry_after` を返してUI側で再試行待ち状態を表現してください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "major",
+      "file": "runs/2026-07-13T0730_PORT-02/e2e",
+      "line": 1,
+      "issue": "実環境E2E証跡が空です。今回の差分は `/api/health`、TTSの503縮退、dbchatのSEMSTORE未設定時切替、Functionsルーター契約など、jetuse-dev実環境でしか確認しにくいOCI依存経路を含みますが、最低2シナリオのデプロイ後証跡がありません。",
+      "suggestion": "jetuse-devへデプロイした上で、少なくとも `/api/health` の複数capability表示、dbchatのSEMSTORE未設定時select_ai切替、TTS未購読/権限エラー時の503ヒント、Functions経由 `/api/dbchat/schema` の契約を含む2本以上のE2E証跡を `runs/<run-id>/e2e/` に残してください。未実施範囲がある場合は `SKIPPED.md` に理由を記録してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "insufficient",
+    "notes": "E2E欄はありますが、`runs/2026-07-13T0730_PORT-02/e2e` は空と明記されており、レビュー可能な実環境証跡はありません。差分の実環境依存範囲に対して裏付け不足です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されていないため、指示通り実ブラウザE2Eは未実施です。"
+    }
+  }
+}

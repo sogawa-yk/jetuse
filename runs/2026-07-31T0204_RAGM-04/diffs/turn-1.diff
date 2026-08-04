@@ -1,0 +1,508 @@
+diff --git a/docs/verification/PREP-01.md b/docs/verification/PREP-01.md
+index 2224c38..166552d 100644
+--- a/docs/verification/PREP-01.md
++++ b/docs/verification/PREP-01.md
+@@ -104,6 +104,10 @@ detail に `limit=<名前>` を書く（実測: `チャンク数が上限を超
+ **ADB 側は文字列列**なので非文字列は文字列化されて入る（`kind=0` → マネージド `0` / ADB `"0"`）。
+ 分類は文字列で揃えるのが前提（残課題に記載）。
+ 
++> **後日変更（RAGM-04 / 2026-07-31）**: この「非文字列は文字列化されて入る」は撤回した。
++> 取り込み・検索とも `kind` は**文字列のみ**で、数値・真偽は 422 で拒否する（黙って変換しない）。
++> 長さ上限 32 バイトはそのまま。詳細は `docs/verification/RAGM-04.md`。
++
+ ### 決めたこと 5: `select_ai` の xlsx は `pending` ではなく `error` — **PREP-02 で撤回**
+ 
+ > **この判断は誤りだった。** 「xlsx は索引に載らない」は実機の裏付けが無い推測で
+@@ -159,9 +163,9 @@ OCI 側の検証用資源は `jetuse-spike-prep01-` 接頭辞（Vector Store・
+   ようにしたが、実機で「索引がどう扱うか」「抽出テキストを別オブジェクトとして投入すべきか」は
+   未確認（この環境では Select AI の索引が未作成。作成に数十分と ADMIN セットアップが要る）。
+ - `opensearch` 経路の xlsx は単体テストのみ（この環境では無効）。
+-- `kind` に数値・真偽を入れると、マネージドは値のまま・ADB は文字列（`0` / `"0"`）になる。
+-  既存クライアントを壊さないためスカラーは受け続けているが、分類は文字列で揃える前提。
+-  型を文字列に寄せるなら公開契約の変更なので別途判断が要る。
++- ~~`kind` に数値・真偽を入れるとマネージドは値のまま・ADB は文字列になる~~
++  → **RAGM-04 で解決**（2026-07-31）。取り込み・検索とも `kind` は**文字列のみ**で、
++  数値・真偽は 422。詳細は `docs/verification/RAGM-04.md`。
+ - 抽出の粒度（矩形の切り方）は「空行・行の飛びで区切る」だけ。列方向に離れた 2 つの表を
+   同じ行範囲に置くと 1 チャンクにまとまる。案件で必要になったら `POST /api/extract` の結果を
+   使って呼び出し側で組み直せる（そのための口）。
+diff --git a/docs/verification/RAGM-04.md b/docs/verification/RAGM-04.md
+new file mode 100644
+index 0000000..f118d8e
+--- /dev/null
++++ b/docs/verification/RAGM-04.md
+@@ -0,0 +1,65 @@
++# RAGM-04 検証レポート — バックエンド間の挙動差を潰す（`kind` の型統一・送信可否の判定）
++
++実施日: 2026-07-31 / リージョン: ap-osaka-1 /
++コンパートメント: **`jetuse`**（`.env` の `COMPARTMENT_OCID` が指す実体。`CLAUDE.md` の
++「jetuse-proto」・`loop-config.yml` の「jetuse-dev」はどちらもこの 1 つの呼び名。証跡 `e2e/env.log`）
++証跡: `runs/2026-07-31T0204_RAGM-04/e2e/`（`scenario-1.md` / `scenario-2.md` / `SKIPPED.md` / `teardown.md`）
++
++## 背景
++
++「バックエンドを選べる」設計（ADR-0020）の結果、**同じ操作が選んだ先で違う結果になる**箇所が
++2 つ残っていた。利用者がいないアルファ版の今のうちに揃った形へ固定する
++（2026-07-31 のユーザー判断: 既存利用者はいない → 約束を変える費用がゼロなのは今だけ）。
++
++## 決めたこと 1: `kind` は文字列のみ（数値・真偽は 422）
++
++**症状**: `kind` に数値・真偽を入れると、マネージド側は値のまま（`0`）、ADB 側は
++VARCHAR2 列なので文字列（`"0"`）で入っていた。さらに `rag_adb.build_where()` は
++非文字列のフィルタ値を拒否するため、**同じフィルタがバックエンドで挙動を変えていた**。
++
++**直し方**: 門番（`jetuse_core/rag_metadata.py`）に `_check_kind()` を置き、
++取り込み（`normalize_attributes`）と検索（`validate_filters`）の両方をそこへ通した。
++文字列でなければ 422。`rag.add_file` にあった `str(attrs["kind"])` の暗黙変換は**消した**。
++
++- **黙って文字列化しない**のが要点。変換すると「入れた値」と「検索条件」が食い違い、
++  結果が静かに 0 件になる（SPIKE-M1 ①-b と同じ壊れ方）。
++- **長さ上限 32 バイトは据え置き**（ADB の `VARCHAR2(32)` に合わせた狭い側で揃える。
++  広げるのは簡単・狭めるのは難しい、というユーザー判断）。検索側にも同じ上限を掛けた
++  ＝取り込めない長さで絞れば必ず 0 件になり、これも「静かに該当なし」を作るため。
++- 仕様書 `specs/09-rag.md` の「非文字列は文字列化されて入る」記述を「文字列のみ」へ更新。
++  `docs/verification/PREP-01.md` の当該記述にも撤回の追記をした。
++
++## 決めたこと 2: 送信可否は「選択中のバックエンドの取り込み状態」で決める
++
++**症状**（RAGM03-005）: 画面の送信可否が `f.status === 'completed'`
++（＝マネージド側の取り込み状態）だけで決まっていたため、
++**ADB を選んでいてもマネージド側が完了していれば送信可に見えた**。
++
++**直し方**: `packages/web/src/pages/rag/sendReadiness.ts` に判定を切り出し、
++`backends[選択中] === 'indexed'` で判定する。`backends` を持たない応答（縮退時・前方互換）は
++マネージド側の状態しか分からないので、`vector_store` を選んでいるときだけ従来の判定に落とす。
++
++- **3 つ目の概念は足していない**。「取り込めたか（状況バッジ）」と
++  「何ができるか（能力表示・RAGM-03）」の区別はそのままで、送信可否の**判定根拠**だけを正した。
++- 画面の文言も増やしていない（未取り込み時のヒントは従来の `rag.needFiles` のまま）。
++
++## E2E（実環境）
++
++| シナリオ | 結果 |
++|---|---|
++| 1. 同一の不正な `kind`（数値・真偽）を実 API へ | 取り込み **422**、検索フィルタは `rag_backend` が VS/ADB/SAI/OS のどれでも **422**（バックエンド別の 400 より先に型で断る） |
++| 2. ADB 未取り込みのファイルを選んだ状態の画面 | ADB 選択で入力欄・送信ボタンとも無効。ADB 取り込み済みを 1 件足すと有効になる。SAI（未同期）でも無効 |
++
++- api area の deploy 相当（実 ADB へのマイグレーション適用）を、共有 loop ADB の
++  run 固有スキーマ `JETUSE_RAGM04_C5F34C` に対して実施（019 まで）。検証後に DROP 済み。
++- ADB へ実際に取り込んだファイルのチャンク表で `kind='spec'`（文字列）を確認。
++- 実施できなかった範囲は `runs/2026-07-31T0204_RAGM-04/e2e/SKIPPED.md` に明記
++  （マネージド側アップロードは当該コンパートメントに ACTIVE な GenerativeAI project が無いため 503。
++  project の自動作成は共有リソースの新規作成にあたるので人間ゲート）。
++
++## 残課題
++
++- マネージド側に格納された属性値の読み出しによる突き合わせ（上記 project 不在のため未実施）。
++  型が文字列に固定され、変換箇所を消したので実装上の分岐は残っていない。
++- `rag_filters` は依然 `vector_store` 専用（ADB へ条件を渡す口は無い）。これは RAGM-03 の
++  能力表示に「絞り込み △ 条件付き」として出ており、本タスクの範囲外。
+diff --git a/docs/verification/e2e-screenshots/RAGM-04-2a-vs-sendable.png b/docs/verification/e2e-screenshots/RAGM-04-2a-vs-sendable.png
+new file mode 100644
+index 0000000..a18777e
+Binary files /dev/null and b/docs/verification/e2e-screenshots/RAGM-04-2a-vs-sendable.png differ
+diff --git a/docs/verification/e2e-screenshots/RAGM-04-2b-adb-not-sendable.png b/docs/verification/e2e-screenshots/RAGM-04-2b-adb-not-sendable.png
+new file mode 100644
+index 0000000..872316f
+Binary files /dev/null and b/docs/verification/e2e-screenshots/RAGM-04-2b-adb-not-sendable.png differ
+diff --git a/docs/verification/e2e-screenshots/RAGM-04-2c-adb-sendable.png b/docs/verification/e2e-screenshots/RAGM-04-2c-adb-sendable.png
+new file mode 100644
+index 0000000..8a0092d
+Binary files /dev/null and b/docs/verification/e2e-screenshots/RAGM-04-2c-adb-sendable.png differ
+diff --git a/packages/api/jetuse_core/rag.py b/packages/api/jetuse_core/rag.py
+index 4bb3d7b..c721f04 100644
+--- a/packages/api/jetuse_core/rag.py
++++ b/packages/api/jetuse_core/rag.py
+@@ -385,9 +385,10 @@ def add_file(
+         if state == rag_adb.READY:
+             # `kind` は**両バックエンドで同じ値**にする。ここを既定値のままにすると、
+             # 同じファイルがマネージド側では kind='spec'、ADB 側では kind='doc' になり、
+-            # 分類での絞り込みがバックエンドを変えた瞬間に結果を変える(review-2 PREP01-004)
++            # 分類での絞り込みがバックエンドを変えた瞬間に結果を変える(review-2 PREP01-004)。
++            # 値は rag_metadata が文字列に限っているので、ここで変換はしない(RAGM-04)
+             rag_adb.ingest(owner, file_id, filename, content,
+-                           **({"kind": str(attrs["kind"])} if "kind" in attrs else {}))
++                           **({"kind": attrs["kind"]} if "kind" in attrs else {}))
+         elif state == rag_adb.UNAVAILABLE:
+             # 「表が無い(未導入)」と「今つながらない」を区別する。後者を黙って飛ばすと、
+             # 復旧後もそのファイルだけ取り込まれないまま誰も気づけない。
+diff --git a/packages/api/jetuse_core/rag_metadata.py b/packages/api/jetuse_core/rag_metadata.py
+index 9b79a75..e8f33e7 100644
+--- a/packages/api/jetuse_core/rag_metadata.py
++++ b/packages/api/jetuse_core/rag_metadata.py
+@@ -28,8 +28,6 @@ MAX_ATTRIBUTE_VALUE_CHARS = 512  # ①-d: exceeds max length of 512 characters
+ # 「マネージドでは絞れるのに ADB では取り込み自体が失敗する」というズレが起きる。
+ # **バイト長で見る**: 列は BYTE セマンティクスのことがあり、日本語 11 文字(33 バイト)は
+ # 文字数では通っても ORA-12899 になる(`rag._fit` が同じ理由でバイト長を使っている)。
+-# 型は従来どおりスカラー(文字列 / 数値 / 真偽)を許す — ここで文字列限定にすると
+-# `kind=0` を送っていた既存クライアントが壊れる。
+ MAX_KIND_BYTES = 32
+ MAX_FILTER_DEPTH = 5             # 複合フィルタの入れ子上限(病的な入力の打ち切り)
+ 
+@@ -67,6 +65,30 @@ def _check_scalar(value: Any, where: str) -> str | int | float | bool:
+     )
+ 
+ 
++def _check_kind(value: Any, where: str) -> str:
++    """`kind` は**文字列のみ**(RAGM-04)。取り込み・検索の両方でこれを通す。
++
++    数値・真偽を受けると、マネージド側は値のまま(`0`)・ADB 側は列が
++    VARCHAR2 なので文字列(`"0"`)で入り、**同じ条件が選んだバックエンドで違う結果**になる
++    (`rag_adb.build_where` は非文字列のフィルタ値を拒否する)。黙って文字列化はしない —
++    入れた値と検索条件が食い違うだけで、ズレが見えなくなる。
++    長さ上限は ADB 列に合わせたまま広げない(狭い側で揃える)。検索側にも同じ上限を掛けるのは、
++    取り込めない長さで絞っても必ず 0 件になり ①-b と同じ「静かに該当なし」になるため。
++    """
++    if not isinstance(value, str):
++        raise MetadataError(
++            f"{where}: value must be a string "
++            "(numbers and booleans are not accepted: the adb backend stores kind in a "
++            "VARCHAR2 column, so the same value would filter differently per backend)"
++        )
++    if len(value.encode("utf-8")) > MAX_KIND_BYTES:
++        raise MetadataError(
++            f"{where}: value must be at most {MAX_KIND_BYTES} bytes in UTF-8 "
++            "(the adb backend stores it in a VARCHAR2(32) column)"
++        )
++    return value
++
++
+ def normalize_attributes(raw: Any) -> dict[str, str | int | float | bool]:
+     """取り込み時の attributes を検証して返す。
+ 
+@@ -85,12 +107,8 @@ def normalize_attributes(raw: Any) -> dict[str, str | int | float | bool]:
+             raise MetadataError(f"unknown attribute key '{key}'. allowed: {_KEYS_HINT}")
+         if value is None or (isinstance(value, str) and not value.strip()):
+             continue  # 値が無いメタはキーごと省く
+-        out[key] = _check_scalar(value, f"attribute '{key}'")
+-        if key == "kind" and len(str(out[key]).encode("utf-8")) > MAX_KIND_BYTES:
+-            raise MetadataError(
+-                f"attribute 'kind' must be at most {MAX_KIND_BYTES} bytes in UTF-8 "
+-                "(the adb backend stores it in a VARCHAR2(32) column)"
+-            )
++        where = f"attribute '{key}'"
++        out[key] = _check_kind(value, where) if key == "kind" else _check_scalar(value, where)
+     if len(out) > MAX_ATTRIBUTE_KEYS:
+         raise MetadataError(
+             f"attributes must not contain more than {MAX_ATTRIBUTE_KEYS} key-value pairs"
+@@ -139,4 +157,7 @@ def validate_filters(raw: Any, _depth: int = 0) -> dict | None:
+         raise MetadataError(f"unknown filter key '{key}'. allowed: {_KEYS_HINT}")
+     if "value" not in raw:
+         raise MetadataError(f"filter on '{key}' requires a 'value'")
+-    return {"type": ftype, "key": key, "value": _check_scalar(raw["value"], f"filter '{key}'")}
++    where = f"filter '{key}'"
++    value = (_check_kind(raw["value"], where) if key == "kind"
++             else _check_scalar(raw["value"], where))
++    return {"type": ftype, "key": key, "value": value}
+diff --git a/packages/api/tests/test_rag.py b/packages/api/tests/test_rag.py
+index 9d907a5..2726f64 100644
+--- a/packages/api/tests/test_rag.py
++++ b/packages/api/tests/test_rag.py
+@@ -649,16 +649,38 @@ def test_kind_longer_than_the_adb_column_is_rejected():
+         assert res.status_code == 422 and "32" in res.json()["detail"], bad
+ 
+ 
+-def test_kind_keeps_accepting_non_string_scalars(fake_rag):
+-    """既存クライアント（`kind` に数値・真偽を入れていた）を壊さない。"""
++def test_kind_rejects_non_string_scalars(fake_rag):
++    """RAGM-04: `kind` は文字列のみ。数値・真偽は 422（黙って文字列化しない）。
++
++    取り込みは 1 リクエストで両バックエンドへ入るので、ここで断ることが
++    「同じ入力なら両バックエンドとも同じ応答」になる唯一の門。
++    """
+     for value in (0, False, 1.5):
+         res = client.post(
+             "/api/rag/files",
+             files={"file": ("a.md", b"x", "text/markdown")},
+             data={"attributes": json.dumps({"kind": value})},
+         )
+-        assert res.status_code == 200, value
+-        assert fake_rag.last_attributes == {"kind": value}
++        assert res.status_code == 422, value
++        assert "string" in res.json()["detail"]
++        assert fake_rag.last_attributes is None  # OCI も ADB も呼ばない
++
++
++@pytest.mark.parametrize("backend", ["vector_store", "adb", "select_ai", "opensearch"])
++def test_chat_rejects_non_string_kind_filter_on_every_backend(fake_rag, backend):
++    """RAGM-04: 同じ不正な `kind` フィルタは、選んだバックエンドに関わらず 422。
++
++    バックエンド別の 400（絞り込み非対応）より**先に**型を弾く。ここが分かれると
++    「同じ条件が選んだ先で違う応答になる」が検索側に残る。
++    """
++    fake_rag.store_id = "vs_fake"
++    res = client.post("/api/chat/stream", json={
++        "model": "gpt-oss-120b", "messages": [{"role": "user", "content": "q"}],
++        "rag": True, "rag_backend": backend,
++        "rag_filters": {"type": "eq", "key": "kind", "value": 1},
++    })
++    assert res.status_code == 422, backend
++    assert "string" in res.text
+ 
+ 
+ def test_long_filename_keeps_its_extension():
+diff --git a/packages/api/tests/test_rag_metadata.py b/packages/api/tests/test_rag_metadata.py
+index ff3e18e..df1156c 100644
+--- a/packages/api/tests/test_rag_metadata.py
++++ b/packages/api/tests/test_rag_metadata.py
+@@ -62,6 +62,39 @@ def test_normalize_attributes_rejects_non_finite_number():
+             rm.normalize_attributes({"chunk_id": bad})
+ 
+ 
++def test_kind_is_string_only_on_both_ingest_and_search():
++    """RAGM-04: `kind` は文字列のみ。数値・真偽は**黙って文字列化せず**拒否する。
++
++    文字列化すると、マネージド側は `0`(数値)・ADB 側は `"0"`(文字列)で入り、
++    同じフィルタがバックエンドで違う結果になる(ADB の build_where は非文字列を拒否する)。
++    """
++    for bad in (0, 1, 1.5, True, False):
++        with pytest.raises(rm.MetadataError) as e:
++            rm.normalize_attributes({"kind": bad})
++        assert "string" in str(e.value)
++        with pytest.raises(rm.MetadataError):
++            rm.validate_filters({"type": "eq", "key": "kind", "value": bad})
++    assert rm.normalize_attributes({"kind": "spec"}) == {"kind": "spec"}
++    assert rm.validate_filters({"type": "eq", "key": "kind", "value": "spec"}) == {
++        "type": "eq", "key": "kind", "value": "spec",
++    }
++
++
++def test_kind_length_limit_is_in_bytes_and_applies_to_filters_too():
++    """上限は ADB 列(VARCHAR2(32))に合わせたまま**広げない**。
++
++    検索側にも同じ上限を掛ける: 取り込めない長さの値で絞っても必ず 0 件になり、
++    ①-b と同じ「静かに該当なし」になるため。
++    """
++    assert len("分類" * 6) < rm.MAX_KIND_BYTES < len(("分類" * 6).encode("utf-8"))
++    for bad in ("k" * (rm.MAX_KIND_BYTES + 1), "分類" * 6):
++        with pytest.raises(rm.MetadataError):
++            rm.normalize_attributes({"kind": bad})
++        with pytest.raises(rm.MetadataError):
++            rm.validate_filters({"type": "eq", "key": "kind", "value": bad})
++    assert rm.normalize_attributes({"kind": "k" * rm.MAX_KIND_BYTES})["kind"]
++
++
+ def test_normalize_attributes_rejects_non_mapping():
+     for bad in ("{}", [("file", "a")], 3):
+         with pytest.raises(rm.MetadataError):
+diff --git a/packages/web/src/pages/rag.tsx b/packages/web/src/pages/rag.tsx
+index 524de96..fbe02f9 100644
+--- a/packages/web/src/pages/rag.tsx
++++ b/packages/web/src/pages/rag.tsx
+@@ -7,6 +7,7 @@ import { readSse } from '../lib/sse'
+ import { usePrefs } from '../prefs'
+ import { BackendCapabilityPanel } from './rag/BackendCapabilities'
+ import { BackendStatusBadges } from './rag/BackendStatusBadges'
++import { hasSendableFile } from './rag/sendReadiness'
+ import { UPLOAD_ACCEPT } from './rag/uploadFormats'
+ import {
+   pickRagBackendCapabilities,
+@@ -179,7 +180,9 @@ export default function Rag() {
+     }
+   }
+ 
+-  const ready = files.some((f) => f.status === 'completed')
++  // 送信可否は**選択中のバックエンド**の取り込み状態で決める(RAGM-04)。
++  // マネージド側の完了だけで見ると、ADB を選んでいても送信可に見える(RAGM03-005)。
++  const ready = hasSendableFile(files, backend)
+ 
+   return (
+     <PageContainer wide icon="rag" title={t('nav.rag')} subtitle={t('rag.lead')} helpKey="rag">
+diff --git a/packages/web/src/pages/rag/sendReadiness.test.ts b/packages/web/src/pages/rag/sendReadiness.test.ts
+new file mode 100644
+index 0000000..652d65d
+--- /dev/null
++++ b/packages/web/src/pages/rag/sendReadiness.test.ts
+@@ -0,0 +1,52 @@
++import { describe, it, expect } from 'vitest'
++import { hasSendableFile, isSendableWith } from './sendReadiness'
++
++/** RAGM-04: 送信可否は「選択中のバックエンドの取り込み状態」で決まる。
++ *  RAGM03-005（ADB を選んでもマネージド側の完了で送信可に見えた）を固定する。 */
++
++const managedOnly = {
++  status: 'completed' as const,
++  backends: { vector_store: 'indexed', adb: 'pending', select_ai: 'pending',
++              opensearch: 'disabled' } as const,
++}
++
++describe('sendReadiness', () => {
++  it('does not allow sending on adb while adb has not ingested the file', () => {
++    expect(hasSendableFile([managedOnly], 'adb')).toBe(false)
++    expect(hasSendableFile([managedOnly], 'vector_store')).toBe(true)
++  })
++
++  it.each(['pending', 'error', 'disabled'] as const)(
++    'treats adb %s as not sendable', (st) => {
++      expect(isSendableWith({ status: 'completed', backends: { adb: st } }, 'adb')).toBe(false)
++    },
++  )
++
++  it('allows sending once the selected backend has indexed the file', () => {
++    const f = { status: 'processing' as const, backends: { vector_store: 'pending',
++                adb: 'indexed' } as const }
++    expect(hasSendableFile([f], 'adb')).toBe(true)
++    expect(hasSendableFile([f], 'vector_store')).toBe(false)
++  })
++
++  it('is per-backend across a mixed file list', () => {
++    const files = [
++      { status: 'completed' as const, backends: { vector_store: 'indexed', adb: 'error' } as const },
++      { status: 'processing' as const, backends: { vector_store: 'pending', adb: 'indexed' } as const },
++    ]
++    expect(hasSendableFile(files, 'vector_store')).toBe(true)
++    expect(hasSendableFile(files, 'adb')).toBe(true)
++    expect(hasSendableFile(files, 'select_ai')).toBe(false)
++  })
++
++  it('falls back to the managed status only for vector_store (forward compatible)', () => {
++    const legacy = { status: 'completed' as const }
++    expect(isSendableWith(legacy, 'vector_store')).toBe(true)
++    expect(isSendableWith(legacy, 'adb')).toBe(false)
++    expect(isSendableWith({ status: 'failed' }, 'vector_store')).toBe(false)
++  })
++
++  it('is false for an empty file list', () => {
++    expect(hasSendableFile([], 'vector_store')).toBe(false)
++  })
++})
+diff --git a/packages/web/src/pages/rag/sendReadiness.ts b/packages/web/src/pages/rag/sendReadiness.ts
+new file mode 100644
+index 0000000..bc2f757
+--- /dev/null
++++ b/packages/web/src/pages/rag/sendReadiness.ts
+@@ -0,0 +1,26 @@
++/** 送信可否（RAGM-04）: 「選択中のバックエンドに取り込めたファイルが 1 つでもあるか」。
++ *
++ *  以前はマネージド側の取り込み状態（`status === 'completed'`）だけで決めていたため、
++ *  ADB を選んでいてもマネージド側が完了していれば送信できるように見えていた（RAGM03-005）。
++ *  判定根拠を「選択中のバックエンドの取り込み状態」へ正すだけで、
++ *  「取り込めたか（バッジ）」と「何ができるか（能力表示）」の区別は変えていない。
++ */
++import type { BackendStatus, RagBackend } from './capabilityCatalog'
++
++type FileIngestState = {
++  status: 'processing' | 'completed' | 'failed'
++  backends?: Partial<Record<RagBackend, BackendStatus>>
++}
++
++/** そのファイルを、選択中のバックエンドへの質問に使えるか。 */
++export function isSendableWith(file: FileIngestState, backend: RagBackend): boolean {
++  // `backends` を持たない応答（前方互換 / 縮退時）から分かるのはマネージド側の状態だけ。
++  // 他のバックエンドを選んでいるときにそれで代用すると、直そうとしているズレが戻る。
++  if (!file.backends) return backend === 'vector_store' && file.status === 'completed'
++  return file.backends[backend] === 'indexed'
++}
++
++/** 選択中のバックエンドで質問できる状態か（＝送信可否）。 */
++export function hasSendableFile(files: FileIngestState[], backend: RagBackend): boolean {
++  return files.some((f) => isSendableWith(f, backend))
++}
+diff --git a/specs/09-rag.md b/specs/09-rag.md
+index 0a90d22..d5312a8 100644
+--- a/specs/09-rag.md
++++ b/specs/09-rag.md
+@@ -70,11 +70,11 @@
+   属性の `sheet` / `cells` は単一シートなら外接範囲、複数シートなら `(ブック全体: N シート)` / `(ブック全体)`。
+   **1 チャンク = 1 ファイルに割って「セル単位で返る」ように見せる細工はしない。**
+ - `kind` は**両バックエンドに同じ値**を入れる（マネージドの属性と ADB の `kind` 列）。
+-  そのため `kind` は **UTF-8 で 32 バイト以内**に限る（ADB 側が `VARCHAR2(32)`。
+-  BYTE セマンティクス想定なのでバイト長で見る。超過は 422）。
+-  型は従来どおりスカラー（文字列 / 数値 / 真偽）を受けるが、**ADB 側は文字列列**なので
+-  非文字列は文字列化されて入る（`kind=0` → マネージド `0` / ADB `"0"`）。
+-  数値・真偽での分類は避け、文字列で揃えること。
++  そのため `kind` は **UTF-8 で 32 バイト以内の文字列のみ**（ADB 側が `VARCHAR2(32)`。
++  BYTE セマンティクス想定なのでバイト長で見る）。**取り込み・検索とも**この制約で、
++  数値・真偽・長さ超過は **422**（RAGM-04。以前は非文字列を受けてマネージド `0` /
++  ADB `"0"` と入り、同じ絞り込みがバックエンドで違う結果になっていた）。
++  **黙って文字列化はしない** — 変換すると入れた値と検索条件が食い違い、静かに 0 件になる。
+ - `sheet` のファイル単位属性 `(ブック全体: N シート)` の **N は本文があったシート数**
+   （空シートは数えない）。
+ - **`select_ai` の xlsx は「取り込める」**（[PREP-02] で実測。下記）。
+@@ -130,6 +130,10 @@
+ - 左: ファイル一覧（アップロード、状態バッジ processing/completed/failed、削除）
+ - 右: チャット（ストリーミング・停止・Md描画）。アシスタント応答下に**引用元チップ**（ファイル名+スコア）
+ - ファイル0件時はアップロード誘導を表示
++- **送信可否は「選択中のバックエンドに取り込めた（`backends[選択中] === 'indexed'`）ファイルが
++  1 つでもあるか」で決める**（RAGM-04）。マネージド側の `status === 'completed'` だけで決めると、
++  ADB を選んでいても送信可に見える（RAGM03-005）。判定根拠を正すだけで、
++  「取り込めたか（状況バッジ）」と「何ができるか（能力表示・RAGM-03）」の区別は変えない。
+ 
+ ### 完了条件
+ 
+diff --git a/tasks/RAGM-04.md b/tasks/RAGM-04.md
+new file mode 100644
+index 0000000..e0cd6c0
+--- /dev/null
++++ b/tasks/RAGM-04.md
+@@ -0,0 +1,70 @@
++# タスク: RAGM-04 バックエンド間の挙動差を潰す（分類項目の型統一・送信可否の判定）
++
++## 目的
++「バックエンドを選べる」設計にした結果、**同じ操作が選んだ先で違う結果になる**箇所が2つ残っている。
++利用者がいないアルファ版の今のうちに潰す（**約束を変える費用がゼロなのは今だけ**）。
++
++決定の根拠: 2026-07-31 のユーザー判断
++（「既存利用者はいない。今後、ある程度完成したら増える想定」→ **いま揃った形で固定する**）。
++
++## 仕様参照
++- `docs/decisions/ADR-0020-rag-metadata-backend.md`（Accepted。選べる 2 バックエンド）
++- PREP-01 の `STATE.md` review-7 残指摘（PREP01-002 = 本タスクの 1）
++- RAGM-03 の `STATE.md` residual（RAGM03-005 = 本タスクの 2）
++
++## 対象 area
++api, web
++
++## 前提（依存タスク / 人間の事前作業）
++- PREP-02（#107）・RAGM-03（#108）がマージ済み（済）。
++
++## 直すもの
++
++### 1. 分類項目（`kind`）の型を文字列に統一する
++現状: `kind` に数値・真偽を入れると、マネージド側は**値のまま**・ADB 側は**文字列**になる。
++さらに `rag_adb.build_where()` は文字列以外のフィルタ値を拒否するため、
++**同じフィルタがバックエンドで挙動を変える**。
++
++- 取り込み・検索とも `kind` は**文字列のみ**を受け付ける形に統一する。
++  文字列以外は **422** で拒否する（黙って変換しない。変換すると「入れた値と検索条件が一致しない」が起きる）。
++- 長さ上限（32 バイト）は**現状のまま**。ユーザー判断で「狭い側で揃える」と決定済み
++  （広げるのは簡単・狭めるのは難しいため。将来必要になれば ADB 側の列を広げる）。
++- **仕様書の記述を「バックエンドで挙動が違う」から「文字列のみ」へ更新**する。
++
++### 2. 送信可否（`ready`）が選択中のバックエンドを見ていない
++現状: 画面の送信可否が `f.status === 'completed'`（＝マネージド側の取り込み状態）だけで決まる。
++**ADB を選んでいてもマネージド側が完了していれば送信可に見える**（RAGM03-005）。
++
++- 送信可否を**選択中のバックエンドの取り込み状態**で判定する。
++- 「取り込めたか（既存バッジ）」と「何ができるか（RAGM-03 の能力表示）」の区別は**維持**する。
++  本タスクは 3 つ目の概念を足すのではなく、**送信可否の判定根拠を正す**だけ。
++
++## 完了条件（検証可能な述語で）
++- [ ] `kind` に数値・真偽を渡すと**両バックエンドとも 422**（同じ入力に同じ応答）。単体テストで固定。
++- [ ] 同じフィルタ条件が**両バックエンドで同じ結果**になる（文字列のみなので分岐しない）。
++- [ ] `specs/09-rag.md` の該当記述が「文字列のみ」に更新されている。
++- [ ] 画面で ADB を選択し、ADB 側が未取り込みのファイルは**送信可にならない**（web テストで固定）。
++- [ ] 既存バッジ・能力表示の意味を変えていない（RAGM-01/02/03 の回帰なし）。
++- [ ] `.venv/bin/pytest packages/api/tests` 全件パス・`.venv/bin/ruff check packages/api` クリーン。
++- [ ] `npm --prefix packages/web run test` / `run lint` / `run build` が緑。
++- [ ] STATE.md の `review_verdict` が PASS。
++
++## E2E シナリオ（実環境 / jetuse-dev）
++- [ ] シナリオ1: 同一の不正な `kind`（数値）を両バックエンドへ投げ、**どちらも 422** になることを実 API で示す。
++- [ ] シナリオ2: ADB 未取り込みのファイルを選んだ状態で、画面が送信可にならないことを示す
++      （スクリーンショット可）。
++- [ ] 実施不能な範囲は `runs/<run-id>/e2e/SKIPPED.md` に理由を明記（無言スキップ禁止）。
++
++## 成果物
++- `rag_metadata.py` / `rag.py` / 画面の修正、テスト
++- `specs/09-rag.md` の更新
++- `docs/verification/RAGM-04.md`
++
++## 非ゴール / 禁止事項
++- **長さ上限を広げない**（狭い側で揃える判断は確定済み）。
++- 新しい概念を画面に増やさない（送信可否の判定根拠を正すだけ）。
++- 他の residual（ヘルプの図が古い・カタログ応答が壊れたときの描画・`/api/rag/files` の縮退表示）には
++  手を出さない。**このタスクは 2 点だけ**。
++- 顧客データを持ち込まない。**顧客名・案件名を書かない**（公開リポジトリ）。
++- 認証情報・OCID をコミットしない。IAM を変更しない。
++- 未承認のコミット / PR / push を行わない（人間ゲート）。

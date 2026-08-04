@@ -113,6 +113,9 @@ async def synthesize_tts(
             audit.log_event, user.subject, "tts", None, len(req.text), None,
             "ok", req.voice,
         )
+    except tts.TtsError as e:
+        logger.warning("tts synthesize degraded: %s", e)
+        raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:
         logger.exception("tts synthesize failed")
         raise HTTPException(

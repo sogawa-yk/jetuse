@@ -1,0 +1,71 @@
+{
+  "review_n": 4,
+  "timestamp": "2026-08-01T11:41:43+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-4.input.diff",
+  "raw_output_path": "reviews/review-4.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "OCR 結線の主要動作は5本の実環境シナリオで裏づけられていますが、既存 ADB を人間ゲートなしで起動した証跡があり、運用制約違反のため FAIL です。また、無効な要求でも課金対象 OCR が先に実行される問題などがあります。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 3,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "PREP03-001",
+      "severity": "blocker",
+      "file": "runs/2026-08-01T1033_PREP-03/e2e/deploy.log",
+      "line": 1,
+      "issue": "STOPPED だった既存の共有 ADB `jetuse-loop-adb` を起動しています。既存リソースの変更は人間ゲート対象というレビュー条件に反し、AVAILABLE のまま残して課金状態も変更しています。「破壊的でない」「列挙例に ADB がない」は、既存リソース変更全般を対象とするゲートを解除する根拠になりません。",
+      "suggestion": "当該操作について明示的な人間承認を取得し、その承認記録を証跡へ追加してください。以後は既存 ADB の start/stop も人間ゲート対象として扱い、承認なしの場合は E2E を SKIPPED/blocked にしてください。"
+    },
+    {
+      "id": "PREP03-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag.py",
+      "line": 350,
+      "issue": "`prepare_upload()` が課金対象の OCR を実行した後で、導出属性との競合を検査しています。画像やスキャン PDF に `sheet` を指定した無効な要求は最終的に 422 になるにもかかわらず、その前に OCI Document Understanding が呼ばれます。",
+      "suggestion": "画像では直ちに、PDF では非課金の `needs_ocr()` 判定後に、導出予定キーと利用者属性の競合を検査してください。競合時に `docunderstand.ocr` が0回であることをテストしてください。"
+    },
+    {
+      "id": "PREP03-003",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/extract_scan.py",
+      "line": 159,
+      "issue": "single-flight のタイムアウト時に `_inflight[key]` を新しい Event へ置換しますが、元の計算者は完了時に line 176 でその新しい Event を無条件に pop します。元の処理がタイムアウト直後に完了すると、引き継いだ計算者との二重 OCR が発生し、さらに別の待ち手も誤って起床します。複数待ち手が同時にタイムアウトすれば複数回の課金にもなり得ます。",
+      "suggestion": "各計算者が所有する Event/token を保持し、完了時は `_inflight.get(key) is owned_event` の場合だけ削除・通知してください。タイムアウトと元計算者の完了が競合するテストも追加してください。"
+    },
+    {
+      "id": "PREP03-004",
+      "severity": "major",
+      "file": "spikes/prep03/vlm_check.py",
+      "line": 59,
+      "issue": "VLM 検証が FAIL でも文字列を表示するだけでプロセスは終了コード0になります。自動実行側は失敗した E2E を成功と判定でき、証跡の信頼性を損ないます。",
+      "suggestion": "`sys.exit(0 if ok else 1)` とし、失敗条件で非0終了することをテストしてください。"
+    },
+    {
+      "id": "PREP03-005",
+      "severity": "minor",
+      "file": "docs/verification/PREP-03.md",
+      "line": 144,
+      "issue": "「チャンク本文には原文どおりの文字が入る」という記述は、添付証跡のチャンク本文 `BRG - 778 1` と矛盾します。実際には文字間の空白が変化しており、完全一致検索もできません。",
+      "suggestion": "「文字列は原文どおりではなく空白が挿入されるが、空白を除いた文字列は一致する」など、証跡と一致する表現へ修正してください。docs/tips.md の同様の記述も合わせて修正してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "sufficient",
+    "notes": "`runs/2026-08-01T1033_PREP-03/e2e/` のシナリオ0〜4を確認しました。スキャンPDFの抽出・検索・ページ引用、画像検索、テキスト層PDFのOCR 0回、VLM明示指定を網羅し、最低2本の要件を満たしています。Resource Principal、Select AI、OpenSearchなどの未検証範囲は SKIPPED.md に理由と残作業が明記されています。ただし既存共有ADBの無承認起動はE2Eの十分性とは別の運用違反としてblockerです。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されておらず、ユーザー指定に従ってブラウザツールは使用していません。"
+    }
+  }
+}

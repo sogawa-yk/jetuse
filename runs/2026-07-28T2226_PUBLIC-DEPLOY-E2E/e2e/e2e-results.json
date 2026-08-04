@@ -1,0 +1,192 @@
+[
+ {
+  "name": "デモユーザーがパスワード変更を強制されない",
+  "ok": true,
+  "detail": "https://<redacted>.apigateway.<region>.oci.customer-oci.com"
+ },
+ {
+  "name": "ログイン→アプリ表示",
+  "ok": true,
+  "detail": "https://<redacted>.apigateway.<region>.oci.customer-oci.com"
+ },
+ {
+  "name": "/api/health 全体が ok",
+  "ok": true,
+  "detail": "{\"ok\":true,\"capabilities\":{\"chat\":{\"status\":\"ok\",\"models\":{\"gpt-oss-120b\":{\"ok\":true},\"llama-3.3-70b\":{\"ok\":true},\"gemini-2.5-pro\":{\"ok\":true},\"gemini-2.5-flash\":{\"ok\":true},\"llama-3.2-90b-vision\":{\"o"
+ },
+ {
+  "name": "capability: chat",
+  "ok": true,
+  "detail": "ok {\"status\":\"ok\",\"models\":{\"gpt-oss-120b\":{\"ok\":true},\"llama-3.3-70b\":{\"ok\":true},\"gemini-2.5-pro\":{\"ok\":true},\"gemini-2.5"
+ },
+ {
+  "name": "capability: rag",
+  "ok": true,
+  "detail": "ok {\"status\":\"ok\"}"
+ },
+ {
+  "name": "capability: dbchat",
+  "ok": true,
+  "detail": "ok {\"status\":\"ok\",\"semantic_store\":{\"ok\":false,\"hint\":\"SEMSTORE_OCID 未設定\"},\"select_ai\":{\"ok\":true},\"sample_data\":{\"ok\":true"
+ },
+ {
+  "name": "capability: speech",
+  "ok": true,
+  "detail": "ok {\"status\":\"ok\"}"
+ },
+ {
+  "name": "capability: ocr",
+  "ok": true,
+  "detail": "ok {\"status\":\"ok\"}"
+ },
+ {
+  "name": "capability: tts",
+  "ok": true,
+  "detail": "ok {\"status\":\"ok\",\"region\":\"us-chicago-1\",\"candidate_regions\":[\"us-chicago-1\",\"us-phoenix-1\"],\"verified\":true}"
+ },
+ {
+  "name": "/api/rag/health 3点すべて ok",
+  "ok": true,
+  "detail": "{\"project\":{\"ok\":true,\"source\":\"auto\"},\"control_plane\":{\"ok\":true},\"data_plane\":{\"ok\":true}}"
+ },
+ {
+  "name": "チャット: 既定モデル(gpt-oss-120b)が応答",
+  "ok": true,
+  "detail": "data: {\"ka\": 1}data: {\"delta\": \"高\"}data: {\"delta\": \"性能\"}data: {\"delta\": \"・\"}data: {\"delta\": \"低\"}data: {\"delta\": \"遅\"}data: {\"delta\": \"延\"}data: {\"delta\": \"の\"}data: {\"delta\": \"ネット\"}data: {\"delta\": \"ワ\"}da"
+ },
+ {
+  "name": "チャット: 既定モデルのフォールバック通知が出ない",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "チャット: モデル llama-3.3-70b",
+  "ok": true,
+  "detail": "data: {\"ka\": 1}data: {\"delta\": \"OK\"}data: {\"usage\": {\"input_tokens\": 37, \"output_tokens\": 2}}data: [DONE]"
+ },
+ {
+  "name": "チャット: モデル gemini-2.5-pro",
+  "ok": true,
+  "detail": "data: {\"ka\": 1}data: {\"delta\": \"OK\"}data: {\"usage\": {\"input_tokens\": 2, \"output_tokens\": 1}}data: [DONE]"
+ },
+ {
+  "name": "チャット: モデル gemini-2.5-flash",
+  "ok": true,
+  "detail": "data: {\"ka\": 1}data: {\"delta\": \"OK\"}data: {\"usage\": {\"input_tokens\": 2, \"output_tokens\": 1}}data: [DONE]"
+ },
+ {
+  "name": "チャット: モデル llama-3.2-90b-vision",
+  "ok": true,
+  "detail": "data: {\"ka\": 1}data: {\"delta\": \"OK\"}data: {\"usage\": {\"input_tokens\": 37, \"output_tokens\": 2}}data: [DONE]"
+ },
+ {
+  "name": "会話メモリ: 会話作成(OCI Conversations)",
+  "ok": true,
+  "detail": "200 {\"id\":\"923187a6-c335-48c6-ba0c-2c43f1afd839\",\"title\":\"e2e\",\"model\":\"gpt-oss-120b\"}"
+ },
+ {
+  "name": "RAG: 初回アップロードがゲートウェイ504にならない",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "RAG: 文書取り込み完了",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "RAG: Vector Store 索引化完了",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "RAG: 文書に基づく回答(引用付き)",
+  "ok": true,
+  "detail": "\"delta\": \"経\"\"delta\": \"費\"\"delta\": \"精\"\"delta\": \"算\"\"delta\": \"の\"\"delta\": \"締\"\"delta\": \"め\"\"delta\": \"日は\"\"delta\": \"、\"\"delta\": \"**\"\"delta\": \"毎\"\"delta\": \"月\"\"delta\": \"25\"\""
+ },
+ {
+  "name": "DBチャット: SQL生成",
+  "ok": true,
+  "detail": "SELECT \"CHANNEL\".CHANNEL_DESC AS \"販売チャネル\", SUM(\"SALES\".AMOUNT_SOLD) AS \"売上\" FROM \"SH\".\"SALES\" \"SALES\" JOIN \"SH"
+ },
+ {
+  "name": "DBチャット: SQL実行と結果表示",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "OCR: 画像から文字抽出",
+  "ok": true,
+  "detail": "英語（ENG）選択時のみ対応します。 5ページを超えるPDFは自動的に分割して処理します（OCI同期OCRは1回5ページまで）。 ページ数: 1 平均信頼度: 99.4% コピー このテキストでチャット 抽出テキスト JetUse OCR TEST 2026 INVOICE NO 12345 合計金額 98,760 円 JetUse — Copyright © 2026 AISA v0.1.0"
+ },
+ {
+  "name": "議事録: 音声登録がエラーにならない",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "リアルタイムSTT: セッション作成",
+  "ok": true,
+  "detail": "200 {\"id\":\"d9173ace-9d4c-4d8e-83d7-389f6c6a6cbe\",\"language\":\"ja\"}"
+ },
+ {
+  "name": "TTS: 音声合成",
+  "ok": true,
+  "detail": "200 ID3\u0004\u0000\u0000\u0000\u0000\u00005TPE1\u0000\u0000\u0000\b\u0000\u0000\u0003ORACLE\u0000TSSE\u0000\u0000\u0000\u000f\u0000\u0000\u0003Lavf58.76.100\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000���\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000Info\u0000\u0000\u0000\u000f\u0000\u0000\u0000:\u0000\u0000\u0016�\u0000 \u0011\u0011\u0015\u0015\u0019\u001d\u001d\"\"&&*..337;;@@DDHLLQQUUY]]bbfjjnnssw{{������������"
+ },
+ {
+  "name": "TTS: health が実合成の結果を反映(verified)",
+  "ok": true,
+  "detail": "{\"status\":\"ok\",\"region\":\"us-chicago-1\",\"candidate_regions\":[\"us-chicago-1\",\"us-phoenix-1\"],\"verified\":true}"
+ },
+ {
+  "name": "翻訳",
+  "ok": true,
+  "detail": "200 {\"translated\":\"Hello\"}"
+ },
+ {
+  "name": "エージェント一覧",
+  "ok": true,
+  "detail": "200 {\"agents\":[]}"
+ },
+ {
+  "name": "管理ダッシュボード: demoユーザーが閲覧できる",
+  "ok": true,
+  "detail": "200 {\"days\":30,\"by_feature\":[{\"feature\":\"chat\",\"calls\":5,\"input_tokens\":157,\"output_tokens\":264},{\"feature\":\"dbchat\",\"calls\":1,\"input_tokens\":0,\"output_to"
+ },
+ {
+  "name": "ページ描画: ホーム",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "ページ描画: チャット",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "ページ描画: リアルタイム翻訳",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "ページ描画: 音声チャット",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "ページ描画: 映像分析",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "ページ描画: ビルダー",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "ページ描画: 設定",
+  "ok": true,
+  "detail": ""
+ }
+]

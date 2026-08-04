@@ -1,0 +1,63 @@
+{
+  "review_n": 4,
+  "timestamp": "2026-07-13T08:17:53+00:00",
+  "reviewer": "codex",
+  "model": "gpt-5.5",
+  "input_diff_path": "reviews/review-4.input.diff",
+  "raw_output_path": "reviews/review-4.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "モデル可用性のグローバルな汚染と、agent_id 実行時の早期判定により、特定ユーザー/エージェントの失敗が通常チャットや他エージェントを巻き込むリスクがあります。実環境 E2E 証跡は空で、OCI/DB/TTS/health まわりの主張を裏づけられていません。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 2,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "packages/api/jetuse_core/chat.py",
+      "line": 579,
+      "issue": "APIStatusError 401/403/404 を model_only_call だけでモデル未提供とみなし、project_ocid 指定時も mark_unavailable します。エージェント固有 project_ocid の誤設定・権限不足・削除済み project による 403/404 が、プロセス全体のモデル不可状態として記録され、他ユーザーの通常チャットや /api/chat/models にまで波及します。",
+      "suggestion": "project_ocid が指定されている呼び出しはモデル可用性判定から除外してください。少なくとも `model_only_call = not p.file_search_store and not oci_conversation_id and not project_ocid` 相当にし、project 由来の 401/403/404 は別のエラーとして返すテストを追加してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "packages/api/service/routes/chat.py",
+      "line": 83,
+      "issue": "agent_id リクエストでも、agent 定義を読む前に req.model の model_status を見て即エラーにしています。保存済みエージェントは後段で agent_def[\"model\"] を eff_model として使うため、リクエスト上のモデルが不可にマークされているだけで、実際には利用可能なエージェントモデルや Select AI agent の実行まで拒否されます。",
+      "suggestion": "agent_id ありのリクエストでは先に agent_def を解決し、可用性判定は実際に使う eff_model に対して行ってください。Select AI agent など通常の chat/responses モデルを使わない経路はこの判定をスキップしてください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "major",
+      "file": "runs/2026-07-13T0730_PORT-02/e2e",
+      "line": 1,
+      "issue": "実環境 E2E 証跡が空です。差分は /api/health、モデル不可時のフォールバック、DBチャットの SemanticStore/Select AI 切替、TTS の 503 変換など実OCI・ADB構成差に依存する挙動を変更していますが、jetuse-dev で最低2シナリオの成功/縮退確認が添付されていません。",
+      "suggestion": "少なくとも通常チャット/モデル不可フォールバック、/api/health の degraded 表示、DBチャット sample unavailable または Select AI fallback、TTS 未購読時 503 のうち2本以上を実環境で実行し、runs/.../e2e にリクエスト・レスポンス・対象デプロイを残してください。未実施範囲がある場合は SKIPPED.md に理由を書いてください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "minor",
+      "file": "packages/api/service/routes/dbchat.py",
+      "line": 82,
+      "issue": "SEMSTORE_OCID 未設定時に実際は Select AI 経路へ切り替えているのに、監査ログには req.backend の既定値 `sql_search` が記録されます。運用時にどのバックエンドで生成したかを追えず、障害切り分けや利用状況集計がずれます。",
+      "suggestion": "分岐後に `effective_backend` を持ち、SemanticStore 未設定による自動切替時は `select_ai` を audit.log_event に渡してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "insufficient",
+    "notes": "入力には `runs/2026-07-13T0730_PORT-02/e2e` が空である旨のみがあり、実行シナリオ、結果、レスポンス、デプロイ対象を確認できる証跡はありません。差分の実環境依存部分を裏づけるには不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲット URL が提供されておらず、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}
