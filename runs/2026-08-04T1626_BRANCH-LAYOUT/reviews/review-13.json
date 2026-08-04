@@ -1,0 +1,47 @@
+{
+  "review_n": 13,
+  "timestamp": "2026-08-04T17:40:38+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-13.input.diff",
+  "raw_output_path": "reviews/review-13.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "実値のOCID・認証情報・エンドポイントは含まれていません。一方、OCIR専用で環境ではないと再定義した `jetuse:registry` を、引き続きRuntime用Dynamic GroupとAPI Gateway Policyの対象にしており、IAM設計に2件の重大な矛盾があります。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 2,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "major",
+      "file": "docs/setup/dynamic-group-matching-rules.md",
+      "line": 17,
+      "issue": "`jetuse:registry` はOCIRリポジトリだけを置く非実行環境と明記されたにもかかわらず、Container Instance、Functions、ADB、Semantic Storeを `jetuse-internal-dg` に加入させる対象として残っています。現時点では無効なルールですが、将来誤って配置されたResource Principalが自動的に加入し、同グループのdev向けPolicyを利用できるため、registryからdevへの権限経路が生じます。77行目は逆方向の「devからregistry」しか説明しておらず、このリスクも欠落しています。",
+      "suggestion": "registry用の4つのmatching rule、`<JETUSE_REGISTRY_COMPARTMENT_OCID>`、registry向けPolicyの説明を削除し、`jetuse-internal-dg` はdevだけを対象にしてください。将来registryへ実行リソースを置く要件が生じた場合は、配置前に人間ゲートを通して別Dynamic Groupと最小権限Policyを設計してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "docs/setup/dynamic-group-matching-rules.md",
+      "line": 147,
+      "issue": "FunctionsもAPI Gatewayも存在しないと説明された `jetuse:registry` に対し、Functions呼び出し用の `any-user` Policyを作成するよう指示しています。不要なIAM変更であるうえ、将来registryにFunctionが誤配置された場合、そのFunctionをAPI Gateway Principalから呼べる権限が自動的に有効になります。",
+      "suggestion": "Policy作成対象を実際にAPI GatewayとFunctionsを配備するdev/testだけに限定し、registryを削除してください。必要なら「registryには実行リソースを配備しないため、このPolicyを作成しない」と明記してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "runs/2026-08-04T1626_BRANCH-LAYOUT/e2e は空で、実環境E2E証跡はありません。ただし差分はIAM設定ドキュメントのみで、実環境への適用や動作変更を含まないため、ブラウザ／デプロイE2E未実施自体は妥当です。記載されたIAM構成を実際に変更する場合は人間ゲートと別途検証が必要です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}
