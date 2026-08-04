@@ -1,0 +1,39 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-08-04T18:35:07+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "TOOL-01 ガードについては実 OCI で3分岐を確認した証跡がありますが、goal.txt が完了対象とする4件のうち、branch protection と2種類のリリースに関する証跡がありません。完了条件を裏づける E2E が不足しています。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "E2E-001",
+      "severity": "blocker",
+      "file": "runs/2026-08-04T1832_FINISH-4/goal.txt",
+      "line": 1,
+      "issue": "「残りの4件を実施し、E2Eまで合格」としている一方、添付証跡は TOOL-01 の3分岐のみです。branch protection（4ブランチ・bot bypass）、Public リリース、Internal リリースの実行結果がなく、SKIPPED.md による未実施理由もありません。このため、記載された完了条件を検証できません。",
+      "suggestion": "残る3項目について、各操作の対象、手順、期待値、実測結果、成否を runs/2026-08-04T1832_FINISH-4/e2e/ に追加してください。実施不能な項目には SKIPPED.md を置き、理由と代替検証を明記してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 3,
+    "adequacy": "insufficient",
+    "notes": "runs/2026-08-04T1832_FINISH-4/e2e/scenario-1-tool01-guard.md のケースA〜Cを確認しました。現行のdev OCID、親コンパートメント指定の後方互換、非dev指定時のfail-closedという3経路はいずれもPASSと記録されており、TOOL-01 の主張には対応しています。ただし、goal.txt に列挙されたbranch protection、Publicリリース、Internalリリースの証跡がなく、差分全体の完了条件を満たすには不十分です。認証情報、実OCID、エンドポイント実値のコミットは見当たりません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおり実ブラウザE2Eは実施していません。"
+    }
+  }
+}
