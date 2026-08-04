@@ -1,0 +1,47 @@
+{
+  "review_n": 9,
+  "timestamp": "2026-08-04T20:03:47+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-9.input.diff",
+  "raw_output_path": "reviews/review-9.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "namespace フォールバックの修正自体は意図どおりですが、E2E 証跡に実テナンシ固有の OCIR/Object Storage namespace が平文でコミットされています。また、追加テストは実際のスクリプト上の実行順を再現せず、合成した断片を検証しているため回帰検出力に不足があります。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 0,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "blocker",
+      "file": "runs/2026-08-04T1832_FINISH-4/e2e/scenario-5-ns-fallback.md",
+      "line": 50,
+      "issue": "実環境の OCIR/Object Storage namespace `idqcucnenh88` が証跡へ平文で記録されています。資格情報そのものではありませんが、テナンシ固有の環境依存値であり、環境依存値は `.env` 管理とするリポジトリ方針に違反します。",
+      "suggestion": "値を `<namespace>` などへマスクし、リポジトリ履歴へ取り込む前に証跡から実値を除去してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "minor",
+      "file": "packages/api/tests/test_dev_env_namespace.py",
+      "line": 30,
+      "issue": "`_extract_resolver()` はスクリプト内での位置や実行順に関係なく3行を検索し、固定順で合成しています。そのため、本体で代入順が入れ替わる、両行の間に必要な処理が追加される、または別スコープへ移動するといった回帰でもテストが成功し得ます。",
+      "suggestion": "namespace 解決を source 可能な専用関数へ分離して実物を呼び出すか、連続するブロックとして抽出して順序も検証してください。可能なら外部操作をスタブ化して `ops/dev-env-up.sh` 自体を実行してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "sufficient",
+    "notes": "添付された5シナリオを確認しました。この差分を直接裏づける scenario-5 では、OCIR_NAMESPACE、OS_NAMESPACE フォールバック、環境変数優先、両方欠落、引用符・CRLF の5経路が報告されており、最低2シナリオの要件を満たします。SKIPPED.md は別作業である Internal リリース統合E2Eの未完了理由を明示しています。ただし scenario-5 の証跡には実テナンシ固有namespaceのマスキング漏れがあります。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されておらず、指示どおりブラウザ E2E は実施していません。"
+    }
+  }
+}
