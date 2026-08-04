@@ -1,0 +1,30 @@
+{
+  "review_n": 2,
+  "timestamp": "2026-08-04T18:35:50+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-2.input.diff",
+  "raw_output_path": "reviews/review-2.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "差分は E2E 証跡と進捗記録のみで、認証情報・OCID・エンドポイント実値の混入はありません。対象項目について正常系・後方互換・fail-closed の3分岐が実 OCI で確認され、未着手の3項目も SKIPPED.md に範囲と理由が明記されています。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 3,
+    "adequacy": "sufficient",
+    "notes": "`resolve_dev_compartment` について、COMPARTMENT_OCID が dev 自身、親コンパートメント、dev でないコンパートメントの3ケースが記録され、すべて期待結果と一致している。今回の差分が完了を主張する項目1の裏づけとしては十分。項目2〜4は未着手だが、このPRでは完了を主張しておらず、順序依存と分割理由が SKIPPED.md に明記されている。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲット URL が提供されておらず、指示どおり実ブラウザ E2E は実施していない。"
+    }
+  }
+}

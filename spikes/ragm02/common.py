@@ -191,21 +191,33 @@ def resolve_dev_compartment() -> str:
     import oci
     from jetuse_core.oci_auth import sdk_signer_args
 
-    root = adb.env("COMPARTMENT_OCID")
-    if not root:
-        sys.exit(".env の COMPARTMENT_OCID が未設定。承認済みの根を決められないため中止。")
+    approved = adb.env("COMPARTMENT_OCID")
+    if not approved:
+        sys.exit(".env の COMPARTMENT_OCID が未設定。承認済みの範囲を決められないため中止。")
     region = adb.env("OCI_REGION", "ap-osaka-1")
     args = sdk_signer_args(region)
     args.setdefault("config", {})
     args["config"] = {**args["config"], "region": region}
     idc = oci.identity.IdentityClient(**args)
+
+    # dev ブランチ派生の作業では COMPARTMENT_OCID = jetuse:dev そのもの（2026-08-01 施主明言）。
+    # ops/_adb.assert_target() も「COMPARTMENT_OCID そのもの」を要求するのでこちらが正。
+    # 旧来の「COMPARTMENT_OCID は親で、直下の dev を探す」構成も受け入れる（両対応）。
+    # いずれも **名前が dev であること**を要求する＝fail-closed は維持する。
+    self_c = idc.get_compartment(approved).data
+    if self_c.name == DEV_COMPARTMENT_NAME and self_c.lifecycle_state == "ACTIVE":
+        os.environ["ADB_COMPARTMENT_OCID"] = approved
+        return approved
+
     children = [
-        c for c in idc.list_compartments(root).data
+        c for c in idc.list_compartments(approved).data
         if c.name == DEV_COMPARTMENT_NAME and c.lifecycle_state == "ACTIVE"
     ]
     if len(children) != 1:
-        sys.exit(f"承認済みコンパートメント直下の {DEV_COMPARTMENT_NAME} が"
-                 " 一意に定まらない。中止。")
+        sys.exit(
+            f"COMPARTMENT_OCID 自身が {DEV_COMPARTMENT_NAME} でもなく、"
+            f"その直下の {DEV_COMPARTMENT_NAME} も一意に定まらない。中止。"
+        )
     os.environ["ADB_COMPARTMENT_OCID"] = children[0].id
     return children[0].id
 
