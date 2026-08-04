@@ -12,6 +12,8 @@ name: release
 #    (無いと push がルートコンパートメントへの自動作成を試み権限不足で失敗)。
 #  - SPA(dist)をビルドし、Terraformと共にDeploy専用zipへ同梱
 #  - IAMとJetUse本体を含む1つのzipをGitHubのorm-mainリリースへpublish
+#  - **dist をリポジトリへ commit しない**(ADR-0030)。branch protection と両立しないため、
+#    追跡された packages/web/dist は人がコミットし、陳腐化は ci.yml の web ジョブが検出する。
 # 必要な GitHub Secrets:
 #  - OCIR_USERNAME: "<namespace>/<user>"(Identity Domain利用時は
 #                   "<namespace>/oracleidentitycloudservice/<user>")
@@ -26,6 +28,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  # contents: write は orm-main リリースへ zip を upload するため（ブランチへの push はしない）
   contents: write
   packages: write
 
@@ -168,15 +171,3 @@ jobs:
           gh release upload orm-main \
             "$RUNNER_TEMP/orm-packages/jetuse-orm.zip" \
             --clobber
-      - name: Commit dist (self-contained ORM zip)
-        working-directory: .
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f packages/web/dist
-          if git diff --cached --quiet; then
-            echo "dist unchanged"
-          else
-            git commit -m "chore(spa): rebuild dist for ORM deploy [skip ci]"
-            git push
-          fi

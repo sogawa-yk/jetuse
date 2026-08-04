@@ -1,0 +1,17 @@
+# 既に GitHub の公開履歴に入っており、受容すると決めた実 OCID（ADR-0029）。
+#
+# 受容の根拠:
+#   - 認証情報ではない。IAM 認証なしには何もできず、分かるのは「そのリソースが存在した」ことだけ
+#   - tenancy / compartment ではない（この2種は危険度が変わるので受容しない。必ずマスクする）
+#   - 履歴書き換え(filter-repo)は public リポジトリの fork / clone を壊す代償に見合わない
+#
+# **ここに足す前に「マスクで済まないか」を必ず考えること。** 未公開のものは受容ではなくマスクする。
+#
+# **この一覧への追加は人間レビューでしか止められない。** CI は「正当な受容」と
+# 「検査を通すための追記」を区別できない（同じコミットで OCID と受容行を足せば通る）。
+# tenancy / compartment だけはコードで拒否しているが、それ以外は PR レビューが唯一の関門。
+# 追加行には必ず「なぜ受容できるか」を行末コメントで書くこと。
+#
+# 1行1 OCID。`#` 始まりと行末 `#` 以降はコメント。
+ocid1.ormjob.oc1.ap-osaka-1.amaaaaaal7l2mtaa7roptxlekeaa6ewru6zullvzcy42iekzqn2r4p4367nq  # PORT-01 の E2E 証跡(runs/2026-07-13T0730_PORT-01/e2e/)。ORM ジョブの存在と実行時刻が分かるだけ
+ocid1.ormjob.oc1.ap-osaka-1.amaaaaaal7l2mtaajd56jjsbnasatlbwbb2vcx675vzvn4l2ukypswhpjgrq  # PORT-01 の E2E 証跡(runs/2026-07-13T0730_PORT-01/e2e/)。ORM ジョブの存在と実行時刻が分かるだけ

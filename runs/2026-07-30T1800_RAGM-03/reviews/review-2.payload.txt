@@ -1,1493 +1,0 @@
-diff --git a/docs/verification/RAGM-03.md b/docs/verification/RAGM-03.md
-new file mode 100644
-index 0000000..1e1bc9c
---- /dev/null
-+++ b/docs/verification/RAGM-03.md
-@@ -0,0 +1,89 @@
-+# RAGM-03 æ¤œè¨¼ãƒ¬ãƒãƒ¼ãƒˆ: ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã®èƒ½åŠ›å·®ã‚’ API ã¨ç”»é¢ã‹ã‚‰è¦‹ãˆã‚‹ã‚ˆã†ã«ã™ã‚‹
-+
-+å®Ÿæ–½æ—¥: 2026-07-30 / ãƒªãƒ¼ã‚¸ãƒ§ãƒ³: ap-osaka-1 / ä»•æ§˜ã®æ­£æœ¬: `docs/decisions/ADR-0020-rag-metadata-backend.md` Â§3
-+æ¯”è¼ƒè¡¨ã®ä¸­èº«: `docs/comparison/rag-metadata-backends.md`
-+è¨¼è·¡: `runs/2026-07-30T1800_RAGM-03/e2e/`ï¼ˆå®Ÿæ–½ã—ãªã‹ã£ãŸç¯„å›²ã¯åŒãƒ‡ã‚£ãƒ¬ã‚¯ãƒˆãƒªã® `SKIPPED.md`ï¼‰
-+
-+## çµè«–ï¼ˆå…ˆã«ï¼‰
-+
-+**ã€ŒOracle AI Database ã‚’é¸ã¶ã¨ä½•ãŒå¢—ãˆã‚‹ã‹ã€ãŒã€APIï¼ˆ`GET /api/capabilities`ï¼‰ã¨ç”»é¢ã®åŒæ–¹ã§
-+ãã®ã¾ã¾èª­ã‚ã‚‹çŠ¶æ…‹ã«ãªã£ãŸã€‚** ãã—ã¦ **æœªå®Ÿè¨¼ã®ã‚‚ã®ã¯ã€Œæœªå®Ÿè¨¼ã€ã¨å‡ºã‚‹**ã€‚
-+
-+1. `rag.search` ãƒ‡ã‚£ã‚¹ã‚¯ãƒªãƒ—ã‚¿ã« `backend_capabilities` ã‚’è¿½åŠ ã—ãŸã€‚4 ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ Ã— 5 è»¸
-+   ï¼ˆå‡ºå…¸ç²’åº¦ / çµã‚Šè¾¼ã¿ã®è¡¨ç¾åŠ› / æ¥­å‹™ãƒ‡ãƒ¼ã‚¿çµåˆ / è¡Œãƒ¬ãƒ™ãƒ«åˆ¶å¾¡ / ãƒ¡ã‚¿æ›´æ–°ã®æ•´åˆæ€§ï¼‰ã‚’
-+   æ©Ÿæ¢°å¯èª­ã§æŒã¡ã€å„é …ç›®ã« `support` / `verified` / `detail` / `evidence` ãŒä»˜ãã€‚
-+2. ç”»é¢ï¼ˆ`rag.tsx`ï¼‰ã®ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰é¸æŠã« `adb` ã‚’è¶³ã—ã€é¸æŠä¸­ã®ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã§
-+   ã€Œä½¿ãˆã‚‹ / æ¡ä»¶ä»˜ã / ä½¿ãˆãªã„ / **æœªå®Ÿè¨¼**ã€ã‚’å‡ºã™ã€‚ADB ã‚’é¸ã¶ã¨
-+   **ã‚»ãƒ«ç¯„å›²ã¤ãå‡ºå…¸**ã¨**ç‰ˆãƒ•ã‚£ãƒ«ã‚¿ï¼ˆæ—¢å®šã§ç¾è¡Œç‰ˆã®ã¿ï¼‰**ãŒã€Œä½¿ãˆã‚‹ã€ã¨ã—ã¦ç¾ã‚Œã‚‹ã€‚
-+3. **VPDï¼ˆè¡Œãƒ¬ãƒ™ãƒ«åˆ¶å¾¡ï¼‰ã¨æ¥­å‹™è¡¨ JOIN ã¯ã€Œæœªå®Ÿè¨¼ã€**ã€‚SPIKE-M1 ã§ã©ã¡ã‚‰ã‚‚å®Ÿè¡Œçµæœã‚’æ®‹ã—ã¦ã„ãªã„
-+   ï¼ˆ`runs/2026-07-28T1848_SPIKE-M1/e2e/SKIPPED.md` 3ï¼‰ãŸã‚ã€ã€Œã§ãã‚‹ã€ã¨ã¯æ›¸ã„ã¦ã„ãªã„ã€‚
-+
-+## ä½•ã‚’æ©Ÿæ¢°å¯èª­ã«ã—ãŸã‹
-+
-+```
-+rag.search.backend_capabilities
-+â”œâ”€â”€ axes[5]            : æ¯”è¼ƒãƒ‰ã‚­ãƒ¥ãƒ¡ãƒ³ãƒˆã¨åŒã˜ 5 è»¸
-+â”œâ”€â”€ support_levels     : yes / limited / no / unverified ã®æ„å‘³
-+â””â”€â”€ backends{4}        : vector_store / adb / select_ai / opensearch
-+    â””â”€â”€ axes{5} â†’ { support, verified, detail, evidence }
-+```
-+
-+`verified` ã¯æ‰‹ã§ç«‹ã¦ãš `support` ã‹ã‚‰å°å‡ºã™ã‚‹ï¼ˆ`_axis()`ï¼‰ã€‚`unverified` ã®ã¨ãã ã‘ `false`ã€‚
-+ã¤ã¾ã‚Š **ã€Œæœªå®Ÿè¨¼ãªã®ã« verified=trueã€ã¨ã„ã†çŠ¶æ…‹ã‚’æ§‹é€ çš„ã«ä½œã‚Œãªã„**ã€‚
-+
-+| backend | å‡ºå…¸ç²’åº¦ | çµã‚Šè¾¼ã¿ | æ¥­å‹™ãƒ‡ãƒ¼ã‚¿çµåˆ | è¡Œãƒ¬ãƒ™ãƒ«åˆ¶å¾¡ | ãƒ¡ã‚¿æ›´æ–°æ•´åˆ |
-+|---|---|---|---|---|---|
-+| vector_store | limitedï¼ˆãƒ•ã‚¡ã‚¤ãƒ«å˜ä½ï¼‰ | limitedï¼ˆå±æ€§ eq/and/or/gteãƒ»æ˜ç¤ºæŒ‡å®šï¼‰ | no | no | limitedï¼ˆçµæœæ•´åˆï¼‰ |
-+| **adb** | **yes**ï¼ˆãƒãƒ£ãƒ³ã‚¯å˜ä½ãƒ»ã‚»ãƒ«ç¯„å›²ï¼‰ | **yes**ï¼ˆSQL WHEREãƒ»æ—¢å®šã§ç¾è¡Œç‰ˆã®ã¿ï¼‰ | **unverified** | **unverified** | **yes**ï¼ˆåŒä¸€Txï¼‰ |
-+| select_ai | limitedï¼ˆãƒ•ã‚¡ã‚¤ãƒ« + offsetï¼‰ | noï¼ˆORA-20048ï¼‰ | no | unverified | noï¼ˆrefresh ã§æ¬ æï¼‰ |
-+| opensearch | unverified Ã—5ï¼ˆADR-0020 ã®æ¯”è¼ƒå¯¾è±¡å¤–ï¼‰ | | | | |
-+
-+æ•°å­—ã¨åˆ¶ç´„ã®å‡ºæ‰€ã¯ã™ã¹ã¦ `evidence` ã«å…¥ã‚Œã¦ã‚ã‚‹ï¼ˆSPIKE-M1 / RAGM-01 / RAGM-02 / PREP-01 /
-+æ¯”è¼ƒãƒ‰ã‚­ãƒ¥ãƒ¡ãƒ³ãƒˆï¼‰ã€‚ç”»é¢ã§ã¯ãƒãƒƒã‚¸ã® `title` ã¨ã—ã¦ãã®ã¾ã¾èª­ã‚ã‚‹ã€‚
-+
-+## ç”»é¢ï¼ˆå–ã‚Šè¾¼ã¿çŠ¶æ³ãƒãƒƒã‚¸ã¨ã¯åˆ¥ç‰©ã«ã—ãŸï¼‰
-+
-+| | å–ã‚Šè¾¼ã¿çŠ¶æ³ãƒãƒƒã‚¸ï¼ˆæ—¢å­˜ï¼‰ | èƒ½åŠ›ãƒ‘ãƒãƒ«ï¼ˆæœ¬ã‚¿ã‚¹ã‚¯ï¼‰ |
-+|---|---|---|
-+| å•ã„ | ãã®ãƒ•ã‚¡ã‚¤ãƒ«ã‚’**å–ã‚Šè¾¼ã‚ãŸã‹** | ãã®ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã§**ä½•ãŒã§ãã‚‹ã‹** |
-+| å‡ºã‚‹å ´æ‰€ | ãƒ•ã‚¡ã‚¤ãƒ«ä¸€è¦§ã®å„è¡Œ | ãƒãƒ£ãƒƒãƒˆæ¬„ã®ä¸Šï¼ˆé¸æŠä¸­ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ 1 ã¤åˆ†ï¼‰ |
-+| å€¤ | indexed / pending / error / disabled | yes / limited / no / **unverified** |
-+
-+æ—¢å­˜ãƒãƒƒã‚¸ã®æ„å‘³ã¯å¤‰ãˆã¦ã„ãªã„ã€‚`adb` ã¯ API ãŒå‰ã‹ã‚‰è¿”ã—ã¦ã„ãŸï¼ˆRAGM-02ï¼‰ã®ã§ã€
-+è¡¨ç¤ºå¯¾è±¡ã«åŠ ãˆãŸã ã‘ã§ã‚ã‚‹ã€‚æ–‡è¨€ã¯ i18nï¼ˆ`rag.cap.*` / `rag.backend.adb` / `rag.be.adb`ï¼‰ã«ç½®ã„ãŸã€‚
-+
-+è¨¼è·¡ã®ã‚¹ã‚¯ãƒªãƒ¼ãƒ³ã‚·ãƒ§ãƒƒãƒˆï¼ˆåŒã˜ç”»é¢ãƒ»é¸æŠã ã‘ãŒé•ã†ï¼‰:
-+
-+- `runs/2026-07-30T1800_RAGM-03/e2e/scenario-2a-vector_store.png`
-+- `runs/2026-07-30T1800_RAGM-03/e2e/scenario-2b-adb.png` â€” ã€Œâœ“ ä½¿ãˆã‚‹ å‡ºå…¸ã®ç²’åº¦ â€” ãƒãƒ£ãƒ³ã‚¯å˜ä½ã€‚
-+  xlsx ã¯ã‚·ãƒ¼ãƒˆåã¨ã‚»ãƒ«ç¯„å›²ã¾ã§è¿”ã‚‹(å®Ÿæ¸¬ä¾‹: ã€åˆ¶ç´„ã€C5:E6 / ã€æ”¹è¨‚å±¥æ­´ã€A1:C2)ã€
-+- `runs/2026-07-30T1800_RAGM-03/e2e/scenario-2c-select_ai.png`
-+
-+## å®Ÿè£…ï¼ˆä½•ã‚’è¶³ã—ãŸã‹ï¼‰
-+
-+| å¤‰æ›´ | å†…å®¹ |
-+|---|---|
-+| `packages/api/jetuse_core/capabilities.py` | `RAG_BACKEND_CAPABILITIES` ã¨ `_axis()`ã€‚`rag.search` ã« `backend_capabilities` ã‚’è¿½åŠ ï¼ˆæ—¢å­˜ã‚­ãƒ¼ã¯ä¸å¤‰ï¼‰ |
-+| `packages/api/tests/test_capabilities.py` | é¸ã¹ã‚‹ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ï¼ˆ`ChatRequest.rag_backend`ï¼‰ã¨ã®ä¸€è‡´ / å…¨è»¸ã®å……è¶³ / **æœªå®Ÿè¨¼ã‚’ã€Œã§ãã‚‹ã€ã¨æ›¸ã‹ã›ãªã„**ä¸å¤‰æ¡ä»¶ / æœªå®Ÿè¨¼ 3 é …ç›®ã®æœŸå¾…å€¤å›ºå®š |
-+| `packages/web/src/pages/rag/capabilityCatalog.ts` | ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã®èªå½™ã¨èƒ½åŠ›ã‚«ã‚¿ãƒ­ã‚°ã‹ã‚‰ã®å–ã‚Šå‡ºã—ï¼ˆèƒ½åŠ›ã®äº‹å®Ÿã¯ç”»é¢ã«æŒãŸãªã„ï¼‰ |
-+| `packages/web/src/pages/rag/BackendCapabilities.tsx` | èƒ½åŠ›ãƒ‘ãƒãƒ«ï¼ˆAPI ã®è¨˜è¿°ã‚’æãã ã‘ï¼‰ |
-+| `packages/web/src/pages/rag/BackendStatusBadges.tsx` | æ—¢å­˜ã®å–ã‚Šè¾¼ã¿çŠ¶æ³ãƒãƒƒã‚¸ã‚’åˆ‡ã‚Šå‡ºã—ã€`adb` ã‚’è¡¨ç¤ºå¯¾è±¡ã«è¿½åŠ ï¼ˆæ„å‘³ã¯ä¸å¤‰ï¼‰ |
-+| `packages/web/src/pages/rag.tsx` | `adb` ã‚’é¸æŠè‚¢ã«è¿½åŠ ãƒ»èƒ½åŠ›ãƒ‘ãƒãƒ«ã®é…ç½®ãƒ»ã‚«ã‚¿ãƒ­ã‚°å–å¾— |
-+| `packages/web/src/i18n/dict.{ja,en}.ts` | `rag.cap.*` / `rag.backend.adb` / `rag.be.adb`ãƒ»å‡¡ä¾‹æ›´æ–° |
-+
-+## åˆ†ã‹ã£ãŸã“ã¨ãƒ»æ³¨æ„
-+
-+- **`adb` ã®ã€Œç‰ˆãƒ•ã‚£ãƒ«ã‚¿ã€ã¯ vector_store ã®ãã‚Œã¨æ€§æ ¼ãŒé•ã†**ã€‚ãƒãƒ£ãƒƒãƒˆ API ã® `rag_filters` ã¯
-+  vector_store å°‚ç”¨ã§ã€`adb` ã¯æ¤œç´¢ãŒ**æ—¢å®šã§ç¾è¡Œç‰ˆã®ã¿**ï¼ˆ`current_version='Y'`ï¼‰ã€‚
-+  ã€ŒæŒ‡å®šã‚’å¿˜ã‚Œã‚‹ã¨æ—§ç‰ˆãŒæ··ã–ã‚‹ã€ã®ã¯ vector_store å´ã ã‘ã§ã‚ã‚‹ã€‚ç”»é¢ã®èª¬æ˜æ–‡ã‚‚ãã†æ›¸ã„ãŸã€‚
-+- **æ¥­å‹™è¡¨ JOIN ã‚‚æœªå®Ÿè¨¼ã ã£ãŸ**ã€‚ADR / æ¯”è¼ƒãƒ‰ã‚­ãƒ¥ãƒ¡ãƒ³ãƒˆã¯ã€Œå¯ã€ã¨æ›¸ã„ã¦ã„ã‚‹ãŒã€SPIKE-M1 ã¯
-+  æ¥­å‹™è¡¨ã‚’ä½œã‚‰ãšå®Ÿè¡Œçµæœã‚’æ®‹ã—ã¦ã„ãªã„ã€‚ã€ŒSQL ã ã‹ã‚‰æ›¸ã‘ã‚‹ã€ã¯å®Ÿè¨¼ã§ã¯ãªã„ã®ã§ `unverified` ã«ã—ãŸã€‚
-+- `select_ai` ã® xlsx ã®æ‰±ã„ã¯ PREP-02 ãŒå®Ÿæ©Ÿç¢ºèªä¸­ã®ãŸã‚ã€Œæœªç¢ºèªã€ã¨æ³¨è¨˜ã—ãŸï¼ˆæ–­å®šã—ãªã„ï¼‰ã€‚
-+- `opensearch` ã¯ãƒ¡ã‚¿ãƒ‡ãƒ¼ã‚¿è¦³ç‚¹ã§æœªè©•ä¾¡ã€‚5 è»¸ã™ã¹ã¦ `unverified` ã«ã—ã¦ã‚ã‚‹ã€‚
-+
-+## æ®‹èª²é¡Œ
-+
-+- VPD / Data Redaction ãŒãƒ™ã‚¯ã‚¿æ¤œç´¢ã«åŠ¹ãã‹ã€æ¥­å‹™è¡¨ JOIN ã®å®Ÿè¡Œçµæœ â€” ã©ã¡ã‚‰ã‚‚å®Ÿæ©Ÿç¢ºèªãŒè¦ã‚‹ã€‚
-+  ç¢ºèªã§ããŸã‚‰ `capabilities.py` ã®è©²å½“è»¸ã‚’ `unverified` ã‹ã‚‰ä¸Šã’ã‚‹ï¼ˆãƒ†ã‚¹ãƒˆã® `UNPROVEN_AXES` ã‚‚æ›´æ–°ï¼‰ã€‚
-+- `opensearch` ã® 5 è»¸ã®è©•ä¾¡ã€‚
-+- é…å‚™æ¸ˆã¿ URLï¼ˆAPI Gateway çµŒç”±ï¼‰ã§ã®ç¢ºèªã¯æœªå®Ÿæ–½ï¼ˆ`SKIPPED.md` 1ã€‚ä½œæ¥­æ©Ÿã«ã‚³ãƒ³ãƒ†ãƒŠãƒ©ãƒ³ã‚¿ã‚¤ãƒ ãŒç„¡ã„ï¼‰ã€‚
-diff --git a/packages/api/jetuse_core/capabilities.py b/packages/api/jetuse_core/capabilities.py
-index 158f3b2..724567e 100644
---- a/packages/api/jetuse_core/capabilities.py
-+++ b/packages/api/jetuse_core/capabilities.py
-@@ -6,6 +6,191 @@
- 3. ä»¥ä¸Šã§ GET /api/capabilities ã«è‡ªå‹•ã§è¼‰ã‚‹(routes ã®ä¹–é›¢ã¯ tests/test_capabilities.py ãŒæ¤œå‡º)ã€‚
- """
- 
-+# --- RAG ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã®èƒ½åŠ›å·®(RAGM-03 / ADR-0020 Â§3) ---------------------------
-+# ã€ŒOracle AI Database ã‚’é¸ã¶ã¨ä½•ãŒå¢—ãˆã‚‹ã‹ã€ã‚’æ©Ÿæ¢°å¯èª­ã§ç¤ºã™ã€‚è»¸ã¯æ¯”è¼ƒãƒ‰ã‚­ãƒ¥ãƒ¡ãƒ³ãƒˆ
-+# docs/comparison/rag-metadata-backends.md ã¨æƒãˆã‚‹(ã“ã“ã‚’å¢—ã‚„ã™ã¨ãã¯å‘ã“ã†ã‚‚ç›´ã™)ã€‚
-+#
-+# **æœªå®Ÿè¨¼ã®ã‚‚ã®ã‚’ã€Œã§ãã‚‹ã€ã¨æ›¸ã‹ãªã„**ã®ãŒã“ã®è¡¨ã®å­˜åœ¨ç†ç”±ã§ã‚ã‚‹ã€‚å®Ÿæ©Ÿã§ç¢ºã‹ã‚ã¦ã„ãªã„
-+# é …ç›®ã¯ support="unverified"(= verified False)ã«ã™ã‚‹ã€‚è¨­è¨ˆä¸Šã§ãã‚‹ã¯ãšã§ã‚‚ã€å®Ÿè¡ŒçµæœãŒ
-+# ç„¡ã„ã‚‚ã®ã¯æœªå®Ÿè¨¼(ä¾‹: VPD ã«ã‚ˆã‚‹è¡Œãƒ¬ãƒ™ãƒ«åˆ¶å¾¡ãƒ»æ¥­å‹™è¡¨ã¨ã® JOIN ã¯ SPIKE-M1 ã®éã‚´ãƒ¼ãƒ«ã§
-+# å®Ÿè¡ŒçµæœãŒç„¡ã„ = SKIPPED.md 1/3)ã€‚ã“ã®ä¸å¤‰æ¡ä»¶ã¯ _axis() ãŒæ§‹é€ ã§å®ˆã‚Šã€
-+# tests/test_capabilities.py ãŒæ¤œæŸ»ã™ã‚‹ã€‚
-+RAG_BACKEND_AXES: tuple[str, ...] = (
-+    "citation_granularity",        # å‡ºå…¸ç²’åº¦
-+    "filter_expressiveness",       # çµã‚Šè¾¼ã¿ã®è¡¨ç¾åŠ›
-+    "business_data_join",          # æ¥­å‹™ãƒ‡ãƒ¼ã‚¿çµåˆ
-+    "row_level_security",          # è¡Œãƒ¬ãƒ™ãƒ«åˆ¶å¾¡
-+    "metadata_update_consistency",  # ãƒ¡ã‚¿æ›´æ–°ã®æ•´åˆæ€§
-+)
-+# yes=ã§ãã‚‹ / limited=æ¡ä»¶ä»˜ãã§ã§ãã‚‹ / no=ã§ããªã„ / unverified=æœªå®Ÿè¨¼(ã§ãã‚‹ã¨ã¯æ›¸ã‹ãªã„)
-+RAG_SUPPORT_LEVELS: tuple[str, ...] = ("yes", "limited", "no", "unverified")
-+
-+_COMPARISON = "docs/comparison/rag-metadata-backends.md"
-+
-+
-+def _axis(support: str, detail: str, evidence: str) -> dict:
-+    """1 è»¸ã®è¨˜è¿°ã€‚verified ã¯ support ã‹ã‚‰å°å‡ºã™ã‚‹(æ‰‹ã§ç«‹ã¦ã•ã›ãªã„)ã€‚
-+
-+    verified=True ã¯ã€Œã“ã®è¨˜è¿°ã«ä¸€æ¬¡æƒ…å ±(å®Ÿæ¸¬ / å®Ÿæ©Ÿã§ç¢ºèªã—ãŸåˆ¶ç´„)ã®è£ä»˜ã‘ãŒã‚ã‚‹ã€ã§ã‚ã‚Šã€
-+    yes/limited ãªã‚‰èƒ½åŠ›ã®å®Ÿè¨¼ã€no ãªã‚‰å®Ÿç¾ã§ããªã„ã“ã¨ã®æ ¹æ‹ ãŒ evidence ã«ã‚ã‚‹ã€ã¨ã„ã†æ„å‘³ã€‚
-+    verified=False ã¯ unverified ã®ã¨ãã ã‘ = ç¢ºã‹ã‚ã¦ã„ãªã„ = ã§ãã‚‹ã¨ã¯è¨€ãˆãªã„ã€‚
-+    """
-+    if support not in RAG_SUPPORT_LEVELS:
-+        raise ValueError(f"unknown support level: {support}")
-+    return {"support": support, "verified": support != "unverified",
-+            "detail": detail, "evidence": evidence}
-+
-+
-+RAG_BACKEND_CAPABILITIES: dict = {
-+    "axes": RAG_BACKEND_AXES,
-+    "support_levels": {
-+        "yes": "å®Ÿæ©Ÿã§ç¢ºèªæ¸ˆã¿ã€‚ä½¿ãˆã‚‹",
-+        "limited": "ä½¿ãˆã‚‹ãŒæ¡ä»¶ãƒ»åˆ¶ç´„ãŒã‚ã‚‹",
-+        "no": "ã“ã®æ–¹å¼ã§ã¯å®Ÿç¾ã§ããªã„",
-+        "unverified": "æœªå®Ÿè¨¼ã€‚ã§ãã‚‹ã¨ã¯è¨€ãˆãªã„(é¡§å®¢ã«è¨€ã†å‰ã«å®Ÿæ©Ÿç¢ºèªãŒè¦ã‚‹)",
-+    },
-+    "comparison_doc": _COMPARISON,
-+    "backends": {
-+        "vector_store": {
-+            "label": "Enterprise AI ãƒãƒãƒ¼ã‚¸ãƒ‰ Vector Store (file_search)",
-+            "role": "æ‰‹è»½ã•å´(æ—¢å®š)ã€‚è¿½åŠ é–‹ç™ºã»ã¼ç„¡ã—ã§æ–‡æ›¸ Q&A ãŒå‡ºã›ã‚‹",
-+            "axes": {
-+                "citation_granularity": _axis(
-+                    "limited",
-+                    "ãƒ•ã‚¡ã‚¤ãƒ«å˜ä½ã€‚1 ãƒ•ã‚¡ã‚¤ãƒ«ãŒè¤‡æ•°ãƒãƒ£ãƒ³ã‚¯ã«å‰²ã‚Œã¦ã‚‚å±æ€§ã¯ 1 ç¨®é¡ã—ã‹è¿”ã‚‰ãªã„"
-+                    "(xlsx ã¯ sheet='(ãƒ–ãƒƒã‚¯å…¨ä½“: N ã‚·ãƒ¼ãƒˆ)')ã€‚ãƒãƒ£ãƒ³ã‚¯æœ¬æ–‡ãƒ»ã‚¹ã‚³ã‚¢ã¯è¿”ã‚‹ã€‚"
-+                    "ãƒãƒ£ãƒ³ã‚¯å˜ä½ã®å‡ºå…¸ãŒè¦ã‚‹ãªã‚‰ 1 ãƒãƒ£ãƒ³ã‚¯ = 1 ãƒ•ã‚¡ã‚¤ãƒ«ã§å–ã‚Šè¾¼ã‚€é‹ç”¨ãŒè¦ã‚‹ã€‚",
-+                    "docs/verification/SPIKE-M1.md â‘ -a / docs/verification/PREP-01.md",
-+                ),
-+                "filter_expressiveness": _axis(
-+                    "limited",
-+                    "å±æ€§ãƒ•ã‚£ãƒ«ã‚¿ eq/and/or/gte(in ã¯ä¸å¯ãƒ»ã‚­ãƒ¼ 16 / å€¤ 512 æ–‡å­— / å…¥ã‚Œå­ä¸å¯)ã€‚"
-+                    "ç‰ˆã§çµã‚‹ã«ã¯ãƒªã‚¯ã‚¨ã‚¹ãƒˆã§ rag_filters ã‚’æ˜ç¤ºæŒ‡å®šã™ã‚‹(æ—¢å®šã¯çµã‚‰ãªã„ã®ã§"
-+                    "æ—§ç‰ˆãŒæ··ã–ã‚Šã†ã‚‹)ã€‚å­˜åœ¨ã—ãªã„ã‚­ãƒ¼ã¯ã‚¨ãƒ©ãƒ¼ã«ãªã‚‰ãš 0 ä»¶ã«ãªã‚‹ãŸã‚ã€"
-+                    "ã‚­ãƒ¼ã¯ã‚¢ãƒ—ãƒªå´ã®è¨±å¯åˆ¶ã§å®ˆã£ã¦ã„ã‚‹ã€‚",
-+                    "docs/verification/SPIKE-M1.md â‘ -b/â‘ -d / docs/verification/RAGM-01.md",
-+                ),
-+                "business_data_join": _axis(
-+                    "no",
-+                    "åˆ¥ã‚µãƒ¼ãƒ“ã‚¹ã®ãŸã‚ã€åœ¨åº«è¡¨ãƒ»å¥‘ç´„è¡¨ãªã©ã®æ¥­å‹™è¡¨ã¨çµåˆã—ãŸæ¤œç´¢ã¯ã§ããªã„ã€‚",
-+                    _COMPARISON,
-+                ),
-+                "row_level_security": _axis(
-+                    "no",
-+                    "ã‚¢ã‚¯ã‚»ã‚¹åˆ¶å¾¡ã¯ã‚¹ãƒˆã‚¢åˆ†é›¢ã¨ IAMã€‚è¡Œ(ãƒãƒ£ãƒ³ã‚¯)å˜ä½ã®åˆ¶å¾¡æ©Ÿæ§‹ã¯ç„¡ã„ã€‚",
-+                    _COMPARISON,
-+                ),
-+                "metadata_update_consistency": _axis(
-+                    "limited",
-+                    "files.update(attributes=) ã§å†å–ã‚Šè¾¼ã¿ç„¡ã—ã«ç›´ã›ã‚‹ãŒã€API è¶Šã—ã®æ›´æ–°ã§"
-+                    "æ¤œç´¢ã¨ã¯åˆ¥ãƒˆãƒ©ãƒ³ã‚¶ã‚¯ã‚·ãƒ§ãƒ³(çµæœæ•´åˆ)ã€‚",
-+                    "docs/verification/SPIKE-M1.md â‘ ",
-+                ),
-+            },
-+            "notes": [
-+                "ç´ ã® xlsx ã¯ 400 unsupported_file ã§æ‹’å¦ã•ã‚Œã‚‹ãŸã‚ã€æŠ½å‡ºãƒ†ã‚­ã‚¹ãƒˆã«å¤‰æ›ã—ã¦"
-+                "æŠ•å…¥ã—ã¦ã„ã‚‹(è¡¨ç¤ºåãƒ»sha256 ã¯åŸæœ¬ã®ã¾ã¾)ã€‚",
-+            ],
-+        },
-+        "adb": {
-+            "label": "Oracle AI Database è‡ªå‰ç´¢å¼• (DBMS_VECTOR_CHAIN)",
-+            "role": "é«˜æ©Ÿèƒ½å´ã€‚æ¥­å‹™ãƒ‡ãƒ¼ã‚¿ã¨çµ¡ã‚€ææ¡ˆãƒ»ç›£æŸ»ãŒè¦ã‚‹ç”¨é€”",
-+            "axes": {
-+                "citation_granularity": _axis(
-+                    "yes",
-+                    "ãƒãƒ£ãƒ³ã‚¯å˜ä½ã€‚xlsx ã¯ã‚·ãƒ¼ãƒˆåã¨ã‚»ãƒ«ç¯„å›²ã¾ã§è¿”ã‚‹"
-+                    "(å®Ÿæ¸¬ä¾‹: ã€åˆ¶ç´„ã€C5:E6 / ã€æ”¹è¨‚å±¥æ­´ã€A1:C2)ã€‚"
-+                    "åŒã˜ãƒ•ã‚¡ã‚¤ãƒ«ç”±æ¥ã§ã‚‚ãƒãƒ£ãƒ³ã‚¯ã”ã¨ã«é•ã†å‡ºå…¸ã«ãªã‚‹ã€‚",
-+                    "docs/verification/PREP-01.md / docs/verification/RAGM-02.md",
-+                ),
-+                "filter_expressiveness": _axis(
-+                    "yes",
-+                    "SQL ã® WHEREã€‚current_version / version / file / file_id / sheet / kind ã§"
-+                    "çµã‚Œã‚‹ã€‚æ¤œç´¢ã¯æ—¢å®šã§ç¾è¡Œç‰ˆã®ã¿(current_version='Y')ãªã®ã§ã€æŒ‡å®šã‚’å¿˜ã‚Œã¦"
-+                    "æ—§ç‰ˆãŒæ··ã–ã‚‹ã“ã¨ãŒãªã„ã€‚ãƒãƒ£ãƒƒãƒˆ API ã® rag_filters ã¯ vector_store å°‚ç”¨ã€‚",
-+                    "docs/verification/RAGM-02.md",
-+                ),
-+                "business_data_join": _axis(
-+                    "unverified",
-+                    "åŒã˜ DB ã®æ¥­å‹™è¡¨ã¨ JOIN ã—ãŸãƒ™ã‚¯ã‚¿æ¤œç´¢ãŒ 1 SQL ã§æ›¸ã‘ã‚‹ â€” ãŒã€"
-+                    "å®Ÿè¡Œçµæœã¯ã¾ã ç„¡ã„(SPIKE-M1 ã¯æ¥­å‹™è¡¨ã‚’ä½œã‚‰ãšéã‚´ãƒ¼ãƒ«ã«ã—ãŸ)ã€‚"
-+                    "é¡§å®¢ã«ç¤ºã™å‰ã«å®Ÿæ©Ÿç¢ºèªãŒè¦ã‚‹ã€‚",
-+                    "runs/2026-07-28T1848_SPIKE-M1/e2e/SKIPPED.md 3",
-+                ),
-+                "row_level_security": _axis(
-+                    "unverified",
-+                    "VPD / Data Redaction ã¯åŒã˜è¡¨ã«å¯¾ã™ã‚‹ DB æ©Ÿèƒ½ãªã®ã§åŸç†çš„ã«ã¯ä½µç”¨ã§ãã‚‹ãŒã€"
-+                    "ãƒ™ã‚¯ã‚¿æ¤œç´¢ã«åŠ¹ãã“ã¨ã¯æœªå®Ÿè¨¼(SPIKE-M1 ã®éã‚´ãƒ¼ãƒ«)ã€‚"
-+                    "ã€Œè¡Œãƒ¬ãƒ™ãƒ«åˆ¶å¾¡ãŒã§ãã‚‹ã€ã¨é¡§å®¢ã«è¨€ã†å‰ã«å®Ÿæ©Ÿç¢ºèªãŒè¦ã‚‹ã€‚",
-+                    "runs/2026-07-28T1848_SPIKE-M1/e2e/SKIPPED.md 3 / ADR-0020 æœªè§£æ±º",
-+                ),
-+                "metadata_update_consistency": _axis(
-+                    "yes",
-+                    "UPDATE 1 æ–‡ã§ç›´ã›ã¦ã€æ¤œç´¢ãƒ»å°å¸³ã¨åŒä¸€ãƒˆãƒ©ãƒ³ã‚¶ã‚¯ã‚·ãƒ§ãƒ³"
-+                    "(ç¾è¡Œç‰ˆã®ä»˜ã‘æ›¿ãˆã‚‚å‰Šé™¤ã¨åŒã˜ãƒˆãƒ©ãƒ³ã‚¶ã‚¯ã‚·ãƒ§ãƒ³ã§æ•´åˆã™ã‚‹)ã€‚",
-+                    "docs/verification/RAGM-02.md",
-+                ),
-+            },
-+            "notes": [
-+                "ADB 23ai ä»¥ä¸Šãƒ»ãƒã‚¤ã‚°ãƒ¬ãƒ¼ã‚·ãƒ§ãƒ³ 017 é©ç”¨ãŒå‰æã€‚"
-+                "æœªå°å…¥ãªã‚‰å–ã‚Šè¾¼ã¿çŠ¶æ³ã¯ disabled ã«ãªã‚‹ã€‚",
-+                "åŸ‹ã‚è¾¼ã¿ã¯ã‚¯ãƒ©ã‚¤ã‚¢ãƒ³ãƒˆå´ã€‚æœ¬æ–‡ã¯ OCI Generative AI ã® embedText ã¸é€ã‚‰ã‚Œã‚‹"
-+                "(ã€Œãƒ†ãƒŠãƒ³ãƒˆå¤–ã«ä¸€åˆ‡å‡ºãªã„ã€ã§ã¯ãªã„)ã€‚",
-+            ],
-+        },
-+        "select_ai": {
-+            "label": "Select AI with RAG (DBMS_CLOUD_AI ç´¢å¼•)",
-+            "role": "ãƒã‚±ãƒƒãƒˆã«ç½®ãã ã‘ã§ RAGã€‚ãƒ¡ã‚¿ãƒ‡ãƒ¼ã‚¿ç®¡ç†ã®åŸºç›¤ã¨ã—ã¦ã¯æ¡ç”¨ã—ãªã„",
-+            "axes": {
-+                "citation_granularity": _axis(
-+                    "limited",
-+                    "ãƒ•ã‚¡ã‚¤ãƒ«å˜ä½(object_name + start/end offset)ã€‚å¿œç­”æœ«å°¾ã« Sources: ã®"
-+                    "æ–‡å­—åˆ—ã¨ã—ã¦ä»˜ãã€ã‚¹ã‚³ã‚¢ã¯ç„¡ã„ã€‚",
-+                    "docs/verification/SPIKE-M1.md â‘¡",
-+                ),
-+                "filter_expressiveness": _axis(
-+                    "no",
-+                    "æ¨™æº–çµŒè·¯ã«çµã‚Šè¾¼ã¿ã®å£ãŒç„¡ã„ã€‚ä»»æ„ãƒ¡ã‚¿ãƒ‡ãƒ¼ã‚¿ã¯ ORA-20048 ã§æ‹’å¦ã•ã‚Œã‚‹ã€‚",
-+                    "docs/verification/SPIKE-M1.md â‘¡",
-+                ),
-+                "business_data_join": _axis(
-+                    "no",
-+                    "$VECTAB ã¯ DB å†…ã«ã‚ã‚‹ãŒç´¢å¼•ç”¨é€”ã§ã€æ¥­å‹™è¡¨ã¨ã®çµåˆã¯å®Ÿè³ªã§ããªã„ã€‚",
-+                    _COMPARISON,
-+                ),
-+                "row_level_security": _axis(
-+                    "unverified",
-+                    "DB æ¨©é™ã¯åŠ¹ããŒã€è¡Œãƒ¬ãƒ™ãƒ«åˆ¶å¾¡ãŒãƒ™ã‚¯ã‚¿æ¤œç´¢ã«åŠ¹ãã“ã¨ã¯æœªå®Ÿè¨¼ã€‚",
-+                    "runs/2026-07-28T1848_SPIKE-M1/e2e/SKIPPED.md 3",
-+                ),
-+                "metadata_update_consistency": _axis(
-+                    "no",
-+                    "ç´¢å¼•ãƒªãƒ•ãƒ¬ãƒƒã‚·ãƒ¥ã§å…¥ã£ãŸæ–°è¦è¡Œã¯è‡ªå‰ã§è¶³ã—ãŸåˆ—ãŒ NULL ã«ãªã‚‹ã€‚"
-+                    "å–ã‚Šè¾¼ã¿ã®ãŸã³ã«è£œå®Œå‡¦ç†ã‚’å›ã™å‰æã®è¨­è¨ˆã«ãªã‚‹ã€‚",
-+                    "docs/verification/SPIKE-M1.md â‘¡",
-+                ),
-+            },
-+            "notes": [
-+                "ã‚¢ãƒƒãƒ—ãƒ­ãƒ¼ãƒ‰ã®åæ˜ ã¯ refresh_rate æ¬¡ç¬¬(æ—¢å®š 60 åˆ†)ã€‚",
-+                "xlsx ã‚’ã“ã®çµŒè·¯ã§ã©ã†æ‰±ã†ã‹ã¯å®Ÿæ©Ÿç¢ºèªä¸­(PREP-02)ã§æœªç¢ºèªã€‚",
-+            ],
-+        },
-+        "opensearch": {
-+            "label": "OCI Search with OpenSearch",
-+            "role": "æ—¢å­˜ã®é¸æŠè‚¢ã€‚ADR-0020 ã®ãƒ¡ã‚¿ãƒ‡ãƒ¼ã‚¿æ¯”è¼ƒã®å¯¾è±¡å¤–",
-+            "axes": {
-+                axis: _axis(
-+                    "unverified",
-+                    "ADR-0020 / SPIKE-M1 ã®æ¯”è¼ƒå¯¾è±¡å¤–ã§æœªè¨ˆæ¸¬ã€‚ã“ã®è»¸ã«ã¤ã„ã¦è¨€ãˆã‚‹ã“ã¨ã¯ç„¡ã„ã€‚",
-+                    _COMPARISON,
-+                )
-+                for axis in RAG_BACKEND_AXES
-+            },
-+            "notes": ["ãƒ¡ã‚¿ãƒ‡ãƒ¼ã‚¿ãƒ»å‡ºå…¸ç²’åº¦ã®è¦³ç‚¹ã§ã¯æœªè©•ä¾¡ã€‚è©•ä¾¡ã™ã‚‹ãªã‚‰åˆ¥ã‚¿ã‚¹ã‚¯ãŒè¦ã‚‹ã€‚"],
-+        },
-+    },
-+}
-+
- # ponytail: ç´ ã® dict ã®ãƒªã‚¹ãƒˆã€‚çµ±ä¸€ Capability ã‚¤ãƒ³ã‚¿ãƒ¼ãƒ•ã‚§ãƒ¼ã‚¹(æ¡ˆ2)ã¯ä½œã‚‰ãªã„(specs/17 Â§3)ã€‚
- CAPABILITIES: list[dict] = [
-     {
-@@ -33,6 +218,9 @@ CAPABILITIES: list[dict] = [
-                       "messages": [{"role": "user", "content": "çµŒè²»ç²¾ç®—ã®ç· ã‚æ—¥ã¯?"}]},
-             "output": "æ–‡æ›¸ç”±æ¥ã®å›ç­”ãŒ SSE ã§å±Šãã€æœ«å°¾ã« citations(å¼•ç”¨å…ƒãƒ•ã‚¡ã‚¤ãƒ«å)ãŒä»˜ãã€‚",
-         },
-+        # RAGM-03: ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã‚’é¸ã¹ã¦ã‚‚ã€Œé¸ã¶ã¨ä½•ãŒå¢—ãˆã‚‹ã‹ã€ãŒåˆ†ã‹ã‚‰ãªã‘ã‚Œã°é¸ã¹ãªã„ã€‚
-+        # èƒ½åŠ›å·®ã¯ backend_capabilities ã«æ©Ÿæ¢°å¯èª­ã§è¼‰ã›ã‚‹(ADR-0020 Â§3)ã€‚
-+        "backend_capabilities": RAG_BACKEND_CAPABILITIES,
-         "demo_safe": True,
-         "routes": [
-             {"path": "/api/chat/stream", "method": "post"},
-diff --git a/packages/api/tests/test_capabilities.py b/packages/api/tests/test_capabilities.py
-index 6fdd74c..bbdf575 100644
---- a/packages/api/tests/test_capabilities.py
-+++ b/packages/api/tests/test_capabilities.py
-@@ -4,12 +4,19 @@
- (ãƒ‡ã‚£ã‚¹ã‚¯ãƒªãƒ—ã‚¿ã¨ãƒ«ãƒ¼ãƒˆã®ä¹–é›¢ã‚’ã“ã“ã§æ¤œå‡ºã™ã‚‹)ã€‚
- """
- 
-+import typing
-+
- import pytest
- from fastapi.testclient import TestClient
- 
--from jetuse_core.capabilities import CAPABILITIES
-+from jetuse_core.capabilities import (
-+    CAPABILITIES,
-+    RAG_BACKEND_AXES,
-+    RAG_SUPPORT_LEVELS,
-+)
- from jetuse_core.settings import get_settings
- from service.main import app
-+from service.schemas import ChatRequest
- 
- client = TestClient(app)
- 
-@@ -80,6 +87,66 @@ def test_example_model_keys_are_public_registry_keys():
-             assert model in MODELS, f"{cap['capability']}: {model}"
- 
- 
-+# --- RAGM-03: RAG ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã®èƒ½åŠ›å·®(ADR-0020 Â§3) ---------------------------
-+
-+
-+def _rag_backend_capabilities() -> dict:
-+    res = client.get("/api/capabilities")
-+    cap = next(c for c in res.json()["capabilities"] if c["capability"] == "rag.search")
-+    return cap["backend_capabilities"]
-+
-+
-+def test_rag_backends_match_the_api_contract():
-+    # é¸ã¹ã‚‹ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰(ChatRequest.rag_backend)ã¨èƒ½åŠ›è¡¨ãŒã‚ºãƒ¬ãŸã‚‰ã€ç”»é¢ã¯
-+    # ã€Œé¸ã¹ã‚‹ã®ã«ä½•ãŒä½¿ãˆã‚‹ã‹åˆ†ã‹ã‚‰ãªã„ã€ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã‚’å‡ºã—ã¦ã—ã¾ã†ã€‚
-+    selectable = set(typing.get_args(ChatRequest.model_fields["rag_backend"].annotation))
-+    assert set(_rag_backend_capabilities()["backends"]) == selectable
-+
-+
-+def test_every_backend_describes_every_axis():
-+    backends = _rag_backend_capabilities()["backends"]
-+    for name, be in backends.items():
-+        assert be["label"] and be["role"], name
-+        assert set(be["axes"]) == set(RAG_BACKEND_AXES), name
-+        for axis, entry in be["axes"].items():
-+            assert entry["support"] in RAG_SUPPORT_LEVELS, f"{name}.{axis}"
-+            assert entry["detail"] and entry["evidence"], f"{name}.{axis}"
-+
-+
-+def test_unverified_capabilities_are_never_claimed_as_available():
-+    # ã“ã®ã‚¿ã‚¹ã‚¯ã®æ ¸ã€‚å®Ÿæ©Ÿã§ç¢ºã‹ã‚ã¦ã„ãªã„ã‚‚ã®ã‚’ã€Œã§ãã‚‹ã€ã¨æ›¸ã‹ã›ãªã„ã€‚
-+    for name, be in _rag_backend_capabilities()["backends"].items():
-+        for axis, entry in be["axes"].items():
-+            where = f"{name}.{axis}"
-+            if entry["support"] in ("yes", "limited"):
-+                assert entry["verified"] is True, where
-+            if entry["support"] == "unverified":
-+                assert entry["verified"] is False, where
-+
-+
-+# SPIKE-M1 ãŒå®Ÿè¡Œçµæœã‚’æ®‹ã—ã¦ã„ãªã„é …ç›®(runs/2026-07-28T1848_SPIKE-M1/e2e/SKIPPED.md 3)ã€‚
-+# ã“ã“ã‚’ "yes" ã«ã‚‚ "limited" ã«ã‚‚ã§ããªã„ã‚ˆã†æœŸå¾…å€¤ã§å›ºå®šã™ã‚‹ã€‚"limited" ã«ã™ã‚‹ã¨ç”»é¢ã«ã¯
-+# ã€Œæ¡ä»¶ä»˜ãã§ä½¿ãˆã‚‹ã€ã¨å‡ºã‚‹ = æœªå®Ÿè¨¼ã®èƒ½åŠ›ã‚’é¡§å®¢ã«è¦‹ã›ã‚‹ã“ã¨ã«ãªã‚‹ã€‚
-+UNPROVEN_AXES = {
-+    ("adb", "row_level_security"),        # VPD ãŒãƒ™ã‚¯ã‚¿æ¤œç´¢ã«åŠ¹ãã“ã¨
-+    ("adb", "business_data_join"),        # æ¥­å‹™è¡¨ã¨ JOIN ã—ãŸãƒ™ã‚¯ã‚¿æ¤œç´¢
-+    ("select_ai", "row_level_security"),
-+}
-+
-+
-+@pytest.mark.parametrize(("backend", "axis"), sorted(UNPROVEN_AXES))
-+def test_unproven_axes_stay_unverified(backend: str, axis: str):
-+    entry = _rag_backend_capabilities()["backends"][backend]["axes"][axis]
-+    assert entry["support"] == "unverified", f"{backend}.{axis}"
-+    assert entry["verified"] is False
-+
-+
-+def test_row_level_security_is_never_advertised_as_available():
-+    # VPD ã¯ãƒ™ã‚¯ã‚¿æ¤œç´¢ã«åŠ¹ãã“ã¨ãŒæœªå®Ÿè¨¼ã€‚ã©ã®ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã§ã‚‚ã€Œä½¿ãˆã‚‹ã€ã¨å‡ºã—ã¦ã¯ã„ã‘ãªã„ã€‚
-+    for name, be in _rag_backend_capabilities()["backends"].items():
-+        assert be["axes"]["row_level_security"]["support"] in ("no", "unverified"), name
-+
-+
- def test_requires_auth(monkeypatch):
-     monkeypatch.setenv("AUTH_REQUIRED", "true")
-     get_settings.cache_clear()
-diff --git a/packages/web/src/i18n/dict.en.ts b/packages/web/src/i18n/dict.en.ts
-index 90d33d8..282f5f6 100644
---- a/packages/web/src/i18n/dict.en.ts
-+++ b/packages/web/src/i18n/dict.en.ts
-@@ -165,11 +165,25 @@ export const en: Record<keyof typeof ja, string> = {
-   'rag.be.vector_store': 'Vector Store / File Search',
-   'rag.be.select_ai': 'Select AI with RAG',
-   'rag.be.opensearch': 'OpenSearch',
-+  'rag.be.adb': 'Oracle AI Database (own index)',
-   'rag.bestatus.indexed': 'Ingested',
-   'rag.bestatus.pending': 'Ingesting (awaiting sync)',
-   'rag.bestatus.error': 'Failed',
-   'rag.bestatus.disabled': 'Disabled',
--  'rag.beLegend': 'VS / SAI / OS next to each file show per-backend ingestion. VS=Vector Store (File Search), SAI=Select AI (in-DB RAG), OS=OpenSearch. âœ“=done â³=awaiting sync (Select AI up to 60 min).',
-+  'rag.beLegend': 'VS / ADB / SAI / OS next to each file show per-backend ingestion. VS=Vector Store (File Search), ADB=Oracle AI Database (own index), SAI=Select AI (in-DB RAG), OS=OpenSearch. âœ“=done â³=awaiting sync (Select AI up to 60 min) â€“=disabled.',
-+  'rag.backend.adb': 'Oracle AI Database (own index)',
-+  // RAGM-03: what the selected backend can do (distinct from per-file ingestion badges).
-+  'rag.cap.title': 'What this backend can do',
-+  'rag.cap.axis.citation_granularity': 'Citation granularity',
-+  'rag.cap.axis.filter_expressiveness': 'Filter expressiveness',
-+  'rag.cap.axis.business_data_join': 'Join with business data',
-+  'rag.cap.axis.row_level_security': 'Row-level control',
-+  'rag.cap.axis.metadata_update_consistency': 'Metadata update consistency',
-+  'rag.cap.support.yes': 'available',
-+  'rag.cap.support.limited': 'with limits',
-+  'rag.cap.support.no': 'not available',
-+  'rag.cap.support.unverified': 'unverified',
-+  'rag.cap.legend': 'The VS/ADB/SAI/OS badges next to each file mean "was it ingested"; this panel means "what can it do". "unverified" means it has not been proven on real infrastructure, so it must not be presented as supported (hover a badge for where the evidence lives). Details come from the API capability catalog and are in Japanese.',
-   'rag.backend.saiNote':
-     'Select AI with RAG is in-database RAG (experimental). First query builds an index (minutes); uploads sync within 60 min. No conversation context',
-   'rag.status.processing': 'processing',
-diff --git a/packages/web/src/i18n/dict.ja.ts b/packages/web/src/i18n/dict.ja.ts
-index 2e74b05..df113fb 100644
---- a/packages/web/src/i18n/dict.ja.ts
-+++ b/packages/web/src/i18n/dict.ja.ts
-@@ -163,11 +163,25 @@ export const ja = {
-   'rag.be.vector_store': 'Vector Store / File Search',
-   'rag.be.select_ai': 'Select AI with RAG',
-   'rag.be.opensearch': 'OpenSearch',
-+  'rag.be.adb': 'Oracle AI Databaseï¼ˆè‡ªå‰ç´¢å¼•ï¼‰',
-   'rag.bestatus.indexed': 'å–ã‚Šè¾¼ã¿æ¸ˆã¿',
-   'rag.bestatus.pending': 'å–ã‚Šè¾¼ã¿ä¸­ï¼ˆåŒæœŸå¾…ã¡ï¼‰',
-   'rag.bestatus.error': 'å–ã‚Šè¾¼ã¿å¤±æ•—',
-   'rag.bestatus.disabled': 'ç„¡åŠ¹',
--  'rag.beLegend': 'å„ãƒ•ã‚¡ã‚¤ãƒ«å³ã® VS / SAI / OS ã¯å„ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã®å–ã‚Šè¾¼ã¿çŠ¶æ³ã€‚VS=Vector Storeï¼ˆFile Searchï¼‰ã€SAI=Select AIï¼ˆDBå†…RAGï¼‰ã€OS=OpenSearchã€‚âœ“=æ¸ˆ â³=åŒæœŸå¾…ã¡ï¼ˆSelect AIã¯æœ€å¤§60åˆ†ï¼‰ã€‚',
-+  'rag.beLegend': 'å„ãƒ•ã‚¡ã‚¤ãƒ«å³ã® VS / ADB / SAI / OS ã¯å„ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã®å–ã‚Šè¾¼ã¿çŠ¶æ³ã€‚VS=Vector Storeï¼ˆFile Searchï¼‰ã€ADB=Oracle AI Databaseï¼ˆè‡ªå‰ç´¢å¼•ï¼‰ã€SAI=Select AIï¼ˆDBå†…RAGï¼‰ã€OS=OpenSearchã€‚âœ“=æ¸ˆ â³=åŒæœŸå¾…ã¡ï¼ˆSelect AIã¯æœ€å¤§60åˆ†ï¼‰ â€“=ç„¡åŠ¹ã€‚',
-+  'rag.backend.adb': 'Oracle AI Databaseï¼ˆè‡ªå‰ç´¢å¼•ï¼‰',
-+  // RAGM-03: ã€Œé¸ã¶ã¨ä½•ãŒã§ãã‚‹ã‹ã€ã€‚å–ã‚Šè¾¼ã¿çŠ¶æ³ãƒãƒƒã‚¸ï¼ˆä½•ã‚’å–ã‚Šè¾¼ã‚ãŸã‹ï¼‰ã¨ã¯åˆ¥ç‰©ã€‚
-+  'rag.cap.title': 'ã“ã®ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã§ã§ãã‚‹ã“ã¨',
-+  'rag.cap.axis.citation_granularity': 'å‡ºå…¸ã®ç²’åº¦',
-+  'rag.cap.axis.filter_expressiveness': 'çµã‚Šè¾¼ã¿ã®è¡¨ç¾åŠ›',
-+  'rag.cap.axis.business_data_join': 'æ¥­å‹™ãƒ‡ãƒ¼ã‚¿ã¨ã®çµåˆ',
-+  'rag.cap.axis.row_level_security': 'è¡Œãƒ¬ãƒ™ãƒ«åˆ¶å¾¡',
-+  'rag.cap.axis.metadata_update_consistency': 'ãƒ¡ã‚¿ãƒ‡ãƒ¼ã‚¿æ›´æ–°ã®æ•´åˆæ€§',
-+  'rag.cap.support.yes': 'ä½¿ãˆã‚‹',
-+  'rag.cap.support.limited': 'æ¡ä»¶ä»˜ã',
-+  'rag.cap.support.no': 'ä½¿ãˆãªã„',
-+  'rag.cap.support.unverified': 'æœªå®Ÿè¨¼',
-+  'rag.cap.legend': 'ãƒ•ã‚¡ã‚¤ãƒ«å³ã®ãƒãƒƒã‚¸ï¼ˆVS/ADB/SAI/OSï¼‰ã¯ã€Œå–ã‚Šè¾¼ã‚ãŸã‹ã€ã€ã“ã“ã¯ã€Œä½•ãŒã§ãã‚‹ã‹ã€ã€‚ã€Œæœªå®Ÿè¨¼ã€ã¯å®Ÿæ©Ÿã§ç¢ºã‹ã‚ã¦ã„ãªã„é …ç›®ã§ã€ã§ãã‚‹ã¨ã¯è¨€ãˆãªã„ï¼ˆãƒãƒƒã‚¸ã«ã‚«ãƒ¼ã‚½ãƒ«ã‚’åˆã‚ã›ã‚‹ã¨æ ¹æ‹ ã®æ‰€åœ¨ãŒå‡ºã‚‹ï¼‰ã€‚',
-   'rag.backend.saiNote':
-     'Select AI with RAGã¯DBå†…RAGï¼ˆå®Ÿé¨“çš„ï¼‰ã€‚åˆå›ã¯ç´¢å¼•æ§‹ç¯‰ã«æ•°åˆ†ã€ã‚¢ãƒƒãƒ—ãƒ­ãƒ¼ãƒ‰åæ˜ ã¯æœ€å¤§60åˆ†ã‹ã‹ã‚Šã¾ã™ã€‚ä¼šè©±ã®æ–‡è„ˆã¯ä½¿ã‚ã‚Œã¾ã›ã‚“',
-   'rag.status.processing': 'å–ã‚Šè¾¼ã¿ä¸­',
-diff --git a/packages/web/src/pages/rag.tsx b/packages/web/src/pages/rag.tsx
-index 83dd55a..7eccbe0 100644
---- a/packages/web/src/pages/rag.tsx
-+++ b/packages/web/src/pages/rag.tsx
-@@ -5,28 +5,23 @@ import { PageContainer } from '../components/layout'
- import { Md } from '../components/markdown'
- import { readSse } from '../lib/sse'
- import { usePrefs } from '../prefs'
-+import { BackendCapabilityPanel } from './rag/BackendCapabilities'
-+import { BackendStatusBadges } from './rag/BackendStatusBadges'
-+import {
-+  pickRagBackendCapabilities,
-+  type BackendStatus,
-+  type RagBackend,
-+  type RagBackendCapabilities,
-+} from './rag/capabilityCatalog'
- 
--type BackendStatus = 'indexed' | 'pending' | 'error' | 'disabled'
- type RagFile = {
-   id: string
-   filename: string
-   status: 'processing' | 'completed' | 'failed'
-   bytes?: number
-   error?: string | null
--  backends?: { vector_store: BackendStatus; select_ai: BackendStatus; opensearch: BackendStatus }
-+  backends?: Partial<Record<RagBackend, BackendStatus>>
- }
--// å–ã‚Šè¾¼ã¿çŠ¶æ³ãƒãƒƒã‚¸ã®è‰²
--const beBadge: Record<BackendStatus, string> = {
--  indexed: 'bg-pill-ok text-pill-ok-ink',
--  pending: 'bg-band-chip/20 text-ink-muted',
--  error: 'bg-primary-soft text-primary-strong',
--  disabled: 'bg-band-chip/10 text-ink-muted/50',
--}
--const BACKEND_LABELS: { key: 'vector_store' | 'select_ai' | 'opensearch'; short: string }[] = [
--  { key: 'vector_store', short: 'VS' },
--  { key: 'select_ai', short: 'SAI' },
--  { key: 'opensearch', short: 'OS' },
--]
- type Citation = { file_id: string; filename: string; score: number | null }
- type Msg = { role: 'user' | 'assistant'; content: string; citations?: Citation[] }
- 
-@@ -45,7 +40,8 @@ export default function Rag() {
-   const [msgs, setMsgs] = useState<Msg[]>([])
-   const [input, setInput] = useState('')
-   const [busy, setBusy] = useState(false)
--  const [backend, setBackend] = useState<'vector_store' | 'select_ai' | 'opensearch'>('vector_store')
-+  const [backend, setBackend] = useState<RagBackend>('vector_store')
-+  const [caps, setCaps] = useState<RagBackendCapabilities | null>(null)
-   const abortRef = useRef<AbortController | null>(null)
-   const fileInputRef = useRef<HTMLInputElement>(null)
-   const bottomRef = useRef<HTMLDivElement>(null)
-@@ -53,7 +49,9 @@ export default function Rag() {
-   const loadFiles = () =>
-     fetch('/api/rag/files', { headers: authHeaders(user) })
-       .then((r) => r.json())
--      .then((d) => setFiles(d.files))
-+      // DB åœæ­¢æ™‚ãªã©ã¯ 200 ä»¥å¤–ã® JSON({detail}) ãŒè¿”ã‚‹ã€‚files ãŒç„¡ã„å¿œç­”ã§
-+      // undefined ã‚’ state ã«å…¥ã‚Œã‚‹ã¨ã€ä»¥é™ã® files.some(...) ã§ãƒšãƒ¼ã‚¸ã”ã¨è½ã¡ã‚‹ã€‚
-+      .then((d) => setFiles(Array.isArray(d?.files) ? d.files : []))
-       .catch(() => setFiles([]))
- 
-   useEffect(() => {
-@@ -61,6 +59,15 @@ export default function Rag() {
-     // eslint-disable-next-line react-hooks/exhaustive-deps
-   }, [user])
- 
-+  // RAGM-03: ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã®èƒ½åŠ›å·®ã¯ API ã®èƒ½åŠ›ã‚«ã‚¿ãƒ­ã‚°ãŒæ­£æœ¬(ç”»é¢ã¯æãã ã‘)ã€‚
-+  // å–ã‚Œãªã‘ã‚Œã°ãƒ‘ãƒãƒ«ã‚’å‡ºã•ãªã„(RAGãƒãƒ£ãƒƒãƒˆè‡ªä½“ã¯å‹•ã)ã€‚
-+  useEffect(() => {
-+    fetch('/api/capabilities', { headers: authHeaders(user) })
-+      .then((r) => (r.ok ? r.json() : null))
-+      .then((d) => setCaps(pickRagBackendCapabilities(d)))
-+      .catch(() => setCaps(null))
-+  }, [user])
-+
-   // å–ã‚Šè¾¼ã¿ä¸­(VSå‡¦ç†ä¸­ or ã„ãšã‚Œã‹ã®ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ãŒpending)ã¯å®šæœŸçš„ã«çŠ¶æ…‹ã‚’æ›´æ–°ã€‚
-   // Select AIã¯æœ€å¤§60åˆ†ã®åŒæœŸé–“éš”ãŒã‚ã‚‹ãŸã‚ã€æœªåæ˜ ã®é–“ã¯ã‚†ã£ãã‚Š(20ç§’)ãƒãƒ¼ãƒªãƒ³ã‚°
-   useEffect(() => {
-@@ -213,23 +220,7 @@ export default function Rag() {
-                       ğŸ“„ {f.filename}
-                     </span>
-                     {f.backends ? (
--                      <span className="flex shrink-0 gap-1">
--                        {BACKEND_LABELS.map((b) => {
--                          const st = f.backends![b.key]
--                          const mark =
--                            st === 'indexed' ? 'âœ“' : st === 'pending' ? 'â³'
--                              : st === 'error' ? '!' : 'â€“'
--                          return (
--                            <span
--                              key={b.key}
--                              className={`rounded-full px-1.5 py-0.5 text-[10px] ${beBadge[st]}`}
--                              title={`${t(`rag.be.${b.key}`)}: ${t(`rag.bestatus.${st}`)}`}
--                            >
--                              {mark} {b.short}
--                            </span>
--                          )
--                        })}
--                      </span>
-+                      <BackendStatusBadges backends={f.backends} />
-                     ) : (
-                       <span
-                         className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] ${statusBadge[f.status]}`}
-@@ -302,6 +293,10 @@ export default function Rag() {
-             )}
-             <div ref={bottomRef} />
-           </div>
-+          {/* RAGM-03: é¸æŠä¸­ã®ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã§ä½•ãŒã§ãã‚‹ã‹(å–ã‚Šè¾¼ã¿çŠ¶æ³ãƒãƒƒã‚¸ã¨ã¯åˆ¥ç‰©) */}
-+          <div className="border-t border-line p-3 pb-0">
-+            <BackendCapabilityPanel backend={backend} caps={caps} />
-+          </div>
-           <form
-             className="flex items-end gap-2 border-t border-line p-3"
-             onSubmit={(e) => {
-@@ -311,13 +306,14 @@ export default function Rag() {
-           >
-             <select
-               value={backend}
--              onChange={(e) => setBackend(e.target.value as 'vector_store' | 'select_ai' | 'opensearch')}
-+              onChange={(e) => setBackend(e.target.value as RagBackend)}
-               disabled={busy}
-               className="rounded-rw border border-line bg-bg px-2 py-2 text-xs outline-none focus:border-action"
-               aria-label="rag backend"
-               title={backend === 'select_ai' ? t('rag.backend.saiNote') : ''}
-             >
-               <option value="vector_store">VS â€” {t('rag.backend.vs')}</option>
-+              <option value="adb">ADB â€” {t('rag.backend.adb')}</option>
-               <option value="select_ai">SAI â€” {t('rag.backend.sai')}</option>
-               <option value="opensearch">OS â€” {t('rag.backend.os')}</option>
-             </select>
-diff --git a/packages/web/src/pages/rag/BackendCapabilities.test.tsx b/packages/web/src/pages/rag/BackendCapabilities.test.tsx
-new file mode 100644
-index 0000000..3932c4f
---- /dev/null
-+++ b/packages/web/src/pages/rag/BackendCapabilities.test.tsx
-@@ -0,0 +1,119 @@
-+import { describe, it, expect } from 'vitest'
-+import { render, screen } from '@testing-library/react'
-+import { PrefsProvider } from '../../prefs'
-+import { BackendCapabilityPanel } from './BackendCapabilities'
-+import {
-+  pickRagBackendCapabilities,
-+  type RagBackendCapabilities,
-+} from './capabilityCatalog'
-+
-+/** RAGM-03: ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã‚’åˆ‡ã‚Šæ›¿ãˆã‚‹ã¨ã€Œä½•ãŒã§ãã‚‹ã‹ã€ã®è¡¨ç¤ºãŒå¤‰ã‚ã‚‹ã“ã¨ã€
-+ *  æœªå®Ÿè¨¼ã®èƒ½åŠ›ãŒã€Œä½¿ãˆã‚‹ã€ã¨ã—ã¦å‡ºãªã„ã“ã¨(ADR-0020 Â§3)ã€‚ */
-+
-+const CAPS: RagBackendCapabilities = {
-+  axes: ['citation_granularity', 'filter_expressiveness', 'row_level_security'],
-+  backends: {
-+    vector_store: {
-+      label: 'ãƒãƒãƒ¼ã‚¸ãƒ‰ Vector Store',
-+      role: 'æ‰‹è»½ã•å´',
-+      axes: {
-+        citation_granularity: {
-+          support: 'limited', verified: true,
-+          detail: 'ãƒ•ã‚¡ã‚¤ãƒ«å˜ä½ã€‚', evidence: 'SPIKE-M1 â‘ -a',
-+        },
-+        filter_expressiveness: {
-+          support: 'limited', verified: true,
-+          detail: 'å±æ€§ãƒ•ã‚£ãƒ«ã‚¿ eq/and/or/gteã€‚', evidence: 'RAGM-01',
-+        },
-+        row_level_security: {
-+          support: 'no', verified: false,
-+          detail: 'è¡Œå˜ä½ã®åˆ¶å¾¡æ©Ÿæ§‹ã¯ç„¡ã„ã€‚', evidence: 'æ¯”è¼ƒãƒ‰ã‚­ãƒ¥ãƒ¡ãƒ³ãƒˆ',
-+        },
-+      },
-+    },
-+    adb: {
-+      label: 'Oracle AI Database è‡ªå‰ç´¢å¼•',
-+      role: 'é«˜æ©Ÿèƒ½å´',
-+      axes: {
-+        citation_granularity: {
-+          support: 'yes', verified: true,
-+          detail: 'ãƒãƒ£ãƒ³ã‚¯å˜ä½ã€‚ã‚»ãƒ«ç¯„å›²ã¾ã§è¿”ã‚‹ã€‚', evidence: 'PREP-01',
-+        },
-+        filter_expressiveness: {
-+          support: 'yes', verified: true,
-+          detail: 'SQL ã® WHEREã€‚æ—¢å®šã§ç¾è¡Œç‰ˆã®ã¿ã€‚', evidence: 'RAGM-02',
-+        },
-+        row_level_security: {
-+          support: 'unverified', verified: false,
-+          detail: 'VPD ã¯æœªå®Ÿè¨¼ã€‚', evidence: 'SPIKE-M1 SKIPPED 3',
-+        },
-+      },
-+      notes: ['ADB 23ai ä»¥ä¸ŠãŒå‰æã€‚'],
-+    },
-+  },
-+}
-+
-+const renderPanel = (backend: string, caps: RagBackendCapabilities | null = CAPS) =>
-+  render(
-+    <PrefsProvider>
-+      <BackendCapabilityPanel backend={backend} caps={caps} />
-+    </PrefsProvider>,
-+  )
-+
-+describe('pickRagBackendCapabilities', () => {
-+  it('extracts backend_capabilities from the rag.search descriptor', () => {
-+    const payload = {
-+      capabilities: [
-+        { capability: 'chat' },
-+        { capability: 'rag.search', backend_capabilities: CAPS },
-+      ],
-+    }
-+    expect(pickRagBackendCapabilities(payload)).toEqual(CAPS)
-+  })
-+
-+  it('returns null when the catalog has no rag.search capabilities', () => {
-+    expect(pickRagBackendCapabilities({ capabilities: [{ capability: 'chat' }] })).toBeNull()
-+    expect(pickRagBackendCapabilities({ capabilities: [{ capability: 'rag.search' }] })).toBeNull()
-+    expect(pickRagBackendCapabilities(null)).toBeNull()
-+    expect(pickRagBackendCapabilities('nope')).toBeNull()
-+  })
-+})
-+
-+describe('BackendCapabilityPanel', () => {
-+  it('shows chunk-level citations and the version filter when adb is selected', () => {
-+    renderPanel('adb')
-+    expect(screen.getByText('å‡ºå…¸ã®ç²’åº¦')).toBeInTheDocument()
-+    expect(screen.getByText(/ãƒãƒ£ãƒ³ã‚¯å˜ä½ã€‚ã‚»ãƒ«ç¯„å›²ã¾ã§è¿”ã‚‹ã€‚/)).toBeInTheDocument()
-+    expect(screen.getByText(/SQL ã® WHEREã€‚æ—¢å®šã§ç¾è¡Œç‰ˆã®ã¿ã€‚/)).toBeInTheDocument()
-+    expect(screen.getByText(/ADB 23ai ä»¥ä¸ŠãŒå‰æã€‚/)).toBeInTheDocument()
-+  })
-+
-+  it('shows file-level citations for vector_store (switching backend switches the panel)', () => {
-+    const { rerender } = renderPanel('adb')
-+    expect(screen.getByTestId('rag-capabilities-adb')).toBeInTheDocument()
-+
-+    rerender(
-+      <PrefsProvider>
-+        <BackendCapabilityPanel backend="vector_store" caps={CAPS} />
-+      </PrefsProvider>,
-+    )
-+    expect(screen.queryByTestId('rag-capabilities-adb')).not.toBeInTheDocument()
-+    expect(screen.getByText(/ãƒ•ã‚¡ã‚¤ãƒ«å˜ä½ã€‚/)).toBeInTheDocument()
-+    expect(screen.queryByText(/ãƒãƒ£ãƒ³ã‚¯å˜ä½/)).not.toBeInTheDocument()
-+  })
-+
-+  it('marks unverified capabilities as unverified, never as available', () => {
-+    renderPanel('adb')
-+    // è¡Œãƒ¬ãƒ™ãƒ«åˆ¶å¾¡ã®è¡Œã®ãƒãƒƒã‚¸(å‡¡ä¾‹ã®ã€Œæœªå®Ÿè¨¼ã€ã§ã¯ãªãã€èƒ½åŠ›ãã®ã‚‚ã®ã®è¡¨ç¤º)
-+    const badge = screen.getByTitle('SPIKE-M1 SKIPPED 3')
-+    expect(badge.textContent).toMatch(/æœªå®Ÿè¨¼/)
-+    expect(badge.textContent).not.toMatch(/ä½¿ãˆã‚‹/)
-+  })
-+
-+  it('renders nothing when the catalog is unavailable or the backend is unknown', () => {
-+    const { container: noCaps } = renderPanel('adb', null)
-+    expect(noCaps).toBeEmptyDOMElement()
-+    const { container: unknown } = renderPanel('does_not_exist')
-+    expect(unknown).toBeEmptyDOMElement()
-+  })
-+})
-diff --git a/packages/web/src/pages/rag/BackendCapabilities.tsx b/packages/web/src/pages/rag/BackendCapabilities.tsx
-new file mode 100644
-index 0000000..35bf5d2
---- /dev/null
-+++ b/packages/web/src/pages/rag/BackendCapabilities.tsx
-@@ -0,0 +1,69 @@
-+/** RAGM-03: é¸æŠä¸­ã® RAG ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã§ã€Œä½•ãŒã§ãã‚‹ã‹ã€ã‚’å‡ºã™(ADR-0020 Â§3)ã€‚
-+ *
-+ *  ãƒ•ã‚¡ã‚¤ãƒ«å³ã®å–ã‚Šè¾¼ã¿çŠ¶æ³ãƒãƒƒã‚¸(VS/SAI/OS)ã¨ã¯**åˆ¥ç‰©**ã§ã‚ã‚‹:
-+ *    å–ã‚Šè¾¼ã¿çŠ¶æ³ãƒãƒƒã‚¸ = ãã®ãƒ•ã‚¡ã‚¤ãƒ«ã‚’å–ã‚Šè¾¼ã‚ãŸã‹(indexed / pending / disabled)
-+ *    ã“ã“               = ãã®ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã‚’é¸ã¶ã¨ä½•ãŒã§ãã‚‹ã‹(å‡ºå…¸ç²’åº¦ãƒ»çµã‚Šè¾¼ã¿â€¦)
-+ *
-+ *  ä¸­èº«(äº‹å®Ÿ)ã¯ API ã®èƒ½åŠ›ã‚«ã‚¿ãƒ­ã‚°ãŒæ­£æœ¬ã§ã€ç”»é¢ã¯ãã‚Œã‚’æãã ã‘(capabilityCatalog.ts)ã€‚
-+ */
-+import { usePrefs } from '../../prefs'
-+import type { RagBackendCapabilities, SupportLevel } from './capabilityCatalog'
-+
-+const supportBadge: Record<SupportLevel, string> = {
-+  yes: 'bg-pill-ok text-pill-ok-ink',
-+  limited: 'bg-band-chip/20 text-ink-muted',
-+  no: 'bg-band-chip/10 text-ink-muted/60',
-+  unverified: 'bg-primary-soft text-primary-strong',
-+}
-+const supportMark: Record<SupportLevel, string> = {
-+  yes: 'âœ“', limited: 'â–³', no: 'âœ•', unverified: '?',
-+}
-+
-+export function BackendCapabilityPanel(
-+  { backend, caps }: { backend: string; caps: RagBackendCapabilities | null },
-+) {
-+  const { t } = usePrefs()
-+  const be = caps?.backends[backend]
-+  if (!caps || !be) return null
-+
-+  return (
-+    <section
-+      className="rounded-rw border border-line bg-bg p-3"
-+      aria-label="backend capabilities"
-+      data-testid={`rag-capabilities-${backend}`}
-+    >
-+      <div className="mb-2">
-+        <h3 className="text-xs font-semibold text-ink-muted">{t('rag.cap.title')}</h3>
-+        <p className="text-[11px] text-ink-muted/80">{be.label} â€” {be.role}</p>
-+      </div>
-+      <ul className="space-y-1.5">
-+        {caps.axes.map((axis) => {
-+          const entry = be.axes[axis]
-+          if (!entry) return null
-+          return (
-+            <li key={axis} className="flex items-start gap-2 text-[11px]">
-+              <span
-+                className={`mt-px shrink-0 rounded-full px-1.5 py-0.5 ${supportBadge[entry.support]}`}
-+                title={entry.evidence}
-+              >
-+                {supportMark[entry.support]} {t(`rag.cap.support.${entry.support}`)}
-+              </span>
-+              <span className="min-w-0">
-+                <span className="font-medium">{t(`rag.cap.axis.${axis}`)}</span>
-+                <span className="text-ink-muted"> â€” {entry.detail}</span>
-+              </span>
-+            </li>
-+          )
-+        })}
-+      </ul>
-+      {be.notes && be.notes.length > 0 && (
-+        <ul className="mt-2 space-y-0.5">
-+          {be.notes.map((n) => (
-+            <li key={n} className="text-[10px] leading-snug text-ink-muted/80">â€» {n}</li>
-+          ))}
-+        </ul>
-+      )}
-+      <p className="mt-2 text-[10px] leading-snug text-ink-muted/70">{t('rag.cap.legend')}</p>
-+    </section>
-+  )
-+}
-diff --git a/packages/web/src/pages/rag/BackendStatusBadges.test.tsx b/packages/web/src/pages/rag/BackendStatusBadges.test.tsx
-new file mode 100644
-index 0000000..d6d6bd3
---- /dev/null
-+++ b/packages/web/src/pages/rag/BackendStatusBadges.test.tsx
-@@ -0,0 +1,44 @@
-+import { describe, it, expect } from 'vitest'
-+import { render, screen } from '@testing-library/react'
-+import { PrefsProvider } from '../../prefs'
-+import { BackendStatusBadges } from './BackendStatusBadges'
-+import type { BackendStatus, RagBackend } from './capabilityCatalog'
-+
-+/** å–ã‚Šè¾¼ã¿çŠ¶æ³ãƒãƒƒã‚¸(ã€Œå–ã‚Šè¾¼ã‚ãŸã‹ã€)ã€‚RAGM-03 ã§ adb ã‚‚å‡ºã‚‹ã‚ˆã†ã«ã—ãŸã€‚
-+ *  èƒ½åŠ›å·®ãƒ‘ãƒãƒ«(ã€Œä½•ãŒã§ãã‚‹ã‹ã€)ã¨ã¯åˆ¥ç‰©ã§ã‚ã‚‹ã“ã¨ã‚’ã€æ„å‘³ã®é•ã†ãƒ†ã‚¹ãƒˆã§å›ºå®šã™ã‚‹ã€‚ */
-+
-+const renderBadges = (backends: Partial<Record<RagBackend, BackendStatus>>) =>
-+  render(
-+    <PrefsProvider>
-+      <BackendStatusBadges backends={backends} />
-+    </PrefsProvider>,
-+  )
-+
-+describe('BackendStatusBadges', () => {
-+  it('shows adb ingestion state alongside the existing backends', () => {
-+    renderBadges({
-+      vector_store: 'indexed', adb: 'indexed', select_ai: 'pending', opensearch: 'disabled',
-+    })
-+    expect(screen.getByText('âœ“ ADB')).toBeInTheDocument()
-+    expect(screen.getByText('âœ“ VS')).toBeInTheDocument()
-+    expect(screen.getByText('â³ SAI')).toBeInTheDocument()
-+    expect(screen.getByText('â€“ OS')).toBeInTheDocument()
-+  })
-+
-+  it.each<[BackendStatus, string, string]>([
-+    ['indexed', 'âœ“ ADB', 'å–ã‚Šè¾¼ã¿æ¸ˆã¿'],
-+    ['pending', 'â³ ADB', 'å–ã‚Šè¾¼ã¿ä¸­ï¼ˆåŒæœŸå¾…ã¡ï¼‰'],
-+    ['error', '! ADB', 'å–ã‚Šè¾¼ã¿å¤±æ•—'],
-+    ['disabled', 'â€“ ADB', 'ç„¡åŠ¹'],
-+  ])('renders adb %s as "%s"', (status, mark, title) => {
-+    renderBadges({ adb: status })
-+    const badge = screen.getByText(mark)
-+    expect(badge.getAttribute('title')).toBe(`Oracle AI Databaseï¼ˆè‡ªå‰ç´¢å¼•ï¼‰: ${title}`)
-+  })
-+
-+  it('omits backends the API response does not mention (forward compatible)', () => {
-+    renderBadges({ vector_store: 'indexed' })
-+    expect(screen.queryByText(/ADB/)).not.toBeInTheDocument()
-+    expect(screen.queryByText(/SAI/)).not.toBeInTheDocument()
-+  })
-+})
-diff --git a/packages/web/src/pages/rag/BackendStatusBadges.tsx b/packages/web/src/pages/rag/BackendStatusBadges.tsx
-new file mode 100644
-index 0000000..5921cb2
---- /dev/null
-+++ b/packages/web/src/pages/rag/BackendStatusBadges.tsx
-@@ -0,0 +1,48 @@
-+/** ãƒ•ã‚¡ã‚¤ãƒ«ã”ã¨ã®å–ã‚Šè¾¼ã¿çŠ¶æ³ãƒãƒƒã‚¸(RAG-01 ã‹ã‚‰ rag.tsx ã«ã‚ã£ãŸã‚‚ã®ã‚’åˆ‡ã‚Šå‡ºã—ãŸ)ã€‚
-+ *
-+ *  æ„å‘³ã¯å¾“æ¥ã©ãŠã‚Šã€Œãã®ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã«å–ã‚Šè¾¼ã‚ãŸã‹ã€ã§ã€å¤‰ãˆã¦ã„ãªã„ã€‚
-+ *  ã€Œãã®ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã§ä½•ãŒã§ãã‚‹ã‹ã€ã¯ BackendCapabilityPanel ã®æ‹…å½“ï¼ˆåˆ¥ç‰©ï¼‰ã€‚
-+ *  RAGM-03 ã§ adb ã‚’é¸ã¹ã‚‹ã‚ˆã†ã«ã—ãŸã®ã§ã€adb ã®å–ã‚Šè¾¼ã¿çŠ¶æ³ã‚‚ã“ã“ã«å‡ºã‚‹ã€‚
-+ */
-+import { usePrefs } from '../../prefs'
-+import type { BackendStatus, RagBackend } from './capabilityCatalog'
-+
-+const beBadge: Record<BackendStatus, string> = {
-+  indexed: 'bg-pill-ok text-pill-ok-ink',
-+  pending: 'bg-band-chip/20 text-ink-muted',
-+  error: 'bg-primary-soft text-primary-strong',
-+  disabled: 'bg-band-chip/10 text-ink-muted/50',
-+}
-+const beMark: Record<BackendStatus, string> = {
-+  indexed: 'âœ“', pending: 'â³', error: '!', disabled: 'â€“',
-+}
-+// è¡¨ç¤ºé †ã¯ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰é¸æŠãƒ—ãƒ«ãƒ€ã‚¦ãƒ³ã¨æƒãˆã‚‹ã€‚
-+const BACKEND_LABELS: { key: RagBackend; short: string }[] = [
-+  { key: 'vector_store', short: 'VS' },
-+  { key: 'adb', short: 'ADB' },
-+  { key: 'select_ai', short: 'SAI' },
-+  { key: 'opensearch', short: 'OS' },
-+]
-+
-+export function BackendStatusBadges(
-+  { backends }: { backends: Partial<Record<RagBackend, BackendStatus>> },
-+) {
-+  const { t } = usePrefs()
-+  return (
-+    <span className="flex shrink-0 gap-1">
-+      {BACKEND_LABELS.map((b) => {
-+        const st = backends[b.key]
-+        if (!st) return null  // ãã®ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã‚’çŸ¥ã‚‰ãªã„å¿œç­”(å‰æ–¹äº’æ›)
-+        return (
-+          <span
-+            key={b.key}
-+            className={`rounded-full px-1.5 py-0.5 text-[10px] ${beBadge[st]}`}
-+            title={`${t(`rag.be.${b.key}`)}: ${t(`rag.bestatus.${st}`)}`}
-+          >
-+            {beMark[st]} {b.short}
-+          </span>
-+        )
-+      })}
-+    </span>
-+  )
-+}
-diff --git a/packages/web/src/pages/rag/capabilityCatalog.ts b/packages/web/src/pages/rag/capabilityCatalog.ts
-new file mode 100644
-index 0000000..61b4b2e
---- /dev/null
-+++ b/packages/web/src/pages/rag/capabilityCatalog.ts
-@@ -0,0 +1,56 @@
-+/** RAG ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã®èªå½™ã¨ã€èƒ½åŠ›å·®(RAGM-03 / ADR-0020 Â§3)ã®å‹ãƒ»å–ã‚Šå‡ºã—ã€‚
-+ *
-+ *  äº‹å®Ÿã®æ­£æœ¬ã¯ API ã® GET /api/capabilitiesï¼ˆ`rag.search` ã® `backend_capabilities`ï¼‰ã€‚
-+ *  ç”»é¢å´ã«èƒ½åŠ›ã‚’ãƒãƒ¼ãƒ‰ã‚³ãƒ¼ãƒ‰ã—ãªã„ â€” ã—ãŸã‚‰ã€Œæœªå®Ÿè¨¼ã‚’ã€ã§ãã‚‹ã€ã¨æ›¸ãã€çµŒè·¯ãŒ
-+ *  ç”»é¢ã«ã‚‚ã§ãã¦ã—ã¾ã†ã€‚ã“ã“ã¯å‹ä»˜ã‘ã¨å–ã‚Šå‡ºã—ã ã‘ã‚’æŒã¤ã€‚
-+ */
-+
-+/** ãƒãƒ£ãƒƒãƒˆã§é¸ã¹ã‚‹ RAG ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰(API å´ ChatRequest.rag_backend ã¨åŒã˜é›†åˆ)ã€‚ */
-+export type RagBackend = 'vector_store' | 'adb' | 'select_ai' | 'opensearch'
-+
-+/** å–ã‚Šè¾¼ã¿çŠ¶æ³(ãã®ãƒ•ã‚¡ã‚¤ãƒ«ã‚’å–ã‚Šè¾¼ã‚ãŸã‹)ã€‚èƒ½åŠ›å·®(ä½•ãŒã§ãã‚‹ã‹)ã¨ã¯åˆ¥ç‰©ã€‚ */
-+export type BackendStatus = 'indexed' | 'pending' | 'error' | 'disabled'
-+
-+export type SupportLevel = 'yes' | 'limited' | 'no' | 'unverified'
-+
-+export type AxisKey =
-+  | 'citation_granularity'
-+  | 'filter_expressiveness'
-+  | 'business_data_join'
-+  | 'row_level_security'
-+  | 'metadata_update_consistency'
-+
-+export type AxisEntry = {
-+  support: SupportLevel
-+  verified: boolean
-+  detail: string
-+  evidence: string
-+}
-+
-+export type BackendCapability = {
-+  label: string
-+  role: string
-+  axes: Partial<Record<AxisKey, AxisEntry>>
-+  notes?: string[]
-+}
-+
-+export type RagBackendCapabilities = {
-+  axes: AxisKey[]
-+  backends: Record<string, BackendCapability>
-+}
-+
-+const isObj = (v: unknown): v is Record<string, unknown> =>
-+  typeof v === 'object' && v !== null && !Array.isArray(v)
-+
-+/** GET /api/capabilities ã®ãƒ¬ã‚¹ãƒãƒ³ã‚¹ã‹ã‚‰ rag.search ã®èƒ½åŠ›å·®ã‚’å–ã‚Šå‡ºã™ã€‚
-+ *  å½¢ãŒé•ãˆã° null(ï¼ãƒ‘ãƒãƒ«ã‚’å‡ºã•ãªã„)ã€‚èƒ½åŠ›è¡¨ãŒç„¡ãã¦ã‚‚ RAG ãƒãƒ£ãƒƒãƒˆè‡ªä½“ã¯å‹•ãã€‚ */
-+export function pickRagBackendCapabilities(payload: unknown): RagBackendCapabilities | null {
-+  if (!isObj(payload) || !Array.isArray(payload.capabilities)) return null
-+  const cap = payload.capabilities.find(
-+    (c: unknown) => isObj(c) && c.capability === 'rag.search',
-+  )
-+  if (!isObj(cap)) return null
-+  const bc = cap.backend_capabilities
-+  if (!isObj(bc) || !Array.isArray(bc.axes) || !isObj(bc.backends)) return null
-+  return bc as unknown as RagBackendCapabilities
-+}
-
-
-===== ãƒ©ã‚¤ãƒ– E2E ã‚¿ãƒ¼ã‚²ãƒƒãƒˆ =====
-TARGET_URL=http://localhost:5173/#/rag
-(Playwright MCP ã® browser ãƒ„ãƒ¼ãƒ«ã§ã“ã® URL ã‚’é–‹ãã€diff é–¢é€£ã®ä¸»è¦ãƒ•ãƒ­ãƒ¼ã‚’å®Ÿæ¤œè¨¼ã™ã‚‹ã“ã¨)
-
-
-===== å®Ÿç’°å¢ƒ E2E è¨¼è·¡ (jetuse-dev / Codex ã¯å®Ÿè¡Œã›ãšè¨¼è·¡ã‚’è©•ä¾¡ã™ã‚‹) =====
---- runs/2026-07-30T1800_RAGM-03/e2e/scenario-1.capabilities.json ---
-ication/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/dbchat/execute":{"post":{"requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ExecuteSqlRequest"}}},"required":true},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/dbchat/schema":{"get":{"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}}}},{"capability":"agents","summary":"ãƒ„ãƒ¼ãƒ«(Webæ¤œç´¢ãƒ»RAGæ¤œç´¢ãƒ»DBç…§ä¼šãƒ»MCP)ã‚’è‡ªå¾‹çš„ã«ä½¿ã†ã‚¨ãƒ¼ã‚¸ã‚§ãƒ³ãƒˆã‚’å®Ÿè¡Œã™ã‚‹","when_to_use":"è¤‡æ•°ã‚¹ãƒ†ãƒƒãƒ—ã®èª¿æŸ»ãƒ»ãƒ„ãƒ¼ãƒ«é€£æºã‚’è¦‹ã›ã‚‹ãƒ‡ãƒ¢ã€‚å®šç¾©æ¸ˆã¿ã‚¨ãƒ¼ã‚¸ã‚§ãƒ³ãƒˆã‚’é¸ã‚“ã§å¯¾è©±ã•ã›ã‚‹ã€‚","example":{"input":{"model":"gpt-oss-120b","agent_id":"<GET /api/agents ã®id>","messages":[{"role":"user","content":"æœ€æ–°ã®OCIãƒªãƒªãƒ¼ã‚¹ã‚’èª¿ã¹ã¦è¦ç´„ã—ã¦"}]},"output":"ãƒ„ãƒ¼ãƒ«å‘¼ã³å‡ºã—ã®çµŒéã¨æœ€çµ‚å›ç­”ãŒ SSE ã§å±Šãã€‚"},"demo_safe":true,"routes":[{"path":"/api/agents","method":"get"},{"path":"/api/chat/stream","method":"post"},{"path":"/api/agent/execute-tool","method":"post"}],"openapi":{"/api/agents":{"get":{"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}},"/api/chat/stream":{"post":{"requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ChatRequest"}}},"required":true},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/agent/execute-tool":{"post":{"requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ToolExecuteRequest"}}},"required":true},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}}}},{"capability":"voice","summary":"éŸ³å£°ã®æ–‡å­—èµ·ã“ã—(ãƒªã‚¢ãƒ«ã‚¿ã‚¤ãƒ STT)ã¨éŸ³å£°åˆæˆ(TTS)","when_to_use":"éŸ³å£°å…¥åŠ›ãƒ»èª­ã¿ä¸Šã’ã‚’å«ã‚€ãƒ‡ãƒ¢(çª“å£å¿œå¯¾ãƒ»éŸ³å£°ãƒ¡ãƒ¢ãªã©)ã€‚","example":{"input":{"note":"POST /api/stt/sessions ã§ã‚»ãƒƒã‚·ãƒ§ãƒ³ä½œæˆâ†’audio ã¸éŸ³å£°ãƒãƒ£ãƒ³ã‚¯ã‚’é€ä¿¡"},"output":"events(SSE)ã§éƒ¨åˆ†/ç¢ºå®šã®æ–‡å­—èµ·ã“ã—ãŒå±Šãã€‚/api/tts ã¯ãƒ†ã‚­ã‚¹ãƒˆã‹ã‚‰éŸ³å£°(audio/mp3)ã‚’è¿”ã™ã€‚"},"demo_safe":true,"routes":[{"path":"/api/stt/sessions","method":"post"},{"path":"/api/stt/sessions/{sid}/audio","method":"post"},{"path":"/api/stt/sessions/{sid}/events","method":"get"},{"path":"/api/tts","method":"post"}],"openapi":{"/api/stt/sessions":{"post":{"requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/SttSessionCreate"}}},"required":true},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/stt/sessions/{sid}/audio":{"post":{"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/stt/sessions/{sid}/events":{"get":{"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/tts":{"post":{"requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/TtsRequest"}}},"required":true},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}}}},{"capability":"minutes","summary":"ä¼šè­°éŸ³å£°ã‹ã‚‰è­°äº‹éŒ²ã‚’ä½œã‚‹(æ–‡å­—èµ·ã“ã— + è¦ç´„ãƒ»ã‚¢ã‚¯ã‚·ãƒ§ãƒ³æŠ½å‡º)","when_to_use":"ä¼šè­°ãƒ»æ‰“åˆã›ã®éŒ²éŸ³ã‹ã‚‰è­°äº‹éŒ²ã‚’è‡ªå‹•ç”Ÿæˆã™ã‚‹ãƒ‡ãƒ¢ã€‚","example":{"input":{"note":"POST /api/minutes ã§éŸ³å£°ãƒ•ã‚¡ã‚¤ãƒ«ã‚’ç™»éŒ²â†’ /generate ã§è­°äº‹éŒ²ç”Ÿæˆ"},"output":"æ–‡å­—èµ·ã“ã—å…¨æ–‡ã¨ã€è¦ç´„ãƒ»æ±ºå®šäº‹é …ãƒ»TODO ã‚’æ§‹é€ åŒ–ã—ãŸè­°äº‹éŒ²ãŒå¾—ã‚‰ã‚Œã‚‹ã€‚"},"demo_safe":true,"routes":[{"path":"/api/minutes","method":"post"},{"path":"/api/minutes/{mid}","method":"get"},{"path":"/api/minutes/{mid}/generate","method":"post"}],"openapi":{"/api/minutes":{"post":{"requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"$ref":"#/components/schemas/Body_create_minutes_api_minutes_post"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/minutes/{mid}":{"get":{"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/minutes/{mid}/generate":{"post":{"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/MinutesGenerateRequest"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}}}},{"capability":"translate","summary":"ãƒ†ã‚­ã‚¹ãƒˆç¿»è¨³(LLM / OCI Language ã®2ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰)","when_to_use":"å¤šè¨€èªå¯¾å¿œãƒ»ç¿»è¨³æ”¯æ´ã®ãƒ‡ãƒ¢ã€‚å¯¾å¿œè¨€èªã¯ /api/translate/options ã§å–å¾—ã€‚","example":{"input":{"text":"ã“ã‚“ã«ã¡ã¯","target":"en"},"output":{"translated":"Hello"}},"demo_safe":true,"routes":[{"path":"/api/translate","method":"post"},{"path":"/api/translate/options","method":"get"}],"openapi":{"/api/translate":{"post":{"requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/TranslateRequest"}}},"required":true},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/translate/options":{"get":{"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}}}},{"capability":"docunderstand","summary":"æ–‡æ›¸ç”»åƒ/PDFã‹ã‚‰ã®ãƒ†ã‚­ã‚¹ãƒˆãƒ»è¡¨ãƒ»ã‚­ãƒ¼å€¤æŠ½å‡º(OCR / Document Understanding / VLM)","when_to_use":"å¸³ç¥¨ãƒ»è«‹æ±‚æ›¸ãƒ»ã‚¹ã‚­ãƒ£ãƒ³æ–‡æ›¸ã®èª­ã¿å–ã‚Šãƒ‡ãƒ¢ã€‚ãƒ•ã‚¡ã‚¤ãƒ«ã‚’ multipart ã§é€ã‚‹ã€‚","example":{"input":{"note":"multipart/form-data ã§ file(png/jpg/pdf)ã‚’é€ä¿¡ã€‚engine/language æŒ‡å®šå¯"},"output":"æŠ½å‡ºãƒ†ã‚­ã‚¹ãƒˆãƒ»è¡¨ãƒ»ã‚­ãƒ¼å€¤ãƒšã‚¢ã® JSON ãŒè¿”ã‚‹ã€‚"},"demo_safe":true,"routes":[{"path":"/api/ocr","method":"post"},{"path":"/api/ocr/options","method":"get"}],"openapi":{"/api/ocr":{"post":{"requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"$ref":"#/components/schemas/Body_do_ocr_api_ocr_post"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/ocr/options":{"get":{"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}}}}]}
---- runs/2026-07-30T1800_RAGM-03/e2e/scenario-1.md ---
-# ã‚·ãƒŠãƒªã‚ª 1: `GET /api/capabilities` ã«ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰åˆ¥ã®èƒ½åŠ›ãŒè¼‰ã‚‹
-
-å®Ÿæ–½æ—¥æ™‚: 2026-07-30 18:21â€“18:29 JST / ãƒªãƒ¼ã‚¸ãƒ§ãƒ³: ap-osaka-1
-
-## å®Ÿè¡Œç’°å¢ƒï¼ˆé…å‚™å½¢æ…‹ã¯ SKIPPED.md 1 ã‚’å‚ç…§ï¼‰
-
-- API: `uvicorn service.main:app`ï¼ˆå®Ÿ `.env` / `AUTH_MODE=config_file` â†’ å®Ÿ OCI ã«åˆ°é”ã€‚
-  èµ·å‹•ãƒ­ã‚°ã« `GET https://generativeai.ap-osaka-1.oci.oraclecloud.com/.../vector_stores 200 OK`ï¼‰
-- SPA: `npm --prefix packages/web run dev`ï¼ˆ`/api` ã¯ä¸Šè¨˜ API ã¸ãƒ—ãƒ­ã‚­ã‚·ï¼‰
-- å–å¾—ã‚³ãƒãƒ³ãƒ‰: `curl -s http://localhost:5173/api/capabilities`ï¼ˆï¼ç”»é¢ã¨åŒã˜çµŒè·¯ï¼‰
-- è¨¼è·¡: `scenario-1.capabilities.json`ï¼ˆå¿œç­”å…¨æ–‡ï¼‰
-
-## æœŸå¾…
-
-`rag.search` ãƒ‡ã‚£ã‚¹ã‚¯ãƒªãƒ—ã‚¿ã« `backend_capabilities` ãŒã‚ã‚Šã€4 ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ Ã— 5 è»¸ã®
-èƒ½åŠ›ãŒè¼‰ã£ã¦ã„ã¦ã€**æœªå®Ÿè¨¼ã®é …ç›®ãŒå®Ÿè¨¼æ¸ˆã¿ã¨åŒºåˆ¥ã§ãã‚‹**ã“ã¨ã€‚æ—¢å­˜æ§‹é€ ï¼ˆ8 èƒ½åŠ›ãƒ»
-`routes` / `openapi` ãƒ•ãƒ©ã‚°ãƒ¡ãƒ³ãƒˆï¼‰ãŒå£Šã‚Œã¦ã„ãªã„ã“ã¨ã€‚
-
-## å®Ÿçµæœ
-
-æ—¢å­˜æ§‹é€ : `capabilities` ã¯ 8 ä»¶ã®ã¾ã¾
-ï¼ˆchat / rag.search / dbchat / agents / voice / minutes / translate / docunderstandï¼‰ã€‚
-
-`rag.search.backend_capabilities.axes` =
-`citation_granularity / filter_expressiveness / business_data_join / row_level_security /
-metadata_update_consistency`ï¼ˆæ¯”è¼ƒãƒ‰ã‚­ãƒ¥ãƒ¡ãƒ³ãƒˆã® 5 è»¸ï¼‰ã€‚
-
-| backend | å‡ºå…¸ç²’åº¦ | çµã‚Šè¾¼ã¿ | æ¥­å‹™ãƒ‡ãƒ¼ã‚¿çµåˆ | è¡Œãƒ¬ãƒ™ãƒ«åˆ¶å¾¡ | ãƒ¡ã‚¿æ›´æ–°æ•´åˆ |
-|---|---|---|---|---|---|
-| vector_store | limited | limited | no | no | limited |
-| adb | **yes** | **yes** | **unverified** | **unverified** | **yes** |
-| select_ai | limited | no | no | unverified | no |
-| opensearch | unverified | unverified | unverified | unverified | unverified |
-
-`verified` ã¯ `support != "unverified"` ã§ã€`unverified` ã® 8 é …ç›®ã¯ã™ã¹ã¦ `verified=false`ã€‚
-å„é …ç›®ã« `detail`ï¼ˆä½•ãŒã§ãã‚‹ï¼ã§ããªã„ã‹ï¼‰ã¨ `evidence`ï¼ˆæ ¹æ‹ ã®æ‰€åœ¨ï¼‰ãŒå…¥ã£ã¦ã„ã‚‹ã€‚ä¾‹:
-
-```json
-"row_level_security": {
-  "support": "unverified", "verified": false,
-  "detail": "VPD / Data Redaction ã¯åŒã˜è¡¨ã«å¯¾ã™ã‚‹ DB æ©Ÿèƒ½ãªã®ã§åŸç†çš„ã«ã¯ä½µç”¨ã§ãã‚‹ãŒã€
-             ãƒ™ã‚¯ã‚¿æ¤œç´¢ã«åŠ¹ãã“ã¨ã¯æœªå®Ÿè¨¼(SPIKE-M1 ã®éã‚´ãƒ¼ãƒ«)ã€‚â€¦",
-  "evidence": "runs/2026-07-28T1848_SPIKE-M1/e2e/SKIPPED.md 3 / ADR-0020 æœªè§£æ±º"
-}
-```
-
-**åˆ¤å®š: PASS**ï¼ˆãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰åˆ¥èƒ½åŠ›ãŒè¿”ã‚Šã€æœªå®Ÿè¨¼ãŒå®Ÿè¨¼æ¸ˆã¿ã¨åŒºåˆ¥ã§ãã‚‹ã€‚æ—¢å­˜æ§‹é€ ã¯ä¸å¤‰ï¼‰
-
---- runs/2026-07-30T1800_RAGM-03/e2e/scenario-2.md ---
-# ã‚·ãƒŠãƒªã‚ª 2: ç”»é¢ã§ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã‚’åˆ‡ã‚Šæ›¿ãˆã‚‹ã¨èƒ½åŠ›è¡¨ç¤ºãŒå¤‰ã‚ã‚‹
-
-å®Ÿæ–½æ—¥æ™‚: 2026-07-30 18:28â€“18:29 JST / å®Ÿãƒ–ãƒ©ã‚¦ã‚¶ï¼ˆChromiumãƒ»Playwright MCPï¼‰
-
-æ“ä½œ: `http://localhost:5173/#/rag` ã‚’é–‹ãã€ãƒãƒ£ãƒƒãƒˆæ¬„ä¸‹ã®ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰é¸æŠã‚’
-VS â†’ ADB â†’ SAI ã¨åˆ‡ã‚Šæ›¿ãˆã€ãã®ã¤ã©å…¨ç”»é¢ã‚¹ã‚¯ãƒªãƒ¼ãƒ³ã‚·ãƒ§ãƒƒãƒˆã¨
-ã‚¢ã‚¯ã‚»ã‚·ãƒ“ãƒªãƒ†ã‚£ã‚¹ãƒŠãƒƒãƒ—ã‚·ãƒ§ãƒƒãƒˆï¼ˆDOM ã®ãƒ†ã‚­ã‚¹ãƒˆï¼‰ã‚’å–å¾—ã—ãŸã€‚
-
-| # | é¸æŠ | è¨¼è·¡ |
-|---|---|---|
-| 2a | VSï¼ˆVector Storeãƒ»æ—¢å®šï¼‰ | `scenario-2a-vector_store.png` / `.snapshot.yml` |
-| 2b | **ADBï¼ˆOracle AI Databaseï¼‰** | `scenario-2b-adb.png` / `.snapshot.yml` |
-| 2c | SAIï¼ˆSelect AIï¼‰ | `scenario-2c-select_ai.png` / `.snapshot.yml` |
-
-## å®Ÿçµæœï¼ˆåŒã˜ç”»é¢ãƒ»é¸æŠã ã‘ãŒé•ã†ï¼‰
-
-| è»¸ | VS ã®è¡¨ç¤º | **ADB ã®è¡¨ç¤º** |
-|---|---|---|
-| å‡ºå…¸ã®ç²’åº¦ | â–³ æ¡ä»¶ä»˜ãã€Œãƒ•ã‚¡ã‚¤ãƒ«å˜ä½ã€‚1 ãƒ•ã‚¡ã‚¤ãƒ«ãŒè¤‡æ•°ãƒãƒ£ãƒ³ã‚¯ã«å‰²ã‚Œã¦ã‚‚å±æ€§ã¯ 1 ç¨®é¡â€¦ã€ | **âœ“ ä½¿ãˆã‚‹ã€Œãƒãƒ£ãƒ³ã‚¯å˜ä½ã€‚xlsx ã¯ã‚·ãƒ¼ãƒˆåã¨ã‚»ãƒ«ç¯„å›²ã¾ã§è¿”ã‚‹(å®Ÿæ¸¬ä¾‹: ã€åˆ¶ç´„ã€C5:E6 / ã€æ”¹è¨‚å±¥æ­´ã€A1:C2)ã€** |
-| çµã‚Šè¾¼ã¿ã®è¡¨ç¾åŠ› | â–³ æ¡ä»¶ä»˜ãã€Œå±æ€§ãƒ•ã‚£ãƒ«ã‚¿ eq/and/or/gteâ€¦ç‰ˆã§çµã‚‹ã«ã¯ rag_filters ã‚’æ˜ç¤ºæŒ‡å®š(æ—¢å®šã¯çµã‚‰ãªã„)ã€ | **âœ“ ä½¿ãˆã‚‹ã€ŒSQL ã® WHEREâ€¦æ¤œç´¢ã¯æ—¢å®šã§ç¾è¡Œç‰ˆã®ã¿(current_version='Y')ã€** |
-| æ¥­å‹™ãƒ‡ãƒ¼ã‚¿ã¨ã®çµåˆ | âœ• ä½¿ãˆãªã„ | **? æœªå®Ÿè¨¼**ã€Œ1 SQL ã§æ›¸ã‘ã‚‹ãŒå®Ÿè¡Œçµæœã¯ã¾ã ç„¡ã„ã€ |
-| è¡Œãƒ¬ãƒ™ãƒ«åˆ¶å¾¡ | âœ• ä½¿ãˆãªã„ | **? æœªå®Ÿè¨¼**ã€ŒVPD ã¯ãƒ™ã‚¯ã‚¿æ¤œç´¢ã«åŠ¹ãã“ã¨ãŒæœªå®Ÿè¨¼ã€ |
-| ãƒ¡ã‚¿ãƒ‡ãƒ¼ã‚¿æ›´æ–°ã®æ•´åˆæ€§ | â–³ æ¡ä»¶ä»˜ãï¼ˆçµæœæ•´åˆï¼‰ | âœ“ ä½¿ãˆã‚‹ï¼ˆåŒä¸€ãƒˆãƒ©ãƒ³ã‚¶ã‚¯ã‚·ãƒ§ãƒ³ï¼‰ |
-
-- è¦‹å‡ºã—ã‚‚åˆ‡ã‚Šæ›¿ã‚ã‚‹: ã€ŒEnterprise AI ãƒãƒãƒ¼ã‚¸ãƒ‰ Vector Store (file_search) â€” æ‰‹è»½ã•å´(æ—¢å®š)ã€
-  â†”ã€ŒOracle AI Database è‡ªå‰ç´¢å¼• (DBMS_VECTOR_CHAIN) â€” é«˜æ©Ÿèƒ½å´ã€ã€‚
-- SAIï¼ˆ2cï¼‰ã§ã¯ã€Œçµã‚Šè¾¼ã¿ âœ• ä½¿ãˆãªã„ï¼ˆä»»æ„ãƒ¡ã‚¿ãƒ‡ãƒ¼ã‚¿ã¯ ORA-20048ï¼‰ã€ã€Œãƒ¡ã‚¿æ›´æ–° âœ•ã€ã«åŠ ãˆã€
-  æ³¨è¨˜ã«ã€Œxlsx ã‚’ã“ã®çµŒè·¯ã§ã©ã†æ‰±ã†ã‹ã¯å®Ÿæ©Ÿç¢ºèªä¸­(PREP-02)ã§æœªç¢ºèªã€ãŒå‡ºã‚‹ã€‚
-- å„ãƒãƒƒã‚¸ã® `title` ã«æ ¹æ‹ ã®æ‰€åœ¨ï¼ˆä¾‹ `runs/2026-07-28T1848_SPIKE-M1/e2e/SKIPPED.md 3`ï¼‰ãŒå…¥ã‚‹ã€‚
-- å–ã‚Šè¾¼ã¿çŠ¶æ³ãƒãƒƒã‚¸ï¼ˆVS/ADB/SAI/OSï¼‰ã¨ã¯åˆ¥æ ã§ã€å‡¡ä¾‹ã«ã€Œã‚ã¡ã‚‰ã¯å–ã‚Šè¾¼ã‚ãŸã‹ã€ã“ã“ã¯ä½•ãŒã§ãã‚‹ã‹ã€
-  ã¨æ˜è¨˜ã•ã‚Œã¦ã„ã‚‹ï¼ˆã‚¹ã‚¯ãƒªãƒ¼ãƒ³ã‚·ãƒ§ãƒƒãƒˆä¸‹éƒ¨ï¼‰ã€‚
-
-**åˆ¤å®š: PASS**ï¼ˆ`adb` ã‚’é¸ã¶ã¨ç‰ˆãƒ•ã‚£ãƒ«ã‚¿ã¨ã‚»ãƒ«ç¯„å›²å‡ºå…¸ãŒã€Œä½¿ãˆã‚‹ã€ã¨ã—ã¦ç”»é¢ã«å‡ºã‚‹ã€‚
-æœªå®Ÿè¨¼ã® 2 è»¸ã¯ã€Œ? æœªå®Ÿè¨¼ã€ã§ã€ã€Œä½¿ãˆã‚‹ã€ã¨ã¯è¡¨ç¤ºã•ã‚Œãªã„ï¼‰
-
---- runs/2026-07-30T1800_RAGM-03/e2e/scenario-2a-vector_store.png ---
-îk Í>P-}áM}6ú?vËg½tVŞ¶ªÛfCˆe'rå<d¶öår7ct[¸t¿¼û(»æ!&^4ğÂøğÏÑŞiÇ|!±[øT½˜¨ü“1S‘³—Ğ ëõËJ!ç…Lh‹é¯…8F íÌœŒµŒJn&yÆo æXøtà°·XsşìüÙù3W¢*uşÜ-Üù3g¸®ø³Ÿ:K÷æì³YñÍÔz& 9wî,–€eÄ+R›y&	‰r ¬ÖëØµT™zš0 .&Ê<)ábr;‹²ÏY4 bŠ” ªä‚UÛk¥†L«2xé&ÅŠCC&€Ìe´$îPá3PI*JÛ B©¨§‹áJ"ø92„Ï¬Y µÃ¨ªjÎ6õXP©x)kìĞÚ»§½Ş”†»µwGËè¹œHh½ÊÉX`"É<7em-ÛÛ˜â‹bÅtí‚ëê|¡pÁ•1ñª¿¾™¦”F¸o'CØ¢HuİF‰ªğ²$×8HY€½ãØ˜„'jô[µ1
-ù"6Şób]ÈÃ¡H-°eR-ÍIYà²Ì%%ã?ï„†Ÿ?çÏÎŸ›Zœ?÷?w¼nù³:aM
-
-²)n	 F ›Šáëµş§â÷ÎĞ,<3WÅ™¬)æVÙfUƒ2a¶¬pUk÷ú±‹lÍ-ºTå¤s©êÄ
-BG²«‰d¾vÂDÓq4UñÖb72/À~p©'2ÇÙB»¦eô,Îw¦P¨òMéìÄšB<¶±uQ€ÒVÆõÂˆĞ$ÑõBQ“±‡	æM­ªÂ©¡¤Æg:Í‡Û(1,IJØ(e y÷bf=USëÄŒó[ZUª"ŠRFÂAè‘AõÚßèS	T)¡5óX”7:èéh¿¤îŸj¨,ù•HŞ<M¥<¼ûAfÔ¹{=ê—Ê&«f")!4‚NùÛ,‹›E§æƒkŒè¹¿:¦P¡Ä-Øy¡,2ıµ®š vIÜJ{œ?;VäüÙùó(ÑùóeÈŸıƒĞéhh&÷_0~ÀÎv§ç[9hŒeaRP‹P¿Á–#VVcª¦ ¡µ ¡R ÈP@²{¶ Íİí µá šH†TIÄ>-,ljõmÀG¬µüË-ãĞqkĞrQ¼ÛÒT«Ù«K•rº`¤K™ÚÈ¢O¢<ÆªBÆlì’óğËš{–Bóa.ìBİ®T*—Ò›[ÇbÌÇ¹Øv¿Ñ† İšmZgtÖS¼ê`ñO=¼	­ÄEÎÏGKKoĞJó¢¹E8Œ‘åôU¥Øšl™YHÔØ¥„6ÉÆ©+ôØ&u'1"ÊÔ­w“BšmQ¡ÃeCøç¼äé.1ß³ï:´|˜PçÏÎŸªsşœ?£JçÏ½Ÿ—öB§£!ÁZ°À”Qìªú'àµ$jH+²¯E†M¡¼ñÉ;3#qş&»2Bgj aìv]GP.BEön~0C¹e'>h#‡^lÉ`4¥_{ìŠ±Ûœ7¼	À’’-¦êaoaƒÏEA9
-ÒÜˆ×Ü“âïh ÚƒábaNF’¯åYqL×æ,AÂÀh£ƒèWnf"ä[Øz¨@¸Lª`Âš…ğÙC ;{ŒĞ²ÊÔ:³‡ÍÚ/ÚÀDa¾¦‘iJ0É˜äĞÃÖNPtgÃ‹‹ºFmiq|«Ÿn_øÍ*âmOQ¸xUr·1Ótú6ªhjjR×œ­ÛHÛ/;gF9í#¡3ğ‚»%Æ]²yRïœ$8vş<&çÏİƒóç9¾®ø³:ğXŒÔ£…}& EŠ4bRPêíq9ûs+F{yï.¼±µ„1Ç
-yİr%ú9]¤E»Úpq.MnAtÀŸIÓfÓ¸_Y»”Pš©FÆgpÕT‘Ş„Ñ¯ˆ0òœPœÌBöú,p¨á=SbU],s¶øwŸ…­«gEx‚¤È|ó„<¼O¤Í¥.@İŠæ·:eÜh·àó›™ŒÇ¹8Àåz¡¿öeÍÆEK9EDÌ¸àÉh²î˜^v.÷Nö,X‹Ãì—€4«Z˜PÈÂĞuñ`¾[zÚH ÍíÃÎFº5JóxĞº“Ğ>bÓñ[Ò›é4øŒIc£)|´€X:Omp3LîEpşìüÙù³iŒMqşœ?ã‘Ë?û¡ÓÑ €Á€MB˜Pöô@;`J‘ê³£2±×2N)\÷§"¬¬Tüâ35’¶ºX‚ğv¥
-È:] mØŠ…× Ù-2Ó%.0rVä¡ŒÉÇIÿ*6 á6ÀhgA=IhªF>+ñXW£ÁR2ljPæ¸7Ú£Ñ¹Eã~ö9; {'M^Ì#ı¨.ßG`.Á¡áßOºÉr†@•]üÀ=%-’»Kò‡IMÙ#á|"µÄ.ø×­:¥Å	‰llˆN;j­˜]…)ëYŒÔšwz‡ Rl7]¡5sÉÇi³ıŠ¶Öp)4B«M=3Twê#Ü›­ÛÎ]¯)=B{¯Éå½‚Ÿe|âÀzÊùspşìüÙù³óçzÛfë¶ó:çÏşAèt4ÄXNºe#Ç®¿ªjèÁ8_²„g£Ë.Û[§¤Ê.|âa—EÕkm	„M,Ö+»ø™JØ)7­3:–- aM­nËV]
-#f=éÁhçîR@)yÕúc`P|"ŸÑ]˜­µ
-Z±†a1ûi§u¡ÛTÚ*gI5&Ë¦w^Ø~ò›‘©8e!~n&–™Äq3R‹}Z ;„)ä=cÁm`Â46\	Ev‰Q«²¤³şîÅM—å]ô7ôh$pÌ»˜oºxá€¯+í½;é…	l§KG »İo‡E<Âíœò¤å¾¨Úîí¦«¹„dìXD.TÎ:¦S¡ÛçÏÎŸ?;frşŠ?û¡ÓÑoÿ@5 ^„ÂÅ@V¨ÌøÍ™t%Uçà @¼ğÚ”1N^u«j©RD„Æ£°íÜ†iEŒÀö¿j`p–1¡å²åÏcí#@Â
-‘åò°•øĞÀ†-ŞÌ0­j,gÀŸß	Æºª1ˆ¹)	XB«‘Ÿìp‚ÉÅE" ©];¨3Õ—ØˆŒfL­1 ×¢Êì
-iŒ@'²Ù°ÇlÔ‡ºH³ÂtWäLL5²[ RÜÖ•yx{$9a$8F*	£yš=¢…lSëoPòÛ
-åÌoÇCñãØM‘ò§©õS'¡½§™Š ĞÄ”H5Éau+í2Ÿ` x~MyY)Ÿ
-—D®Áù³ógi¿ógçÏÁùs{KÑeÈŸıƒĞéh¨0Oí+‰0V¦Âdw‡æEÂØá‘ “]Œ¦³].,ÜmEñ£@±X>@\Dì²SÆèS|¬Ûò6äÓ•<À"Û-¹1S‘\É%„	8°åCæÈµÛ[¥m' &ÅsÀáÂ$6Áé#éßCİ+R4!U,$¶PŒ02ë‰o	ˆwvEîQ¬ØY M^·mEöÖ~–Òb¢³©=a–Dl±|­H¶s‰H«®<o'§4i‡^¯zÊ™»…(p¼ÔHr-/"h«¤>«È`ÕÁ=ğl2‡h6Ïà¢c¯Û0	ó‚ÉŠ®·ó?›P­û¨¿2  çÏÁù³óçöÚù³óç#âÏÃh'§ËòğX@âd‚åUŸØŠ²l1*VuàBöKğ)®›¢´· dìß‹Š$(ùÄ¢º=µ©°_ÎE¾h}Ä©I¤j·Nœò»   IDAT-ö-hİÈ…škš¼£ R¼4Ô
-ÀvUÊßá©æŒ•¸dh¹ÄêN]VQi°eú ;—¥èk*Ãë­Á=j¨«˜Úò=B© JnFl^-º¡S(5Îsß]ËùÒ"Ğ¶ü©‡R×”}÷Ñk”Ÿß¯¨—0aÄò‰‹xª øæÎ•”Ñ Úc.áè#L]9f"÷ô~c;¤:,8—ZË‘ôX§è>Ui‘ãı|ãÏ¸K‘òùHÕ½¢öUÛVÅÁ gà¢À7D™M8Û(¿"çÏÎŸù­9nãü¹©ËùóåÆŸı„ĞéÈGÛsŞ#§Ş=šìnhM ØMõˆZdˆq œAüãÅêF­ \Ø×«ãóë}üßİé¼õÖ=Ñ	>0f" __5<´ğî=‡ŠîrgD7–¦Ú ËóÎ´ªşë„Ğ¼u1­d¾/Ö)’Í¯­z5& j¼«›)’5Ø_"5!ô¦^"!‹7oz®¤k3ùĞï
-£rÄ²Es/Ì””êŞ QæGÕ_w ;„.a@ªëŞ7-Lİ0\}ià®›¹Ir	+­CÆg©WI’[,/Ì–QSù$´ªVâ8'2?“7ÆK&õ<ò	É-E+
-‚%kñ©÷¸|æàüÙù³óçàüÙÔâüùòçÏñ®÷¸Gprrrrrrrrrrrrºş‘Ÿ:99999999999]OÉ?œœœœœœœœœœœ®§ä„NNNNNNNNNNNN×SòB'''''''''''§ë)ù¡“““““““““““Óõ”üƒĞÉÉÉÉÉÉÉÉÉÉÉézJşAèääääääääääät=%ÿ trrrrrrrrrrrº’:99999999999]OÉ?œœœœœœœœœœœ®§ôíá-ßç}n|ã‡w)åöĞ‡î^y»Ûİû÷ÓÉÉÉ]¯ºêš=èğ1ÆQ¶[ßêV7ºÑlâjµâ”\Âû^yå™“›¨rN·¸ùÍouË[''''''''''§IºùÍo>Mïü§Y–ÛÃ;K'á¥üMò¸¯üÊ/ú²/ëŞ}È5WŸ?áwï÷òõW|é—¾õ­oıo?ú£¸õIÿîßŞíª»~ÍãşeèôAŸş¨O999“¯ßü–7×÷~ßë_ÿúğ® ¼ózÍÕOÆ3.®×öîı>ôCîvÕU/øã?æD¦ûÜë^úäOzó›ßòú7¾áAõQ«“ÕÿØ½ø%/å<ïs‹[|åúOgÏÍßu/yéK¿ûû¾/'¾ç{¾ç×<î±7¼ÁR
-¿ñ´§ıúÓ†Ò>ıQJi¦ÕÓşô'ÿú¯çÄ‡?ìÚ‡\}MØ~†_xÒ/ÿŞüjCşÎüæ¯ÿú?ş“?ù?ù“Hù²/ş¢wœ?ÿƒ?ü#W\q›/ı‚/<wî\éÂ…‹?ğC?ô’—½y>âş÷Ä'|ÂıØ½ğ¯ş*89999999999ı3è†7¼á£?ë³Î;›Åû?|ö³ÿàÙÏ¶y>êø¾ïßşİßıòÿşUuëNw¼ÃÇ=üáùcr³™îñÿøáé_ê„ğƒî~÷»ßí®¸Ş~µ`bÿLºÙÍnúŸö©ùËê«¾ú«ÿË×}]Hé‹şÃç‡wıÑóŸÿ%_ñ•İ¯Áñ8åÓËOı”G>ñgîk¿ñ¿÷~ğq_ûµÏüıßÿ‚Ç<&ûq¶OÙ~1¾ù‹¿üËŸğıß÷~·¿ıïp‡œ˜§ËúâÅ¯xÜÉŸ‚×>ä!7¹ÉMrâ'?âÏù£çæ¶=ãw~ûÁW_*zÍ5¿òä_Í?û¹ô	ÿÏÇÙ¶]ûàç¿ù”’Òvïå‘xÄ;Şñ/ìcÿÓşª7½éMzä#%ÇG>àşùïƒô àääääääääääôÏ£ó±»Ş¬¿ç~ğYÏ~ö‡İï~ùøGeø”OúÄûŞçŞùÆ>›¿ª>æ¡×¾ä¥/ûÎïùŞW½úÕ¹¨péôÎŸ2=üÚk¯şèœœ¼ü¯È­ùÔG~òû^ù¾9ıñ_ó5ÿõ¾aôÔ½ïyÏ|JvæÌ™·½ííùüğeÿğ¹ÿ_ş%_|ó÷~ïó.üâ“ôœ?z^¸Dºÿ‡}Xšçü‘™ç9ÿüáÿşãüÄGä/æüó>ÿ1wü€È‰û÷ÿ?ôÃùâ»¿ıÛ^üâ—ä¯êÍfóÛ¿ûÌÿık¿–OÌñÛ¿ıŒßù|÷[ÿø|ÔvÛ+n“?™n|£½ííoÿ‰ŸúéÏûÜÏùŠÇ>.ß}ä'~bşL_MÓßşİß_yåíxƒs7ø¶oúÆŞà†oxÃ¾å;¿óÿí'tÇ!ÏsûÜ|–˜ osë[½îõoøæoÿö|ü˜_áÏÿÒ/I¶ıÍßşı‹_œ/ò÷ífŞÜæÖ·Î¨Àíß÷ÊŸÿ¥'?>>øA}Ÿ{İ3·üÏÿâ/ş÷¯=%ç|Áÿ÷ÇW?ğ£óÉŞı?üÃŞôæ7ÿá³Ÿsç;İñ~é—pf¨(Ÿ+şŞ³şà#>üÃó§f.™oİô&7ÍSêÂ…ùúûø‡sÕHŞğV·¼åSúÔk|F589999999999@÷½÷½?ôƒ?8ªäëûĞ¹ç=îñC?úcWÜúÖOû­g\¼x1~è}ï{Õ]îò¼¼€ŸÊÇ3¿òä_{Ä'|‚-ğ7¿y>RzòS’RÊÿıç|Îopƒ·¿ãáRè]pBøïÿş}ğ5?ós?ÿµßøM7¿ùÍ?í‘üÉ'şÌËşáeı7/ZøÌ”{õ'úgù\ë¯^ô¢{ßkk}÷…Ÿÿùëõæq_ûu¿óÌg~Ê'}²²ˆ;¨1ï÷ş¯~ÍkäCå^şòoÿî'äŸÿîã?>·ó;¿ç{ò÷j¾È?óİ“Õê½ßû½¾úë¿áWüäkô +ow»¿ô%ù»<ßÊßHïñ7|îó—¿ñnvÓ›å=ş[¾5·MºÛ]¯Ê¯ğg~öçşë7<>¾J;ó#ÿó§ŸøOxÂMoz“k>ú£Gãpë[ßúé¿õÛùC?g~ÙW=6çÉzÏzösrÃ8Û¯?õ©ı¢…¢ü™Oîÿ‚ä÷½ZÈÇ[şäËmÎÿó‰O|Ë[Ş¶Ÿ©Èß¢ùsñ¶W\±šVßòøoxÌ£ı]ßö­Ö¸ñv·½"~ÿúSŸöŠü?ùõ©»¿õ»¿sç;İé›¾şë>ûÓ?ı½nv³¿|á‘şàk®~ûÛß¿EóœËßŞÁÉÉÉÉÉÉÉÉÉÉé0ú³?ÿóü½p›ÛlÏZ>èîÿêeÿğò|66­V/ù+á-o{ë­nu+õÔ“ı7ŞúÖ·v¼ím¯È§‹çË)Î?½éMYD¿âŠ+Â%Ò»à„°|lÄ|Ü”ÿå/–»É½öu¯»×=ïqƒŞàŸóÜ<:9åŠÛÜ&Ï<ê“>)”Ğ»ÜåÎş‰Ìù,ñNw¼c·œŸù¹ŸË‡i¸Î§”›MçØê.w¾s®âå¯ØêÔæ‹üé¿ò«OÎßÜ¿óÌß{èƒ|Ïú ü–Oínpƒ\ıÀşÃË_#²×¼öµü§Ê¥åœoxãÿèùÏÏ×¿ú”§ä?¤ç/4|;åGÜ±ä®å×öïñï8ÿü±úÒ—ıC†r]''ï/|Ÿû<ôškò·e>¢Ì_ü9e½ÙàVîé	}3Æ£•ò¾éÛ¾=”£¼ü½—?€ó¹k>xüøû¸üÍÅ>üÚ‡å:sşüÍ|¿ùÜ¤<än¿~Ñß<äê«ï|ç;eè"fşÄOıT(°¯zÕ«ó‹xã?ıSşâµv‰NNNNNNNNNNN]ÊŸ ¯~Ík?ä¾÷}Úo>ı&7¹ñ³~é§bI·™wâ}šÓÉêNì¶Î#ç½ŸB:¹ôµwşƒP¾^òwmşûºâ¸%Ÿøåó.•óíoÇŞsï'ó¦7¹)¾bŸğıßÿ€ÿğûŞû^ş¬Ïüã?ùS¸6ÉZ(*„¼öµ¯“§ò—áë^ÿ†nK^ûº½Ï˜|ÄwÿûíO®òÔı>ôC~÷÷~µµ³”ï¨ÍªúğÉŸÔ¸È£Ÿ41¾å-oı¨<àÎwºãöçj~m4øÖ·½Mìın|ã}×ÖÕ¼ğâÅõ‚dî×G>àşOıÍ§?äêk¾ã[¾9¿ºg?÷¹yfä7•ó®W]õ©|dşjÅÁq>ÿÍÓåıoûüÙ\Fò&Ïù£ç"çÇÿ?—¿®Ÿğı??³QÅín{[ø›¿õ[zàó2nîv×íwû¿ÿìÏ†Ù`>¼Îm»ïÿ~·Ï'‡ùà1_?âß~ÂıË©işÄÍç¥·»İmóSçÎåîÇüÙ™?Sƒ““““““““““Óô¼<ÿš=è>÷¾÷[Şò–üá“SæysÅ­oó¦7½9ÿ‘öqxiÿøÿçäÌ	,¹ò‡Ï§—¿âáé’UFóèÏıšÇ>6”Ã"|)ıÉŸıYşÊßo¿øË¿ü¶·½í½nö^91Ÿwİì¦7Ã#¹W·½âŠ«>ğÃVSñ¶W}à]şæoÿ&_ÁcóOÿôOßı}ßÿWı¢+¯Üª>æïœÜŸ'ıÊ¯üş³uë[İ2 I½¹–ßxÚÓºÿØ‰è>û9ùSí³?ıÓÏœléÿÃç?ôšçú»¿ø_İıîïY(_üİ‹ÿù?æ¡×æïv×«nt£aôŸûüç]ûĞ‡ÄiRşB™ıœçæó½/øüÇü›ûØı˜	câqúÙ_ø…|¼vÇ;Üáq_ûµßğÍßò{\ş¼ÓïğKÿëW8[ş*{Ìç~ÎSú°i½ò•¯üØ‡Lşv½ÿ‡İ/•åéP|™~ôG~ä÷ı·ziõú¬ç<'”sÑ°5Tı×ù3’¿óäW–ëİş{ìã^òÒ—<ğ#?‚«ş¼ÏùÜGögá›öï}óóçÏ‡â„æÍo~Ó—~ÅWæ§¾èË¾<wíÁ×\œœœœœœœœœœœ£¿øËL«ûÜë^úg”íYÑG< ’ÜãƒşÕÙ³g^ô7Û¥œáınûQ!7¾Ñ®~àóÅ+_õªõfóĞâ*òá{XÚGÊ¥tÉ'„Où§~é}á÷}×wæ¢§=ıé9å/_øÂç=ÿ_üÿcş|¸xñâşÈ6¼ÄïıÁ³>ëÓ?í›¿şëó7Ïï<ó™w¹Ó>ÿÑŸ›ÒV[2!şÂ“~9çyÕ«_õ9Ÿù8¸ûr«‘øƒ?ò#_ö%_ü=ß±Uzü‹¾ğoü§p‰ôªW¿ú'ŸøÄG}ò'}×·}kşùóçÿÛo­6ó7Øíß÷}¿å¾>l1$6  šIDATîÕ?û¿ˆüùëÕ=ÿ/ø»¿ß~%şæ3ñ zàŸşùŸK™¢J)Ç±yèäÇüÚ?ä®xÕo?ó™x%'Ø–k¹•?Ûr{şıgÖ›Şüæ×¿ş·ºåûœ9{6›zŸù©Ÿ–ùá×>,ÿNøÉ'şÌıØÿê¯úÏOøöoËÅ?õéOÍk_›oıë‡åñK¾àğàşÏªÏù£çıÇÏû¼9Ä8ıÏŸşi.ùê~`|æ…¢ ú™Ÿö©åÌs×ş|6˜?¿÷;¿#”ÕŸø©íãw¿ûİ]¾3AùW/üàûÜ'Ÿ^''''''''''§ÃèÅ/}é>àıŸ[¬Ï2ıâÿú_Ÿû™Ÿñe_üEÛ°Ïy.?ü~úê×¼ö%/İ¥cíÃ|°tï{İó¹Ï{Ş›ßò–üuö¯víİ®º*ÍóÏ?éIáÒ)Şõ÷—HùğíÊ+¯|Å?ş£|Q”&ÆßøÆozÓ›$e*$Z”ùPëÊÛŞ6?Åar†|4ÇO…rTšK^_JtK·ºå-/\¼ÕJ!èyÂ20Sş¬ıöï~ÂŞø†óç/HuWŞîv_ñ¥_ò-ßñÿç•¯\(<Ÿ”æ/ÏW¾òUyô£ßç·àï=Ej„ò0Şå.wÎg§ÿâ—äoÑKòØyë[İ*Ÿø:DïqÃŞâ·°š¨Rîf~­ùë789999999999ı‹ÑÍo~ó7¾ñbã¦|XRnù>ïóê×¼&¼SôÎØæ/:„C`ÊRßus!ù™»'ÁÍ9z*Ó;qĞi)ÚDùÜ5)Ÿm6o}ëÛ$å¡¾æá×^ûÇò§_ƒ(<Ÿí~é~a~ùÛõ¿ÿÄO,dVã ”‡1Ÿã‰×œK¢?ÒŞöö·¿Ó_ƒa0†NNNNNNNNNNNïZz™w…Vñ°K*Ã;ı5Ş¹Âÿ‹	Vs§¾ ¡|ì)ßñNNNNNNNNNNNNÇEïšÀôÿ×ĞáŸ‚ ÿtrrrrrrrrrr:^z¦wrrrrrrrrrrrr:FòB'''''''''''§ë)ù¡“““““““““““Óõ”üƒĞÉÉÉÉÉÉÉÉÉÉÉézJşAèääääääääääät=%ÿ trrrrrrrrrrrº’:99999999999]OÉ?œœœœœœœœœœœ®§ôÿ  ÿÿ#1ş   IDAT bÍDY8˜2¤    IEND®B`‚
---- runs/2026-07-30T1800_RAGM-03/e2e/scenario-2a-vector_store.snapshot.yml ---
-- generic [ref=f3e3]:
-  - banner [ref=f3e4]:
-    - button "toggle navigation" [ref=f3e5]: â˜°
-    - generic [ref=f3e6]: JetUse
-    - generic [ref=f3e7]:
-      - button "EN" [ref=f3e8]
-      - button "â˜¾" [ref=f3e9]
-      - button "ã‚¢ã‚«ã‚¦ãƒ³ãƒˆ" [ref=f3e11]: D
-  - generic [ref=f3e12]:
-    - navigation [ref=f3e13]:
-      - list [ref=f3e14]:
-        - listitem [ref=f3e15]:
-          - link "ãƒ›ãƒ¼ãƒ " [ref=f3e16] [cursor=pointer]:
-            - /url: "#/"
-        - listitem [ref=f3e19]:
-          - link "ãƒãƒ£ãƒƒãƒˆ" [ref=f3e20] [cursor=pointer]:
-            - /url: "#/chat"
-        - listitem [ref=f3e23]:
-          - link "ã‚¨ãƒ¼ã‚¸ã‚§ãƒ³ãƒˆ" [ref=f3e24] [cursor=pointer]:
-            - /url: "#/agents"
-        - listitem [ref=f3e28]:
-          - link "RAGãƒãƒ£ãƒƒãƒˆ" [ref=f3e29] [cursor=pointer]:
-            - /url: "#/rag"
-        - listitem [ref=f3e32]:
-          - link "DBãƒãƒ£ãƒƒãƒˆ" [ref=f3e33] [cursor=pointer]:
-            - /url: "#/dbchat"
-        - listitem [ref=f3e37]:
-          - link "è­°äº‹éŒ²" [ref=f3e38] [cursor=pointer]:
-            - /url: "#/minutes"
-        - listitem [ref=f3e41]:
-          - link "ãƒªã‚¢ãƒ«ã‚¿ã‚¤ãƒ ç¿»è¨³" [ref=f3e42] [cursor=pointer]:
-            - /url: "#/realtime"
-        - listitem [ref=f3e46]:
-          - link "éŸ³å£°ãƒãƒ£ãƒƒãƒˆ" [ref=f3e47] [cursor=pointer]:
-            - /url: "#/voicechat"
-        - listitem [ref=f3e50]:
-          - link "æ˜ åƒåˆ†æ" [ref=f3e51] [cursor=pointer]:
-            - /url: "#/video"
-        - listitem [ref=f3e54]:
-          - link "OCR / æ–‡æ›¸èªè­˜" [ref=f3e55] [cursor=pointer]:
-            - /url: "#/ocr"
-        - listitem [ref=f3e60]:
-          - link "è¨­å®š" [ref=f3e61] [cursor=pointer]:
-            - /url: "#/settings"
-        - listitem [ref=f3e65]:
-          - link "ãƒ‡ã‚¶ã‚¤ãƒ³ã‚®ãƒ£ãƒ©ãƒªãƒ¼" [ref=f3e66] [cursor=pointer]:
-            - /url: "#/design"
-    - separator "ãƒ¡ãƒ‹ãƒ¥ãƒ¼å¹…ã‚’èª¿æ•´ï¼ˆãƒ‰ãƒ©ãƒƒã‚°ï¼‰" [ref=f3e72]
-    - main [ref=f3e73]:
-      - generic [ref=f3e74]:
-        - generic [ref=f3e79]:
-          - generic [ref=f3e80]:
-            - heading "RAGãƒãƒ£ãƒƒãƒˆ" [level=1] [ref=f3e81]
-            - button "ã“ã®æ©Ÿèƒ½ã®èª¬æ˜ã¨æ§‹æˆå›³ã‚’è¦‹ã‚‹" [ref=f3e82]: "?"
-          - paragraph [ref=f3e83]: æ–‡æ›¸ã‚’ã‚¢ãƒƒãƒ—ãƒ­ãƒ¼ãƒ‰ã—ã€ãã®å†…å®¹ã«åŸºã¥ã„ã¦è³ªå•ã§ãã¾ã™
-        - generic [ref=f3e85]:
-          - generic [ref=f3e87]:
-            - generic [ref=f3e88]:
-              - heading "æ–‡æ›¸ãƒ•ã‚¡ã‚¤ãƒ«" [level=2] [ref=f3e89]
-              - generic [ref=f3e90] [cursor=pointer]: ï¼‹ ã‚¢ãƒƒãƒ—ãƒ­ãƒ¼ãƒ‰
-            - paragraph [ref=f3e91]: "å¯¾å¿œå½¢å¼: PDF / ãƒ†ã‚­ã‚¹ãƒˆ / Markdownï¼ˆ20MBã¾ã§ï¼‰"
-            - paragraph [ref=f3e92]: ã¾ã æ–‡æ›¸ãŒã‚ã‚Šã¾ã›ã‚“ã€‚ã‚¢ãƒƒãƒ—ãƒ­ãƒ¼ãƒ‰ã—ã¦ãã ã•ã„
-          - generic [ref=f3e93]:
-            - paragraph [ref=f3e95]: æ–‡æ›¸ã‚’ã‚¢ãƒƒãƒ—ãƒ­ãƒ¼ãƒ‰ã™ã‚‹ã¨è³ªå•ã§ãã¾ã™ï¼ˆå–ã‚Šè¾¼ã¿å®Œäº†å¾Œï¼‰
-            - region "backend capabilities" [ref=f3e97]:
-              - generic [ref=f3e98]:
-                - heading "ã“ã®ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã§ã§ãã‚‹ã“ã¨" [level=3] [ref=f3e99]
-                - paragraph [ref=f3e100]: Enterprise AI ãƒãƒãƒ¼ã‚¸ãƒ‰ Vector Store (file_search) â€” æ‰‹è»½ã•å´(æ—¢å®š)ã€‚è¿½åŠ é–‹ç™ºã»ã¼ç„¡ã—ã§æ–‡æ›¸ Q&A ãŒå‡ºã›ã‚‹
-              - list [ref=f3e101]:
-                - listitem [ref=f3e102]:
-                  - generic "docs/verification/SPIKE-M1.md â‘ -a / docs/verification/PREP-01.md" [ref=f3e103]: â–³ æ¡ä»¶ä»˜ã
-                  - generic [ref=f3e104]:
-                    - text: å‡ºå…¸ã®ç²’åº¦
-                    - generic [ref=f3e105]: "â€” ãƒ•ã‚¡ã‚¤ãƒ«å˜ä½ã€‚1 ãƒ•ã‚¡ã‚¤ãƒ«ãŒè¤‡æ•°ãƒãƒ£ãƒ³ã‚¯ã«å‰²ã‚Œã¦ã‚‚å±æ€§ã¯ 1 ç¨®é¡ã—ã‹è¿”ã‚‰ãªã„(xlsx ã¯ sheet='(ãƒ–ãƒƒã‚¯å…¨ä½“: N ã‚·ãƒ¼ãƒˆ)')ã€‚ãƒãƒ£ãƒ³ã‚¯æœ¬æ–‡ãƒ»ã‚¹ã‚³ã‚¢ã¯è¿”ã‚‹ã€‚ãƒãƒ£ãƒ³ã‚¯å˜ä½ã®å‡ºå…¸ãŒè¦ã‚‹ãªã‚‰ 1 ãƒãƒ£ãƒ³ã‚¯ = 1 ãƒ•ã‚¡ã‚¤ãƒ«ã§å–ã‚Šè¾¼ã‚€é‹ç”¨ãŒè¦ã‚‹ã€‚"
-                - listitem [ref=f3e106]:
-                  - generic "docs/verification/SPIKE-M1.md â‘ -b/â‘ -d / docs/verification/RAGM-01.md" [ref=f3e107]: â–³ æ¡ä»¶ä»˜ã
-                  - generic [ref=f3e108]:
-                    - text: çµã‚Šè¾¼ã¿ã®è¡¨ç¾åŠ›
-                    - generic [ref=f3e109]: â€” å±æ€§ãƒ•ã‚£ãƒ«ã‚¿ eq/and/or/gte(in ã¯ä¸å¯ãƒ»ã‚­ãƒ¼ 16 / å€¤ 512 æ–‡å­— / å…¥ã‚Œå­ä¸å¯)ã€‚ç‰ˆã§çµã‚‹ã«ã¯ãƒªã‚¯ã‚¨ã‚¹ãƒˆã§ rag_filters ã‚’æ˜ç¤ºæŒ‡å®šã™ã‚‹(æ—¢å®šã¯çµã‚‰ãªã„ã®ã§æ—§ç‰ˆãŒæ··ã–ã‚Šã†ã‚‹)ã€‚å­˜åœ¨ã—ãªã„ã‚­ãƒ¼ã¯ã‚¨ãƒ©ãƒ¼ã«ãªã‚‰ãš 0 ä»¶ã«ãªã‚‹ãŸã‚ã€ã‚­ãƒ¼ã¯ã‚¢ãƒ—ãƒªå´ã®è¨±å¯åˆ¶ã§å®ˆã£ã¦ã„ã‚‹ã€‚
-                - listitem [ref=f3e110]:
-                  - generic "docs/comparison/rag-metadata-backends.md" [ref=f3e111]: âœ• ä½¿ãˆãªã„
-                  - generic [ref=f3e112]:
-                    - text: æ¥­å‹™ãƒ‡ãƒ¼ã‚¿ã¨ã®çµåˆ
-                    - generic [ref=f3e113]: â€” åˆ¥ã‚µãƒ¼ãƒ“ã‚¹ã®ãŸã‚ã€åœ¨åº«è¡¨ãƒ»å¥‘ç´„è¡¨ãªã©ã®æ¥­å‹™è¡¨ã¨çµåˆã—ãŸæ¤œç´¢ã¯ã§ããªã„ã€‚
-                - listitem [ref=f3e114]:
-                  - generic "docs/comparison/rag-metadata-backends.md" [ref=f3e115]: âœ• ä½¿ãˆãªã„
-                  - generic [ref=f3e116]:
-                    - text: è¡Œãƒ¬ãƒ™ãƒ«åˆ¶å¾¡
-                    - generic [ref=f3e117]: â€” ã‚¢ã‚¯ã‚»ã‚¹åˆ¶å¾¡ã¯ã‚¹ãƒˆã‚¢åˆ†é›¢ã¨ IAMã€‚è¡Œ(ãƒãƒ£ãƒ³ã‚¯)å˜ä½ã®åˆ¶å¾¡æ©Ÿæ§‹ã¯ç„¡ã„ã€‚
-                - listitem [ref=f3e118]:
-                  - generic "docs/verification/SPIKE-M1.md â‘ " [ref=f3e119]: â–³ æ¡ä»¶ä»˜ã
-                  - generic [ref=f3e120]:
-                    - text: ãƒ¡ã‚¿ãƒ‡ãƒ¼ã‚¿æ›´æ–°ã®æ•´åˆæ€§
-                    - generic [ref=f3e121]: â€” files.update(attributes=) ã§å†å–ã‚Šè¾¼ã¿ç„¡ã—ã«ç›´ã›ã‚‹ãŒã€API è¶Šã—ã®æ›´æ–°ã§æ¤œç´¢ã¨ã¯åˆ¥ãƒˆãƒ©ãƒ³ã‚¶ã‚¯ã‚·ãƒ§ãƒ³(çµæœæ•´åˆ)ã€‚
-              - list [ref=f3e122]:
-                - listitem [ref=f3e123]: â€» ç´ ã® xlsx ã¯ 400 unsupported_file ã§æ‹’å¦ã•ã‚Œã‚‹ãŸã‚ã€æŠ½å‡ºãƒ†ã‚­ã‚¹ãƒˆã«å¤‰æ›ã—ã¦æŠ•å…¥ã—ã¦ã„ã‚‹(è¡¨ç¤ºåãƒ»sha256 ã¯åŸæœ¬ã®ã¾ã¾)ã€‚
-              - paragraph [ref=f3e124]: ãƒ•ã‚¡ã‚¤ãƒ«å³ã®ãƒãƒƒã‚¸ï¼ˆVS/ADB/SAI/OSï¼‰ã¯ã€Œå–ã‚Šè¾¼ã‚ãŸã‹ã€ã€ã“ã“ã¯ã€Œä½•ãŒã§ãã‚‹ã‹ã€ã€‚ã€Œæœªå®Ÿè¨¼ã€ã¯å®Ÿæ©Ÿã§ç¢ºã‹ã‚ã¦ã„ãªã„é …ç›®ã§ã€ã§ãã‚‹ã¨ã¯è¨€ãˆãªã„ï¼ˆãƒãƒƒã‚¸ã«ã‚«ãƒ¼ã‚½ãƒ«ã‚’åˆã‚ã›ã‚‹ã¨æ ¹æ‹ ã®æ‰€åœ¨ãŒå‡ºã‚‹ï¼‰ã€‚
-            - generic [ref=f3e125]:
-              - combobox "rag backend" [ref=f3e126]:
-                - option "VS â€” Vector Store / File Search" [selected]
-                - option "ADB â€” Oracle AI Databaseï¼ˆè‡ªå‰ç´¢å¼•ï¼‰"
-                - option "SAI â€” Select AI with RAG"
-                - option "OS â€” OpenSearch"
-              - textbox "æ–‡æ›¸ã‚’ã‚¢ãƒƒãƒ—ãƒ­ãƒ¼ãƒ‰ã™ã‚‹ã¨è³ªå•ã§ãã¾ã™ï¼ˆå–ã‚Šè¾¼ã¿å®Œäº†å¾Œï¼‰" [disabled] [ref=f3e127]
-              - button "é€ä¿¡" [disabled] [ref=f3e128]
-  - contentinfo [ref=f3e129]:
-    - generic [ref=f3e130]: JetUse â€” Copyright Â© 2026 AISA
-    - generic [ref=f3e131]: v0.1.0
---- runs/2026-07-30T1800_RAGM-03/e2e/scenario-2b-adb.png ---
-D¾”ÒªåÏ}fvxeüF0è¿\»Ùuw\möjéoê«Ñÿ±[>ëu ³ªğ¶U€Ü6B,;‘+ç!«µ/—»©£ÛÂ¥ûåİGÙu01ñ¢Á€Æ‡öN;æ‰İÂ§êÅDåŸŒ™Šœ½ô„]ï¨_V
-987˜(dB[L-Ä1mgæd¬eTºp3iŒÈ‹0~1¯ÀÂ§‡İbÍù³ógçÏ\‰ªÔùs·pçÏœá¥ÅŸı„Ğé’¨Xº7gß˜ÍŠo¦Ö3 È;·±< ä(#æX‘ÚÌ3IøH¬`µ^Ç®¥ÊÔÓ„u1QnäU	“ÛY”}n£S¤Q%¬Ú^+5¤`‚\•ÁëH7)V2d( %qC…oA%©h(ƒòº   IDAT¥¢.†+yˆàç@:È>³fÖb Z¨ªY8gX(ê± RñRÖØ¡µwO»Ş”†»µwGËè¹œHh½ÊÉX`"É¼7em-ÛÛ˜â‹bæŠŠ :vÁSuG~P¸àÊ˜xÕ_ßÊSJ#Ü·“!lQ¤ºn	£DUxY’'¤ÀŞqlLÂ5ú­ZŒ£B¾ˆ÷¼Xòp(R‹@§Ø2©–æ¤,pYæ’Î’qŸ7¡„ágçÏÁù³óç¦çÏıDçÏİ_ºüÙ?.†°&YŠ[ˆHÁ¦"AxÅ:E­ÿ©ø=ƒ34Ï¬U±g%kŠµU¶™kP&ìÁ–ÎÕ¹v¯[Ô`knÑ¥*'İIU÷ V:’]M$ó•°	MÇÑTÅ[‹İÈz ûÁ¥È·m1LËèYœïV¡På›ÒÙ‰5…xlcë¢ ¥ÍÆõÂˆĞ$ÑõBQ“±‡	æMÍÕ?áÔÆPRã3]çÃm”˜–$%l”2P‰¼{1³ª¿Š©ubÆù-­ªUE)#áˆ ôHŒ zíoô©ª”‹ĞšyÊôt´_RO÷O5T–ü,’7Ï@S)ï>ÈŒ:w¯GıRÙdÕLä1%„FĞ)›¥Abq³èÔ|Pb=÷ë©c
-JÜ‚Íe‘éwÖ:7Aí’¸+”ö8vş¬Èù³óçQ¢óç‡?û¡ÓÅĞJî¿`ü€;l§çg9hŒeaRPûP¿Á–#VVcª¦ ¡µ ¡R ÈP@²{¶ Íİí µá4‘ş¨’ˆ}ZXØÔêÛ€Xkø—;Æ¡ãÙ å¾x·»IS®d¯",UÊé‚yhdj#ï‰>‰ò«
-³u°KÎÃ/kíY
-­7saêv¥
-T¹”æØÚ:c>ÎÅ¶û.0íÖliÑYOñªƒÅ?õğn$´9?-½A+1¬‡æáfÄˆ,§Ï•bk²efu"QcK	-l¼’SWè±Mê>NbD”©[ï&…4Û¢B;†Ç‡ğÏõÈÓ]b¾gßuhù0 ÎŸ?Tçü98F•ÎŸ{?şì„NC‚µ`)£Ø¹ú'àµ$jH3Ù×"ÃR(ï@|òÎÌHœ¿É®Ì€Ğ­h»]×Q”‹P‘½›ÌPnÙ‰o´‘C¯F¶d0šÒ¯»bì¶ ço°¤d‹©zØ;ØàsQP‚ô7âu wRü@{0\,ÌÉHòµ<+éºÂœ%HmtıÊÍL„|[—ILX³0 >{tg:6P™Z'cVà°yBÛñƒC˜(làk™¦ã‘ŒI=líEw6¼x¨kÔ–Ç·úéö•!ß¬"~Ñö…‹W%w3M×o£
-¦¦&uÍÙº´ı²sf”Ó>Ú9¿ ¸[bÜ%›'õÎI‚ógçÏcrşÜ-08î‘óç—öB§‹¡‹:`´°GaòQ0 H#v ¥>—³?·bD±[€¬»»ğÆÖ"Æk(äS/È•èçtufŠvµpq.MnAtÀ_IÓfi\‡ÏÖ.%T‡fª‘±ç\5U¤7aô3Fó£Š“YÈ®ïÁ‡Ş[%VÕı0çŒ—ñ9ØºŠq[„'HŠÌ7¯ÈÃûDÚ\êÔ­híy«SÆ-v.0¿™Éxœ‹,P®úk_Öj\ä±”SDÄŒ^ö!ëéIáåis9¸;Ù³`9.³w> Ò¬jaB!C×Åƒùnéi#4·ov6Ò­QšÇƒÖ„ö›ß’ŞL§ÁgLMá£ÄÒyjƒ›ap/‚ógçÏÎŸMclŠóçàü<|üÙ?.†á lÂ„²§ÚSŠTŸ•‰½–qJáz¼?aeVñ‹oÕHJØêb	ÂÛ•* ët^´á,
-^d·ÈL÷”¸ÀÈY‘‡R0&Wmü«`4.Ø€„Û £õ$¡©ùÌâ±®Fƒ¥dXjPæ¸› íh4CnÑ¸_‡}Î`oÒäı<2Ğêò}æşı¤›,gTÙEÁo¸§¤ÃÀSrr‰Bş0©){$œO¤–ØÿºU§Ô ¢8!‘ÑiG­³«0 eı"ë‘‘ÚQón…†Ş!€ÛMW¨gÍƒÁ_Wrãq]Ãl¿¢­5<MƒĞjSÏLÕ]û·Çfë¶së5¥§Ahï¹¼Wğ³ŒOXO9ÎŸ?;vş\oÛlİv¾Ôù³:]1VÆ„“nÙÈ±ëÏU=çK–ğàjtÙe»bëTÁ…O<ì²¨úd¢-°©#ƒÅze¿U	;åÒ:£cÙvĞÔê6°ÌaÕ¥0bÖ“^Œ6¿p
-JÉsëAñ‰|Fwa6´Ö*hÅ†xÆì§M?ê^·©´+T>6Î$’jL0–	L#î|°ıä7#Sq2ÊBüÜJ,+9ˆãf¤û´ vRÈ{ÆÛ:À„il¸Šì£VeI›³şîÅM—å]ô7ôh$p¬[Ì·N]<Çp@„WÏ•öŞôBÏ¶Óƒ#Ğİî·Ã"á6g†<i¹/ªv†{»éêA.!;‘•³…éTè¶Äù³ógçÏÎŸ™œ?‡‹âÏşAèt1ÄÛ?Pˆ¡pC1*3~¹Uƒ®¤êˆ^›2ÆÉ«n®–*EDh<ªÛÎÍ`˜VÄlÿğ«gZ.[ş:Ö>$¬Y.[)€ŸlØâÍÓªæÁrüùÁXçƒ˜’€å)´ù©Á'Ø™Ü?ôX òšÚµc:S}‰Í€HÁhÆÔp-ªÌ®À‘Æt"›+p¬F}¨‹4+Lw&gbª‘İ‘rà¶®ÌÃû˜Ø#É	#©Ài4RI}ÈÓ¼èd›Zƒ’ß>ÈP(gx;Ş?İ)ÿæ4µ~ê$´÷Ô3S:˜é &™#¬n¥]æ ÏÃ¢)/+åáSAà’È58vş,íwşìü98no)zù³:]æ©}…2ÆÊT˜ìvh^$Œ]m1šnw¹°p·™âGb±|€¸ ‰Øÿd§Œ5Ğ§øX·ålÈ§+y€E¶[rc¦"¹’K	p`Ë‡Ì‘k··JÛ® LŠç€›Ø§¤u¯HÑ„T±ØB1şÁÈœ$¾% ŞÙA¹G±B`g 4yİj´Ù[#øYJ‹qˆÎ¦öl„-Xy,°Åòµ8"Ù¬%"­ºVTDğ¼\œÒ¤½zÊ™»…ÜPàøcPw"Éµ¼ˆ ­’ú¬"ƒUk÷†„g“9Ü@³é|{•Ø†IXLVt½GøÙd€jµØGı•9ÎŸ?·×ÎŸ?_@;9=„”wh€Ç'¼X(¯ø$ÀV”e‹Q±Ê¨²_‚OqØ¥%¸!c?|/*F ä‹êöÔ:¤Â~¹ú¢õ§6$‘ªİB¶Ø· u#;j­QhòHñVH<ĞPc(<ÛU)ÃS-Ì+qÉĞr‰Õº¬ £Ò`ËôvK9Ğ×T†×Zƒ{ÔPV1µå;B© JnFlİĞ©”×µï®€åƒ|ih[şÔC©kÊŞ}ôåç÷+ê%L±¼Fâ!*(¾¹³c¢’2@{Ò%}„SW™È=½ßØ©Î¥Ör$=Ö):D ¯AZäxŸoüÙ w)R>?©ºWÔ^µmUp.
-|C”Ù„³ò+rşìü™ßšóç¶1ÎŸ›ºœ??lüÙO.Œp´½Öè=rêİ£¡yÀv»@kÁ.Õ#vh‘!Ærñ«q`´‚ra_¯îöø¿Ûé¼õÖ=Ñ	>0f" __5<´ğîCÅ	w¹3¢KSm€åygš«ÿ:!4ïTcL«™ï‹uŠd³Ãk«Ç„áDwau“"E²ûK¤&dŞÔ‹A$dñæ¥áJº¶’ı®À1*G,[ø·öÂLI	¡îe¾apTíùu²Cè¤ºî}ÓÂÔİÃƒ!Ğî*°™›$‘°Ò:Ôi|æz•$¹ÅòñÁl5•Ï@B«j%ãğw"ó3y³a¼dRÏ#ŸÜâY4Sp<,ÁX‹O½Çã3çÏÎŸ?çÏ¦çÏ?oø¦oœœœœœœœœœœœœœ^öÈOœœœœœœœœœœœ^FÉ?œœœœœœœœœœœ^FÉ?œœœœœœœœœœœ^FÉ?œœœœœœœœœœœ^FÉ?œœœœœœœœœœœ^FÉ?œœœœœœœœœœœ^FÉ?œœœœœœœœœœœ^FÉ?œœœœœœœœœœœ^FÉ?œœœœœœœœœœœ^FÉ?œœœœœœœœœœœ^Féÿ¶„¯ögÿì+¼Â+„+åßíéOİ}ük¾æ[¼Ù›…ÓÕÕÕ>éIO}ò“_ïu_7Æ8Êö˜WõG=êQ6qgNÉ%¼ÖãëêÊ&ªœ7§W}ô£_ıÕ^-89999999999ıiÒ£ıèiúãše¹=üqé*üq)“<ë?ñ£?îãºwßõ©O¹{÷Ş¿ÿïÉ×Ÿğ±ûğÿìŸÿsÜz¿ÿî¯¾Ñ“Şğ“?ıÓÃŸ½Ù›¼É}à\]İÊ×/xáşñ?ıüßşíß/úóO|âÓŸú”oûöo¿:Ù»oû6oıFOzÒóø‡9‘Çé-ßüÍ?ğıßï/xáoÿîï<ù/ÿåùjş’/û²Ÿÿ…_ä<öU_õÿöß¾}ûvş®û…_üÅòùŸŸ_şå_ş“ŸõI|Ä#R
-ßòìgó³ŸÒ>è?0¥ušægÛ·}ã7sN|w{Æ»>å©áüY¾úë¾ş{¾÷{Uòwæg|ê§şğüÈÿçË¿)÷1ı¢»w¿èK¾ô±}ı¨¿yçÎÒ½{÷¿ğ‹¿ø~é—ç/½Ã;¼Ï{¿÷Ù—ıäúOÁÉÉÉÉÉÉÉÉÉÉéO@|ä#?üƒ?øÎÛY¼ÿşç<ç{Ÿó›ç/¿ã;¾õ_|«ŸùÙŸıúıoÔ­'¼şë½×{¼Gş˜\–õ«¾æk~õ×~-< ıi¾É¿ñ¿Ñâú|úÕ€ˆı	é•_ù•şÆ_ÿkùËêïüİ¿û¿ü½¿Rúèÿé#Ã‹‰~à‡~èo}Â'v¿GÄã ”O/ÿÚ<ó+¾ò«>åïÿıú…_ô¬Où”ïşÿá£>â#ò·gû€óã>æã?şs¿àóÿÜk¿öë¿ŞëåÄ<]N÷ïÂ³ş—ü)øŒw}×W|ÅWÌ‰ïÿ>ïóÜx^nÛ·×w>í)OAOêS¿áÿ­  ßIDATM~ü9Ïû÷şoŞË¶íO{Zş›O))m{/Ï|Ÿ÷yÑ‹^ôñŸôIûÿùw~ÿ÷ÿŸùLÉñNïøùïÓüäàääääääääääô'£ÿö=ßó´œ>ï¿èûóœ·{Û·ÍÇ?*Ã¼ßû¾Õ[¾E>¤±Ïæ¯ªwú3~áés>ïŸşúoüF.*<8ıñO™ŞãÏxÊ»¼óÕÕÕ¯üê¯æÖüµg¾ÿk=şµrú§ò'ÿ¯Ÿöi£§ŞâÍŞ,Ÿ’İºuëÿğòùá/ıò/çşüßú˜G¿Ê«Ü½wïk¾îëû?ŞáíŞ.­ë}é—®ëš~ÉÿëÿıÌ÷}ŸüÅœ~ÔG~Äë¿îëæÄŸù¹ŸûÂ/ş’|ñO>û³~şç!U/Ëòÿş»ÿõ¿ı·ùÄìÛ¿ó;¿ı»¾+ßı‡Ÿşéù¨íq}üÉô
-zÔşÑıoÿâÿø?ìC?á“•ï>ó}ß7¦ÏÓô3?ûsük"ñwñYÿàï?òüßùÏüœÏyß¿úŞİqÈãóÜç=/Ÿ%æÀ×xÌ«ÿÖoÿÎg|ögçãÇü
-ÿÕ×~­dû©Ÿş™ŸûùŸÏùûvY—×xÌc2*ğÚ¯õøõµ_w÷îİ|<ø´'¿Ë[¾ù›å–ÿøOüÄ¿ş·ß”s>ÿÿÿÃOyçwÉ'{ïğöo÷û/xÁ÷?ç¹O|Âëõ×~-ÎåsÅïù¾ïıKoÿöùS3—Ì·^é_)O©{÷îåë/ø’/ÉU#ıåùÈWµWû¦oıÖg<í©Õàäääääääääätz«·x‹·ù‹1ªäë·{›·~³7}Ó/şç_öØÇ<æÙßñí÷ïßÏ„oóVoõ¤7xƒ|şóù©|<óßøoßç½ßÛøª~t>RúÆoú¦”Rşû?|è‡>òø£½(<½N_÷u^çéO{ê¿üªõ)ÿ<úÑşëÏ|æ—Å¿ü¥_ş¥ÿüÓ?uğ5˜)÷êG~ôÇò¹Öú©Ÿz‹7?[ßıÍüÈÓiyÖ§ü½ïúîïş€÷{ew£Æü¹×ùÿú_åCå—åW>ûŸ|nşùßı•¿’Ûù9Ÿ÷yù{5_äŸùîÕ<¿Ê«ü™¿û©ŸößøO}ò“ÿš¯ùó¿øù»<ßÊßH/÷r|Şş`şÆ{åWzåÜ£OÿÌ˜Ûƒ&½Ñ>)¿Âù•_õ¿~Ú§çÏWig~äÿ?¾â}îç¾Ò+½âSßå]Fãğ˜Ç<æÛ¾ã;ó‡~şÎü¸¿óI9O>Ğû¾ç<77Œ³}ó·~ëş©Ÿ
-Eù3ŸÜıĞóŸŸß÷<_ÉÇ[şäËmÎÿûW|Å_øÂpşL}Ÿü-š?÷ØÇÎÓü™Ÿşiñáş?ëZãÆ×|Ücóç÷7ë³õ×şÏüúÔİïø÷ßõÄ'<á|êßûú ?óÊ¯üò'‘ş´§>åşèò·hsùÛ;89999999999İŒ~ìÇ</¼ÆkœÏZŞäÿÂ/ıò¯ä³±iåW~^ø‡ğê¯şêê©oüæoùƒ?øƒn{ÜcóéâİrŠó{¿ÿûYDìc^'„åc#æã¦ü/±¼‘ÑÑoşÖo½ù›½é#ùˆïîóòèä”Ç¾Ækäï™|¿÷å ôŞà‰?şÿ™óYâ^ÿõ»åüË¯úª|˜†ë|J¹,c«7xâs¿ò«gÚ|‘"ışÍ7æoîïúîïyúÓöfoò&ù,ŸÚ=âxÊ;¿ó/ÿÊ¯âˆì¿şæoşğş(—–sşÎïşîüĞåëóMß”Oü¿Ğğí”9pÇ’»–_ÛË¿ÜË½èî‹òÇê/şÒ/gH ×uuÕñşòßò-ŸşÔ§æoË|D™¿øsÊiYp+÷ôŠ¾™ÿÆ~`>ÊûŸõÙ¡ååï½üœÏ]óÁã_y¯÷ÊßØ\ì{<ãİr9şf~Û·~ëÜ¤<änÿüS?ı®OyÊŸø„]äÃÌÿí_ü‹P`ı×#¿ˆßı½ßË_¼Ö.ÑÉÉÉÉÉÉÉÉÉÉ©Kùà7şëo¾õ[½Õ³ÿİ·½â+¾Â÷}í÷OÅ’nY7ñ>­éj~€»³óÈu—áSHW~¢öÇÿ ”¯—ü]›ÿşVqÜ’Oüòy—ÊùGô¢G½üî'ó•^ñ•ğû¹_ğïøöoÿVoñæşÁÿıÿÈÂµIşĞBQù#ä7ó·ä©üeø[¿ı;İ–üæoí>còß;¼í~r•¿ ŞömŞúßÏ˜Ïv–òµÌÕ‡Oş¤ÆEı< ù‹ñ…/üƒ¿üïøÄ'¼şW|åWÕüÚhğşğÅŞï^aïÚ©šŞ¿:°“Ìız§w|‡oıwßö®Oyê?úÌÏÈ¯î9Ï{^ùãMå|Ã'=é¯=ó™ù«Çùü7O—×yí×ÎŸÍe$_ñ¹?ğ<äü+ÿÍ{å¯ëÏı‚/ÌŸÙ¨â5÷8øï¾ã;üÎïœ”qôFoxşnÿ>äC`6˜¯säîëü¹×Î'‡ùà1_¿Ï_}ïw(§¦ù7Ÿ—¾æk>.?uçNî~ÌŸù3589999999999İ€~ğù?ôÔ'?ù-ßâ-^øÂæŸœ²®Ëcó¿ÿû/ÅäıÄOÜ¼´_ûµÿóêÖ,¹ò‡Ï§_ùÕ_H¬2úşaŸüIŸÊa¾”~äÇ~,Oåï·¯ùú¯ÿÃ?üÃ?óÊ&'æó®W~¥WÆ#¹W{ìcŸôçÿ|8k*>îIş~úg~:_ÔG|ÄïıŞïı“Ïÿ‚ÿôŸêñ?«>æïœÜŸ¯û†oøß÷}yõWËhRo®å[ıìî?v"úıÏynşTûú [Wgú›ÿÓG>ı©OËô³?ÿóáßøåå‹ŸıùŸCşwú3roô†OzÔ£…ÑŞıà3ş®qš”¿P¦ç<÷yù|ï£>ò#şÛ÷zÏ÷|÷wcâqúÊ¯şê|¼öú¯÷zÏú”Où´ÏøÌOxÖ³ò×à^ÿõ¾öÿ÷œ-•}Ä‡}è7}ë·À¦ô_şËyÏ÷x÷üíúo÷¶ù«,H‡âËô]Şé>ÿŸ}ñ/V_ ß÷Üç†r.Î†ªÿüÉ_ƒyò+Ëõÿ}Ò³~ááßé/qÕÿã‡~Ø‡Èã›öU_åÑwïŞÅ	Í^ğûû	Ÿ˜ŸúèûøÜµ§=õ)ÁÉÉÉÉÉÉÉÉÉÉéfôÿñ'¯¦ù-ßüÍôÇ~)ç³¢¿ôù“äMßä/Ü¾}ë§~úü¡”3ü¹×~íQ!¯ğ¨G=åß9_ü—_ÿõÓ²<½¸Š|w{·,´”KèO¿é[¾õc?úo~ş?şœ|@ôìoû¶œòò'ğ‡ÿ1ÿóÿœ?îß¿ÿE_z/ñ=ßû}üAı3>õSó7Ïw}÷w¿Áğ‘şa)µ%óâWİ×ç<¿ş¿ş¡ÿıßÀÁİÿ÷ËÏ‰_ô¥_úqëc>ï•â'òw÷÷ÂÒ¯ÿÆo|ùW|Å¾ÿûıãÏú‡ùç‹îŞıg_r¶ÚÌß`¯ıZ¯õ™Ÿö©á<p¿ñ•_ı5ÈŸ¿Qİ=ÿù?ûsç¯Äÿ‹½ûy‰"Œã8>+$xrº‡
-2€•DÑ%ûa­èŸ d‘¤¥DÔ¡{¤’tŠJÃÊ:Dˆ×H	<¥y(‘ê”zÈ6×tÙõjn}‘§i¶Öİe=¬ó~áÁ}æÙÙgNŸı>Ï<¯ûû-U}ª©”ª+C¿³ÓW~ªpoÁ›ã~è-M[ıó8¨·$¶Éõ\8w6ÏÌÌzÜ®m™™2n–ûW[]#ƒ\é«?Mÿ9áÉ³ç÷vÜ¼q½½å¶tÿª¯/0=-oUUHGSCƒqâƒGRP|7|©¾^~rp82ww›{>q¬LÁˆyš>A´¶¦Z¯y®_¿Ô%ŞmkÕô‚j×ÓµÓ‹‹‹Şê9Óğñó§ƒ¥¥R½Ô    Äglbb÷®Cúê3ñ²·÷|í™«W.¯m;18d”>4˜Ÿø³)yö¡–ìß74<›“tVUá+*(ø‰¼èéÑç(,)Ñ$Å7¯×ûurR%
-ıÙÙÙ¡PHÉĞ©Y”RÔòææÊYæm¤”æÌgiz©Tzş™ÈîÑ<n÷òÊŠ1µR1æy+…ÄÚ–;í³ÁÙ¥¥eõqŞ¼¼kÍM·ZÛ¾ùı1:—J©$O¿ÿûÅº:—ÓiÎ{–qPdóó÷HíôËØ¸dÑ„Ø¹Ãã‘Šß†C´=+ËétFÏD“|M¹­’~5    ›&'''ª5n–|D³4p»\S€–”dÖJ¢3¶C0“²äºˆN½”¯§677·±œ%’(tF“RaôA×/IÊg««óóêÈéò“•>ßû#1Ò Ñ¹Ôv›å^HvíèêŠÑØ2Š£ÔñÔSsgH[X\L:jÿC    ©õÃ´¼Kû{âá?Y$µä*„[˜±jnÃ HÙSåx    H/©Ù˜~Ëˆ?
-Hƒ    ÒW
-6¦    ¤#!    Ø    lŠ@    6E     ›"   €M   À¦„    `S¿  ÿÿ&ö#÷   IDAT Èf\ít–ˆ    IEND®B`‚
---- runs/2026-07-30T1800_RAGM-03/e2e/scenario-2b-adb.snapshot.yml ---
-- generic [ref=f3e3]:
-  - banner [ref=f3e4]:
-    - button "toggle navigation" [ref=f3e5]: â˜°
-    - generic [ref=f3e6]: JetUse
-    - generic [ref=f3e7]:
-      - button "EN" [ref=f3e8]
-      - button "â˜¾" [ref=f3e9]
-      - button "ã‚¢ã‚«ã‚¦ãƒ³ãƒˆ" [ref=f3e11]: D
-  - generic [ref=f3e12]:
-    - navigation [ref=f3e13]:
-      - list [ref=f3e14]:
-        - listitem [ref=f3e15]:
-          - link "ãƒ›ãƒ¼ãƒ " [ref=f3e16] [cursor=pointer]:
-            - /url: "#/"
-        - listitem [ref=f3e19]:
-          - link "ãƒãƒ£ãƒƒãƒˆ" [ref=f3e20] [cursor=pointer]:
-            - /url: "#/chat"
-        - listitem [ref=f3e23]:
-          - link "ã‚¨ãƒ¼ã‚¸ã‚§ãƒ³ãƒˆ" [ref=f3e24] [cursor=pointer]:
-            - /url: "#/agents"
-        - listitem [ref=f3e28]:
-          - link "RAGãƒãƒ£ãƒƒãƒˆ" [ref=f3e29] [cursor=pointer]:
-            - /url: "#/rag"
-        - listitem [ref=f3e32]:
-          - link "DBãƒãƒ£ãƒƒãƒˆ" [ref=f3e33] [cursor=pointer]:
-            - /url: "#/dbchat"
-        - listitem [ref=f3e37]:
-          - link "è­°äº‹éŒ²" [ref=f3e38] [cursor=pointer]:
-            - /url: "#/minutes"
-        - listitem [ref=f3e41]:
-          - link "ãƒªã‚¢ãƒ«ã‚¿ã‚¤ãƒ ç¿»è¨³" [ref=f3e42] [cursor=pointer]:
-            - /url: "#/realtime"
-        - listitem [ref=f3e46]:
-          - link "éŸ³å£°ãƒãƒ£ãƒƒãƒˆ" [ref=f3e47] [cursor=pointer]:
-            - /url: "#/voicechat"
-        - listitem [ref=f3e50]:
-          - link "æ˜ åƒåˆ†æ" [ref=f3e51] [cursor=pointer]:
-            - /url: "#/video"
-        - listitem [ref=f3e54]:
-          - link "OCR / æ–‡æ›¸èªè­˜" [ref=f3e55] [cursor=pointer]:
-            - /url: "#/ocr"
-        - listitem [ref=f3e60]:
-          - link "è¨­å®š" [ref=f3e61] [cursor=pointer]:
-            - /url: "#/settings"
-        - listitem [ref=f3e65]:
-          - link "ãƒ‡ã‚¶ã‚¤ãƒ³ã‚®ãƒ£ãƒ©ãƒªãƒ¼" [ref=f3e66] [cursor=pointer]:
-            - /url: "#/design"
-    - separator "ãƒ¡ãƒ‹ãƒ¥ãƒ¼å¹…ã‚’èª¿æ•´ï¼ˆãƒ‰ãƒ©ãƒƒã‚°ï¼‰" [ref=f3e72]
-    - main [ref=f3e73]:
-      - generic [ref=f3e74]:
-        - generic [ref=f3e79]:
-          - generic [ref=f3e80]:
-            - heading "RAGãƒãƒ£ãƒƒãƒˆ" [level=1] [ref=f3e81]
-            - button "ã“ã®æ©Ÿèƒ½ã®èª¬æ˜ã¨æ§‹æˆå›³ã‚’è¦‹ã‚‹" [ref=f3e82]: "?"
-          - paragraph [ref=f3e83]: æ–‡æ›¸ã‚’ã‚¢ãƒƒãƒ—ãƒ­ãƒ¼ãƒ‰ã—ã€ãã®å†…å®¹ã«åŸºã¥ã„ã¦è³ªå•ã§ãã¾ã™
-        - generic [ref=f3e85]:
-          - generic [ref=f3e87]:
-            - generic [ref=f3e88]:
-              - heading "æ–‡æ›¸ãƒ•ã‚¡ã‚¤ãƒ«" [level=2] [ref=f3e89]
-              - generic [ref=f3e90] [cursor=pointer]: ï¼‹ ã‚¢ãƒƒãƒ—ãƒ­ãƒ¼ãƒ‰
-            - paragraph [ref=f3e91]: "å¯¾å¿œå½¢å¼: PDF / ãƒ†ã‚­ã‚¹ãƒˆ / Markdownï¼ˆ20MBã¾ã§ï¼‰"
-            - paragraph [ref=f3e92]: ã¾ã æ–‡æ›¸ãŒã‚ã‚Šã¾ã›ã‚“ã€‚ã‚¢ãƒƒãƒ—ãƒ­ãƒ¼ãƒ‰ã—ã¦ãã ã•ã„
-          - generic [ref=f3e93]:
-            - paragraph [ref=f3e95]: æ–‡æ›¸ã‚’ã‚¢ãƒƒãƒ—ãƒ­ãƒ¼ãƒ‰ã™ã‚‹ã¨è³ªå•ã§ãã¾ã™ï¼ˆå–ã‚Šè¾¼ã¿å®Œäº†å¾Œï¼‰
-            - region "backend capabilities" [ref=f3e97]:
-              - generic [ref=f3e98]:
-                - heading "ã“ã®ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã§ã§ãã‚‹ã“ã¨" [level=3] [ref=f3e99]
-                - paragraph [ref=f3e100]: Oracle AI Database è‡ªå‰ç´¢å¼• (DBMS_VECTOR_CHAIN) â€” é«˜æ©Ÿèƒ½å´ã€‚æ¥­å‹™ãƒ‡ãƒ¼ã‚¿ã¨çµ¡ã‚€ææ¡ˆãƒ»ç›£æŸ»ãŒè¦ã‚‹ç”¨é€”
-              - list [ref=f3e101]:
-                - listitem [ref=f3e102]:
-                  - generic "docs/verification/PREP-01.md / docs/verification/RAGM-02.md" [ref=f3e132]: âœ“ ä½¿ãˆã‚‹
-                  - generic [ref=f3e104]:
-                    - text: å‡ºå…¸ã®ç²’åº¦
-                    - generic [ref=f3e105]: "â€” ãƒãƒ£ãƒ³ã‚¯å˜ä½ã€‚xlsx ã¯ã‚·ãƒ¼ãƒˆåã¨ã‚»ãƒ«ç¯„å›²ã¾ã§è¿”ã‚‹(å®Ÿæ¸¬ä¾‹: ã€åˆ¶ç´„ã€C5:E6 / ã€æ”¹è¨‚å±¥æ­´ã€A1:C2)ã€‚åŒã˜ãƒ•ã‚¡ã‚¤ãƒ«ç”±æ¥ã§ã‚‚ãƒãƒ£ãƒ³ã‚¯ã”ã¨ã«é•ã†å‡ºå…¸ã«ãªã‚‹ã€‚"
-                - listitem [ref=f3e106]:
-                  - generic "docs/verification/RAGM-02.md" [ref=f3e133]: âœ“ ä½¿ãˆã‚‹
-                  - generic [ref=f3e108]:
-                    - text: çµã‚Šè¾¼ã¿ã®è¡¨ç¾åŠ›
-                    - generic [ref=f3e109]: â€” SQL ã® WHEREã€‚current_version / version / file / file_id / sheet / kind ã§çµã‚Œã‚‹ã€‚æ¤œç´¢ã¯æ—¢å®šã§ç¾è¡Œç‰ˆã®ã¿(current_version='Y')ãªã®ã§ã€æŒ‡å®šã‚’å¿˜ã‚Œã¦æ—§ç‰ˆãŒæ··ã–ã‚‹ã“ã¨ãŒãªã„ã€‚ãƒãƒ£ãƒƒãƒˆ API ã® rag_filters ã¯ vector_store å°‚ç”¨ã€‚
-                - listitem [ref=f3e110]:
-                  - generic "runs/2026-07-28T1848_SPIKE-M1/e2e/SKIPPED.md 3" [ref=f3e134]: "? æœªå®Ÿè¨¼"
-                  - generic [ref=f3e112]:
-                    - text: æ¥­å‹™ãƒ‡ãƒ¼ã‚¿ã¨ã®çµåˆ
-                    - generic [ref=f3e113]: â€” åŒã˜ DB ã®æ¥­å‹™è¡¨ã¨ JOIN ã—ãŸãƒ™ã‚¯ã‚¿æ¤œç´¢ãŒ 1 SQL ã§æ›¸ã‘ã‚‹ â€” ãŒã€å®Ÿè¡Œçµæœã¯ã¾ã ç„¡ã„(SPIKE-M1 ã¯æ¥­å‹™è¡¨ã‚’ä½œã‚‰ãšéã‚´ãƒ¼ãƒ«ã«ã—ãŸ)ã€‚é¡§å®¢ã«ç¤ºã™å‰ã«å®Ÿæ©Ÿç¢ºèªãŒè¦ã‚‹ã€‚
-                - listitem [ref=f3e114]:
-                  - generic "runs/2026-07-28T1848_SPIKE-M1/e2e/SKIPPED.md 3 / ADR-0020 æœªè§£æ±º" [ref=f3e135]: "? æœªå®Ÿè¨¼"
-                  - generic [ref=f3e116]:
-                    - text: è¡Œãƒ¬ãƒ™ãƒ«åˆ¶å¾¡
-                    - generic [ref=f3e117]: â€” VPD / Data Redaction ã¯åŒã˜è¡¨ã«å¯¾ã™ã‚‹ DB æ©Ÿèƒ½ãªã®ã§åŸç†çš„ã«ã¯ä½µç”¨ã§ãã‚‹ãŒã€ãƒ™ã‚¯ã‚¿æ¤œç´¢ã«åŠ¹ãã“ã¨ã¯æœªå®Ÿè¨¼(SPIKE-M1 ã®éã‚´ãƒ¼ãƒ«)ã€‚ã€Œè¡Œãƒ¬ãƒ™ãƒ«åˆ¶å¾¡ãŒã§ãã‚‹ã€ã¨é¡§å®¢ã«è¨€ã†å‰ã«å®Ÿæ©Ÿç¢ºèªãŒè¦ã‚‹ã€‚
-                - listitem [ref=f3e118]:
-                  - generic "docs/verification/RAGM-02.md" [ref=f3e136]: âœ“ ä½¿ãˆã‚‹
-                  - generic [ref=f3e120]:
-                    - text: ãƒ¡ã‚¿ãƒ‡ãƒ¼ã‚¿æ›´æ–°ã®æ•´åˆæ€§
-                    - generic [ref=f3e121]: â€” UPDATE 1 æ–‡ã§ç›´ã›ã¦ã€æ¤œç´¢ãƒ»å°å¸³ã¨åŒä¸€ãƒˆãƒ©ãƒ³ã‚¶ã‚¯ã‚·ãƒ§ãƒ³(ç¾è¡Œç‰ˆã®ä»˜ã‘æ›¿ãˆã‚‚å‰Šé™¤ã¨åŒã˜ãƒˆãƒ©ãƒ³ã‚¶ã‚¯ã‚·ãƒ§ãƒ³ã§æ•´åˆã™ã‚‹)ã€‚
-              - list [ref=f3e122]:
-                - listitem [ref=f3e137]: â€» ADB 23ai ä»¥ä¸Šãƒ»ãƒã‚¤ã‚°ãƒ¬ãƒ¼ã‚·ãƒ§ãƒ³ 017 é©ç”¨ãŒå‰æã€‚æœªå°å…¥ãªã‚‰å–ã‚Šè¾¼ã¿çŠ¶æ³ã¯ disabled ã«ãªã‚‹ã€‚
-                - listitem [ref=f3e138]: â€» åŸ‹ã‚è¾¼ã¿ã¯ã‚¯ãƒ©ã‚¤ã‚¢ãƒ³ãƒˆå´ã€‚æœ¬æ–‡ã¯ OCI Generative AI ã® embedText ã¸é€ã‚‰ã‚Œã‚‹(ã€Œãƒ†ãƒŠãƒ³ãƒˆå¤–ã«ä¸€åˆ‡å‡ºãªã„ã€ã§ã¯ãªã„)ã€‚
-              - paragraph [ref=f3e124]: ãƒ•ã‚¡ã‚¤ãƒ«å³ã®ãƒãƒƒã‚¸ï¼ˆVS/ADB/SAI/OSï¼‰ã¯ã€Œå–ã‚Šè¾¼ã‚ãŸã‹ã€ã€ã“ã“ã¯ã€Œä½•ãŒã§ãã‚‹ã‹ã€ã€‚ã€Œæœªå®Ÿè¨¼ã€ã¯å®Ÿæ©Ÿã§ç¢ºã‹ã‚ã¦ã„ãªã„é …ç›®ã§ã€ã§ãã‚‹ã¨ã¯è¨€ãˆãªã„ï¼ˆãƒãƒƒã‚¸ã«ã‚«ãƒ¼ã‚½ãƒ«ã‚’åˆã‚ã›ã‚‹ã¨æ ¹æ‹ ã®æ‰€åœ¨ãŒå‡ºã‚‹ï¼‰ã€‚
-            - generic [ref=f3e125]:
-              - combobox "rag backend" [ref=f3e126]:
-                - option "VS â€” Vector Store / File Search"
-                - option "ADB â€” Oracle AI Databaseï¼ˆè‡ªå‰ç´¢å¼•ï¼‰" [selected]
-                - option "SAI â€” Select AI with RAG"
-                - option "OS â€” OpenSearch"
-              - textbox "æ–‡æ›¸ã‚’ã‚¢ãƒƒãƒ—ãƒ­ãƒ¼ãƒ‰ã™ã‚‹ã¨è³ªå•ã§ãã¾ã™ï¼ˆå–ã‚Šè¾¼ã¿å®Œäº†å¾Œï¼‰" [disabled] [ref=f3e127]
-              - button "é€ä¿¡" [disabled] [ref=f3e128]
-  - contentinfo [ref=f3e129]:
-    - generic [ref=f3e130]: JetUse â€” Copyright Â© 2026 AISA
-    - generic [ref=f3e131]: v0.1.0
---- runs/2026-07-30T1800_RAGM-03/e2e/scenario-2c-select_ai.png ---
-à	:m
-FÊ³D5°Î@º7ŠYÈĞ·T¡••ˆö šÊKpeö¦@‚)ƒ·CJmÏùnFXêÍÅHaj5C°C	{%1¼0		ãU‚÷±|É¥ËŸ]ÉìğÊäÁx¢/òåÚÅ®¹âh³Ts_ä¢>ı»äK½tV^·ªÛfCˆ•NäòyÈhíËùnÌÆè¶pî~~÷WÌCL¼`0à‰ñ‘?{k§ó‰ÄfáCñb¢òÆL…Ï^ZBƒ®·×/+…Lœ"dB]Lû[}ÚÎÌÁXË¨tæfÜ–aü’¼¾8pX[¬9vşìüYV¢*uşÜ,Üù³Ìpyñg?!tÚ&Ê–îÕÙ7f³â›±öL (ràÀ~| r”s(Hmâ™BøˆR!Àj¹MK•¡¥	jb¢²‘;9\LjgVöÙ@LáX•œ±j{­ÔÈ¹Ê!ƒÇnR(84dÈP6@KÂ
-Ş•¤¬¡´"³z:®¤!‚Ÿî „ğ%kfh-š Õ¨¨fáœa!¢ó */eMµ½{\ëMi¹Y{q´Œ^–Z¯rJ,0
-Î<7eu-ÛÛ˜ì‹b&+ÊèĞ[çÅùDáŒ+câ}£˜bìá¾¡c‹ÂÕ5Kè%ªÂó'9ÇAÊìúÆ$r¢†î@»Uã¨P^„Ê{^(rw(b@Çl™TË{s’?pşÌ9]JÆ~^	%~vşLÎŸ?Wµ8n':n>xùògß:má›dd‘İ@Œ@
-ÂËÖ)êû²ß38C³ğÌX{FaM1ÖÊ6³”	k°e…³â\»ÕUÔ`knÑ¤"'ˆE÷ :»š ÌWh%LTGSoÍv#ãì—z,sìÏ´ŠašGÏâ|û2Q‘org©)$Ç6Ô.
-PÚÌ¸^èšÄº^(j0ö0dŞÔ¬ø'êJj|†½|¸õcÇ’$‡R*A®^’YÅ_ÅP;1“ù-­ª ¢ˆ¢”‘pD@-b#¨Vû+}*†*ù‚j3Iy£öÖËŞQ@léş©f€ò'?cÉ[Î@S©Şõ KÔ¹yİë—ÊÆ_Í <¦U‚Nş[}B,®>:5”XcDÏõõĞ0…¢·`å…2ËôkÖ:«‚ÚEvWÈíqşìüY‘ógçÏ½DçÏG ö¡ÓÖĞ(ÜÁø+7­NÏ—rĞËÂ:%£ »P¿Á’ÃVV`c(¦ T[€€P)Pd( Ù5›‘æær‰‡‘ZÚ€¡?#TNÄ:Í,l¨õmÀG¬µüËMãĞaiĞ²ËŞí6i*ÃÕ$ìU˜¥r9M0ÒÀaLiä!Ö'QCQ!“lìRæ‘/klY
-›¹°£²\©U.¥96ÖÅ$—ÅÖë.H»5[ÔÎè¬§xÕÁìŸº{7´)¿8jšzƒVb'Í-h3’ˆ¬LŸ
-µÉ–™ÕQˆ«ªaãQØ85…Û¤æãBŒ<uËİ¨f[Õc8-p0ÿ§<İEÉ÷ì»¦šKÔù³óç‰êœ?“ógTéü¹õóHàÏ¾!tÚb¬˜2Šÿò[b5¤™°¯E†E¦´É“wÉŒØù¯ÊÚWcµk:*€r*²wÓƒ	ÊÍ+ñF9ôjxI£ÉıZcW»ÍÀyÅ› ,)Ùb(ö&øT”£ ½ÁxÀ5)ş =.)ÌñHÊk~–Ó5…9K00Úè ú•šòÍl
-Î“ŠLX3ê Ÿ-º±Æ0M¨µ“1+pØ<Tw|¢@ªÑ
-|=Ó2É$ñ¡‡­]@Ñ/LêÕ¥…ş­vº}eHoV‘|ÑöE¯Jn6fö^F-šÕµÌÖl¤í—3½œöªçü‚ànqmØ:'!çÏÎŸûäü¹Y 9n‘óçË‹?û†Ğik¨‡ÇÀb„¡-¬£0ùÈ
-P¤a;ŒR/Ë¥?·lD±¶ ×îÂ+[s(¡ç­ W¬ŸÓÔAš‰hW‹..Kã[ğBÓfQ¹ŸY»*ÍT#CË3¸j*KoÌèg‚0ò2?À ¸0Yë{HCï¾«j7ÌYâßy|&–®,dìgá	’¢ä›;ÂÃû ´¹Ô¨YÑØòV§Œ[H¬²Àôfãq.t°@¾è¯}Y£q‘'¥œ,"&\p§·YOw’^W.×Nö,X‹	Ã¬‡4«Z$¡‰¡kâÁònîi%T·7;iÖÈÍ“ƒÖœ„ö›ßœ^M§Î6&ö¦°iIé<ÖÁÍ0d/Èù³ógçÏ¦16Åù39Æ#Gö¡ÓÖ#€Á€MB˜Pöô@;`JË³½2±ÖJœ’¹\Ÿ²°2Sñ‹÷•HJXêBÂÛ”* ë4^´a)
-d^d7ËL‡”¸ ‘³,E2&;uü+2Ò€D¶F;êILC1ò™±ÇºL)µ Ã¢ek 5-!·`Ü¯Ã>g`¯¤Éİ42Ğjò}æbşı¸›RÎ`¨²‰‚o¸¦ÄÉÀS|r‰Bş0©Eö p>–ZBükVcˆâ„„6D§íµ–Í®¨CÊú…¿G‰Ôöš·	J­C .¶™®PÏ’9Á_GáÆc¯†Ù~[+ĞjCËLÕíùˆlÍÖlçª×"=vB{Ï…Ë{?óø„õ”ógrşìüÙù³óçrÛfk¶órçÏ¾!tÚ’XNºy!Çª?+jèdœ/YÂƒ£ÑeçåJZ§0¤*\øÄÃ*‹ªç&Ú‹:2X¬—Wñ}…°R.jgtR¶ D„4ÖºRæ°êR1ëI/F+¿p‡rÉ³ÚƒÅá3º	³¡µVA+”0¬€Àf?¬ô£5›*v…Ê‡Ê™DT!c™ ©Ç'–Ÿôfx*FYH>7
-–Q8ˆ“Íˆ5öil¢
-)”kÆ„Û:À„±o¸BYv	A«²Ä•³öê%›:.Ë›è/µ¨'pŒ«˜oºäÃ^½¬´õî¸z&0°nv¿ö·rf('­ì‹ª]Â½Ítõ ,!;‘£ÂÙ¨a:EÍ–8vşìüÙù³$çÏ´UüÙ7„N[Crùªñ‚27dY¦<ãûJĞ•Xœƒƒ ñÂkSÂ8åW7+–*YD¨<ªÛNÍ0-‹XşáWÎ2&´œ—ü±¯}HX!²²<,¥ ~z 4°a‹7K˜V5–3àÏ—±ÎJbÙ€,TkäÇ
-;`g²;é±€å4µiÇu¦ò«á‚ÑŒ¡6µ¨2›Gì#ĞQØlXc4êCM¤Yaº3áLL5²Y R&ÜÖåy¸‹‰İ“œ0’
-œF#•„Ñ†<Í‹îÑD¶¡ö7Èùíƒ
-•™Ş›âÇ¡™ÂåoNCí§C{-3F Iˆ)AÔDs„Õ¬´É|È ğòqX4¥ÏJyøT8'Êœ?;æö;vşLÎŸë[Š@şìB§­¡Ì<µ¯p@&ÌX%e&»:4ÏÆ
-í¬b4íoraæn3?
-²åÄNÄúÇ+e(>ÙÇº-`3C>MÉ,²^’+3^È•\BB˜€ó [>dT»½•Û¶`’=l.|@bcœ>ı{¨{MH‰²ñFfŞ!ö-ñÎ2Ë=Š;#¡ñëV£­ÈŞêÁÏ\Z]t6Ög#Ò‚%
-¶Xy­ lÆ‘V]+Ê"xZv&Niâ
-½MôTfn²¡Àq¨9‘øš_i«¤6«È`ÕÁİğl4‡h¶8ŸÁEÃ^%ÔaÆ	“]oãùl4@µúØ{ıå9&çÏÎŸëkçÏÎŸ·ˆ?w œ@J+4Àc‰£	^Ì”¾ø$ÀR”d‹^±Ê¨¼^‚OÉ*°(rKpBÆúğ=«Ab€’OÈªÛCí
-ëå˜è³ÖGêDªvÙbİ‚Ö¯X¨±D¡I+
-@ Å[!ñ@s@!ó,W¹üjaÎPH–-—PÜ©óÀ22Ê¶L`ç´”}-@exTÜ£€j°Š)-_#”
-ª”Íh‚Í³I7tj ¹Æql»+òAº´´-h¡Ô%eİ}ôå§÷Ëê%’0bé	“x*£øæÎå”Ş Úc&áèƒ6¦¦3÷âı†zHuXpYj)‡ÓC™¢]zO¤F×óMnà.…Ë—@ªnµ®Ú¶*tdYø+³1gëåWäüÙù³|kÎŸëÆ8®êrş|¤ñg?!tÚ2ÂÑöX¢÷ğ©w‹ºæ«ÛZcvQ<bSI(e`ÿx¡¸FË(Öõâxàà|ÿwu:o½uâ˜d" __U<4óî5‡
-nrgD7æ¦Ú ËÓÊ4+şë˜Ğ¼y‰1­”|Ÿ­S8›^[õ¬O.@ÔxV7)ˆHÖ`Q¨	Y 7¶b1Y¼yÑŠpÅ]…ı¦ÀÑ+‡-[ø7¶ÂLq	TÖÈˆ<ß08ªöôºIØ!4	¤ºæ}ÓÂØ\éğèÃwØ,›ÄA`¥e¨cÿÌ!¶*‰|KÊÇ³¥×TyBµª;ÃßA˜Ÿñ›¥ş'[ù˜ø–œE3K0©Å§Şãô™ƒógçÏÎŸÉù³©Åùó‘ÏŸÃÍo}krrrrrrrrrrrrrºâ‘Ÿ:99999999999]AÉ7„NNNNNNNNNNNNWPò¡“““““““““““Ó”|Cèääääääääääät%ß:99999999999]AÉ7„NNNNNNNNNNNNWPò¡“““““““““““Ó”|Cèääääääääääät%ß:99999999999]A½%¿j   IDATÉ7„NNNNNNNNNNNNWPú/»!¼öµ®uÕ«^•¾®”
-¼÷é§÷îxİëŞî6·¡iggçæ'têÉ'ßè†7!ô²wì±W¹ÊUlâl6“)©„ëxâ¾›¨rnN×<æ˜c¯}mrrrrrrrrrrrúFÒ1Ç3—}k–ävº¬´C—•Òä)?÷s{â›wïuê)ú‡·½-]?é	O¸øâ‹÷÷~·ğ?~ğ'İüŸñúÆĞmnu«‡<èGvvö¥ë/ºğ7~ûy_úÒ—èëAß~Ó›~ê)o|Ó›vçs{÷Îwºã-N:éİïyL”ã éö·½íƒ~ø^xÑ—¾òå“¿ç{f;³½ä%ç~ü<™çZ×¼æÏıÌÏìß¿?íë>~Şy¿ù¼ç¥Ä+_ùÊ¿ø”'}ÔQ1ÒßyæëÏ<¥=äAŠq†Ù™o|ãk_ÿú”xŸ{Ÿq¯SN¥å¶^ñê¿xÛ?ı“jCÚgşêÓö÷¾÷ÿ¾ô¥Hyâã÷µƒ_ğ¢üuğ˜Ç8p€(:´û;/|áÇ?ñ	äù®»İíş÷»ß_ò’ıë¿’““““““““““Ó‚>úèG>ô¡ìOâı?ŸuÖ?u–Íó=w¿û¿óÿşÑşÅ_ıµºu“ßè¾÷¹OÚL.ãË_ùÊOæ3t˜ô:!¼Õ-oyË[Ü×ËÓ¯ú lâ@ì?I×¸ÆÕìGœvV?ÿ¿ğ¿é—(ÆÇıÏGÓ×‰Şñ®wıô“~®¹ì‘¦tzùàyàËşìåOıå_şíßyÁSúÔ·şã?>æQJ{?™íG–;Æÿ³?ûÜç?ïÛ®ıßèF)1M—ùîî“ò¿ÓVğŒ{İëjW»ZJüáûßÿìwœ“Úö¦·¼ù´SNA§Ÿzêk^û×éñ³ÎyÇışÛ}mÛÎ8í´ô7RŠ´Õ{yàıïÿµ¯}ígŸüäŸù_?Á<èäß}÷»¥¿§|299999999999ıçè¿ÿ÷Ïóßú¼ı¬³îrç;§ã•áGğCw¸ıíÒ!}6íª¾÷ô3>~Ş'ó[¿ı¹óÏOEÑáÓe?!”tŸ3Î8å÷ØÙÙùÔ§?ZóàşğõN¼^JÆ/şâÿyúÓ{Oİî6·I§dûöí»ä’KÓùá'>ùÉÔÿŸıéÇó­ßzğĞ¡W¾úÕg¿ãt˜t·»Ü%ã^üâqÓÏış<ğ‡îŸvÌéçcı¨ßğ†)ñß?ö±ßyá‹ÒÅo>ûYçûñ´«^,oş‡·şÕßüM:1{Ó›ßü¦·¼%İıµg<#µpüuÒ–éªW¹Ê%—^ú‡ü'?ùˆ‡?éÉOIwøC?”¶é³aø÷~ìÄ¯‹Ä£õ¬_ùå£:úË_şò3ŸóœúÁû5Ç!ÏÙçœ“ÎÓàu;ö‹_úò¯>ûÙéø1½Â?Õ«8Û‡?òï;÷Üt‘ö·‹qqãK¨Àõ¯wâŸ¿êÕLÇƒ§|ÏÛßö6©åøàÿêo^—r¾ûÿÏ)÷¸g:Ù»Û]ïrÁ…şóYgßô&7~Å«^…3CEé\ñmoÿ§ïºë]ÓV3•,o]ıjWOSêĞ¡Céúù/zQªéW:úèc¯}í×½ágœv*F•œœœœœœœœœœœ6 ;ÜîvwúÎïL[•t}—;İñ6·¾õï%ÇwÜ™ÿ¦İİİ´!¼ÓîpÒÍnöÎw¿[>•g^óÚ¿¹ÿıîg¼æ1Ç¤#¥×¾îu1Æô÷'şğ£:êÒ¯}‡¾'„7¼ÁN?íÔ?}ùŸ?õ—å˜cùÑ>ğ¥/ûÓO|òÿö‘Oì¥^½÷}ïOçZÿúáßî¶Kë»Ç>úÑóùâ)Oı¥·¼õ­?ò€Vq5æÛnpşç?Ï•O~êSÏşÍç¦Ÿÿã~ µó9¿õ[i¿š.ÒÏtwg6ûÖoı–_xÚÓ_óÚ×zòÉ'^÷ºç÷ñ´/O·ÒéJW:úœw¾3íñ®qõk¤=ã™¿–Úƒ&İâæ'¥Wø§öòÿóôg¤í+·3=òGò²_îs¯~õ«zÏ{öÆá¸ã{ãß¿9môÓ>ó‰?ÿä”'è½ı¬³SÃd¶×¿áÿöáSVşL'wïz÷»ÓûÍvxó–¶|©Íéâ^ö²‹.ºˆ–ÛÔû§½hÚ.püñ³aöÌg<ıQ|äo<ë×¬qãuO8>m¿_ÿ†3?ı™ÿH¯OİıûxËMor“_yÚ/=ì!ù–k\ã_>ô!¤Ÿvê)—^ziÚ‹¦9—öŞäääääääääää´½ÿHû…ë\gyÖr«[~Ç'>ù©t66ÌfŸúÔ§‘á¢K.>öØcÕS¯}ıß^|ñÅÍO8áøtºx0Ÿâ|õ‚’ˆ~üñÇÓaÒ×á„0o6B:nJÿÒåFC²G_øâo{›[uôQÿ|ö9itRÊñ×¹NÚÏ<è | z³›İôüdNg‰7¹ñ›åüéË_ÓpN)‹Æ±ÕÍnzÓTÅ§>½Ô©Mé'Ò_ó×¯M{î·¼õm§ŸvÚmnu«´K§vGuÔ)÷¸Ç'?õi‘}ş_xÏûŞ'KK9¿ü•¯¼ã]ïJ×ıº×¥?¤§öNé‘	w,©kéµ]ùJWúÚÁ¯¥ÍêyŸød‚R];;ï/ßyûÛŸ~ê©io™(Ó?¥ÌÜJ=İ{æ{ĞƒÒQŞ¯<ëÙ”òÒ~/m€Ó¹k:xüûŞ7í±e±÷9ãŞ©Î”?í™ï|Ç;¦&¥	ÄwÓ€üÛ‡?r¯SN¹éMo’ ‹t˜ù‡üÇ”`?÷¹óÓ‹øÊW¿šv¼Ö.ÑÉÉÉÉÉÉÉÉÉÉ©Iipşç¿pÇ;ÜáÌ¿{ãÕ®vÕ·¿êŸ‡lI·Wâ}ãÎì0Nì–Î#Çµ)îş‰Úeßòî%íkÓß/fÇ-éÄ/w©œ—^úµ«\yí'óêW»:v±Ï}şóï~×»Şáv·}äCü=ï}\›¤ŠJ›/|á‹üTÚ~ñK_n¶ä_\ûŒIG|w»óúä*í î|§;şÃÛşq¶´³ä}ÔbV|ø¤-5.Òè§M;Æ‹.ºø{î~÷›ŞäÆ/û³——üÚhğâK.a{¿«^uİµy1/ÜİOØI¦~}÷İïö†¿{ã½N9õ×Ÿù«éÕuÎ9if¤Í›Êyó“Nzğ˜v­88Nç¿iºÜàú×OÛæ<’W;ûç çü·û¦İõsŸÿ;i›*®{Â	(ğïşşïO¾Ç=Ò2nnqóå¾ı'ö0˜¦ÃëÔ¾{ƒo»~:9Léúş?x¿»åSÓ´ÅMç¥×½î	é©R÷CÚv¦m*99999999999m@ï|÷»N=ùäÛßîv]tQÚø¤”q\Üu.¸àBÊş#ßÿÁn^Úg>ó;ûv`É•6>C>õéOÓaÒa«Œ>ê‘øÅ'?™òavJï}ÿûÓ~*íß^ùqÉ%—|Ë5¾%%¦ó®k\ıx$õê„ã?éÛ¿–šŠ'œôí7ûÈ¿$]?æQúêW¿ú›Ï{ş¿şÛ‡O<q©ú˜ö9©?¯~Íkşñío?îØk§4®7Õò·gÙü'ˆşóYg§­ÚÃò};Kzìÿ|ôé§–è£çû·¼å•3¥‹û1äÿŞÓÏH5Şâæ']å*WÁèŸó®wqú½Â0(¡’Î:ûœt¾÷˜G?ê¿ß÷û¿ÿ{¿—ú$ÇéÏ^ñŠt¼vãİè)O}êÓõ™OzÊSÒnğ&7¾Ñ«şò52[Ú•=êİş6 Ï~ö³ßŸïM{×»İåÎiW–6Ò”}™Şó»¿ûy¿ûÂóŠ/Ğ·Ÿ}6åsQZª~_ÚFÊİ`ôÊR½ËO~ÊÇÏûø=¾û»dÕ?ùğG<òaÅöšßzÌÁƒ);¡¹ğÂğ¤ŸKO=î‰?›ºvÚ©§““““““““““ÓfôÁùĞÎ0»ımoû¾÷ )Ë³¢ïº{Ú’ÜúVß±ÿ¾d¹QJ¾íú×ïrÕ«\å”{Ü#]|ösŸ›/§gW‘÷¹÷½“ĞŞS. Ã>!|İß¾á	{ìó~ã9é€èÌ7¾1¥üË‡>ôÎw½ûñ?õSiû°»»û‚/ÃK¼íŸŞşĞ‡üè¯>íiiÏó–·¾õf7¹É£ùˆ—Ú’éñ¯ş‹”çsçîá?şc8¸ûÿ^ºÔH|Á‹_üÄŸ~üoıúRéñƒúĞW¾òU:LúÜùç¿ôe/{Ğ?à7õkéç×üİ-­6Óìú×»Ş3Ÿş4ZÜùöŠW"Ú=¢ºw½ûİıØr—øwozÓÉßs÷}à\&«RòqlúÿÁœqÚ½nşí'½ù­oÅûÈ9Å‰m¾–ãÀ·Ò¶-µç'öĞ.¼ğK_úò±×¾Ö¾ıûÓ¸©÷÷ãşÑ4È÷9ãŞée8á¥/ûÓ¾ä÷áçÿ×sŸı¬TüŞøÆÏáéÖ÷İ;e?ı˜ÇàÁßû¿TÏ~Ç;ê'2A!ô'"K>å÷Hƒ€meÑÿÑç3ÏUûÓÙ`Úşös~òêşñòñ[Şògå}&è_şõCßyûÛ§ÓKrrrrrrrrrrrÚŒÎ=ï¼İğçdë³D¯üË¿|ÄÿØÿ¸eØ‰³ÏÁ±á]ï|§ó?ÿ…Ÿ·J'µÓÁÒín{›sŞùÎ/º(íÎ¾ïŞgÜâ¤“â8şù«_M‡Oáæ·¾5&¥Ã·O<ñÓŸùï(rÃU¯zÕ.¸€S†L¬E™µN<á„ô”Û2¤£9ùå£ÒTòüp¢;X:öÚ×>´»ÕJ&èyÂ20QÚÖ>û7Ÿûå¯|ùàÁC\İ‰×½î“ğÓÏüõçüÇg?;Qx:)M;ÏÏ~öszä#¯uÍkÊı"5Liov³›¦³Óûñ´=,Ç{l:ñÛsˆ®tôÑ×¼æ5­&ê†”º™^kÚı’““““““““““Ó7Œ9æ˜¯|å+lã¦|XR®}­kÿùÏÓe¢ËbC˜vt‡ )5HíëÆLü3uƒ›Ë<ê©D—á ÓR:*´‰¼\5)Ÿ-_|	§œ~Ú©÷9ãŒ÷¼÷}»AÎvŸğØÇ¦w‘ö®¿ÿ‡8‘YSÆtÇ^s‹6Ü¤]ré¥—y7H1trrrrrrrrrrúúÒ…yÕŠ‡MR.ón.Û	áa‚ÕÜ/€){ò>ŞÉÉÉÉÉÉÉÉÉÉÉi»èë˜ş¿m¾ùnĞÉÉÉÉÉÉÉÉÉÉi{éë˜ŞÉÉÉÉÉÉÉÉÉÉÉÉiÉ7„NNNNNNNNNNNNWPò¡şû]   hIDAT“““““““““““Ó”|Cèääääääääääät%ß:99999999999]AÉ7„NNNNNNNNNNNNWPò¡“““““““““““Ó”|Cèääääääääääät¥ÿ  ÿÿMN@   IDAT ó¹ÌDşÀ
-s    IEND®B`‚
---- runs/2026-07-30T1800_RAGM-03/e2e/scenario-2c-select_ai.snapshot.yml ---
-- generic [ref=f3e3]:
-  - banner [ref=f3e4]:
-    - button "toggle navigation" [ref=f3e5]: â˜°
-    - generic [ref=f3e6]: JetUse
-    - generic [ref=f3e7]:
-      - button "EN" [ref=f3e8]
-      - button "â˜¾" [ref=f3e9]
-      - button "ã‚¢ã‚«ã‚¦ãƒ³ãƒˆ" [ref=f3e11]: D
-  - generic [ref=f3e12]:
-    - navigation [ref=f3e13]:
-      - list [ref=f3e14]:
-        - listitem [ref=f3e15]:
-          - link "ãƒ›ãƒ¼ãƒ " [ref=f3e16] [cursor=pointer]:
-            - /url: "#/"
-        - listitem [ref=f3e19]:
-          - link "ãƒãƒ£ãƒƒãƒˆ" [ref=f3e20] [cursor=pointer]:
-            - /url: "#/chat"
-        - listitem [ref=f3e23]:
-          - link "ã‚¨ãƒ¼ã‚¸ã‚§ãƒ³ãƒˆ" [ref=f3e24] [cursor=pointer]:
-            - /url: "#/agents"
-        - listitem [ref=f3e28]:
-          - link "RAGãƒãƒ£ãƒƒãƒˆ" [ref=f3e29] [cursor=pointer]:
-            - /url: "#/rag"
-        - listitem [ref=f3e32]:
-          - link "DBãƒãƒ£ãƒƒãƒˆ" [ref=f3e33] [cursor=pointer]:
-            - /url: "#/dbchat"
-        - listitem [ref=f3e37]:
-          - link "è­°äº‹éŒ²" [ref=f3e38] [cursor=pointer]:
-            - /url: "#/minutes"
-        - listitem [ref=f3e41]:
-          - link "ãƒªã‚¢ãƒ«ã‚¿ã‚¤ãƒ ç¿»è¨³" [ref=f3e42] [cursor=pointer]:
-            - /url: "#/realtime"
-        - listitem [ref=f3e46]:
-          - link "éŸ³å£°ãƒãƒ£ãƒƒãƒˆ" [ref=f3e47] [cursor=pointer]:
-            - /url: "#/voicechat"
-        - listitem [ref=f3e50]:
-          - link "æ˜ åƒåˆ†æ" [ref=f3e51] [cursor=pointer]:
-            - /url: "#/video"
-        - listitem [ref=f3e54]:
-          - link "OCR / æ–‡æ›¸èªè­˜" [ref=f3e55] [cursor=pointer]:
-            - /url: "#/ocr"
-        - listitem [ref=f3e60]:
-          - link "è¨­å®š" [ref=f3e61] [cursor=pointer]:
-            - /url: "#/settings"
-        - listitem [ref=f3e65]:
-          - link "ãƒ‡ã‚¶ã‚¤ãƒ³ã‚®ãƒ£ãƒ©ãƒªãƒ¼" [ref=f3e66] [cursor=pointer]:
-            - /url: "#/design"
-    - separator "ãƒ¡ãƒ‹ãƒ¥ãƒ¼å¹…ã‚’èª¿æ•´ï¼ˆãƒ‰ãƒ©ãƒƒã‚°ï¼‰" [ref=f3e72]
-    - main [ref=f3e73]:
-      - generic [ref=f3e74]:
-        - generic [ref=f3e79]:
-          - generic [ref=f3e80]:
-            - heading "RAGãƒãƒ£ãƒƒãƒˆ" [level=1] [ref=f3e81]
-            - button "ã“ã®æ©Ÿèƒ½ã®èª¬æ˜ã¨æ§‹æˆå›³ã‚’è¦‹ã‚‹" [ref=f3e82]: "?"
-          - paragraph [ref=f3e83]: æ–‡æ›¸ã‚’ã‚¢ãƒƒãƒ—ãƒ­ãƒ¼ãƒ‰ã—ã€ãã®å†…å®¹ã«åŸºã¥ã„ã¦è³ªå•ã§ãã¾ã™
-        - generic [ref=f3e85]:
-          - generic [ref=f3e87]:
-            - generic [ref=f3e88]:
-              - heading "æ–‡æ›¸ãƒ•ã‚¡ã‚¤ãƒ«" [level=2] [ref=f3e89]
-              - generic [ref=f3e90] [cursor=pointer]: ï¼‹ ã‚¢ãƒƒãƒ—ãƒ­ãƒ¼ãƒ‰
-            - paragraph [ref=f3e91]: "å¯¾å¿œå½¢å¼: PDF / ãƒ†ã‚­ã‚¹ãƒˆ / Markdownï¼ˆ20MBã¾ã§ï¼‰"
-            - paragraph [ref=f3e92]: ã¾ã æ–‡æ›¸ãŒã‚ã‚Šã¾ã›ã‚“ã€‚ã‚¢ãƒƒãƒ—ãƒ­ãƒ¼ãƒ‰ã—ã¦ãã ã•ã„
-          - generic [ref=f3e93]:
-            - generic [ref=f3e94]:
-              - paragraph [ref=f3e95]: æ–‡æ›¸ã‚’ã‚¢ãƒƒãƒ—ãƒ­ãƒ¼ãƒ‰ã™ã‚‹ã¨è³ªå•ã§ãã¾ã™ï¼ˆå–ã‚Šè¾¼ã¿å®Œäº†å¾Œï¼‰
-              - paragraph [ref=f3e139]: â“˜ Select AI with RAGã¯DBå†…RAGï¼ˆå®Ÿé¨“çš„ï¼‰ã€‚åˆå›ã¯ç´¢å¼•æ§‹ç¯‰ã«æ•°åˆ†ã€ã‚¢ãƒƒãƒ—ãƒ­ãƒ¼ãƒ‰åæ˜ ã¯æœ€å¤§60åˆ†ã‹ã‹ã‚Šã¾ã™ã€‚ä¼šè©±ã®æ–‡è„ˆã¯ä½¿ã‚ã‚Œã¾ã›ã‚“
-            - region "backend capabilities" [ref=f3e97]:
-              - generic [ref=f3e98]:
-                - heading "ã“ã®ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã§ã§ãã‚‹ã“ã¨" [level=3] [ref=f3e99]
-                - paragraph [ref=f3e100]: Select AI with RAG (DBMS_CLOUD_AI ç´¢å¼•) â€” ãƒã‚±ãƒƒãƒˆã«ç½®ãã ã‘ã§ RAGã€‚ãƒ¡ã‚¿ãƒ‡ãƒ¼ã‚¿ç®¡ç†ã®åŸºç›¤ã¨ã—ã¦ã¯æ¡ç”¨ã—ãªã„
-              - list [ref=f3e101]:
-                - listitem [ref=f3e102]:
-                  - generic "docs/verification/SPIKE-M1.md â‘¡" [ref=f3e140]: â–³ æ¡ä»¶ä»˜ã
-                  - generic [ref=f3e104]:
-                    - text: å‡ºå…¸ã®ç²’åº¦
-                    - generic [ref=f3e105]: "â€” ãƒ•ã‚¡ã‚¤ãƒ«å˜ä½(object_name + start/end offset)ã€‚å¿œç­”æœ«å°¾ã« Sources: ã®æ–‡å­—åˆ—ã¨ã—ã¦ä»˜ãã€ã‚¹ã‚³ã‚¢ã¯ç„¡ã„ã€‚"
-                - listitem [ref=f3e106]:
-                  - generic "docs/verification/SPIKE-M1.md â‘¡" [ref=f3e141]: âœ• ä½¿ãˆãªã„
-                  - generic [ref=f3e108]:
-                    - text: çµã‚Šè¾¼ã¿ã®è¡¨ç¾åŠ›
-                    - generic [ref=f3e109]: â€” æ¨™æº–çµŒè·¯ã«çµã‚Šè¾¼ã¿ã®å£ãŒç„¡ã„ã€‚ä»»æ„ãƒ¡ã‚¿ãƒ‡ãƒ¼ã‚¿ã¯ ORA-20048 ã§æ‹’å¦ã•ã‚Œã‚‹ã€‚
-                - listitem [ref=f3e110]:
-                  - generic "docs/comparison/rag-metadata-backends.md" [ref=f3e142]: âœ• ä½¿ãˆãªã„
-                  - generic [ref=f3e112]:
-                    - text: æ¥­å‹™ãƒ‡ãƒ¼ã‚¿ã¨ã®çµåˆ
-                    - generic [ref=f3e113]: â€” $VECTAB ã¯ DB å†…ã«ã‚ã‚‹ãŒç´¢å¼•ç”¨é€”ã§ã€æ¥­å‹™è¡¨ã¨ã®çµåˆã¯å®Ÿè³ªã§ããªã„ã€‚
-                - listitem [ref=f3e114]:
-                  - generic "runs/2026-07-28T1848_SPIKE-M1/e2e/SKIPPED.md 3" [ref=f3e143]: "? æœªå®Ÿè¨¼"
-                  - generic [ref=f3e116]:
-                    - text: è¡Œãƒ¬ãƒ™ãƒ«åˆ¶å¾¡
-                    - generic [ref=f3e117]: â€” DB æ¨©é™ã¯åŠ¹ããŒã€è¡Œãƒ¬ãƒ™ãƒ«åˆ¶å¾¡ãŒãƒ™ã‚¯ã‚¿æ¤œç´¢ã«åŠ¹ãã“ã¨ã¯æœªå®Ÿè¨¼ã€‚
-                - listitem [ref=f3e118]:
-                  - generic "docs/verification/SPIKE-M1.md â‘¡" [ref=f3e144]: âœ• ä½¿ãˆãªã„
-                  - generic [ref=f3e120]:
-                    - text: ãƒ¡ã‚¿ãƒ‡ãƒ¼ã‚¿æ›´æ–°ã®æ•´åˆæ€§
-                    - generic [ref=f3e121]: â€” ç´¢å¼•ãƒªãƒ•ãƒ¬ãƒƒã‚·ãƒ¥ã§å…¥ã£ãŸæ–°è¦è¡Œã¯è‡ªå‰ã§è¶³ã—ãŸåˆ—ãŒ NULL ã«ãªã‚‹ã€‚å–ã‚Šè¾¼ã¿ã®ãŸã³ã«è£œå®Œå‡¦ç†ã‚’å›ã™å‰æã®è¨­è¨ˆã«ãªã‚‹ã€‚
-              - list [ref=f3e122]:
-                - listitem [ref=f3e145]: â€» ã‚¢ãƒƒãƒ—ãƒ­ãƒ¼ãƒ‰ã®åæ˜ ã¯ refresh_rate æ¬¡ç¬¬(æ—¢å®š 60 åˆ†)ã€‚
-                - listitem [ref=f3e146]: â€» xlsx ã‚’ã“ã®çµŒè·¯ã§ã©ã†æ‰±ã†ã‹ã¯å®Ÿæ©Ÿç¢ºèªä¸­(PREP-02)ã§æœªç¢ºèªã€‚
-              - paragraph [ref=f3e124]: ãƒ•ã‚¡ã‚¤ãƒ«å³ã®ãƒãƒƒã‚¸ï¼ˆVS/ADB/SAI/OSï¼‰ã¯ã€Œå–ã‚Šè¾¼ã‚ãŸã‹ã€ã€ã“ã“ã¯ã€Œä½•ãŒã§ãã‚‹ã‹ã€ã€‚ã€Œæœªå®Ÿè¨¼ã€ã¯å®Ÿæ©Ÿã§ç¢ºã‹ã‚ã¦ã„ãªã„é …ç›®ã§ã€ã§ãã‚‹ã¨ã¯è¨€ãˆãªã„ï¼ˆãƒãƒƒã‚¸ã«ã‚«ãƒ¼ã‚½ãƒ«ã‚’åˆã‚ã›ã‚‹ã¨æ ¹æ‹ ã®æ‰€åœ¨ãŒå‡ºã‚‹ï¼‰ã€‚
-            - generic [ref=f3e125]:
-              - combobox "rag backend" [ref=f3e126]:
-                - option "VS â€” Vector Store / File Search"
-                - option "ADB â€” Oracle AI Databaseï¼ˆè‡ªå‰ç´¢å¼•ï¼‰"
-                - option "SAI â€” Select AI with RAG" [selected]
-                - option "OS â€” OpenSearch"
-              - textbox "æ–‡æ›¸ã‚’ã‚¢ãƒƒãƒ—ãƒ­ãƒ¼ãƒ‰ã™ã‚‹ã¨è³ªå•ã§ãã¾ã™ï¼ˆå–ã‚Šè¾¼ã¿å®Œäº†å¾Œï¼‰" [disabled] [ref=f3e127]
-              - button "é€ä¿¡" [disabled] [ref=f3e128]
-  - contentinfo [ref=f3e129]:
-    - generic [ref=f3e130]: JetUse â€” Copyright Â© 2026 AISA
-    - generic [ref=f3e131]: v0.1.0
---- runs/2026-07-30T1800_RAGM-03/e2e/SKIPPED.md ---
-# å®Ÿæ–½ã§ããªã‹ã£ãŸç¯„å›²ã¨ç†ç”±ï¼ˆRAGM-03ã€‚ç„¡è¨€ã‚¹ã‚­ãƒƒãƒ—ç¦æ­¢ï¼‰
-
-## 1. jetuse-dev ã¸ã®é…å‚™ï¼ˆContainer Instance + API Gateway ã®å…¬é–‹ URLï¼‰
-
-- **ä½•ã‚’**: `loop-config.yml` ã® web area `deploy_cmd` = `ops/dev-env-up.sh loop --apply`
-  ï¼ˆAPI ã‚¤ãƒ¡ãƒ¼ã‚¸ã‚’ build/push â†’ Terraform apply â†’ SPA ã‚’ Object Storage ã¸é…ä¿¡ â†’ å…¬é–‹ URLï¼‰ã€‚
-- **ãªãœå®Ÿæ–½ã§ããªã„**: ã“ã®ä½œæ¥­æ©Ÿï¼ˆmacOSï¼‰ã«**ã‚³ãƒ³ãƒ†ãƒŠãƒ©ãƒ³ã‚¿ã‚¤ãƒ ãŒç„¡ã„**
-  ï¼ˆ`podman` / `docker` ã¨ã‚‚æœªã‚¤ãƒ³ã‚¹ãƒˆãƒ¼ãƒ«ã€‚`dev-env-up.sh` ã¯ `podman build` ã§å§‹ã¾ã‚‹ï¼‰ã€‚
-  åŠ ãˆã¦ `infra/terraform/environments/app/loop.tfvars` ãŒã“ã® worktree ã«ç„¡ãã€
-  ä½œæˆã«ã¯ ADB ã‚¹ã‚­ãƒ¼ãƒã®ãƒ‘ã‚¹ãƒ¯ãƒ¼ãƒ‰ç­‰ã®äººé–“ã®äº‹å‰ä½œæ¥­ãŒè¦ã‚‹ã€‚
-- **ä»£ã‚ã‚Šã«å®Ÿæ–½ã—ãŸã“ã¨**: åŒã˜ã‚¢ãƒ—ãƒªã‚³ãƒ¼ãƒ‰ã‚’**å®Ÿ OCI èªè¨¼ã§**ãƒ­ãƒ¼ã‚«ãƒ«èµ·å‹•ã—
-  ï¼ˆ`uvicorn` + `.env` ã® `AUTH_MODE=config_file`ã€‚èµ·å‹•æ™‚ã« ap-osaka-1 ã® `vector_stores` ã¸
-  å®Ÿéš›ã«åˆ°é”ã—ã¦ã„ã‚‹ï¼‰ã€SPA ã® dev ã‚µãƒ¼ãƒçµŒç”±ï¼**ç”»é¢ã¨åŒã˜ HTTP çµŒè·¯**ã§æ¤œè¨¼ã—ãŸã€‚
-- **ã“ã®å·®ã§ç¢ºèªã§ãã¦ã„ãªã„ã‚‚ã®**: API Gateway / LB çµŒç”±ã®å¿œç­”ã€Identity Domain èªè¨¼ã€
-  `AUTH_MODE=resource_principal`ã€‚ã„ãšã‚Œã‚‚æœ¬ã‚¿ã‚¹ã‚¯ãŒè§¦ã£ã¦ã„ãªã„å±¤ã§ã€
-  `docs/verification/PUBLIC-DEPLOY-E2E.md` ãŒåˆ¥é€”æ‹…ä¿ã—ã¦ã„ã‚‹ã€‚
-  æœ¬ã‚¿ã‚¹ã‚¯ã®å·®åˆ†ï¼ˆèƒ½åŠ›ã‚«ã‚¿ãƒ­ã‚°ã®é™çš„ãªè¨˜è¿°ã¨ã€ãã®æç”»ï¼‰ã¯é…å‚™å½¢æ…‹ã«ä¾å­˜ã—ãªã„ã€‚
-
-## 2. å–ã‚Šè¾¼ã¿çŠ¶æ³ãƒãƒƒã‚¸ï¼ˆADB ã‚’å«ã‚€ 4 ãƒãƒƒã‚¸ï¼‰ã®å®Ÿãƒ‡ãƒ¼ã‚¿è¡¨ç¤º
-
-- **ä½•ã‚’**: ãƒ•ã‚¡ã‚¤ãƒ«ä¸€è¦§ã«å®Ÿãƒ•ã‚¡ã‚¤ãƒ«ã‚’è¼‰ã›ã¦ `VS / ADB / SAI / OS` ã®ãƒãƒƒã‚¸ã‚’å®Ÿå¿œç­”ã§è¦‹ã‚‹ã“ã¨ã€‚
-- **ãªãœå®Ÿæ–½ã§ããªã„**: ã“ã® worktree ã® `.env` ã« `ADB_DSN` / ã‚¦ã‚©ãƒ¬ãƒƒãƒˆè¨­å®šãŒç„¡ãã€
-  `/api/rag/files` ãŒ 503ï¼ˆ`DPY-4000: unable to find "" in tnsnames.ora`ï¼‰ã«ãªã‚‹ãŸã‚ã€
-  å®Ÿãƒ•ã‚¡ã‚¤ãƒ«ä¸€è¦§ã‚’å‡ºã›ãªã„ã€‚ã‚¦ã‚©ãƒ¬ãƒƒãƒˆé…ç½®ã¯äººé–“ã®äº‹å‰ä½œæ¥­ï¼ˆ`docs/guides/dev-environments.md`ï¼‰ã€‚
-- **ä»£ã‚ã‚Šã«å®Ÿæ–½ã—ãŸã“ã¨**: ãƒãƒƒã‚¸ã® 4 çŠ¶æ…‹ï¼ˆindexed / pending / error / disabledï¼‰Ã—
-  ADB ã‚’å«ã‚€ä¸¦ã³ã‚’ frontend ã®å˜ä½“ãƒ†ã‚¹ãƒˆã§å›ºå®šã—ãŸ
-  ï¼ˆ`packages/web/src/pages/rag/BackendStatusBadges.test.tsx`ï¼‰ã€‚
-  ãƒãƒƒã‚¸ã®**æ„å‘³**ã¯å¤‰ãˆã¦ã„ãªã„ï¼ˆè¡¨ç¤ºå¯¾è±¡ã« `adb` ãŒå¢—ãˆãŸã ã‘ï¼‰ã€‚
-- **å‰¯æ¬¡çš„ã«åˆ¤æ˜ã—ãŸæ—¢å­˜ä¸å…·åˆã‚’ 1 è¡Œã§ç›´ã—ãŸ**: `/api/rag/files` ãŒ 503 ã‚’è¿”ã™ã¨
-  `d.files` ãŒ undefined ã«ãªã‚Šã€`files.some(...)` ã§ **RAG ãƒšãƒ¼ã‚¸å…¨ä½“ãŒç™½ç”»é¢**ã«ãªã£ã¦ã„ãŸ
-  ï¼ˆæœ¬ã‚¿ã‚¹ã‚¯ä»¥å‰ã‹ã‚‰ã®æŒ™å‹•ã€‚E2E ãŒã“ã‚Œã§æ­¢ã¾ã£ãŸãŸã‚ `Array.isArray(d?.files)` ã§é˜²ã„ã ï¼‰ã€‚
-
-## 3. `adb` ãƒãƒƒã‚¯ã‚¨ãƒ³ãƒ‰ã§ã®å®Ÿæ¤œç´¢ï¼ˆãƒãƒ£ãƒ³ã‚¯å‡ºå…¸ãŒå®Ÿéš›ã«è¿”ã‚‹ã“ã¨ï¼‰
-
-- **ä½•ã‚’**: ç”»é¢ã‹ã‚‰ ADB ã‚’é¸ã‚“ã§è³ªå•ã—ã€ã‚»ãƒ«ç¯„å›²ã¤ãå‡ºå…¸ãŒè¿”ã‚‹ã“ã¨ã¾ã§ã€‚
-- **ãªãœå®Ÿæ–½ã—ãªã„**: ãã‚Œã¯ RAGM-02 / PREP-01 ã®å—ã‘å…¥ã‚Œç¯„å›²ã§ã€å®Ÿ ADB ã«å¯¾ã—ã¦
-  å®Ÿæ–½ãƒ»è¨˜éŒ²æ¸ˆã¿ï¼ˆ`docs/verification/RAGM-02.md` / `docs/verification/PREP-01.md`ï¼‰ã€‚
-  æœ¬ã‚¿ã‚¹ã‚¯ã¯ã€Œãã®èƒ½åŠ›å·®ã‚’ API ã¨ç”»é¢ã‹ã‚‰**è¦‹ãˆã‚‹ã‚ˆã†ã«ã™ã‚‹**ã€ã“ã¨ãŒç¯„å›²ã§ã‚ã‚Šã€
-  ä¸Šè¨˜ 2 ã®ç†ç”±ã§ DB æ¥ç¶šã‚‚ç„¡ã„ã€‚
-
-## 4. VPD / æ¥­å‹™è¡¨ JOIN ã®å®Ÿè¨¼
-
-æœ¬ã‚¿ã‚¹ã‚¯ã®éã‚´ãƒ¼ãƒ«ã€‚ã‚€ã—ã‚**æœªå®Ÿè¨¼ã§ã‚ã‚‹ã“ã¨ã‚’ç”»é¢ã¨ API ã«å‡ºã™**ã®ãŒæˆæœç‰©å´ã®è¦ä»¶ã§ã€
-`support: "unverified"` ã¨ã—ã¦è¡¨ç¤ºã•ã‚Œã‚‹ã“ã¨ã‚’ã‚·ãƒŠãƒªã‚ª 1/2 ã§ç¢ºèªã—ãŸã€‚
-
---- runs/2026-07-30T1800_RAGM-03/e2e/target_url.txt ---
-http://localhost:5173/#/rag
-
