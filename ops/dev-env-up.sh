@@ -21,7 +21,11 @@ TFVARS="$APPDIR/${DEV}.tfvars"
 # Object Storage の名前空間と同じ値なので、.env の OS_NAMESPACE を既定に使う。
 # **.env は source していない**（shell 変数として export されない）ので、
 # 環境変数ではなくファイルから読む。優先順: 環境変数 > .env の OCIR_NAMESPACE > .env の OS_NAMESPACE。
-_ns_from_env_file() { grep "^$1=" .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r'; }
+# **空振りを成功扱いにする（|| true）。** set -euo pipefail 下では grep の「一致なし」(rc=1)が
+# pipefail でパイプライン全体の失敗になり、`NS="${OCIR_NAMESPACE:-$(_ns_from_env_file ...)}"` の
+# 代入で set -e が発火してスクリプトごと終了する。つまり下の OS_NAMESPACE フォールバックには
+# **到達できなかった**（.env に OCIR_NAMESPACE を書いていない環境で配備が無言で rc=1 になる実害）。
+_ns_from_env_file() { grep "^$1=" .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r' || true; }
 NS="${OCIR_NAMESPACE:-$(_ns_from_env_file OCIR_NAMESPACE)}"
 [ -n "$NS" ] || NS="$(_ns_from_env_file OS_NAMESPACE)"
 # どちらも無いなら止める（誤ったテナンシの repository を掴まないため）
