@@ -1,0 +1,55 @@
+{
+  "review_n": 16,
+  "timestamp": "2026-08-04T17:50:54+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-16.input.diff",
+  "raw_output_path": "reviews/review-16.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "実 OCID の混入防止という方向性は妥当ですが、staged content の取りこぼし、allowlist による tenancy/compartment 制約の迂回、非 oc1 realm の見逃しがあります。blocker はありませんが、セキュリティゲートとして導入する前に修正と自動テストが必要です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 3,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "major",
+      "file": "ops/check-no-real-ocid.sh",
+      "line": 35,
+      "issue": "通常モードは `git ls-files` で名前を列挙した後、grep で working tree の内容を読んでいます。そのため、実 OCID を含む内容を stage した後に working tree だけをマスクすると、コメントにある「ステージ済みを検査」を満たさず `make lint` を通過します。CI の checkout 後には検出されますが、ローカルのコミット前ゲートは迂回可能です。",
+      "suggestion": "index の blob を `git grep --cached` または `git show :<path>` で直接検査してください。working tree も対象にするなら index と working tree を別々に走査し、「stage 後に working tree だけ修正したケース」をテストに追加してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "ops/check-no-real-ocid.sh",
+      "line": 44,
+      "issue": "allowlist は OCID の resource type を区別せず全件を除外します。このため `ocid1.tenancy...` や `ocid1.compartment...` を `allowed-public-ocids.txt` に追加すれば検査を通過でき、ADR の「tenancy / compartment は受容しない」という機械的保証になっていません。コメントによる運用規律だけでは今回置き換えようとしている手動マスク規律と同じ弱点が残ります。",
+      "suggestion": "tenancy/compartment は allowlist 適用前に無条件でエラーにしてください。allowlist 可能な resource type を `ormjob` など明示した安全な集合に限定し、その拒否ケースも自動テストしてください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "major",
+      "file": "ops/check-no-real-ocid.sh",
+      "line": 25,
+      "issue": "検出正規表現が realm を `oc1` に固定しているため、OC2・OC3・OC4 など別 realm の完全長 OCIDを見逃します。スクリプト名と ADR は「実 OCID 全般を止める」としており、実装範囲がその主張より狭くなっています。",
+      "suggestion": "realm 部分を OCI の有効な realm 全体に対応させるか、少なくとも `oc[0-9]+` のように検出してください。各 realm、global resource の空 region、マスク済み値、短縮値、allowlist 値を含むテーブル駆動テストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "`runs/2026-08-04T1626_BRANCH-LAYOUT/e2e/` は空で、実行シナリオや結果は添付されていません。本差分はローカルの静的検査と CI 設定が中心なので jetuse-dev への実環境デプロイ E2E は必須ではありませんが、検査スクリプトの正常系・検出系・allowlist・staged/working-tree 差分を検証した CLI テスト証跡も提示されていません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}
