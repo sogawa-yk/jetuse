@@ -1,0 +1,47 @@
+{
+  "review_n": 5,
+  "timestamp": "2026-08-04T16:46:45+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-5.input.diff",
+  "raw_output_path": "reviews/review-5.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "4ブランチ移行の中核保証に、既存ブランチ再利用と分類一覧の自己変更による迂回経路が残るため FAIL です。認証情報、OCID、環境固有エンドポイントの新規コミットは確認されません。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 1,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "blocker",
+      "file": ".claude/hooks/ensure_task_branch.sh",
+      "line": 40,
+      "issue": "既存の `feat/<task>` がある場合、選択された `BASE_BRANCH` との整合性を確認せず再利用します。旧既定の `dev` から作成済みのブランチが残る移行局面では、既定値を `public-dev` に変更しても Internal 起点のブランチを正常終了で再利用し、共有変更の起点保証を破ります。同じ問題が `start-loop.sh` の既存branch/worktree再利用と `begin_stage.sh` の既存stage branch再利用にもあります。",
+      "suggestion": "ブランチ作成時に `branch.<name>.jetuseBase` などへ起点を記録し、再利用時に要求された base と一致しなければ停止してください。メタデータのない移行前ブランチも自動再利用せず、人間が起点を確認して明示的に移行する経路を設けてください。3つの起動経路それぞれに、旧dev起点の既存ブランチをpublic-dev指定で再利用しない回帰テストを追加してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "ops/check-branch-base.sh",
+      "line": 70,
+      "issue": "分類にPR側の `internal-only-paths.txt` を無条件で加えるため、検査対象PR自身が分類規則を書き換えてCIを迂回できます。例えば共有ファイルと同時に一覧へ `ops/` や対象ファイルの接頭辞を追加すると、その一覧変更自体もInternal扱いとなり、共有物-onlyのPRでも成功します。追加テストもこの自己変更をWARN成功として固定しており、機械的な起点保証になっていません。",
+      "suggestion": "CIの分類にはbase側で承認済みの一覧だけを使ってください。新しいInternalパスの登録は一覧変更を先にpublic-devへ入れてinternal-devへ同期する二段階にするか、一覧変更を含むinternal-dev宛PRを専用チェックで失敗させてください。少なくとも広い接頭辞や一覧自身を包含するパターンを拒否し、自己変更による迂回テストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "`runs/2026-08-04T1626_BRANCH-LAYOUT/e2e/` は空で、実環境E2Eのシナリオ・結果・証跡パスはありません。本差分はGitブランチ、worktree、CI判定の変更であり、jetuse-devへのデプロイを伴う実環境E2Eは対象外と判断します。追加されたローカルテストは複数分岐を扱いますが、既存ブランチ再利用と分類一覧の自己変更による迂回を防止できていません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

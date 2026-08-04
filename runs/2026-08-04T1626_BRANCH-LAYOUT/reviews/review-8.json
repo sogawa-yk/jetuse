@@ -1,0 +1,55 @@
+{
+  "review_n": 8,
+  "timestamp": "2026-08-04T16:55:45+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-8.input.diff",
+  "raw_output_path": "reviews/review-8.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "起点判定の基本分類と主要な回帰テストは整備されていますが、移行初期の fail-open と安定ブランチへの誤った PR を CI が防げない問題が残ります。認証情報・OCID・実エンドポイントの追加や OCI リソース変更は確認されません。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 2,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "major",
+      "file": "ops/check-branch-base.sh",
+      "line": 82,
+      "issue": "internal-dev 側に internal-only-paths.txt がまだ存在しない移行期間は、PR の内容を問わず成功終了します。ADR-0028 が掲げる「移行期間は fail-closed」および「internal-dev 宛の共有物-only PR を落とす」という完了条件に反し、bootstrap 同期以外の誤起点 PR も通過できます。",
+      "suggestion": "同期 PR の内容ベース判定をパターンファイル読込より前に行い、正規の public-dev 同期だけを許可してください。base に一覧がないその他の internal-dev 宛 PR は失敗させ、bootstrap 同期と通常 PR の両方をテストしてください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "ops/check-branch-base.sh",
+      "line": 49,
+      "issue": "検査は internal-dev 宛だけで、それ以外を無条件に通します。このため feature branch を main や internal-stable に直接向けても branch-base job は成功し、「安定枝は release PR と hotfix のみ」という中核規約を機械的に保護できません。特に main への merge は公開配信物を即時更新するため影響が大きいです。",
+      "suggestion": "main 宛は public-dev からの release PR または main 起点の hotfix、internal-stable 宛は internal-dev からの release PR または同枝起点の hotfixだけを許可する検査を追加してください。各安定枝について正規 release、hotfix、通常 feature のテストも追加してください。"
+    },
+    {
+      "id": "F003",
+      "severity": "minor",
+      "file": ".claude/hooks/ensure_task_branch.sh",
+      "line": 22,
+      "issue": "既に feat/<task> 上にいる場合は、新設した base 祖先警告へ到達せず直ちに終了します。旧 dev 起点の既存ブランチをそのまま開いてフックが実行される一般的な経路では、意図した警告が表示されません。追加テストも既存ブランチ再利用経路を扱っていません。",
+      "suggestion": "現在ブランチが対象ブランチの場合も base ref が解決できれば祖先検査を実施してから終了してください。旧起点のブランチ上で警告されるケースと、正しい起点で警告されないケースを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "runs/2026-08-04T1626_BRANCH-LAYOUT/e2e/ は空で、実環境シナリオや結果はありません。本差分は Git ブランチ運用、CI、ローカル shell の変更であり、OCI ランタイムやデプロイ成果物を変更しないため jetuse-dev 実環境 E2E は対象外と判断します。Python によるローカル回帰テストは差分に含まれますが、実行結果の証跡は添付されていません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

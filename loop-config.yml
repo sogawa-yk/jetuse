@@ -92,7 +92,11 @@ budget:
 # 共有しないため、複数の loop を同時に回しても互いの変更を壊さない。
 worktree:
   enabled: true                       # 推奨起動経路。start-loop.sh <task> で worktree 起動。
-  base_branch: dev                    # 既定の派生元(=作業の根)。Experience Builder 系列は main 派生の dev。
+  base_branch: public-dev             # 既定の派生元(=作業の根)。**共有側に倒す**(ADR-0028)。
+                                      # 旧既定は dev(=現 internal-dev) だったが、CLAUDE.md の
+                                      # 「共有物は Public 起点」と食い違い、ループの成果物が必ず
+                                      # Internal 側に着地していた(2026-07 の docs 整理の実害)。
+                                      # 内部固有タスクは BASE_BRANCH=internal-dev で上書きする。
                                       # 依存連鎖は BASE_BRANCH=feat/<dep> で上書き。
   root: ""                            # worktree 配置先。空なら <repo>/../<repo名>-loops。
                                       # 上書きは LOOP_WORKTREE_ROOT 環境変数（loop-config は書き換えない）。

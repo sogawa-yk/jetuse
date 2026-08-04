@@ -1,8 +1,12 @@
 # ADR-0014: Public配布のIAM選択とPublic / Internalリリースライン
 
-- Status: Accepted
+- Status: Partially superseded by ADR-0028（2026-08-04）
 - Date: 2026-07-01
 - Updated: 2026-07-02
+
+> **注記（2026-08-04）**: リリースラインに関する Decision 1〜4 は ADR-0028「4ブランチ体制と起点判定の機械化」が置き換えた。
+> `main` は Public *安定* 版となり、統合先は `public-dev` に移った。`dev` は `internal-dev` に改名。
+> IAM / Stack 構成に関する Decision 5〜8 は引き続き有効。
 
 ## Context
 
