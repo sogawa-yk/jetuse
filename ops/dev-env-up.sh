@@ -45,9 +45,16 @@ echo "== region=${REGION} (tfvars 由来) / image registry=$(jetuse_ocir_host "$
 
 . "$(dirname "$0")/_container.sh"
 CE=$(jetuse_container_engine) || exit 1
-echo "== build & push ${IMAGE} (engine=${CE})"
+echo "== build & push ${IMAGE} (engine=${CE} platform=${JETUSE_BUILD_PLATFORM:-linux/amd64})"
 # ビルドコンテキストはリポジトリルート(Containerfile が packages/jetuse_shared を取り込むため。P1b)
-"$CE" build -f packages/api/Containerfile -t "${IMAGE}" .
+# **--platform を固定する。** Apple Silicon で素直に build すると arm64 イメージになり、
+# Container Instance の shape(x86)が受け付けず apply が
+# 「A container image provided is not compatible with the processor architecture」で落ちる。
+# しかも image_url の変更は**置換**なので旧インスタンスは先に削除済み＝
+# **環境が落ちたまま復旧できない**（2026-08-04 に実際に踏んだ）。
+# CI(ubuntu/x86)では素の build でも通るため、ローカル(Apple Silicon)だけが壊れていた。
+BUILD_PLATFORM="${JETUSE_BUILD_PLATFORM:-linux/amd64}"
+"$CE" build --platform "$BUILD_PLATFORM" -f packages/api/Containerfile -t "${IMAGE}" .
 "$CE" push "${IMAGE}"
 
 echo "== terraform plan (state: ${DEV}.tfstate)"

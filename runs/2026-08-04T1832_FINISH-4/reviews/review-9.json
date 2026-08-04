@@ -1,47 +1,39 @@
 {
   "review_n": 9,
-  "timestamp": "2026-08-04T20:03:47+09:00",
+  "timestamp": "2026-08-04T21:37:43+09:00",
   "reviewer": "codex",
   "model": "gpt-5.6-sol",
   "input_diff_path": "reviews/review-9.input.diff",
   "raw_output_path": "reviews/review-9.raw.txt",
   "codex_exit_code": 0,
-  "verdict": "FAIL",
-  "summary": "namespace フォールバックの修正自体は意図どおりですが、E2E 証跡に実テナンシ固有の OCIR/Object Storage namespace が平文でコミットされています。また、追加テストは実際のスクリプト上の実行順を再現せず、合成した断片を検証しているため回帰検出力に不足があります。",
+  "verdict": "PASS",
+  "summary": "E2E 証跡は7シナリオを含み、未検証範囲も理由と後続条件を明示しているため、今回の証跡更新としては十分です。ただし、更新された review-9.json は同じ差分の内容と矛盾する解消済み指摘を残しており、レビュー記録として不正確です。",
   "severity_counts": {
-    "blocker": 1,
-    "major": 0,
-    "minor": 1
+    "blocker": 0,
+    "major": 1,
+    "minor": 0
   },
   "findings": [
     {
-      "id": "F001",
-      "severity": "blocker",
-      "file": "runs/2026-08-04T1832_FINISH-4/e2e/scenario-5-ns-fallback.md",
-      "line": 50,
-      "issue": "実環境の OCIR/Object Storage namespace `idqcucnenh88` が証跡へ平文で記録されています。資格情報そのものではありませんが、テナンシ固有の環境依存値であり、環境依存値は `.env` 管理とするリポジトリ方針に違反します。",
-      "suggestion": "値を `<namespace>` などへマスクし、リポジトリ履歴へ取り込む前に証跡から実値を除去してください。"
-    },
-    {
-      "id": "F002",
-      "severity": "minor",
-      "file": "packages/api/tests/test_dev_env_namespace.py",
-      "line": 30,
-      "issue": "`_extract_resolver()` はスクリプト内での位置や実行順に関係なく3行を検索し、固定順で合成しています。そのため、本体で代入順が入れ替わる、両行の間に必要な処理が追加される、または別スコープへ移動するといった回帰でもテストが成功し得ます。",
-      "suggestion": "namespace 解決を source 可能な専用関数へ分離して実物を呼び出すか、連続するブロックとして抽出して順序も検証してください。可能なら外部操作をスタブ化して `ops/dev-env-up.sh` 自体を実行してください。"
+      "id": "F-001",
+      "severity": "major",
+      "file": "runs/2026-08-04T1832_FINISH-4/reviews/review-9.json",
+      "line": 12,
+      "issue": "レビュー結果が現行差分および添付証跡と矛盾しています。F-001 は Internal リリースを「統合 E2E 合格」と主張しているとしていますが、SKIPPED.md は「部分的に合格」「統合 E2E は完了していない」と明記しています。F-002 の PR 成功経路は scenario-2 に複数の MERGED 実績が追記済みで、F-003 がいう hosted-agent 未実施説明の削除も実際には行われていません。summary、verdict、severity_counts、e2e.notes もこれらの誤認に基づいています。",
+      "suggestion": "現行差分と添付された scenario-1〜7、SKIPPED.md を入力として review-9.json を再生成してください。少なくとも解消済みの3指摘を削除し、verdict、severity_counts、summary、e2e 所見を再生成結果と整合させてください。"
     }
   ],
   "e2e": {
     "attached": true,
-    "scenarios_reviewed": 5,
+    "scenarios_reviewed": 7,
     "adequacy": "sufficient",
-    "notes": "添付された5シナリオを確認しました。この差分を直接裏づける scenario-5 では、OCIR_NAMESPACE、OS_NAMESPACE フォールバック、環境変数優先、両方欠落、引用符・CRLF の5経路が報告されており、最低2シナリオの要件を満たします。SKIPPED.md は別作業である Internal リリース統合E2Eの未完了理由を明示しています。ただし scenario-5 の証跡には実テナンシ固有namespaceのマスキング漏れがあります。",
+    "notes": "runs/2026-08-04T1832_FINISH-4/e2e/ の7シナリオを確認しました。TOOL-01 の3分岐、branch protection の拒否・distガード・PR成功経路、Publicリリース10項目、container engine、namespace fallback、amd64 build、Internal候補点の基本APIと実推論2モデルが記録されています。Internal の demos/builder 正常系と hosted-agent 配備は未検証ですが、SKIPPED.md に環境上の理由、未完了である旨、後続確認条件が明示されており、完了を偽っていません。Public ORM apply の省略にも変更範囲と人間ゲートに基づく理由があります。",
     "live_check": {
       "performed": false,
       "target_url": "",
       "result": "not_performed",
       "scenarios": [],
-      "notes": "ターゲット URL が提供されておらず、指示どおりブラウザ E2E は実施していません。"
+      "notes": "ライブターゲット URL が提供されていないため、指示どおりブラウザ E2E は実施していません。"
     }
   }
 }
