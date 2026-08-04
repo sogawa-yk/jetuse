@@ -12,8 +12,15 @@ const BASE = 'https://inference.generativeai.ap-osaka-1.oci.oraclecloud.com/open
 async function ociFetch(input, init = {}) {
   const url = typeof input === 'string' ? input : input.url;
   const headers = new Headers(init.headers || {});
-  headers.set('CompartmentId', process.env.COMPARTMENT_OCID ?? (() => { throw new Error('COMPARTMENT_OCID required'); })());
-  headers.set('OpenAi-Project', 'ocid1.generativeaiproject.oc1.ap-osaka-1.amaaaaaal7l2mtaafbc3hyhlw54smiwwnfmqpg2gdlmu6f363vj5q7zpbmba');
+  // 実値はマスク済み（公開リポジトリ。ADR-0029）。動かすなら .env の値を環境変数で渡す。
+  // **未設定なら止める。** MASKED のまま送ると、設定不足が不透明な OCI API エラーになる。
+  const compartmentId = process.env.COMPARTMENT_OCID;
+  const projectId = process.env.PROJECT_OCID;
+  if (!compartmentId || !projectId) {
+    throw new Error('COMPARTMENT_OCID と PROJECT_OCID を環境変数で指定してください（.env と同じ名前）');
+  }
+  headers.set('CompartmentId', compartmentId);
+  headers.set('OpenAi-Project', projectId);
   headers.delete('authorization');
   const httpRequest = {
     uri: url,

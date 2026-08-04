@@ -1,0 +1,71 @@
+{
+  "review_n": 19,
+  "timestamp": "2026-08-04T18:04:18+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-19.input.diff",
+  "raw_output_path": "reviews/review-19.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "既追跡のレビュー生成物が追跡解除されておらず、新設 CI は既存の実 tenancy/compartment OCID を検出して直ちに失敗します。加えて禁止判定の長さ不整合、既存 `.env` と異なる変数名などが残っています。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 2,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": ".gitignore",
+      "line": 61,
+      "issue": "コメントでは既追跡分を追跡解除済みとしていますが、差分に `git rm --cached` 相当の削除がありません。.gitignore は既追跡ファイルには効かないため、例えば `runs/2026-07-13T0730_PORT-02/reviews/review-15.payload.txt` に残る実 tenancy/compartment OCIDを新設ジョブが検出し、CIが必ず失敗します。",
+      "suggestion": "ADRに記載した既追跡の raw.txt、payload.txt、input.diff、turn diff を同じ変更で追跡解除してください。その後、リポジトリ全体に対して検査が成功する証跡を残してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "ops/check-no-real-ocid.sh",
+      "line": 41,
+      "issue": "一般検出の unique-id 閾値は30文字ですが、tenancy/compartment の禁止判定だけ40文字です。このため本スクリプトが「完全長」と判定する30～39文字の tenancy/compartment OCIDは allowlist に追加すると通過でき、コードで常に拒否するという保証を満たしません。",
+      "suggestion": "NEVER_ALLOW の unique-id 閾値も `{30,}` に揃え、30文字と39文字の tenancy/compartment がコメント内・通常エントリの双方で拒否されるテストを追加してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "major",
+      "file": "docs/archive/spikes/spike14b_aisdk.mjs",
+      "line": 18,
+      "issue": "リポジトリの `.env.example` と既存コードは GenerativeAiProject OCID に `PROJECT_OCID` を使用していますが、この変更だけ `GENAI_PROJECT_OCID` を参照しています。通常の `.env` を渡しても未設定エラーとなり、スクリプトを再実行できません。",
+      "suggestion": "既存契約に合わせて `process.env.PROJECT_OCID` を使用し、エラーメッセージも同名にしてください。別名を新設するなら `.env.example` と利用手順を更新し、互換フォールバックを設けてください。"
+    },
+    {
+      "id": "F-004",
+      "severity": "minor",
+      "file": "ops/allowed-public-ocids.txt",
+      "line": 16,
+      "issue": "直前の規約は各追加行に受容理由を行末コメントで必須としていますが、追加された2件には理由がありません。将来のレビューで個別の受容判断を追跡できません。",
+      "suggestion": "各OCIDの行末に、対応する既公開証跡と受容理由を記載してください。"
+    },
+    {
+      "id": "F-005",
+      "severity": "minor",
+      "file": "ops/check-no-real-ocid.sh",
+      "line": 93,
+      "issue": "`SCAN_ALL=0` では末尾の `[ \"$SCAN_ALL\" = 1 ] && ...` が1を返します。`set -euo pipefail` により出所表示パイプラインが失敗し、最初の検出後にループと復旧案の表示が途中終了します。`head -3` によるSIGPIPEも同様の終了要因になります。",
+      "suggestion": "条件分岐を `if [ \"$SCAN_ALL\" = 1 ]; then ...; fi` にし、診断用パイプライン全体を明示的に `|| true` で非致命化してください。複数OCID検出時に全件と末尾の案内が表示されるテストも追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "指定された e2e ディレクトリは空で、実行シナリオや結果の証跡はありません。本差分の中心はリポジトリ衛生用のローカル検査・CIと退避済みスクリプトであり、jetuse-devへのデプロイを伴う実環境E2Eは対象外と判断します。ただし、追加されたシェルテストやリポジトリ全体の検査が実行成功した証跡も提示されていません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されておらず、指示に従いブラウザツールは使用していません。"
+    }
+  }
+}

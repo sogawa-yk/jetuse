@@ -1,0 +1,55 @@
+{
+  "review_n": 18,
+  "timestamp": "2026-08-04T18:00:13+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-18.input.diff",
+  "raw_output_path": "reviews/review-18.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "OCID 検査の正規表現が OCI の一般的な OCID 構造を十分に表現しておらず、正規の実 OCIDを黙って見逃す可能性があるため FAIL です。また、同一変更内で allowlist に追加すれば新規 OCID を通せるため、ADR の「公開済み residual のみ受容」を機械的に保証できません。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 1,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "blocker",
+      "file": "ops/check-no-real-ocid.sh",
+      "line": 31,
+      "issue": "PAT は resource type を小文字英字だけ、unique ID を40文字以上の連続した小文字英数字だけに限定しています。しかし OCID の unique ID や future-use 部分はリソース固有であり、この文字種・長さ・セグメント構造を一律には保証できません。条件外の正規 OCID が検査を黙って通過し、「実 OCID の新規混入を止める」という中核機能に偽陰性が生じます。",
+      "suggestion": "OCI の一般的な OCID 構造を包含する検出方式へ変更し、MASKED など既知のプレースホルダを後段で除外してください。少なくとも大文字、40文字未満、ドット等を含む resource-specific ID、future-use セグメントを持つケースの偽陰性テストを追加してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "ops/check-no-real-ocid.sh",
+      "line": 74,
+      "issue": "検出値が allowlist に存在すれば無条件で受容されるため、新規の非 tenancy/compartment OCID と allowlist への同値追加を同じコミットに含めるだけで CI を通過できます。ADR が定める「既に公開済みで受容済みの2件だけ」という境界を検査できていません。",
+      "suggestion": "allowlist を固定された既知値として検証するか、pull_request では base revision と比較して allowlist の追加を拒否してください。追加を許す場合は CODEOWNERS や明示的な人間ゲートを必須にし、その運用を ADR と CI に反映してください。"
+    },
+    {
+      "id": "F003",
+      "severity": "minor",
+      "file": "ops/check-no-real-ocid.sh",
+      "line": 7,
+      "issue": "コメントでは取りこぼしを「全体で9個」としていますが、同じ差分の ADR-0029 では再調査後の確定値を「追跡対象で10個」としています。監査根拠となる件数が矛盾しています。",
+      "suggestion": "ADR の確定値に合わせて10個へ修正し、必要なら「初回調査では9個だった」と経緯を明記してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "e2e ディレクトリは空で、実行シナリオや SKIPPED.md は添付されていません。本差分の中心は静的なリポジトリ検査と archived spike の設定値外出しであり、jetuse-dev へのデプロイを伴う実環境 E2E は対象外と判断しました。ただし追加されたシェルテストの実行結果も証跡には含まれていません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおり実ブラウザ検証は実施していません。"
+    }
+  }
+}
