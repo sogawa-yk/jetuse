@@ -1,8 +1,12 @@
 # ADR-0016: Internal 安定版リリースライン `internal-stable` の追加（ADR-0014 を追補）
 
 日付: 2026-07-06
-状態: 承認（2026-07-06 施主承認。枝名は `internal-stable` で確定）
-関連: ADR-0014（追補対象）／docs/guides/branching-and-releases.md
+状態: 承認（2026-07-06 施主承認。枝名は `internal-stable` で確定）／2026-08-04 に ADR-0028 が一部改訂
+関連: ADR-0014（追補対象）／ADR-0028（4ブランチ体制）／docs/guides/branching-and-releases.md
+
+> **注記（2026-08-04）**: `internal-stable` の存在と役割は維持。ただし本 ADR が置いた
+> 「安定枝は Internal 側のみ」という非対称性は ADR-0028 が解消し、Public 側にも開発枝
+> （`public-dev`）を設けて `main` を安定枝にした。`dev` は `internal-dev` に改名。
 
 ## 背景
 

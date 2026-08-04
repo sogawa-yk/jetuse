@@ -15,7 +15,7 @@ description: STAGE<N>-PROGRESS.md のステージ全体を自走で実装し切�
 > override/residual はステージ報告の最上段バナーに立てて**、例外が埋もれないようにする。
 
 - 進捗の単一の真実源: `tasks/STAGE<N>-PROGRESS.md`（順序・依存・ゲート・status）。
-- 自動統合の隔離先: **ステージ専用ローカルブランチ `feat/stage-<N>`**（`loop-config.yml` の `worktree.base_branch`＝`dev` から分岐）。
+- 自動統合の隔離先: **ステージ専用ローカルブランチ `feat/stage-<N>`**（`loop-config.yml` の `worktree.base_branch`＝`public-dev` から分岐。内部固有ステージは `BASE_BRANCH=internal-dev`）。
   ここにだけ commit+merge する。**リモート push / base への PR / apply は一切しない**ので、
   人間チェック前に base もリモートも汚れない。
 - 設定は `loop-config.yml` の `stage_runner:` ブロック。
