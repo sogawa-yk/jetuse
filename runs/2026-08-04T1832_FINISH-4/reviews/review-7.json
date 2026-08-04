@@ -1,0 +1,55 @@
+{
+  "review_n": 7,
+  "timestamp": "2026-08-04T19:19:27+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-7.input.diff",
+  "raw_output_path": "reviews/review-7.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "コンテナエンジンの共通化自体は妥当ですが、テストがホスト環境から隔離されておらず、実行環境によって誤判定します。また、添付 E2E は今回変更した Docker fallback の実配備経路を検証しておらず、SKIPPED.md にも状態の自己矛盾があります。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 3,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "major",
+      "file": "packages/api/tests/test_container_engine.py",
+      "line": 34,
+      "issue": "テスト用 PATH に `/usr/bin:/bin` を追加しているため、ホストにインストールされた podman/docker が探索対象に残ります。例えば `/usr/bin/podman` が存在する環境では `test_falls_back_to_docker` が podman を返し、`test_fails_closed_when_neither_present` も成功してしまいます。テストがホスト環境に依存し、意図した分岐を固定できていません。",
+      "suggestion": "`subprocess.run` では `/bin/bash` など絶対パスを指定し、子プロセスの PATH は fake directory のみにしてください。関数内で必要な `command`、`printf`、`local` は shell builtin なのでシステム PATH は不要です。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "runs/2026-08-04T1832_FINISH-4/e2e/SKIPPED.md",
+      "line": 9,
+      "issue": "表では Public リリースを「リリース完了・E2E 10項目合格」と更新していますが、同じファイルの後段では「この PR 時点で確定しているのは 1 と 2a/2b、3・4 はこれから着手」と記載されたままです。どちらが現在の状態か判定できず、E2E 台帳として整合していません。",
+      "suggestion": "後段のスナップショット説明も現在の結果に合わせて更新し、2c、タグ付け、Internal リリースの確定・未確定状態を一貫して記載してください。"
+    },
+    {
+      "id": "F003",
+      "severity": "major",
+      "file": "ops/dev-env-up.sh",
+      "line": 44,
+      "issue": "添付された実環境 E2E は TOOL-01、branch protection、Public リリースを対象としており、今回変更した Docker fallback による build/push や、その後の deploy 経路を検証していません。scenario-3 の `docker manifest inspect` は既存公開イメージの参照だけであり、Docker での build/push 成功を裏付けません。SKIPPED.md に今回の経路を未実施とする理由もありません。",
+      "suggestion": "podman が存在せず Docker のみ存在する環境で、少なくとも対象 Containerfile の build と jetuse-dev 用リポジトリへの push を実施してください。可能なら `ops/dev-env-up.sh` と `ops/deploy-hosted-agent.sh` の2経路をシナリオとして記録し、実施できない経路は SKIPPED.md に理由と代替検証を明記してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 3,
+    "adequacy": "insufficient",
+    "notes": "確認できた証跡は `scenario-1-tool01-guard.md`、`scenario-2-branch-protection.md`、`scenario-3-public-release.md` の3本です。各証跡には複数の正常・異常ケースがありますが、今回の差分の中心である `ops/_container.sh` の Docker fallback、および変更された2つの build/push 経路を実環境で検証していません。また、SKIPPED.md の Public リリース状態が同一ファイル内で矛盾しています。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲット URL が提供されていないため、指示どおり実ブラウザ E2E は実施していません。"
+    }
+  }
+}
