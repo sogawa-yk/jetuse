@@ -124,9 +124,9 @@ Public と Internal が並行して番号を消費するため、帯を分ける
 ## Branch protection
 
 - 4ブランチとも direct push を禁止し、PR と CI 成功を必須にする。
-- **例外**: `github-actions[bot]`。release workflow が `packages/web/dist` を `main` へ commit する（`.gitignore` が `!/packages/web/dist/` で明示的に追跡対象にしており、`scripts/package-orm-stacks.sh` が dist の存在を要求する）。
-- `main` は Public release owner、`internal-dev` と `internal-stable` は Internal release owner の review を必須にする。
-- `main` の ORM / IAM 変更には `infra/orm*` と `infra/terraform/modules/iam` の CODEOWNERS review を設定する。
+- **bot の例外は設けない**（ADR-0030）。個人所有リポジトリでは ruleset の `bypass_actors` に GitHub Actions を指定できない（`Actor GitHub Actions integration must be part of the ruleset source or owner organization`）ため、release workflow が `main` へ dist を直接 commit する設計をやめた。`packages/web/dist` は追跡対象のまま**人がコミットする**成果物とし、陳腐化は `ci.yml` の web ジョブが検出する。
+- **approval は 0 件必須**にする。単独メンテナのため自分の PR を自分で approve できず、1件以上にすると全 PR が止まる。PR 経由の強制と CI 必須で担保する（residual）。
+- **review は ruleset では必須にできない**（approval 0 のため）。`main` の Public release、`internal-stable` の Internal release、および ORM / IAM 変更は、**PR 本文と Codex レビュー（`.claude/skills/codex-review`）で担保する**。CODEOWNERS も approval を要求できないので設定しない。複数人体制になったら approval 必須へ引き上げる。
 - sync PR は `refactor/sync-public-internal` のように識別できる名前にする（`refactor/*` は `deploy-dev.yml` のトリガ外なので自動配備が走らない）。
 
 ## 関連

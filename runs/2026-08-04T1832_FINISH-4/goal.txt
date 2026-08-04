@@ -1,0 +1,6 @@
+残りの4件を実施し、E2E まで合格させる。
+ 1. feat/TOOL-01 の取りこぼし(3caef09)を public-dev へ
+ 2. branch protection（4ブランチ・bot bypass）
+ 3. Public リリース public-v0.1.0（public-dev → main）
+ 4. Internal リリース internal-v0.1.0（E2E 後）
+完了条件: 各件が実 OCI での E2E を通り、証跡が runs/<run-id>/e2e/ に残ること。

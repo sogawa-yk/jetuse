@@ -39,10 +39,12 @@ jetuse_use_cli_region "$REGION"
 IMAGE="$(jetuse_ocir_host "$REGION")/${NS}/jetuse-dev-api:${TAG}"
 echo "== region=${REGION} (tfvars 由来) / image registry=$(jetuse_ocir_host "$REGION")"
 
-echo "== build & push ${IMAGE}"
+. "$(dirname "$0")/_container.sh"
+CE=$(jetuse_container_engine) || exit 1
+echo "== build & push ${IMAGE} (engine=${CE})"
 # ビルドコンテキストはリポジトリルート(Containerfile が packages/jetuse_shared を取り込むため。P1b)
-podman build -f packages/api/Containerfile -t "${IMAGE}" .
-podman push "${IMAGE}"
+"$CE" build -f packages/api/Containerfile -t "${IMAGE}" .
+"$CE" push "${IMAGE}"
 
 echo "== terraform plan (state: ${DEV}.tfstate)"
 ( cd "$APPDIR"

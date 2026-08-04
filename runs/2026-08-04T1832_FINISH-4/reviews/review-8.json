@@ -1,0 +1,30 @@
+{
+  "review_n": 8,
+  "timestamp": "2026-08-04T19:51:06+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-8.input.diff",
+  "raw_output_path": "reviews/review-8.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "コンテナエンジンの自動選択・明示指定・失敗時の fail-closed 動作は妥当で、呼び出し側も引用符付きで安全に実行しています。認証情報、OCID、テナンシ固有値の新規コミットはなく、テストと実環境証跡も今回の変更を十分に裏づけています。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "sufficient",
+    "notes": "scenario-1〜4 と SKIPPED.md を確認しました。今回のコンテナエンジン変更については、resolver の6分岐に加え、docker-only 環境での実 build・OCIR push が成功しており、最低2シナリオ要件を満たします。証跡パスは runs/2026-08-04T1832_FINISH-4/e2e/scenario-4-container-engine.md です。Public release も10項目が PASS。branch protection の2cとInternal release統合E2Eは未完了ですが、SKIPPED.md に状態と理由が明記され、差分は全体完了を主張していないため、本レビューの妨げにはなりません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されておらず、指示に従いブラウザツールは使用していません。"
+    }
+  }
+}

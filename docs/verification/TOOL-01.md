@@ -240,6 +240,12 @@ Vault 秘密は teardown が消さない(固定名で所有を証明できない
 | ローカルの認証資材 | 削除済み |
 | Vault 秘密 `jetuse-spike-tool01-apikey` | **予約削除**（`SCHEDULING_DELETION` / 2026-08-09）。Vault は即時削除できず 7 日以上先の予約が必要 |
 
-補足: `spikes/tool01/teardown.py` のガードは `COMPARTMENT_OCID` を**承認済みの親**として扱い、
-その直下の `dev` を一意に解決する。`.env` の `COMPARTMENT_OCID` を `dev` 自身にしていると
-「一意に定まらない」で中止する（実際に踏んだ）。**このスクリプトを流すときは親を渡すこと。**
+補足（解決済み）: 片付け時に `spikes/ragm02/common.py:resolve_dev_compartment()` が
+「`COMPARTMENT_OCID` は**親**で、その直下の `dev` を探す」前提だったため、`.env` を
+`dev` 自身にしていると「一意に定まらない」で中止した（実際に踏んだ）。
+
+**2026-08-01 に施主が規則を明言**: dev ブランチ派生の作業では
+**`COMPARTMENT_OCID` = `jetuse:dev` コンパートメントそのもの**。
+`ops/_adb.assert_target()` も「`COMPARTMENT_OCID` そのもの」を要求しており、そちらが正だった。
+`resolve_dev_compartment()` を**両対応**（自身が `dev` ならそれを使い、そうでなければ従来どおり
+直下を探す）に修正した。いずれも**名前が `dev` であること**を要求する＝fail-closed は維持。
