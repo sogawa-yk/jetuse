@@ -1,13 +1,13 @@
 {
   "review_n": 9,
-  "timestamp": "2026-08-04T21:37:43+09:00",
+  "timestamp": "2026-08-04T21:58:59+09:00",
   "reviewer": "codex",
   "model": "gpt-5.6-sol",
   "input_diff_path": "reviews/review-9.input.diff",
   "raw_output_path": "reviews/review-9.raw.txt",
   "codex_exit_code": 0,
   "verdict": "PASS",
-  "summary": "E2E 証跡は7シナリオを含み、未検証範囲も理由と後続条件を明示しているため、今回の証跡更新としては十分です。ただし、更新された review-9.json は同じ差分の内容と矛盾する解消済み指摘を残しており、レビュー記録として不正確です。",
+  "summary": "追加された一次証跡は、同一セッションを通じた DB 読み戻し、LLM 構造化、409 ガード、設計、永続化を裏づけており、Internal 統合 E2E の完了主張は妥当です。ただし review-9.json が追加済み証跡を存在しないものとして FAIL を記録しており、run のレビュー記録と現行差分が矛盾しています。",
   "severity_counts": {
     "blocker": 0,
     "major": 1,
@@ -18,22 +18,22 @@
       "id": "F-001",
       "severity": "major",
       "file": "runs/2026-08-04T1832_FINISH-4/reviews/review-9.json",
-      "line": 12,
-      "issue": "レビュー結果が現行差分および添付証跡と矛盾しています。F-001 は Internal リリースを「統合 E2E 合格」と主張しているとしていますが、SKIPPED.md は「部分的に合格」「統合 E2E は完了していない」と明記しています。F-002 の PR 成功経路は scenario-2 に複数の MERGED 実績が追記済みで、F-003 がいう hosted-agent 未実施説明の削除も実際には行われていません。summary、verdict、severity_counts、e2e.notes もこれらの誤認に基づいています。",
-      "suggestion": "現行差分と添付された scenario-1〜7、SKIPPED.md を入力として review-9.json を再生成してください。少なくとも解消済みの3指摘を削除し、verdict、severity_counts、summary、e2e 所見を再生成結果と整合させてください。"
+      "line": 9,
+      "issue": "レビュー結果が同じ差分内の証跡と矛盾しています。summary と E2E-001 は「実行コマンド、HTTP 応答、セッション ID、DB 読み戻し結果がない」としていますが、demo-platform/README.md にコマンド、HTTP status、同一セッション ID が記録され、7a〜7h の各ファイルに応答本文と最終読み戻し結果も追加されています。このため verdict=FAIL、blocker=1、adequacy=insufficient は現行差分に対するレビュー記録として不正確です。",
+      "suggestion": "追加された demo-platform/README.md と 7a〜7h の証跡を含めて review-9.json を再生成し、解消済みの E2E-001 を削除してください。verdict、severity_counts、summary、e2e.adequacy、e2e.notes も再生成結果に合わせて整合させてください。"
     }
   ],
   "e2e": {
     "attached": true,
     "scenarios_reviewed": 7,
     "adequacy": "sufficient",
-    "notes": "runs/2026-08-04T1832_FINISH-4/e2e/ の7シナリオを確認しました。TOOL-01 の3分岐、branch protection の拒否・distガード・PR成功経路、Publicリリース10項目、container engine、namespace fallback、amd64 build、Internal候補点の基本APIと実推論2モデルが記録されています。Internal の demos/builder 正常系と hosted-agent 配備は未検証ですが、SKIPPED.md に環境上の理由、未完了である旨、後続確認条件が明示されており、完了を偽っていません。Public ORM apply の省略にも変更範囲と人間ゲートに基づく理由があります。",
+    "notes": "runs/2026-08-04T1832_FINISH-4/e2e/ の7シナリオを確認しました。今回の核心である scenario-7 は demo-platform/README.md および 7a〜7h に、実行コマンド、HTTP status、応答本文、同一セッション ID、設計後の DB 読み戻しが記録され、正常系と409エラー系を含む8項目を裏づけています。全体でも最低2シナリオを十分に超えています。Hosted Application 配備と Public ORM apply の未実施範囲には SKIPPED.md および scenario-3 で具体的な理由と後続確認条件があります。実値の OCID、秘密情報、未マスクの API Gateway endpoint は追加されていません。",
     "live_check": {
       "performed": false,
       "target_url": "",
       "result": "not_performed",
       "scenarios": [],
-      "notes": "ライブターゲット URL が提供されていないため、指示どおりブラウザ E2E は実施していません。"
+      "notes": "ライブのターゲット URL が提供されていないため、指示どおりブラウザ E2E は実施していません。"
     }
   }
 }
