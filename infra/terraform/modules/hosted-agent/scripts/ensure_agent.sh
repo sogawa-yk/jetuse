@@ -70,22 +70,19 @@ fi
 # 1アプリ=1デプロイメント。既存があっても「自分のもので・設定が一致し・壊れていない」ことを
 # 確かめてから再利用する。条件を満たさなければアプリごと作り直す（デプロイメント単体は
 # ACTIVE だと削除できず、カスケード削除が唯一の回収手段）。
-api --http-method GET --target-uri "$BASE/hostedDeployments?compartmentId=$HA_COMPARTMENT&applicationId=$APP" ||
-  fail "Hosted Deployment の一覧取得に失敗しました"
-DEP="$(pick_ocid generativeaihosteddeployment)"
+# 候補は全件走査する（先頭1件だけ見ると、管理外が混ざったときに取り違える）。
+scan_deployments "$APP"
 
-if [ -n "$DEP" ]; then
-  api --http-method GET --target-uri "$BASE/hostedDeployments/$DEP" ||
-    fail "Hosted Deployment $HA_NAME の取得に失敗しました"
+# 自分のアプリの配下に、自分が作っていないデプロイメントがある状態は想定外。
+# ここでアプリごと消すと管理外リソースを巻き込むので、消さずに止める。
+if [ "$FOREIGN_DEP_EXISTS" = 1 ]; then
+  echo "$HA_NAME のデプロイメントがこのスタックの管理外です。手動で確認してください（自動削除はしません）" >&2
+  exit 1
+fi
+
+if [ -n "$OWNED_DEP" ]; then
+  # scan_deployments が残した応答が、この所有デプロイメントの詳細。
   DST="$(pick_state)"
-
-  # 自分のアプリの配下に、自分が作っていないデプロイメントがある状態は想定外。
-  # ここでアプリごと消すと管理外リソースを巻き込むので、消さずに止める。
-  if ! is_owned; then
-    echo "$HA_NAME のデプロイメントがこのスタックの管理外です。手動で確認してください（自動削除はしません）" >&2
-    exit 1
-  fi
-
   reuse=yes
   resp_has "\"containerUri\":\"$HA_CONTAINER_URI\"" || reuse=no
   resp_has "\"tag\":\"$HA_TAG\"" || reuse=no
