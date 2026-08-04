@@ -67,22 +67,60 @@ POST /api/chat/stream  model=grok-4.3       "1+1は？数字だけ"
 | `GET /api/builder/sessions` | **405** Method Not Allowed | ルートは登録済み（SP3 ビルダーのコードが入っている） |
 | `GET /api/demos` | 503 `database unavailable` | 下記 |
 
-## 確認できなかったこと（正直な限界）
+## デモ基盤（SP1〜SP3）の統合 E2E — 追試で合格
 
-**デモ基盤（SP1〜SP3）の DB 経路は未検証。** `/api/demos` が
-`database unavailable` を返す。原因は、**自分の個人 app スタックの ADB スキーマに
-内部固有 migration（`017_demos_v2` 以降）が適用されていない**こと。
-個人スタックは「API + Gateway + SPA バケット」の最小構成で、デモ基盤用に構成していない。
+初回は `/api/demos` が 503 `database unavailable` で確認できなかった。原因は
+**個人スキーマに内部固有 migration が未適用**だったこと（`main` の checkout から
+`migrate` を流していたため、内部固有の `017_demos_v2` 以降がそもそも存在しなかった）。
 
-- ローカルからの `python -m jetuse_core.migrate` は `DPY-4005`（`.env` が指す**大阪の ADB が
-  STOPPED**）で届かない。アプリが使うのは**シカゴの `jetuse-dev-adb`**（AVAILABLE）で、
-  そちらへ流すには別途スキーマ準備が要る
-- デモ基盤の統合確認は、**共有の Internal 環境**（`jetuse-dev-app` + 専用 ADB + IdP）で
-  行うのが本来の形
+`internal-dev` の checkout から、アプリが使う**シカゴの `jetuse-dev-adb`** に対して
+流し直した（ウォレットは Object Storage の `adb_wallet.zip.b64` から取得）。
 
-各機能は個別に実環境 E2E を通しており、`docs/verification/demo-platform/` に16本、
-`docs/verification/jetuse-app/` に98本の検証レポートが残っている。**今回確認したのは
-「リリース点のコードが実際に動くこと」であり、「デモ基盤の統合動作」は範囲外。**
+```
+接続先 DB=..._JETUSEDEV  USER=JETUSE_SOGAWA
+適用: 11 件
+  + 017_demos_v2  018_demos_idx_owner  019_demos_idx_visibility
+  + 020_conversations_demo_id  021_conversations_idx_demo  022_demo_backend_targets
+  + 023_dbt_idx  024_rag_files_filename_char
+  + 025_builder_sessions  026_builder_sessions_idx  027_builder_sessions_sufficient
+```
+
+### 結果
+
+| # | 確認 | 実測 | 判定 |
+|---|---|---|---|
+| 7a | `GET /api/demos`（DB 経路） | **200** `{"demos":[]}` | PASS |
+| 7b | `POST /api/builder/sessions` | 200 / セッション生成 | PASS |
+| 7c | 生成したセッションを DB から読み戻す | 200 / id 一致・`status=hearing` | PASS |
+| 7d | `POST .../messages`（**LLM 構造化出力**） | 200 / 自然言語から `use_case` `capabilities_hint` を抽出 | PASS |
+| 7e | 必須項目の不足を仕様どおり弾く | 409 `要求サマリが設計に足りません(missing: industry)` | PASS |
+| 7f | 追加ヒアリングで `sufficient=true` | 200 / `industry=製造業` | PASS |
+| 7g | `POST .../design`（**デモ設計**） | 200 / `plan_version` `title` `capabilities` `screens` `data` | PASS |
+| 7h | 設計結果の永続化 | 200 / `status=designed`・`plan` 保存・transcript 4件 | PASS |
+
+**7e が重要。** 必須項目が欠けた状態で設計へ進もうとすると、`specs/19 §3.1` を引用して
+409 で止まる。仕様どおりのガードが実環境で効いている。
+
+**SP3 ビルダーの中核（ヒアリング → LLM 構造化 → 決定的再検査 → 永続化 → 設計）が
+実 OCI 上で完走した。** これをもってデモ基盤の統合 E2E を合格とする。
+
+### 一次証跡
+
+要約ではなく**実行コマンドとレスポンス本文**を `e2e/demo-platform/` に残した。
+同一セッション ID で 7a〜7h が繋がっていることを追える。
+
+- `demo-platform/README.md` — 実行コマンド全文・HTTP ステータス一覧・適用した migration
+- `demo-platform/7a-demos.md` 〜 `7h-final-session.md` — 各リクエストのレスポンス本文
+
+適用前は `/api/demos` が 503 だった。**migration の適用が状態を変えた**ことが、
+この migration 群が実際に必要だったことの裏づけになっている。
+
+### この追試で分かったこと
+
+`make deploy` は app スタックを作るが、**内部固有 migration は流さない**。
+`ops/setup-dev-schema.py` / `python -m jetuse_core.migrate` は
+**実行している checkout の migrations ディレクトリ**を見るため、`main` から流すと
+内部固有分が入らない。**Internal 環境を作るときは internal 系の checkout から流すこと。**
 
 ## 途中で見つけて直した配備経路の欠陥（2件）
 
