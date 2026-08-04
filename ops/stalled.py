@@ -12,7 +12,7 @@ ER が「思いついたことを取りこぼさない」ための仕組みな�
 判定に使うのは**リポジトリの実際の状態だけ**（人が更新する台帳を作らない。必ずずれるため）:
 
 - worktree の `STATE.md` の `review_verdict`
-- ブランチが `main` / `dev` に入っているか
+- ブランチが 4 長期ブランチ（`main` / `public-dev` / `internal-dev` / `internal-stable`）に入っているか
 - PR が出ているか
 - 最後に動いた日からの経過
 
@@ -63,11 +63,23 @@ def _open_prs() -> dict[str, int]:
         return {}
 
 
+# 4ブランチ体制(ADR-0028)の長期ブランチ。取り込み判定の基準はこれだけ。
+LONG_BRANCHES = ("main", "public-dev", "internal-dev", "internal-stable")
+
+
 def scan() -> list[dict]:
     prs = _open_prs()
     intent = _intentional()
-    merged_main = set(_git("branch", "-r", "--merged", "origin/main").split())
-    merged_dev = set(_git("branch", "-r", "--merged", "origin/dev").split())
+    # 4ブランチ体制(ADR-0028)。どれかに入っていれば「取り込み済み」とみなす。
+    # main / internal-stable も見るのは、release 枝へ hotfix が直接入る経路があるため。
+    # 手元に無い参照は黙って飛ばす（浅い clone や移行途中で欠けうる）。
+    existing_refs = {
+        b for b in (f"origin/{x}" for x in LONG_BRANCHES)
+        if _git("rev-parse", "--verify", "--quiet", b)
+    }
+    merged_long: set[str] = set()
+    for _ref in existing_refs:
+        merged_long |= set(_git("branch", "-r", "--merged", _ref).split())
     today = datetime.date.today()
 
     items: list[dict] = []
@@ -94,13 +106,20 @@ def scan() -> list[dict]:
                     pass
         days = (today - datetime.date.fromtimestamp(newest)).days if newest else None
 
-        # **「main と違うか」ではなく「main に入っていないコミットがあるか」で見る。**
-        # 古い worktree は main が先へ進んだ分だけ差分が出るが、それは未出荷ではない。
-        ahead = [x for x in _git("log", "--oneline", "origin/main..HEAD", cwd=wt).splitlines() if x]
+        # **「長期ブランチと違うか」ではなく「どこにも入っていないコミットがあるか」で見る。**
+        # 古い worktree は長期ブランチが先へ進んだ分だけ差分が出るが、それは未出荷ではない。
+        # 4ブランチ体制(ADR-0028)では main だけを基準にすると、public-dev / internal-dev へ
+        # 入れただけの作業が「未出荷」に見え続ける（main はリリース時にしか進まないため）。
+        # **存在する参照だけを渡す。** 1つでも欠けると git log 全体が失敗し、_git は失敗時に
+        # 空文字を返すので ahead=[] となり、未出荷の作業が「取り込み済み」として消える。
+        # 浅い clone・single-branch fetch・移行途中で実際に起こりうる（review-11）。
+        _not = [a for b in LONG_BRANCHES if f"origin/{b}" in existing_refs
+                for a in ("--not", f"origin/{b}")]
+        ahead = [x for x in _git("log", "--oneline", "HEAD", *_not, cwd=wt).splitlines() if x]
         # 未コミットの**コード**変更（STATE.md や証跡は数えない）
         code_dirty = bool(_git("status", "--porcelain", "--",
                                "packages", "infra", "ops", cwd=wt).strip())
-        merged = (f"origin/{branch}" in merged_main) or (f"origin/{branch}" in merged_dev)
+        merged = f"origin/{branch}" in merged_long
         if not merged and not ahead and not code_dirty:
             merged = True  # ブランチ名が違っても、出すべきものは残っていない
         # **意図的に止めているものを最初に見る。** ER に理由が書いてある＝把握済みなので、

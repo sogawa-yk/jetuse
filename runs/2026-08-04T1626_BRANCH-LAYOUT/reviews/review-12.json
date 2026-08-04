@@ -1,0 +1,39 @@
+{
+  "review_n": 12,
+  "timestamp": "2026-08-04T17:17:08+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-12.input.diff",
+  "raw_output_path": "reviews/review-12.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "4長期ブランチのいずれかへの取り込み判定と、参照欠落時に未出荷コミットを消さないロジック自体は妥当です。ただし重要な分岐に自動テストがなく、ブランチ移行や欠落参照に関する回帰を検知できません。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 1,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "major",
+      "file": "ops/stalled.py",
+      "line": 71,
+      "issue": "取り込み判定を2ブランチから4ブランチへ大幅に変更し、さらに参照欠落時の挙動も追加していますが、scan() のテストが追加されていません。特に「public-dev/internal-devだけに取り込まれたブランチ」「一部または全部の長期ブランチ参照がないclone」「未取り込みコミットがある場合」は、誤判定すると停止中の作業を見逃す運用上重要な境界条件です。",
+      "suggestion": "一時Gitリポジトリまたは_gitをモックした自動テストを追加し、最低でも各長期ブランチへの取り込み、複数参照の和集合、一部参照欠落、全参照欠落、未取り込みコミット、未コミットコード変更を検証してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "e2eディレクトリは空で、実行シナリオや結果は添付されていません。本差分はローカルGit状態を走査する運用スクリプトのみであり、jetuse-devへのデプロイや実環境E2Eを必要とする変更ではないため、未実施自体は妥当です。一方、ローカル自動テストの不足は別途findingとして指摘しています。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲットURLが提供されていないため、ブラウザE2Eは実施していません。"
+    }
+  }
+}
