@@ -4,7 +4,9 @@
 いま進めている実装に集中できるように、**ここは急かさない**（既定の状態は「積んである」）。
 
 - **1件1ファイル**（`ER-XXXX-<短い題>.md`）。詳細はリポジトリ側に置く（実装者が読む）
-- **概要は Obsidian のレポート**で見る（判断する人が読む）。生成は `ops/er.py report`
+- **概要は Obsidian の `_renders/ER/`** で見る（判断する人が読む）。生成は `ops/er.py report`
+  - `index.md` … **Markdown**。Obsidian でそのまま読めて**リンクが効く**
+  - `ER-XXXX.html` … 1件ずつの詳細。表や強調を整えた**説明として読む**形
 - **この一覧は自動生成**（`ops/er.py index`）。手で編集しない
 
 ## 使い方
@@ -12,7 +14,7 @@
 ```bash
 python3 ops/er.py list                 # 一覧を見る
 python3 ops/er.py index                # この README の表を更新する
-python3 ops/er.py report               # Obsidian へ概要レポートを出す
+python3 ops/er.py report               # Obsidian の _renders/ER/ へ index.md と詳細 HTML を出す
 ```
 
 **思いついたら書く。** `_TEMPLATE.md` を写して番号を振り、`ops/er.py index` を実行する。

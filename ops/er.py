@@ -101,163 +101,236 @@ def cmd_index(items: list[dict]) -> None:
     print(f"{readme.relative_to(ROOT)} を更新（{len(items)} 件）")
 
 
-CSS = """
+# --- Markdown → HTML の最小変換 -------------------------------------------------
+# ER 本文で使う範囲だけを扱う（見出し・段落・箇条書き・表・強調・コード・引用）。
+# 依存を増やさないための割り切りで、**汎用の Markdown 変換ではない**。
+
+def _inline(t: str) -> str:
+    t = html.escape(t)
+    t = re.sub(r"`([^`]+)`", r"<code>\1</code>", t)
+    t = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", t)
+    return t
+
+
+def _md(text: str) -> str:
+    out, i = [], 0
+    lines = text.split("\n")
+    while i < len(lines):
+        ln = lines[i]
+        if not ln.strip():
+            i += 1
+            continue
+        if ln.startswith("#"):
+            n = len(ln) - len(ln.lstrip("#"))
+            out.append(f"<h{min(n+1,4)}>{_inline(ln.lstrip('# ').strip())}</h{min(n+1,4)}>")
+            i += 1
+        elif ln.lstrip().startswith("|") and i + 1 < len(lines) and set(lines[i+1].replace("|", "").strip()) <= set("-: "):
+            hdr = [c.strip() for c in ln.strip().strip("|").split("|")]
+            i += 2
+            rows = []
+            while i < len(lines) and lines[i].lstrip().startswith("|"):
+                rows.append([c.strip() for c in lines[i].strip().strip("|").split("|")])
+                i += 1
+            th = "".join(f"<th>{_inline(c)}</th>" for c in hdr)
+            tb = "".join("<tr>" + "".join(f"<td>{_inline(c)}</td>" for c in r) + "</tr>" for r in rows)
+            out.append(f'<div class="tw"><table><thead><tr>{th}</tr></thead><tbody>{tb}</tbody></table></div>')
+        elif ln.lstrip().startswith(("- ", "* ")):
+            items = []
+            while i < len(lines) and lines[i].lstrip().startswith(("- ", "* ")):
+                items.append(f"<li>{_inline(lines[i].lstrip()[2:])}</li>")
+                i += 1
+            out.append("<ul>" + "".join(items) + "</ul>")
+        elif ln.lstrip().startswith(">"):
+            buf = []
+            while i < len(lines) and lines[i].lstrip().startswith(">"):
+                buf.append(lines[i].lstrip().lstrip(">").strip())
+                i += 1
+            out.append(f"<blockquote>{_inline(' '.join(buf))}</blockquote>")
+        else:
+            buf = []
+            while i < len(lines) and lines[i].strip() and not lines[i].startswith(("#", "|", ">")) \
+                    and not lines[i].lstrip().startswith(("- ", "* ")):
+                buf.append(lines[i].strip())
+                i += 1
+            out.append(f"<p>{_inline(' '.join(buf))}</p>")
+    return "".join(out)
+
+
+DETAIL_CSS = """
 :root{--bg:#f8fafc;--fg:#0f172a;--mut:#64748b;--bd:#e2e8f0;--card:#fff;
       --ok:#059669;--ng:#dc2626;--warn:#b45309;--acc:#4f46e5}
 @media(prefers-color-scheme:dark){:root{--bg:#0b1220;--fg:#e2e8f0;--mut:#94a3b8;
       --bd:#1e293b;--card:#111a2e}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);
-     font:15px/1.7 system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif}
-.wrap{max-width:1000px;margin:0 auto;padding:28px 22px 60px}
-h1{font-size:24px;margin:0 0 6px}
-.sub{color:var(--mut);margin:0 0 24px;font-size:14px}
-.note{background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--acc);
-      border-radius:10px;padding:14px 18px;margin:0 0 26px}
-.note p{margin:6px 0}
-h2{font-size:16px;margin:30px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--bd)}
-.er{background:var(--card);border:1px solid var(--bd);border-radius:11px;
-    padding:15px 18px;margin:0 0 11px}
-.er .hd{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
-.er .id{font:600 12px ui-monospace,monospace;color:var(--mut)}
-.er .ti{font-weight:600;font-size:15px}
-.er .sm{color:var(--mut);font-size:13.5px;margin-top:6px}
-.tag{font-size:11px;padding:2px 9px;border-radius:99px;border:1px solid var(--bd);color:var(--mut)}
+     font:15.5px/1.85 system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif}
+.wrap{max-width:820px;margin:0 auto;padding:30px 22px 70px}
+.eyebrow{color:var(--mut);font-size:12.5px;letter-spacing:.06em;margin:0 0 6px}
+h1{font-size:26px;line-height:1.4;margin:0 0 10px}
+.meta{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 26px}
+.tag{font-size:11.5px;padding:3px 11px;border-radius:99px;border:1px solid var(--bd);color:var(--mut)}
 .tag.harm{color:var(--ng);border-color:var(--ng)}
-.tag.size{color:var(--warn);border-color:var(--warn)}
-.empty{color:var(--mut);font-size:14px;padding:10px 0}
-.sm-lead{color:var(--ng);font-size:13.5px;margin:0 0 10px}
-.foot{margin-top:36px;padding-top:14px;border-top:1px solid var(--bd);
+.lead{background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--acc);
+      border-radius:10px;padding:16px 20px;margin:0 0 28px;font-size:16px}
+h2{font-size:17px;margin:32px 0 12px;padding-bottom:7px;border-bottom:1px solid var(--bd)}
+h3{font-size:15px;margin:22px 0 8px}
+p{margin:0 0 14px}
+ul{margin:0 0 14px;padding-left:1.3em}
+li{margin:5px 0}
+code{background:var(--card);border:1px solid var(--bd);border-radius:5px;
+     padding:1px 6px;font-size:.88em}
+blockquote{margin:0 0 14px;padding:10px 16px;border-left:3px solid var(--warn);
+           background:var(--card);border-radius:0 8px 8px 0;color:var(--mut)}
+.tw{overflow-x:auto;margin:0 0 16px}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{border:1px solid var(--bd);padding:8px 12px;text-align:left;vertical-align:top}
+th{background:var(--card);font-weight:600}
+.foot{margin-top:44px;padding-top:16px;border-top:1px solid var(--bd);
       color:var(--mut);font-size:12.5px}
 """
 
 
-STALL_JA = {
-    "review": ("レビューが終わっていない", "**放っておくと欠陥が本番に残る。**"),
-    "unshipped": ("PR が出ていない", "レビューは通っているが出荷されていない。"),
-    "unknown": ("状態が読めない", "確認が要る。"),
-    "pr": ("PR が出ている", "マージの判断待ち。"),
-    "parked": ("意図的に止めている", "理由は ER にある。"),
-}
+def _detail_html(item: dict, body: str) -> str:
+    tags = []
+    if item.get("source") == "実害":
+        tags.append('<span class="tag harm">実害あり</span>')
+    elif item.get("source"):
+        tags.append(f'<span class="tag">{html.escape(SOURCE_JA.get(item["source"], item["source"]))}</span>')
+    if item.get("size"):
+        tags.append(f'<span class="tag">大きさ: {html.escape(SIZE_JA.get(item["size"], item["size"]))}</span>')
+    tags.append(f'<span class="tag">{html.escape(STATUS_JA.get(item.get("status",""), ""))}</span>')
+    if item.get("pr"):
+        tags.append(f'<span class="tag">PR #{html.escape(item["pr"])}</span>')
 
+    # 「## ひとことで」は導入として別扱いにする
+    lead = item.get("_summary", "")
+    rest = re.sub(r"##\s*ひとことで\s*\n+.*?(?=\n##|\Z)", "", body, count=1, flags=re.S)
 
-def _stalled_section() -> str:
-    """止まっている作業。**ER と同じ1ページに出す**（見る場所を1つにするため）。
-
-    実害: 2026-08-04 に、レビュー未完了のまま 6 日放置されていた作業から
-    **マージ済みコードの blocker が 2 件**見つかった（他人の資産を消しうるもの）。
-    「やりかけ」も取りこぼさないようにする。
-    """
-    try:
-        sys.path.insert(0, str(ROOT / "ops"))
-        import stalled  # noqa: PLC0415
-        items = stalled.scan()
-    except Exception as e:  # noqa: BLE001 - レポート生成を落とさない
-        return f'<h2>止まっている作業</h2><p class="empty">確認できませんでした（{html.escape(type(e).__name__)}）。</p>'
-
-    need = [i for i in items if i["status"] in ("review", "unshipped", "unknown")]
-    other = [i for i in items if i not in need]
-    if not items:
-        return '<h2>止まっている作業</h2><p class="empty">ありません。</p>'
-
-    def card(i: dict, warn: bool) -> str:
-        label, note = STALL_JA.get(i["status"], (i["status"], ""))
-        d = f'{i["days"]}日前' if i.get("days") is not None else "不明"
-        tag = f'<span class="tag {"harm" if warn else ""}">{html.escape(label)}</span>'
-        return ('<div class="er"><div class="hd">'
-                f'<span class="id">{html.escape(i["name"])}</span>'
-                f'<span class="ti">{html.escape(i["why"])}</span>{tag}'
-                f'<span class="tag">最終更新 {d}</span></div>'
-                + (f'<div class="sm">{html.escape(note)}</div>' if note and warn else "")
-                + "</div>")
-
-    out = ["<h2>止まっている作業</h2>"]
-    if need:
-        out.append('<p class="sm-lead">下の項目は<strong>放っておくと問題になります</strong>。</p>')
-        out += [card(i, True) for i in need]
-    else:
-        out.append('<p class="empty">放っておくと問題になるものはありません。</p>')
-    out += [card(i, False) for i in other]
-    return "".join(out)
-
-
-def cmd_report(items: list[dict], out: pathlib.Path) -> None:
-    """判断する人向けの概要。**詳細はリポジトリ側にある**ので、ここは要点だけ。"""
-    groups: dict[str, list[dict]] = {}
-    for i in items:
-        groups.setdefault(i.get("status", "parked"), []).append(i)
-
-    parts = []
-    for st in STATUS_ORDER:
-        g = groups.get(st, [])
-        if st == "parked":
-            head = f"積んである（{len(g)} 件）"
-            lead = "<p class='empty'>いまは何もありません。</p>"
-        elif st == "doing":
-            head = f"着手中（{len(g)} 件）"
-            lead = "<p class='empty'>着手中のものはありません。</p>"
-        elif st == "done":
-            head = f"完了（{len(g)} 件）"
-            lead = "<p class='empty'>まだありません。</p>"
-        else:
-            head = f"見送り（{len(g)} 件）"
-            lead = "<p class='empty'>ありません。</p>"
-        cards = []
-        for i in g:
-            tags = []
-            if i.get("source") == "実害":
-                tags.append('<span class="tag harm">実害あり</span>')
-            elif i.get("source"):
-                tags.append(f'<span class="tag">{html.escape(SOURCE_JA.get(i["source"], i["source"]))}</span>')
-            if i.get("size"):
-                tags.append(f'<span class="tag size">{html.escape(SIZE_JA.get(i["size"], i["size"]))}</span>')
-            if i.get("pr"):
-                tags.append(f'<span class="tag">PR #{html.escape(i["pr"])}</span>')
-            cards.append(
-                '<div class="er"><div class="hd">'
-                f'<span class="id">{html.escape(i.get("id",""))}</span>'
-                f'<span class="ti">{html.escape(i.get("title",""))}</span>'
-                + "".join(tags) + "</div>"
-                + (f'<div class="sm">{html.escape(i.get("_summary",""))}</div>' if i.get("_summary") else "")
-                + "</div>")
-        parts.append(f"<h2>{head}</h2>" + ("".join(cards) if cards else lead))
-
-    today = datetime.date.today().isoformat()
-    doc = f"""<meta charset="utf-8">
-<title>JetUse 改善要望（ER）一覧</title>
-<style>{CSS}</style>
+    return f"""<meta charset="utf-8">
+<title>{html.escape(item.get('id',''))} {html.escape(item.get('title',''))}</title>
+<style>{DETAIL_CSS}</style>
 <div class="wrap">
-<h1>JetUse 改善要望（ER）</h1>
-<p class="sub">後で実装する項目の置き場 — {today} 時点</p>
-
-<div class="note">
-  <p><strong>この一覧は急ぎません。</strong> いま進めている実装に集中していただくためのもので、
-  「あとで手を付ける候補」を取りこぼさないように置いてあります。</p>
-  <p><strong>次に何をやるか決めるとき</strong>に、ここを眺めて選んでください。
-  <strong>「実害あり」は実際に踏んだもの</strong>で、それ以外は気づきや構想です。</p>
-  <p>詳細（根拠・直し方・やらない場合の代償）は<strong>リポジトリの
-  <code>docs/enhance/</code></strong> にあります。</p>
-</div>
-
-{''.join(parts)}
-
-{_stalled_section()}
-
+<p class="eyebrow">JetUse 改善要望 · {html.escape(item.get('id',''))}</p>
+<h1>{html.escape(item.get('title',''))}</h1>
+<div class="meta">{''.join(tags)}</div>
+{f'<div class="lead">{_inline(lead)}</div>' if lead else ''}
+{_md(rest.strip())}
 <div class="foot">
-  自動生成: <code>ops/er.py report</code> ／ 元データ: <code>docs/enhance/ER-*.md</code>（{len(items)} 件）<br>
+  自動生成 — 元データ: <code>{html.escape(item.get('_path',''))}</code><br>
   手で編集しても次の生成で消えます。内容を直すときは元データを編集してください。
 </div>
 </div>
 """
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(doc, encoding="utf-8")
-    print(f"{out} を生成（{len(items)} 件）")
+
+
+STALL_JA = {
+    "review": "レビューが終わっていない",
+    "unshipped": "PR が出ていない",
+    "unknown": "状態が読めない",
+    "pr": "PR が出ている",
+    "parked": "意図的に止めている",
+}
+
+
+def _stalled_rows() -> tuple[list[str], list[str]]:
+    """止まっている作業。**要注意** と **それ以外** に分けて返す。"""
+    try:
+        sys.path.insert(0, str(ROOT / "ops"))
+        import stalled  # noqa: PLC0415
+        items = stalled.scan()
+    except Exception:
+        return (["| — | 確認できませんでした | — |"], [])
+    warn, rest = [], []
+    for i in items:
+        d = f'{i["days"]}日前' if i.get("days") is not None else "不明"
+        row = f'| `{i["name"]}` | {STALL_JA.get(i["status"], i["status"])} | {i["why"]} | {d} |'
+        (warn if i["status"] in ("review", "unshipped", "unknown") else rest).append(row)
+    return warn, rest
+
+
+def cmd_report(items: list[dict], outdir: pathlib.Path) -> None:
+    """Obsidian へ出す。**index は Markdown・詳細は ER ごとの HTML。**
+
+    index を Markdown にするのは、Obsidian でそのまま読めて**リンクが効く**ため。
+    詳細を HTML にするのは、表や強調を整えた形で**説明として読ませたい**ため。
+    """
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    # 1) 詳細 HTML（ER ごと）
+    for i in items:
+        body = (ROOT / i["_path"]).read_text(encoding="utf-8")
+        body = re.sub(r"^---\s*\n.*?\n---\s*\n", "", body, count=1, flags=re.S)
+        (outdir / f'{i["id"]}.html').write_text(_detail_html(i, body), encoding="utf-8")
+
+    # 2) index（Markdown）
+    today = datetime.date.today().isoformat()
+    parked = [i for i in items if i.get("status") == "parked"]
+    doing = [i for i in items if i.get("status") == "doing"]
+    done = [i for i in items if i.get("status") in ("done", "dropped")]
+
+    def table(rows: list[dict]) -> list[str]:
+        if not rows:
+            return ["", "なし。", ""]
+        out = ["", "| ID | 内容 | 種別 | 大きさ |", "|---|---|---|---|"]
+        for i in rows:
+            mark = "**実害**" if i.get("source") == "実害" else SOURCE_JA.get(i.get("source", ""), "")
+            out.append(f'| [[{i["id"]}.html\\|{i["id"]}]] | {i.get("title","")} '
+                       f'| {mark} | {SIZE_JA.get(i.get("size",""), i.get("size",""))} |')
+        out.append("")
+        return out
+
+    warn, rest = _stalled_rows()
+    md = [
+        "# JetUse 改善要望（ER）",
+        "",
+        f"最終更新: {today} ／ 全 {len(items)} 件",
+        "",
+        "> [!note] この一覧は急ぎません",
+        "> いま進めている実装に集中していただくためのもので、",
+        "> **後で手を付ける候補を取りこぼさない**ように置いてあります。",
+        "> 次に何をやるか決めるときに眺めて選んでください。",
+        "",
+        "**ID をクリックすると詳しい説明が開きます。**",
+        "「実害」は実際に踏んだもの、それ以外は気づきや構想です。",
+        "",
+        "## 積んである（次に選ぶならここから）",
+        *table(parked),
+        "## 着手中",
+        *table(doing),
+    ]
+    if done:
+        md += ["## 終わったもの", *table(done)]
+
+    md += [
+        "## 止まっている作業",
+        "",
+        "**やりかけを取りこぼさないための一覧です。** リポジトリの実際の状態から毎回作ります。",
+        "",
+    ]
+    if warn:
+        md += ["**下の項目は放っておくと問題になります。**", "",
+               "| 作業 | 状態 | 内容 | 最終更新 |", "|---|---|---|---|", *warn, ""]
+    else:
+        md += ["放っておくと問題になるものはありません。", ""]
+    if rest:
+        md += ["| 作業 | 状態 | 内容 | 最終更新 |", "|---|---|---|---|", *rest, ""]
+
+    md += [
+        "---",
+        "",
+        f"自動生成: `ops/er.py report` ／ 元データ: `docs/enhance/ER-*.md`（{len(items)} 件）",
+        "**手で編集しても次の生成で消えます。** 内容を直すときは元データを編集してください。",
+        "",
+    ]
+    (outdir / "index.md").write_text("\n".join(md), encoding="utf-8")
+    print(f"{outdir}/index.md と詳細 {len(items)} 件を生成")
+
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("command", choices=["list", "index", "report"])
-    ap.add_argument("--out", default="", help="report の出力先（既定は .obsidian-dir から解決）")
+    ap.add_argument("--out", default="", help="report の出力先ディレクトリ（既定は .obsidian-dir/_renders/ER）")
     args = ap.parse_args()
 
     items = load()
@@ -274,7 +347,8 @@ def main() -> int:
                       file=sys.stderr)
                 return 2
             base = pathlib.Path(marker.read_text(encoding="utf-8").strip().splitlines()[0])
-            out = base / "_renders" / "JetUse_改善要望一覧.html"
+            # vault 内で書いてよいのは `_renders/` 配下だけ（ノートは読み取り専用）
+            out = base / "_renders" / "ER"
         cmd_report(items, pathlib.Path(out))
     return 0
 
