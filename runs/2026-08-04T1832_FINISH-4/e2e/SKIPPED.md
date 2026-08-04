@@ -7,7 +7,7 @@ goal は4件すべての E2E 合格。**この run は4件を順に進める**�
 | 1 | `feat/TOOL-01` の取りこぼし回収 | **完了**（PR #136 マージ済み・E2E 合格） | `scenario-1-tool01-guard.md` |
 | 2 | branch protection（4ブランチ・bypass なし） | **完了**。2a(direct push 拒否)・2b(dist ガード3経路)・2c(PR 経由で通る＝#137/#139/#141〜#144 が protection 下でマージ済み) すべて合格 | `scenario-2-branch-protection.md` |
 | 3 | Public リリース `public-v0.1.0` | **リリース完了・E2E 10項目合格**。タグ付けはこの後 | `scenario-3-public-release.md` |
-| 4 | Internal リリース `internal-v0.1.0` | **部分的に合格**。リリース点 `ee142e5` の配備・コア機能（実推論2モデル含む）は PASS。**デモ基盤の DB 経路は未検証**（`/api/demos` が 503）＝統合 E2E は完了していない | `scenario-7-internal-release.md` |
+| 4 | Internal リリース `internal-v0.1.0` | **合格**。配備・コア機能（実推論2モデル）に加え、**デモ基盤の統合 E2E も完走**（SP3 ビルダーがヒアリング→LLM 構造化→設計→永続化まで 8項目 PASS） | `scenario-7-internal-release.md` |
 
 ## なぜ分けて出すか
 
@@ -40,17 +40,16 @@ review-4 の指摘内容（SKIPPED.md の自己矛盾・dist ガードの失敗�
 `platform=linux/amd64` が出ること、Hosted Application の作成が architecture エラーで
 落ちないこと。
 
-## 4件目が「合格」と言えない理由（明示）
+## 4件目の追試（2026-08-04）
 
-Internal リリースの統合 E2E は**完了していない**。`/api/demos` が
-`database unavailable`（503）を返し、デモ基盤（SP1〜SP3）の DB 経路を確認できていない。
+初回は `/api/demos` が 503 で「部分的に合格」に留めたが、**原因を特定して解消し、
+統合 E2E を完走させた**。
 
-- 原因: 個人 app スタックの ADB スキーマに内部固有 migration（`017_demos_v2` 以降）が
-  未適用。個人スタックは「API + Gateway + SPA バケット」の最小構成であり、
-  デモ基盤用に構成していない
-- ローカルからの migrate は `.env` が指す**大阪の ADB が STOPPED** で届かない。
-  アプリが使うのは**シカゴの `jetuse-dev-adb`** で、そちらへ流すには別途スキーマ準備が要る
-- **本来の確認場所は共有 Internal 環境**（`jetuse-dev-app` + 専用 ADB + IdP）
+原因は個人スキーマに内部固有 migration が未適用だったこと。`main` の checkout から
+`migrate` を流していたため、内部固有の `017_demos_v2` 以降が**そもそも存在しなかった**。
+`internal-dev` の checkout からシカゴの `jetuse-dev-adb` へ流し直して 11 件適用。
 
-`/api/builder/sessions` が 405（＝ルート登録済み）であることから、内部固有コード自体は
-配備されている。確認できていないのは**動作**であって**配備**ではない。
+結果: `/api/demos` 200、SP3 ビルダーがヒアリング → LLM 構造化 → 必須項目ガード(409) →
+設計 → 永続化まで完走（8項目 PASS）。詳細は `scenario-7-internal-release.md`。
+
+**4件すべて合格。**
