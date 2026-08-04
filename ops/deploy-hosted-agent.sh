@@ -25,8 +25,10 @@ DOMAIN="${IDENTITY_DOMAIN_URL:-$(_ns IDENTITY_DOMAIN_URL)}"
 [ -n "$DOMAIN" ] || { echo "IDENTITY_DOMAIN_URL を .env に設定してください" >&2; exit 1; }
 
 echo "== build & push ${REPO}:${TAG}"
-podman build -t "${REPO}:${TAG}" packages/hosted-agent-sample
-podman push "${REPO}:${TAG}"
+. "$(dirname "$0")/_container.sh"
+CE=$(jetuse_container_engine) || exit 1
+"$CE" build -t "${REPO}:${TAG}" packages/hosted-agent-sample
+"$CE" push "${REPO}:${TAG}"
 
 echo "== create hosted application"
 APP=$(oci generative-ai hosted-application create \
