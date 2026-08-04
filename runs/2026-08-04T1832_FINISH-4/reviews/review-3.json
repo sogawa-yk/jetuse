@@ -1,0 +1,55 @@
+{
+  "review_n": 3,
+  "timestamp": "2026-08-04T18:42:38+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-3.input.diff",
+  "raw_output_path": "reviews/review-3.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "dist 検査が未追跡ファイルを見逃すため、コミット済み成果物との完全一致を保証できません。また、添付 E2E は今回の branch protection/release 差分とは無関係で、SKIPPED.md 自身が対象作業を未着手と記録しています。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 2,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "runs/2026-08-04T1832_FINISH-4/e2e/SKIPPED.md",
+      "line": 8,
+      "issue": "添付証跡は spikes/ragm02/common.py の TOOL-01 検証だけで、今回変更した CI の dist ガード、release workflow の非 push 化、branch protection を検証していません。さらに SKIPPED.md は branch protection を「未着手」と明記しており、差分の完了主張を裏づける証跡になっていません。",
+      "suggestion": "今回の差分に対応する最低2本の証跡を追加してください。少なくとも、最新 dist で CI が成功するケース、陳腐化した dist で失敗するケースを検証し、可能なら release 実行後もブランチ HEAD が更新されず成果物だけが公開されることも確認してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": ".github/workflows/ci.yml",
+      "line": 70,
+      "issue": "git diff --quiet は未追跡ファイルを検査しません。ビルドが packages/web/dist に新規ファイルだけを生成し、既存追跡ファイルを変更しない境界条件では CI が成功し、「コミット済みと一致する」という保証が破られます。ADR の fail-closed という説明も成立しません。",
+      "suggestion": "ビルド後に `git status --porcelain --untracked-files=all -- packages/web/dist` が空であることを検査してください。追跡済みファイルの差分だけでなく、新規生成された未追跡ファイルも失敗理由として表示するテストを追加してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "major",
+      "file": "docs/guides/branching-and-releases.md",
+      "line": 129,
+      "issue": "直前で approval を0件としてレビュー強制は行わないと決定している一方、この行と次行では owner review と CODEOWNERS review を「必須」と記述しており、運用要件が矛盾しています。approval 0 の ruleset ではこれらを必須化できません。",
+      "suggestion": "owner/CODEOWNERS review を任意の運用推奨へ変更するか、必須にするなら approval 0 の決定を見直し、単独メンテナでも停止しない具体的な承認主体・ruleset 設定を記載してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 1,
+    "adequacy": "insufficient",
+    "notes": "確認できた実行証跡は TOOL-01 の resolve_dev_compartment だけです。内部では3分岐が検証されていますが、今回の CI/release/branch protection 差分とは無関係です。SKIPPED.md は対象の branch protection を未着手と明記しており、dist の正常系・陳腐化検出・未追跡ファイル検出・release の非 push 化はいずれも未検証です。証跡パス: runs/2026-08-04T1832_FINISH-4/e2e/scenario-1-tool01-guard.md、runs/2026-08-04T1832_FINISH-4/e2e/SKIPPED.md",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲット URL が提供されていないため、指示どおりブラウザ E2E は実施していません。"
+    }
+  }
+}
