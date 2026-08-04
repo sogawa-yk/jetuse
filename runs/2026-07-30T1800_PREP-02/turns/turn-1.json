@@ -1,0 +1,9 @@
+{
+  "turn": 1,
+  "timestamp": "2026-07-30T18:29:05+09:00",
+  "action_summary": "(loop-protocol 側で追記可)",
+  "files_changed": ["docs/verification/PREP-01.md", "packages/api/jetuse_core/rag.py", "packages/api/tests/test_rag.py", "specs/09-rag.md"],
+  "diff_path": "diffs/turn-1.diff",
+  "review_ref": "reviews/review-1.json",
+  "goal_checker": { "verdict": "(/goal 判定モデルが記録)", "reason": "" }
+}

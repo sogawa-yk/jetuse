@@ -1,0 +1,39 @@
+{
+  "review_n": 7,
+  "timestamp": "2026-08-01T21:12:10+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-7.input.diff",
+  "raw_output_path": "reviews/review-7.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "外部 HTTP ツールの所有者分離、Vault 認可、SSRF 対策、応答上限、および承認時の ID 固定は十分に実装・検証されています。ただし number 型の巨大整数で未処理例外が発生する境界条件が1件あります。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 1,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "TOOL-01-001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/tools.py",
+      "line": 184,
+      "issue": "number 型の検証で整数にも math.isfinite(v) を呼んでいるため、JSON として受理可能な巨大整数（例: 10**400）では float 変換時に OverflowError が発生します。ToolError に正規化されず、API の 500 やエージェント実行の予期しない失敗につながります。現在のテストは NaN/Infinity のみで、この境界条件を網羅していません。",
+      "suggestion": "bool を除外した後、int は有限値としてそのまま許可し、float の場合だけ math.isfinite を呼んでください。必要なら桁数・絶対値の明示的な上限も設け、巨大整数が ToolError または正常入力として一貫して処理されるテストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 6,
+    "adequacy": "sufficient",
+    "notes": "runs/2026-08-01T2002_TOOL-01/e2e/ の証跡を確認しました。外部 API の登録・モデルによる呼び出し・回答反映、Vault 認証と秘密非露出、危険 URL の拒否、タイムアウト、通常および圧縮応答のサイズ上限という6シナリオがすべて PASS です。688件のテストと ruff の成功も記録されています。配備済みURL、承認UI往復、DNSリバインディング攻撃側、Vaultタグ剥奪の実環境検証は未実施ですが、SKIPPED.md に合理的な理由と単体テストによる代替検証が明記されています。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲット URL が提供されていないため、指示どおりブラウザ検証は実施していません。"
+    }
+  }
+}

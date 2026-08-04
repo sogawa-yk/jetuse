@@ -15,7 +15,7 @@ OCI版 JetUse プロトタイプのドキュメント案内。**まずここか�
 |---|---|
 | [guides/onboarding.md](./guides/onboarding.md) | **新規開発者の入門** — ローカル起動→テスト→Gitフロー→自分専用E2E環境 |
 | [guides/dev-environments.md](./guides/dev-environments.md) | 開発者ごとのデプロイ済みE2E環境(共有基盤+per-devアプリ層) |
-| [guides/branching-and-releases.md](./guides/branching-and-releases.md) | Public (`main`) / Internal (`dev`) のブランチ・同期・正式リリース規約 |
+| [guides/branching-and-releases.md](./guides/branching-and-releases.md) | 4ブランチ体制（`main` / `public-dev` / `internal-dev` / `internal-stable`）の起点判定・同期・正式リリース規約 |
 | [../CLAUDE.md](../CLAUDE.md) | 運用ルール（spec-driven / 実機検証主義 / 比較ドキュメント主義）と環境の確定事実 |
 | [plan.md](./plan.md) | 作業計画書（正本）。フェーズ・タスクチケット |
 | [architecture/system.md](./architecture/system.md) | システムアーキテクチャ（Mermaid・正本） |

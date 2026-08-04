@@ -1,0 +1,71 @@
+{
+  "review_n": 3,
+  "timestamp": "2026-08-01T11:34:12+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-3.input.diff",
+  "raw_output_path": "reviews/review-3.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "OCR 結線の主要シナリオは実環境証跡で確認できていますが、人間ゲート対象である既存 ADB の状態変更が実施されています。また、single-flight の競合、巨大 PDF の早期打ち切り、空 OCR 結果の扱いに正確性・境界条件上の問題があります。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 3,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "PREP03-001",
+      "severity": "blocker",
+      "file": "runs/2026-08-01T1033_PREP-03/e2e/deploy.log",
+      "line": 1,
+      "issue": "E2E のため既存リソース `jetuse-loop-adb` を STOPPED から起動しています。今回のレビュー条件では既存リソース変更は人間ゲート対象ですが、証跡には明示承認がなく、ローカル skill の列挙に含まれないことを理由に実施しています。後続の ACL・Resource Principal 設定も含め、現在の指示から権限を推定してはいけません。",
+      "suggestion": "既存 ADB の起動とセキュリティ設定に対する人間の明示承認を取得し、承認記録を証跡に残してください。承認がない場合は、起動済みの承認済み環境または新規の隔離された jetuse-dev リソースだけを使用してください。"
+    },
+    {
+      "id": "PREP03-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/extract_scan.py",
+      "line": 164,
+      "issue": "single-flight の完了通知を送った後でキャッシュへ結果を格納しています。待機スレッドは `done.set()` 直後に起床すると、キャッシュも inflight も存在しない状態を観測して自分を計算役にできるため、同じ文書の OCR が複数回走ります。明示された「同時要求でも OCR 1 回」というコスト保証を満たしません。追加テストも待機側が実際に wait 状態へ入ったことを同期しておらず、この競合を確実には再現しません。",
+      "suggestion": "同じロック内で結果のキャッシュ格納、inflight の削除、Event の通知をこの順に実施してください。失敗結果も共有できる状態オブジェクトを使い、テストでは全待機スレッドが single-flight に参加したことを barrier 等で確認してから先行処理を解放してください。"
+    },
+    {
+      "id": "PREP03-003",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/extract_scan.py",
+      "line": 219,
+      "issue": "OCR 対象ページ上限は `_read_native` が全ページを `extract_text()` した後にしか確認されません。20MB 以下でも空ページを大量に持つ PDF を作れるため、100ページ上限で拒否する前に全ページを展開し、CPU・メモリを長時間占有できます。「読みながら上限で打ち切る」という実装方針にも反します。",
+      "suggestion": "ページを読みながら空白ページ数を数え、`MAX_OCR_PAGES` を超えた時点で `ScanLimitError(limit=\"ocr_pages\")` を送出してください。多数の空ページを持つ小容量 PDF で、101ページ目までに処理が停止するテストも追加してください。"
+    },
+    {
+      "id": "PREP03-004",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/extract_scan.py",
+      "line": 279,
+      "issue": "画像 OCR の空結果判定はページ配列の有無しか見ていないため、通常想定される `pages=[[]]` を成功として `['']` で返します。PDF でも全 OCR ページが空文字のまま成功します。その結果、`POST /api/extract` は白紙・判読不能な入力に 200／`chunk_count=0` を返し、「本文が抽出できない入力は 422」というエラー処理と整合しません。アップロード経路だけは後段で拒否するため、2つの公開入口で挙動も異なります。",
+      "suggestion": "OCR 対象ページの結果がすべて空白なら `ScanUnsupported` を送出してください。画像、全ページ白紙 PDF、テキスト層と白紙 OCR ページが混在する PDFについて、`/api/extract` とアップロードの期待挙動をテストしてください。"
+    },
+    {
+      "id": "PREP03-005",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/extract_scan.py",
+      "line": 266,
+      "issue": "最終結果キャッシュのキーが内容ハッシュとエンジンだけで、PDF／画像という処理形式を含みません。同じバイト列を最初に画像名で処理した後、PDF名で送ると、PDF の構文検証を通らず画像として得たキャッシュ結果が返る可能性があります。グローバルキャッシュのため利用者をまたいでも発生します。",
+      "suggestion": "キャッシュキーへ正規化した形式種別（pdf/png/jpeg など）を含めてください。異なる拡張子で同一バイト列を送った場合に、それぞれの形式検証が行われる回帰テストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "sufficient",
+    "notes": "`runs/2026-08-01T1033_PREP-03/e2e/` のシナリオ0〜4を確認しました。スキャンPDFの抽出・検索・p.2引用、PNGの検索・p.1引用、テキスト層PDFのOCR呼び出し0回、上限／不正エンジン422、明示VLM経路を実物のOCIサービスで確認しており、最低2シナリオを十分に超えています。未実施の Resource Principal、Select AI、OpenSearch、5ページ超、表・Office形式は SKIPPED.md に理由と残作業があります。ただし実施形態はプロセス内ASGI＋config_file認証であり、配備先Resource Principal経路は未検証です。また証跡作成時の既存ADB起動は人間ゲート違反として別途 blocker にしています。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

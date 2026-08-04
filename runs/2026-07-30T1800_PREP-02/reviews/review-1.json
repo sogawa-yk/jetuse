@@ -1,0 +1,30 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-07-30T18:20:24+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "Select AI の xlsx 判定撤回は、単体テストと jetuse-dev 実環境の3シナリオで十分に裏づけられています。公開シグネチャの変更、環境依存の認証情報・OCID・エンドポイント実値のコミット、未承認の既存リソース変更は差分から確認されません。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 3,
+    "adequacy": "sufficient",
+    "notes": "runs/2026-07-30T1800_PREP-02/e2e/ の証跡を確認。シナリオ1は xlsx+txt 混在時の索引作成・本文抽出・検索、シナリオ2は xlsx 単独時の同経路、シナリオ3は rag.add_file → ensure_profile → attach_backend_status のアプリ実経路を検証し、すべて成功している。SKIPPED.md は配備済み経路、refresh_rate、自動同期、難しい xlsx、OpenSearch 等の未実施理由と影響範囲を明記しており、本差分の主張に対して妥当。teardown.log と cleanup-genai.log では run 固有リソースの削除と残存なしを確認できる。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲット URL が提供されていないため、実ブラウザ E2E は実施していない。"
+    }
+  }
+}

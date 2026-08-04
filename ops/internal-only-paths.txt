@@ -1,0 +1,69 @@
+# Internal 版にのみ存在する成果物のパス（4ブランチ体制 / ADR-0028 の単一の真実源）。
+#
+# 用途は2つ:
+#   1. ops/check-branch-base.sh  — internal-dev 宛の PR が「共有物しか触っていない」ときに落とす。
+#      共有物は public-dev 起点で作らないと main へ届かない（実例: 2026-07 の docs 整理）。
+#   2. ops/sync-public-to-internal.sh — 衝突時にどちらを採るかの目安（ここに載る物は internal 版が正）。
+#
+# 書式: 1行1パターン。`#` 始まりはコメント、空行は無視。末尾 `/` はディレクトリ配下すべて。
+# パターンは git diff --name-only の出力（リポジトリルート相対）に対して前方一致で照合する。
+#
+# 追加するとき: 「Public 版に出しても差し支えないか」を先に考える。差し支えないなら
+# ここに足すのではなく public-dev 起点で作り直すこと。ここは "Public に出せない物" の一覧であり、
+# "とりあえず internal で作った物" の一覧ではない。
+
+# --- Internal 専用の CI / 配備 ---
+.github/workflows/deploy-dev.yml
+infra/terraform/environments/dev-app/
+infra/images/gen-ci/
+
+# --- デモプラットフォーム（SP1〜SP3）---
+packages/web/src/pages/demobuilder/
+spikes/sp3_03_scaffold/
+specs/18-sp2-demo-tenancy.md
+specs/19-sp3-builder.md
+docs/comparison/demo-box-provisioning.md
+docs/comparison/frontend-generation-runtime.md
+docs/decisions/ADR-0022-layer2-sql-gate-function-surface.md
+docs/decisions/ADR-0023-opencode-integration.md
+
+# --- Internal 固有の検証レポート・チケット ---
+# NOTE: docs/verification/ 全体を「証跡だから中立」として除外してはならない。
+# 2026-07 の乖離（verification/ の4サブディレクトリ整理が Public に届かなかった）は
+# まさにこのディレクトリで起きた。既定は共有物とし、Internal 固有のものだけ列挙する。
+docs/verification/demo-platform/
+tasks/SP1-
+tasks/SP2-
+tasks/SP3-
+tasks/STAGE2-
+tasks/STAGE3-
+
+# --- 共有パッケージ内に同居する Internal 固有モジュール ---
+# NOTE: ディレクトリで切れないためファイル名パターンに依存している。命名規律
+# (builder_* / demo_* / gen_* / bundle*) が崩れるとこの検査も崩れる。将来的には
+# packages/api/jetuse_core/internal/ へ寄せるのが本筋（ADR-0028 の open item）。
+packages/api/jetuse_core/app_session.py
+packages/api/jetuse_core/builder_
+packages/api/jetuse_core/bundle
+packages/api/jetuse_core/ddl_verify.py
+packages/api/jetuse_core/demo_
+packages/api/jetuse_core/gen_
+packages/api/jetuse_core/generation_runtime
+packages/api/jetuse_core/owner_keys.py
+packages/api/jetuse_core/rag_ledger.py
+packages/api/jetuse_core/sign_proxy.py
+packages/api/service/routes/builder.py
+
+# Internal 固有 migration。ADR-0028 で Public=0xx_ / Internal=5xx_ の帯を分けたので、
+# 新規はこの1行で拾える。既存の重複(017〜021)は schema_migrations の記録と食い違うため
+# リネームせず、個別に列挙もしない（sync 済みで両版に在るため共有物として扱ってよい）。
+packages/api/jetuse_core/migrations/5
+
+# Internal 固有テスト（上記モジュールに対応）
+packages/api/tests/test_app_session.py
+packages/api/tests/test_auth.py
+packages/api/tests/test_box_limits.py
+packages/api/tests/test_builder
+packages/api/tests/test_bundle
+packages/api/tests/test_conversations_
+packages/api/tests/test_demo

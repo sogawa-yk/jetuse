@@ -1,0 +1,79 @@
+{
+  "review_n": 2,
+  "timestamp": "2026-07-31T10:27:19+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-2.input.diff",
+  "raw_output_path": "reviews/review-2.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker はありませんが、調査の否定証明と E2E スクリプトの合否判定に major が4件あります。添付された今回の SDK 直叩き証跡自体は4シナリオの成功を裏づけています。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 4,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "M001",
+      "severity": "major",
+      "file": "spikes/mem01/probe_agent_memory.py",
+      "line": 30,
+      "issue": "「Agent Memory の PL/SQL API は無い」という否定探索が網羅的でない。`objects_memory` は `FETCH FIRST 100 ROWS ONLY` で打ち切られ、添付の `probe1-dictionary.json` も実際に100件で途切れている。また、パッケージメンバーの検索対象は `DBMS_CLOUD_AI` と `DBMS_CLOUD_AI_AGENT` に限定されるため、別名パッケージや後半の `SYS` オブジェクトにある API を見落とし得る。",
+      "suggestion": "件数制限を除去または全ページ取得し、総件数も証跡化する。加えて `all_procedures`、`all_arguments`、Oracle 管理スキーマの PACKAGE 仕様を対象に、object/package/member 名を横断して `MEMOR`、`RECALL` 等を検索する。検証用 `JETUSE_MEM01_*` オブジェクトは結果から明示的に分離する。"
+    },
+    {
+      "id": "M002",
+      "severity": "major",
+      "file": "spikes/mem01/probe_sdk.py",
+      "line": 196,
+      "issue": "初期化後の scheduler job は JSON に記録するだけで合否判定していない。文書で説明する `ORA-27486` の soft failure が起きて TTL purge job が作られなくても、抽出・検索・削除のチェックだけで `all checks passed` になる。これは ADR が問題視する「気づけない失敗」を検出できない。",
+      "suggestion": "`MEM01_PURGE_EXPIRED_RECORDS_J` が存在し、期待する `repeat_interval` と有効な state を持つことを `check()` で必須判定する。権限なしで初期化が soft-fail する否定シナリオと、`CREATE JOB` 付与後に job が作られる肯定シナリオも証跡へ残す。"
+    },
+    {
+      "id": "M003",
+      "severity": "major",
+      "file": "spikes/mem01/probe_sdk.py",
+      "line": 241,
+      "issue": "会話横断想起の出所チェックが `prov in (thread_a, None)` となっており、SDK の返却形式変更などで `thread_id` が取得できない場合も成功扱いになる。これでは会話B由来の類似内容や誤抽出でも中心シナリオが偽陽性になり得る。今回の証跡では `thread_id=mem01-thread-a` だが、再現スクリプトの回帰検出力が不足している。",
+      "suggestion": "`prov == thread_a` を必須とし、`thread_id` 欠落時は失敗させる。併せて provenance の `user_id == user_a` と期待する記憶種別も検証する。"
+    },
+    {
+      "id": "M004",
+      "severity": "major",
+      "file": "spikes/mem01/probe_sdk.py",
+      "line": 203,
+      "issue": "固定 thread ID の事前削除で全例外を握り潰している。接続障害・権限不足・SDK 不具合でも処理を継続するため、前回残った記憶が抽出・想起チェックを満たし、今回の実行が成功したように見える可能性がある。",
+      "suggestion": "存在しない場合を表す SDK 固有例外だけを無視し、それ以外は失敗させる。より安全には run 固有 thread ID を使い、シナリオ開始前の対象データ件数が0であることを検証する。"
+    },
+    {
+      "id": "m001",
+      "severity": "minor",
+      "file": "docs/verification/MEM-01.md",
+      "line": 30,
+      "issue": "証跡として `probe2-packages.json` を参照しているが、記載された run の research 配下には `probe1-dictionary.json` と `probe3-sdk-e2e.json` しかなく、リンク先が存在しない。",
+      "suggestion": "パッケージ調査も含む実在の `probe1-dictionary.json` に参照を統一するか、実際の `probe2-packages.json` を証跡へ追加する。"
+    },
+    {
+      "id": "m002",
+      "severity": "minor",
+      "file": "docs/verification/MEM-01.md",
+      "line": 90,
+      "issue": "`memory_store_id=\"MEM01\"` で作られる表を `MEM01MEMORY` と記載しているが、同文書の表と実環境証跡では `MEM01_MEMORY` である。直前で deprecated な `table_name_prefix` との差を注意喚起しているため、誤記が実装時の誤参照につながる。",
+      "suggestion": "表名を `MEM01_MEMORY` に修正し、文書全体で `memory_store_id` 由来のアンダースコア付き名称へ統一する。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "sufficient",
+    "notes": "`runs/2026-07-31T0204_MEM-01/e2e/research-run.log` と `../research/probe3-sdk-e2e.json` を確認した。SDK 直叩きで、(1) 4発話からの記憶抽出、(2) 会話A由来の記憶を user scope で会話横断想起し provenance も会話A、(3) 別 user の exact match が0件、(4) 両 thread 削除後に memories/messages/chunks と検索結果が0件、の4シナリオが成功している。JetUse API 経由の E2E は未実装かつ Proposed ADR の人間ゲート中であり、`runs/2026-07-31T0204_MEM-01/e2e/SKIPPED.md` の未実施理由は妥当。ただし `CREATE JOB` 未付与時の soft failure、resource/instance principal、アプリ統合経路は未検証である。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおり実ブラウザ E2E は実施していない。"
+    }
+  }
+}

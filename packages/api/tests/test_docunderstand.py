@@ -62,7 +62,8 @@ def test_ocr_splits_pdf_over_5_pages_and_merges():
     def fake_chunk(content, language, tables, key_values):
         n = docunderstand._pdf_page_count(content)
         return {
-            "lines": [f"chunk{n}"], "page_count": n, "confidences": [0.9] * n,
+            "lines": [f"chunk{n}"], "pages": [[f"chunk{n}p{i + 1}"] for i in range(n)],
+            "page_count": n, "confidences": [0.9] * n,
             "tables": [{"rows": [["x"]], "row_count": 1, "column_count": 1}],
             "key_values": [{"label": "k", "value": "v"}],
         }
@@ -75,17 +76,21 @@ def test_ocr_splits_pdf_over_5_pages_and_merges():
     assert len(out["tables"]) == 3
     assert len(out["key_values"]) == 3
     assert out["mean_confidence"] == 0.9
+    # PREP-03: ページごとの行がチャンクを跨いでページ順に並ぶ(取り込み経路が p.N を付けられる)
+    assert len(out["pages"]) == 12
+    assert out["pages"][0] == ["chunk5p1"] and out["pages"][10] == ["chunk2p1"]
 
 
 def test_ocr_small_pdf_single_shot():
     pdf = _make_pdf(3)
     with mock.patch.object(docunderstand, "_analyze_chunk") as m:
-        m.return_value = {"lines": ["a"], "page_count": 3, "confidences": [0.8],
-                          "tables": [], "key_values": []}
+        m.return_value = {"lines": ["a"], "pages": [["a"], [], []], "page_count": 3,
+                          "confidences": [0.8], "tables": [], "key_values": []}
         out = docunderstand.ocr(pdf)
     assert m.call_count == 1  # 5ページ以下は分割しない
     assert out["chunk_count"] == 1
     assert out["page_count"] == 3
+    assert out["pages"] == [["a"], [], []]
 
 
 def test_ocr_too_many_total_pages_raises():

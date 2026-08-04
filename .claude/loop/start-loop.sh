@@ -5,7 +5,7 @@
 #       取り合って互いの変更を壊す（実害事例あり）。タスク=1 worktree に分離して物理的に防ぐ。
 #
 # 使い方:
-#   [GOAL="完了条件"] [CODEX_MODEL=...] [BASE_BRANCH=dev] \
+#   [GOAL="完了条件"] [CODEX_MODEL=...] [BASE_BRANCH=internal-dev] \
 #   [LOOP_WORKTREE_ROOT=/path] [LOOP_SKIP_BOOTSTRAP=1] .claude/loop/start-loop.sh <task-id>
 #
 # 既定の worktree 配置: <repo>/../<repo名>-loops/<task-id>（リポジトリ外の兄弟ディレクトリ）。
@@ -17,9 +17,26 @@ TASK="${1:?usage: start-loop.sh <task-id>}"
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
-# 既定の派生元は loop-config.yml の worktree.base_branch（＝dev）に合わせる。
+# 既定の派生元は loop-config.yml の worktree.base_branch（＝public-dev）に合わせる。
+# 共有物は Public 起点で作らないと main へ届かない(ADR-0028)。内部固有は BASE_BRANCH=internal-dev。
 # 依存連鎖は BASE_BRANCH=feat/<dep> で上書きする。
-BASE="${BASE_BRANCH:-dev}"
+BASE="${BASE_BRANCH:-public-dev}"
+
+# 既存ブランチ/worktree の再利用は、**旧既定(dev)から切った枝をそのまま使い続ける**経路になる
+# （review-6 F003）。base の先端を含んでいなければ起点がずれている可能性を告げる。
+# 失敗にはしない —— 依存連鎖(BASE_BRANCH=feat/<dep>)や単に古いだけの枝を止めてしまうため。
+warn_if_base_not_ancestor() {  # $1=branch $2=base
+  local _b="$1" _base="$2" _r
+  for _r in "refs/heads/${_base}" "refs/remotes/origin/${_base}"; do
+    git show-ref --verify --quiet "$_r" || continue
+    if ! git merge-base --is-ancestor "$_r" "$_b" 2>/dev/null; then
+      echo "[loop] WARN: 既存の $_b は $_base の先端を含んでいません（起点がずれている可能性）。" >&2
+      echo "[loop]       意図した起点か確認し、必要なら git rebase $_base してください。" >&2
+    fi
+    return 0
+  done
+}
+
 BR="feat/${TASK}"
 WT_ROOT="${LOOP_WORKTREE_ROOT:-$(cd "$ROOT/.." && pwd)/$(basename "$ROOT")-loops}"
 
@@ -30,13 +47,15 @@ WT="$(cd "$WT_ROOT" && pwd)/${TASK}"
 # 既存 worktree を再利用、無ければ作成。
 if git worktree list --porcelain | grep -qx "worktree ${WT}"; then
   echo "[loop] 既存 worktree を再利用: $WT" >&2
+  warn_if_base_not_ancestor "$BR" "$BASE"
 elif [ -e "$WT" ]; then
   echo "[loop] ERROR: $WT が worktree でない実体として存在します。退避してください。" >&2
   exit 1
 elif git show-ref --verify --quiet "refs/heads/${BR}"; then
+  warn_if_base_not_ancestor "$BR" "$BASE"
   git worktree add "$WT" "$BR" >&2
 else
-  # base はローカルブランチが無ければ origin/<base> から分岐する（ローカルに dev を持たない
+  # base はローカルブランチが無ければ origin/<base> から分岐する（ローカルに public-dev を持たない
   # 運用が普通なので、ローカル ref だけを見ると起動できない）。
   if git show-ref --verify --quiet "refs/heads/${BASE}"; then
     BASE_REF="$BASE"

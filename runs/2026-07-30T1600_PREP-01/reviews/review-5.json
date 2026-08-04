@@ -1,0 +1,71 @@
+{
+  "review_n": 5,
+  "timestamp": "2026-07-30T17:24:05+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-5.input.diff",
+  "raw_output_path": "reviews/review-5.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker はありませんが、公開契約とバックエンド整合性に関する major 4件を確認しました。実環境 E2E は主要4シナリオを網羅しており、未実施経路にも理由があるため十分です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 4,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "PREP01-014",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag_metadata.py",
+      "line": 89,
+      "issue": "従来は最大512文字まで許可されていた `kind` を全アップロード形式で32 UTF-8バイトに制限しており、ADBが無効な環境や既存の pdf/txt/md クライアントにも422を返す後方互換性破壊です。",
+      "suggestion": "ADBの `kind` 列と検索値上限を既存の512文字契約へ拡張してください。制約変更が不可避ならAPIのversioningまたは移行期間を設けてください。"
+    },
+    {
+      "id": "PREP01-015",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/rag.py",
+      "line": 389,
+      "issue": "非文字列の `kind` はマネージド側には数値・真偽値のまま保存されますが、ADBには `str()` で保存されます。さらにADBの `build_where()` は文字列以外のフィルタ値を拒否するため、同じ公開フィルタがバックエンドによって異なる結果またはエラーになります。",
+      "suggestion": "正規化後の型と値を両バックエンドで一致させてください。非文字列を維持するならADBでも型を保持できる格納・比較方式を実装し、数値・真偽値の検索までテストしてください。"
+    },
+    {
+      "id": "PREP01-016",
+      "severity": "major",
+      "file": "packages/api/service/routes/rag.py",
+      "line": 124,
+      "issue": "`POST /api/extract` は `chunk_units()` の結果を直接返しますが、txt/mdではチャンク数上限が分割中に検査されません。長い行を多数含む単一セグメントは2000件を超えて返せる一方、実際の `ingest()` は後段で全件拒否するため、「ADBへ投入されるものと同一」という公開契約が成立しません。",
+      "suggestion": "チャンク追加のたびに `MAX_CHUNKS` を検査する処理を `chunk_units()` 内へ移し、抽出口と取り込み口で同じ上限判定を共有してください。txt/md/pdfの上限超過ルートテストも追加してください。"
+    },
+    {
+      "id": "PREP01-017",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/extract_xlsx.py",
+      "line": 164,
+      "issue": "壊れたブックの正規化対象に `RuntimeError` が含まれていません。暗号化されたZIPエントリなどは `zipfile` から `RuntimeError` が発生するため、`UnsupportedWorkbook` ではなく500として漏れ、暗号化も422にするという例外契約を破ります。",
+      "suggestion": "ZIPエントリの暗号化フラグを事前検査して `UnsupportedWorkbook` にするか、アーカイブ読み取り由来の `RuntimeError` を限定的に変換してください。暗号化・破損した有効ZIPのルートテストを追加してください。"
+    },
+    {
+      "id": "PREP01-018",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/extract_xlsx.py",
+      "line": 138,
+      "issue": "`(ブック全体: N シート)` の N は実際の総シート数ではなく、チャンクが生成された非空シート数です。仕様への注記はありますが、属性値単体では4シートのブックを「3シート」と表示するため誤解を招きます。",
+      "suggestion": "`(抽出対象: N シート)` など値自体で非空シート数だと分かる表現にするか、総シート数を抽出結果へ保持してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "sufficient",
+    "notes": "scenario-0（POST /api/extract、保存なし・上限422）、scenario-1（ADBのチャンク単位セル出典）、scenario-2（Vector Storeのファイル単位属性・素のxlsx拒否）、scenario-3（現行版フィルタ）はすべてPASS。証跡は runs/2026-07-30T1600_PREP-01/e2e/scenario-0.md〜scenario-3.md、summary.md、tests.log。Select AI、OpenSearch、公開LB・認証経路の未実施理由はSKIPPED.mdに明記されています。ただし findings の非文字列kind、txt/mdのチャンク上限、暗号化xlsxは証跡・単体テストの対象外です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されていないため、指示どおりブラウザ検証は未実施です。"
+    }
+  }
+}

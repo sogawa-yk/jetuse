@@ -1,0 +1,55 @@
+{
+  "review_n": 2,
+  "timestamp": "2026-08-04T16:33:34+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-2.input.diff",
+  "raw_output_path": "reviews/review-2.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "起点判定の中核要件に迂回経路が残っています。特に、再発防止対象そのものである `docs/verification/` の共有変更が neutral 扱いで通過するため FAIL です。認証情報・OCID・エンドポイント実値の新規コミットは確認されません。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 1,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "blocker",
+      "file": "ops/check-branch-base.sh",
+      "line": 77,
+      "issue": "`docs/verification/*` を無条件に neutral として除外するため、`internal-dev` 宛で同ディレクトリだけを整理・変更する共有物-only PRが成功します。ADR-0028が再発防止対象として挙げた2026-07の乖離も、まさに `docs/verification/` の整理であり、中核の受け入れ条件を満たしません。",
+      "suggestion": "証跡ファイルと共有ドキュメントをパスだけで一括除外しないでください。少なくとも `docs/verification/` の変更をsharedとして扱うか、Internal固有の証跡だけを明示的に `internal-only-paths.txt` へ列挙してください。共有物-only、Internal-only、混在、証跡-onlyの回帰テストも追加してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "ops/check-branch-base.sh",
+      "line": 32,
+      "issue": "`ops/internal-only-paths.txt` が存在しない場合に成功終了するため、同ファイルを削除するPRへ共有変更を混ぜれば検査を完全に迂回できます。単一の真実源を守るCIとしてfail-openになっています。",
+      "suggestion": "baseを先に解決し、`internal-dev` 宛で一覧ファイルが無ければ失敗させてください。移行互換が必要なら、base側のファイルを `git show origin/internal-dev:ops/internal-only-paths.txt` で読み、PRによる削除も明示的に拒否してください。"
+    },
+    {
+      "id": "F003",
+      "severity": "minor",
+      "file": "ops/check-branch-base.sh",
+      "line": 1,
+      "issue": "新規のブランチ判定スクリプトについて、自動テストや今回の実行証跡がありません。前回指摘された経路は修正されていますが、neutralの過剰除外や設定ファイル削除時のfail-openを検出できていません。",
+      "suggestion": "一時Gitリポジトリを使うshellテストを追加し、base未指定、public-dev、共有物-only、Internal-only、混在、neutral、一覧ファイル欠落・削除、非ASCIIパスを網羅してCIで実行してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "`runs/2026-08-04T1626_BRANCH-LAYOUT/e2e/` は空で、実環境E2E証跡はありません。本差分はGitブランチ・CI・ローカルshell運用の変更であり、jetuse-devへのデプロイを伴う実環境E2Eは対象外と判断します。ただし、対象外であることとは別に、ブランチ判定のローカル自動テスト証跡が不足しています。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

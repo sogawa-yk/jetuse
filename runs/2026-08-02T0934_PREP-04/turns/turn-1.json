@@ -1,0 +1,9 @@
+{
+  "turn": 1,
+  "timestamp": "2026-08-02T10:00:20+09:00",
+  "action_summary": "(loop-protocol 側で追記可)",
+  "files_changed": ["packages/api/jetuse_core/extract_xlsx.py", "packages/api/tests/test_extract_xlsx.py", "packages/api/tests/test_rag.py", "specs/09-rag.md"],
+  "diff_path": "diffs/turn-1.diff",
+  "review_ref": "reviews/review-1.json",
+  "goal_checker": { "verdict": "(/goal 判定モデルが記録)", "reason": "" }
+}

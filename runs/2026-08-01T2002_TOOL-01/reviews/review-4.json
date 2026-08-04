@@ -1,0 +1,63 @@
+{
+  "review_n": 4,
+  "timestamp": "2026-08-01T20:55:35+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-4.input.diff",
+  "raw_output_path": "reviews/review-4.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker はありませんが、HTTP origin 固定を弱める予約ヘッダー許可と、OCI 認証情報に依存するテストのモック不備があります。5本の実環境 E2E は主要な正常系・秘密・SSRF・上限超過を十分に裏づけています。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 2,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "TOOL-01-001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/http_tools.py",
+      "line": 186,
+      "issue": "auth_header は構文だけを検証しているため `Host`、`Content-Length`、`Transfer-Encoding` なども登録できます。特に `Host` は line 408 の headers.update(auth) で検証済みの元 Host を上書きし、IP pinning が意図する HTTP origin の固定を破ります。",
+      "suggestion": "ヘッダー名を case-insensitive に正規化し、少なくとも Host、Connection、Content-Length、Transfer-Encoding、TE、Trailer、Upgrade、Proxy-* などの routing/hop-by-hop ヘッダーを拒否してください。各予約名の登録拒否テストも追加してください。"
+    },
+    {
+      "id": "TOOL-01-002",
+      "severity": "major",
+      "file": "packages/api/tests/test_http_tools.py",
+      "line": 226,
+      "issue": "`assert_secret_usable` は `sdk_signer_args` を関数内で `jetuse_core.oci_auth` から import するため、`http_tools.sdk_signer_args` への monkeypatch は一切効きません。OCI config がある実行環境では偶然通りますが、`~/.oci/config` のない CI では Vault fake に到達する前に失敗します。",
+      "suggestion": "`jetuse_core.oci_auth.sdk_signer_args` を直接 monkeypatch するか、実装側で依存をモジュール属性として import してください。秘密認可関連の全テストで signer を明示的に stub 化してください。"
+    },
+    {
+      "id": "TOOL-01-003",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/http_tools.py",
+      "line": 90,
+      "issue": "URL 登録時に `p.port` を評価していないため、`https://example.com:abc/` や範囲外ポートが保存され、実行時に ValueError になります。またポート 0 は `_pin_target` の `p.port or 443` により意図せず 443 へ接続されます。",
+      "suggestion": "validate_url で `p.port` を try/except ValueError 内で評価し、1〜65535 の範囲だけを許可してください。無効ポートが登録時に HTTP 400 となるルートテストを追加してください。"
+    },
+    {
+      "id": "TOOL-01-004",
+      "severity": "minor",
+      "file": "docs/verification/TOOL-01.md",
+      "line": 199,
+      "issue": "「DNS リバインディングは塞げていない」と記載されていますが、同じ文書の設計説明、実装の `_pin_target`、SKIPPED.md はこの経路で対策済みと説明しており、検証レポート内で結論が矛盾しています。",
+      "suggestion": "この項目を「攻撃側の実環境実演は未実施。ただし `_pin_target` による対策は実装済み」に修正し、web_fetch/MCP は別途未対策であることを分けて記載してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "sufficient",
+    "notes": "`runs/2026-08-01T2002_TOOL-01/e2e/` の scenario-1〜5、deploy.log、SKIPPED.md、summary.md を確認しました。外部ツール登録・モデルによる呼び出しと回答反映、Vault 秘密の送信と非露出、危険URL 7種の拒否、タイムアウト、128KB上限超過を網羅しており、diff の主要主張を裏づけています。承認UI往復、DNS攻撃側の実演、Vaultタグ剥奪の未実施理由も妥当です。ただし pytest 676件および lint の実行ログ自体は添付証跡に含まれないため、その件数・結果は独立には確認できません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

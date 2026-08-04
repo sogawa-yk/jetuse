@@ -23,6 +23,8 @@ dependencies = [
   "langgraph>=1,<2",
   "langchain-openai>=1",
   "pypdf>=5",
+  # xlsx の前処理(PREP-01)。read_only + data_only で行を逐次読む
+  "openpyxl>=3.1",
   "pymupdf>=1.24",
   # プラグイン署名(PLG-01, ed25519)で直接利用。Ed25519PublicKey.public_bytes_raw は 43.0 以降。
   "cryptography>=43",

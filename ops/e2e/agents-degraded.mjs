@@ -56,7 +56,8 @@ const EXPECTED = 8
 if (results.length !== EXPECTED) {
   rec(`検証項目が ${EXPECTED} 件そろう`, false, `実際は ${results.length} 件`)
 }
-fs.writeFileSync(`${OUT}/results.json`, JSON.stringify(results, null, 2))
+// 出力名はハーネスごとに分ける（理由は agents-3sdk.mjs の同箇所コメント）。
+fs.writeFileSync(`${OUT}/agents-degraded-results.json`, JSON.stringify(results, null, 2))
 const ok = results.filter(r => r.ok).length
 console.log(`\n=== ${ok}/${results.length} PASS ===`)
 await browser.close()

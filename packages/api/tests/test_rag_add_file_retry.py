@@ -29,6 +29,7 @@ class FakeLedger:
         self.reserved: list[tuple] = []
         self.released: list[str] = []
         self.external: dict[str, str] = {}
+        self.upload_ext: dict[str, str] = {}
         self.confirmed: list[str] = []
         self.rid = "00000000-0000-4000-8000-000000000001"
 
@@ -38,6 +39,9 @@ class FakeLedger:
     def reserve(self, owner_key, filename, ext):
         self.reserved.append((owner_key, filename, ext))
         return self.rid
+
+    def set_upload_ext(self, rid, upload_ext):
+        self.upload_ext[rid] = upload_ext
 
     def set_external(self, rid, ext_id):
         self.external[rid] = ext_id
@@ -407,17 +411,21 @@ def test_add_file_rejects_bad_attributes_before_calling_oci(monkeypatch, ledger)
 def test_delete_uses_ledger_ext_not_truncated_filename(monkeypatch):
     """400 文字のマルチバイト名で、原本キーの拡張子が upload 時と一致すること。
 
-    `_fit()` は 400 **バイト**で切るので、ルートが受理する 400 **文字**の日本語名では
-    拡張子まで落ちる(`あ*397 + .md` → 133 文字・拡張子なし)。切り詰め後の
-    `rag_files.filename` から ext を導出すると upload は `.md`・delete は `.bin` になり、
+    `_fit()` は 400 **バイト**で切るので、ルートが受理する 400 **文字**の日本語名は
+    `rag_files.filename` へ切り詰めて入る。切り詰め後の名前から ext を導出する実装だと、
     原本を消し残したまま台帳行だけ消えて「削除成功」を返す(追跡不能な残存)。
-    ext は予約時に ledger へ記録済み(`rag_ledger.reconcile` も ext を正本として使う)。
+    ext は予約時に ledger へ記録済みで、削除はそれを正本にする
+    (`rag_ledger.reconcile` も同じ値を使う)。
+
+    注: PREP-01 で `_fit()` は**拡張子を残す**ようになったため(長い名前で xlsx 判定が
+    誤らないように)、切り詰めだけで ext が消えることは無くなった。それでも
+    「削除は台帳の ext を使う」という契約自体は変わらないので、この検査は残す。
     """
     from jetuse_core import rag_opensearch, rag_select_ai
 
     name = "あ" * 397 + ".md"
     assert len(name) <= rag.MAX_FILENAME_CHARS  # ルートは受理する
-    assert rag.normalize_ext(rag._fit(name)) != "md"  # 切り詰め後からは導けない
+    assert rag._fit(name) != name  # 台帳へは切り詰めて入る
 
     stored = rag._fit(name)  # 実際に rag_files.filename へ入る値
 
@@ -457,3 +465,146 @@ def test_delete_uses_ledger_ext_not_truncated_filename(monkeypatch):
 
     assert rag.delete_file("ns", "f1") is True
     assert seen["ext"] == "md"  # upload が put したキーと一致する
+
+
+# --- SYNC-02: 保管用の拡張子(ext)と送信用の拡張子(upload_ext)を分ける（案 A） ---
+
+def _workbook_bytes() -> bytes:
+    """1 セルだけの最小 xlsx（抽出が通ればよい）。"""
+    import io
+
+    import openpyxl
+    wb = openpyxl.Workbook()
+    wb.active.title = "S1"
+    wb.active["A1"] = "本文"
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_xlsx_keeps_original_ext_but_uploads_as_txt(monkeypatch, ledger):
+    """xlsx は**原本 .xlsx / 送信 .txt**。台帳は両方を別々に持つ。
+
+    ext を送信側に合わせると原本が `.txt` という名前で保管され、逆に送信を原本へ合わせると
+    マネージド側が拡張子で受け付けを拒む（PREP-01 の実測）。台帳の 1 項目で両立させる。
+    """
+    from jetuse_core import rag_opensearch
+
+    puts: list[tuple] = []
+    sent: dict = {}
+    monkeypatch.setattr(rag, "_put_original", lambda o, rid, ext, c: puts.append((rid, ext)))
+    monkeypatch.setattr(rag, "ensure_store", lambda owner, lease=None: "vs_x")
+    monkeypatch.setattr(rag, "_insert_file_confirmed", lambda *a, **kw: None)
+    monkeypatch.setattr(rag_opensearch, "enabled", lambda: False)
+
+    class _Files:
+        @staticmethod
+        def create(file, purpose):
+            sent["name"] = file[0]
+            return type("F", (), {"id": "file-x"})
+
+    monkeypatch.setattr(rag, "make_inference_client",
+                        lambda **kw: type("C", (), {
+                            "files": _Files,
+                            "vector_stores": type("VS", (), {
+                                "files": type("VSF", (), {
+                                    "create": staticmethod(lambda **kw: None)})})})())
+
+    rag.add_file("u1", "仕様.xlsx", _workbook_bytes())
+
+    assert puts and puts[0][1] == "xlsx"          # 原本は元の拡張子のまま保管
+    assert sent["name"].endswith(".txt")          # 送信名は変換後の拡張子
+    assert ledger.upload_ext[ledger.rid] == "txt"  # 台帳が送信用拡張子を持つ（reconcile 用）
+
+
+def test_plain_file_keeps_the_same_ext_on_both_sides(monkeypatch, ledger):
+    """変換しない形式は ext と upload_ext が同値（set_upload_ext を呼ぶ必要が無い）。"""
+    from jetuse_core import rag_opensearch
+
+    sent: dict = {}
+    monkeypatch.setattr(rag, "ensure_store", lambda owner, lease=None: "vs_x")
+    monkeypatch.setattr(rag, "_insert_file_confirmed", lambda *a, **kw: None)
+    monkeypatch.setattr(rag_opensearch, "enabled", lambda: False)
+
+    class _Files:
+        @staticmethod
+        def create(file, purpose):
+            sent["name"] = file[0]
+            return type("F", (), {"id": "file-y"})
+
+    monkeypatch.setattr(rag, "make_inference_client",
+                        lambda **kw: type("C", (), {
+                            "files": _Files,
+                            "vector_stores": type("VS", (), {
+                                "files": type("VSF", (), {
+                                    "create": staticmethod(lambda **kw: None)})})})())
+
+    rag.add_file("u1", "note.md", b"# midashi")
+
+    assert sent["name"].endswith(".md")
+    assert ledger.upload_ext == {}   # 同値なので更新しない（予約時の値のまま）
+
+
+def test_reconcile_finds_a_crashed_xlsx_by_its_upload_name(monkeypatch):
+    """set_external 前に停止した xlsx を、reconcile が **.txt 名**で見つけて消す。
+
+    これが upload_ext を台帳に持つ理由そのもの。照合を原本の ext(.xlsx)で行うと、
+    実際に置かれている `<owner hash>/<予約 id>.txt` に一致せず、迷子の File が
+    OCI 側に残り続ける（台帳からは解放されるので誰も気づけない）。
+    """
+    from jetuse_core import rag_ledger as L
+    from jetuse_core.owner_keys import file_key
+
+    rid = "11111111-1111-4111-8111-111111111111"
+    owner = "u1"
+    stale_row = {
+        "id": rid, "owner_key": owner, "ext": "xlsx", "upload_ext": "txt",
+        "external_file_id": None,          # set_external の直前で落ちた
+        "locator": {},
+    }
+    monkeypatch.setattr(L, "_stale_pending", lambda cur: [stale_row])
+    monkeypatch.setattr(L, "_ensure_ledger", lambda cur: None)
+    monkeypatch.setattr(L, "release", lambda r: None)
+    # 行の locator と現在設定の locator を同じキーに揃える(File 一覧の引き当て先)
+    monkeypatch.setattr(L, "current_locator", lambda: {})
+
+    class _Cur:
+        _q = ""
+
+        def execute(self, sql, **kw):
+            self._q = sql
+
+        def fetchone(self):
+            return (0,)
+
+        def fetchall(self):
+            return []
+
+    class _Conn:
+        def cursor(self):
+            return _Cur()
+
+        def commit(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(L, "connect", lambda: _Conn())
+
+    # OCI 側には**送信名**で置かれている
+    listed = [{"id": "file-orphan", "filename": file_key(owner, rid, "txt")}]
+    deleted: list[str] = []
+    originals: list[tuple] = []
+    L.reconcile(
+        lambda loc=None: listed,
+        lambda ext_id, loc=None: deleted.append(ext_id),
+        lambda o, r, ext, loc=None: originals.append((r, ext)),
+        lambda row, has_file: None,
+    )
+
+    assert deleted == ["file-orphan"]        # .txt 名で照合できた
+    assert originals == [(rid, "xlsx")]      # 原本の削除は元の拡張子で行う

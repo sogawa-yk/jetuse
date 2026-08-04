@@ -22,7 +22,7 @@ import agent_env  # noqa: F401, E402  (import 副作用が目的)
 # コンテナ側はここで jetuse_shared を呼ぶ薄い adapter にする(旧 inline コピーは廃止)。
 from jetuse_shared import webtools as _wt
 
-REGION = os.environ.get("OCI_REGION", "ap-osaka-1")
+REGION = os.environ.get("OCI_REGION", "us-chicago-1")
 COMPARTMENT = os.environ.get("COMPARTMENT_OCID", "")
 PROJECT_OCID = os.environ.get("PROJECT_OCID", "")
 BASE_URL = f"https://inference.generativeai.{REGION}.oci.oraclecloud.com/openai/v1"

@@ -29,22 +29,24 @@ stage_runner:
 # 中身と証跡（runs/）だけ。置き場の解決は各自のホーム側（~/.claude）スキルに委ねる。
 # 接点の契約は docs/guides/report-pipe.md（入力=完成済みHTML+topic / 出力=絶対パス+埋め込み記法）。
 report:
-  # 原本の生成先。証跡と同じ run 配下に置き、git 追跡はしない（.gitignore で塞いである）。
-  build_dir: "runs/<run-id>/report"
-  pipe: personal_skill        # personal_skill | repo_local（repo_local は build_dir に置くだけ）
-  skill: preview              # ホーム側 ~/.claude/skills/<name>。LOOP_REPORT_SKILL で上書き可。
-  mode: place_only            # 完成済み HTML をそのまま配置させる（スキル側で再生成・改変させない）
-  topic:
-    task: "<TASK>"            # → <Obsidian案件フォルダ>/_renders/<TASK>.html
-    stage: "<stage>-report"   # → <Obsidian案件フォルダ>/_renders/<stage>-report.html
-  # パイプ未設定（個人スキル未導入 / .obsidian-dir 未設定）のときの退避。ループは止めない。
-  fallback: artifact          # artifact | none。build_dir の HTML を Artifact 化して提示＋1行警告。
-  # 「読めない報告書は失敗」（2026-07-28 の差し戻しを受けて明文化）。書き方の正本と様式・検証。
+  # **報告書はオーケストレータが書く**（2026-08-01 変更）。ループは HTML を作らない。
+  # 理由: 双方が作って二重になり、かつ実装の文脈に近すぎて実装者視点（判定・差分・findings の
+  # 羅列）になりやすかった。施主の評価は「オーケストレータが書いたものの方が読みやすい」。
+  writer: orchestrator        # orchestrator | loop（loop は 2026-08-01 に廃止）
+  # ループは停止時に「構造化した事実」を最終メッセージで返すだけ（loop-protocol の
+  # 「完了ゲートで人間へ返すもの」）。HTML 生成・レンダリング確認・配置は行わない＝その分の
+  # トークンを使わない。STATE.md には従来どおり全部書く（ローカル・完了時に runs/ へ写す）。
+
+  # 以下はオーケストレータが報告書を書くときの規約（ループは読まなくてよい）。
   style_guide: ".claude/skills/loop-protocol/references/report-style.md"
-  templates:
-    task: ".claude/skills/loop-protocol/references/task-packet-template.html"        # 実装タスクの完了報告
-    decision: ".claude/skills/loop-protocol/references/decision-packet-template.html" # 方式・設計の判断を仰ぐ
-  render_check: ".claude/skills/loop-protocol/scripts/check_report_render.sh"  # 提示前に実行し PNG を目視（省略不可）
+  naming: "<YYYY-MM-DD>_<内容がわかるタイトル>.html"
+  purpose:
+    report:   reports         # 読み物（完了報告・調査結果・説明）→ _renders/reports/
+    decision: decisions       # 承認を問うもの → _renders/decisions/
+  pipe: personal_skill        # ホーム側 ~/.claude/skills/preview（配置先の解決）
+  mode: place_only            # 完成済み HTML をそのまま配置させる
+  fallback: artifact          # 配置できないときの退避。作業は止めない
+  render_check: ".claude/skills/loop-protocol/scripts/check_report_render.sh"  # 提示前に PNG を目視
 
 review:
   reviewer: codex
@@ -90,7 +92,11 @@ budget:
 # 共有しないため、複数の loop を同時に回しても互いの変更を壊さない。
 worktree:
   enabled: true                       # 推奨起動経路。start-loop.sh <task> で worktree 起動。
-  base_branch: dev                    # 既定の派生元(=作業の根)。Experience Builder 系列は main 派生の dev。
+  base_branch: public-dev             # 既定の派生元(=作業の根)。**共有側に倒す**(ADR-0028)。
+                                      # 旧既定は dev(=現 internal-dev) だったが、CLAUDE.md の
+                                      # 「共有物は Public 起点」と食い違い、ループの成果物が必ず
+                                      # Internal 側に着地していた(2026-07 の docs 整理の実害)。
+                                      # 内部固有タスクは BASE_BRANCH=internal-dev で上書きする。
                                       # 依存連鎖は BASE_BRANCH=feat/<dep> で上書き。
   root: ""                            # worktree 配置先。空なら <repo>/../<repo名>-loops。
                                       # 上書きは LOOP_WORKTREE_ROOT 環境変数（loop-config は書き換えない）。
@@ -117,6 +123,40 @@ areas:
     deploy_cmd: "ops/start-adb-if-stopped.sh && .venv/bin/python -m jetuse_core.migrate"
     # E2E は実 ADB への CRUD 往復・冪等再適用など。具体は tasks/<id>.md の「E2E シナリオ」に従う。
     e2e_cmd: ""
+
+  infra:
+    path: infra
+    # **CI の terraform ジョブと同じものを 1 本にまとめてある**（fmt / validate /
+    # modules の terraform test / hosted-agent の CLI smoke）。いずれも mock を使い
+    # 資格情報も課金も発生しない。`terraform validate` は構文と整合性を見るが
+    # **書式は見ない**ので fmt と両方要る（AGT-06 で fmt だけが CI で落ちた）。
+    # 検査は lint_cmd に集約しているので test_cmd は空。
+    test_cmd: ""
+    lint_cmd: "ops/check-infra.sh"
+    # infra の配備は terraform apply ＝ 人間ゲート。ループは実行しない
+    deploy_cmd: ""
+    e2e_cmd: ""
+
+# **`deploy_cmd` / `test_cmd` / `lint_cmd` / `e2e_cmd` に定義された操作は人間ゲートではない**
+# （2026-08-01 追記・PREP-03 の実害を受けて）。これらは本設定が実行を指示している通常フローで、
+# その実行に個別の承認証跡を求めない。求めると、実環境 E2E をするタスクは毎回同じ blocker で
+# 止まる（PREP-03 は `ops/start-adb-if-stopped.sh` による共有 ADB の起動を「既存リソースの
+# 状態変更＝人間ゲート」と判定され、**10 ラウンド一貫して同じ blocker**のまま停止した）。
+# 人間ゲートは下記 `stage_runner.hard_gates`（push / PR / apply / 課金 / IAM / ADR 承認）と
+# コミットに限る。**ここに無い操作を新たにゲート扱いしない。**
+# ただし `deploy_cmd` 等に**書かれていない**破壊的操作（DROP・destroy・削除）は従来どおりゲート。
+#
+# **例外（2026-08-02 追記・AGT-04 の実害を受けて）: 検証自身が作った `jetuse-spike-` 接頭辞の
+# リソースの削除は人間ゲートではない。** CLAUDE.md「環境・認証の扱い」が
+# 「検証用リソースの作成・削除（`jetuse-spike-` プレフィックス必須）」をエージェントに
+# 明示的に許可しており、規約どおりの操作である。E2E は再実行のたびに前回の残骸を消せないと
+# 冪等にならず、消さずに増やすと課金が積み上がる。
+# 条件（すべて満たすこと。ひとつでも欠けたらゲート）:
+#   1. 接頭辞 `jetuse-spike-` が付いたもの、または**その run が自分で登録した行**だけを消す
+#   2. run 固有スキーマ / dev コンパートメントの内側に閉じている
+#   3. 消した対象を E2E 証跡（`runs/<run-id>/e2e/`）に記録する（無言で消さない）
+# **他人の資産・共有資産・接頭辞の無いものの削除は、従来どおり人間ゲート。**
+# AGT-04 では、この明文化が無いために review-4〜9 が同じ論点で停止した（PREP-03 と同じ形）。
 
 # 実環境 E2E（jetuse-dev の実リソースを使った End-to-End 検証）。
 # Codex はコードを実行できない（read-only sandbox）。よって Claude が deploy+E2E を実施して

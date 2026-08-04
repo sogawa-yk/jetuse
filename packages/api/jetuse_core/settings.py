@@ -4,11 +4,35 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# エージェントのツール往復(ホップ)上限(AGT-04・ADR-0025)。1 ホップ = モデル 1 往復。
+# **この 2 つの数値は 2026-08-02 の人間ゲートで承認済み**(ADR-0025 は Accepted)。
+# 値を変えるのはこの 2 行だけ。機構(設定で変えられる / 天井超過は拒否 / 打ち切りを通知)は
+# tasks/AGT-04.md で承認済みの決定。
+# 天井は「モデルが同じツールを呼び続けても必ず止まる」ための硬い上限で、既定値ともども
+# 根拠は ADR-0025。天井を超える値はクランプせず**拒否**する
+# (黙って下げると「上げたのに効かない」が起きる — 解決は chat.resolve_max_tool_hops)。
+AGENT_MAX_TOOL_HOPS_CEILING = 48
+AGENT_MAX_TOOL_HOPS_DEFAULT = 24
+
+# 文書検索(adb 経路の `rag_search`)の回数上限(AGT-05・ADR-0026)。**ホップとは別枠**で数える。
+# 検索がホップを食うと「出典を細かくするほど業務 API に使える往復が減る」という不整合になる
+# (実測: 予算 24 のうち 19〜22 が検索。業務 API に回せたのは 4〜5 回)。
+# **2026-08-02 の人間ゲートで承認済み**(ADR-0026 §2 は Accepted)。
+# 根拠は実測「1 API あたり 3〜5 回 × API 8 本 = 24〜40」。その**上端**を採る:
+# 上限に達しても手続きは死なない(検索ツールを外して通知し、業務 API は続く)ので、
+# **余らせるより届かせる側に倒す**ほうが、外したときの代償が小さい。
+# 天井は既定の 2 倍。env `AGENT_MAX_DOC_SEARCHES` で変更できる。
+AGENT_MAX_DOC_SEARCHES_DEFAULT = 40
+AGENT_MAX_DOC_SEARCHES_CEILING = 80
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    oci_region: str = "ap-osaka-1"
+    # AGT-06: 既定はシカゴ。大阪よりモデルの品揃えが厚く、エージェントで使える系統
+    # (Grok)がある(docs/comparison/agent-capable-models.md)。配備時は Terraform が
+    # OCI_REGION を注入するので、この既定が効くのはローカル/ベア実行のときだけ。
+    oci_region: str = "us-chicago-1"
     # OCI ログイン方式。env AUTH_MODE を読む（後方互換）。既定 config_file=ローカル ~/.oci/config。
     # config_file | resource_principal | instance_principal。解決は jetuse_core.oci_auth 経由。
     auth_mode: str = "config_file"
@@ -22,6 +46,19 @@ class Settings(BaseSettings):
 
     # OpenSearch RAG(ENH-05)。例 http://10.1.1.x:9200。空ならOpenSearchバックエンド無効
     opensearch_endpoint: str = ""
+
+    # AGT-04: エージェントのツール往復上限(env AGENT_MAX_TOOL_HOPS)。天井は
+    # AGENT_MAX_TOOL_HOPS_CEILING。**あえて文字列で持ち、検証は
+    # chat.resolve_max_tool_hops で行う**(空文字は未設定 = 既定値)。
+    # int 宣言にすると `AGENT_MAX_TOOL_HOPS=abc` で Settings 生成そのものが失敗し、
+    # get_settings() を呼ぶ**全 API**(チャット・RAG・認証依存)が 500 になる。
+    # エージェント専用の設定ミスで壊すのは当該機能だけに閉じる。
+    agent_max_tool_hops: str = ""
+
+    # AGT-05: 文書検索の回数上限(env AGENT_MAX_DOC_SEARCHES)。既定は
+    # AGENT_MAX_DOC_SEARCHES_DEFAULT。ホップ上限と同じ理由で**文字列で持ち**、
+    # 検証は chat.resolve_max_doc_searches で行う(設定ミスで壊すのは当該機能だけ)。
+    agent_max_doc_searches: str = ""
 
     # feature flags
     auth_required: bool = False  # INFRA-02(OIDC)完了までの暫定。本番はtrue必須

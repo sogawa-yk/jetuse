@@ -1,0 +1,55 @@
+{
+  "review_n": 6,
+  "timestamp": "2026-08-04T16:50:21+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-6.input.diff",
+  "raw_output_path": "reviews/review-6.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "起点検査の初回導入が自己矛盾しており、`internal-dev` への最初の同期 PR を通せないため FAIL です。また、CI の判定不能時の fail-open と、旧起点で作成済みのループブランチを無警告で再利用する経路が残っています。認証情報・OCID・エンドポイント実値の新規コミットは確認されません。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 2,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "blocker",
+      "file": "ops/check-branch-base.sh",
+      "line": 73,
+      "issue": "`internal-dev` の base 側に `internal-only-paths.txt` がない移行時は HEAD 側の一覧を使いますが、最初の同期 PR は一覧ファイルを含む共有物だけの差分になるため `internal=0` のまま FAIL します。ADR-0028 が要求する「一覧を internal-dev へ同期してから PR を再開する」手順自体を、この検査が阻止します。さらに、このフォールバックでは PR が任意の広い接頭辞を一覧へ追加して自身を Internal 扱いにでき、コメントで主張する迂回防止も成立しません。",
+      "suggestion": "base に一覧がない場合の明示的な bootstrap 経路を設計してください。通常 PR の HEAD 側一覧を分類規則として信用せず、承認済み bootstrap PR の構成を限定して検証するか、CI 導入前に一覧だけを base へ配置する移行手順としてください。初回同期が成功するテストと、HEAD が規則を広げても迂回できないテストを追加してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "ops/check-branch-base.sh",
+      "line": 53,
+      "issue": "`GITHUB_BASE_REF=internal-dev` が設定された CI 実行でも、base ref を解決できない場合や merge-base を取得できない場合に成功終了します。Git 履歴取得や checkout 仕様の変化・障害時に required check が緑のまま検査を丸ごと省略し、「PR では必ず検査する」という運用保証が fail-open になります。",
+      "suggestion": "CI 実行（`GITHUB_BASE_REF` が設定済み）では ref または merge-base を解決できなければ非ゼロ終了してください。ローカルだけを明示的な SKIP 対象に分け、ref 欠落と merge-base 欠落の CI テストを追加してください。"
+    },
+    {
+      "id": "F003",
+      "severity": "major",
+      "file": ".claude/loop/start-loop.sh",
+      "line": 32,
+      "issue": "既存 worktree または既存 `feat/<task>` ブランチは、指定された `BASE` の祖先関係を一切確認せず再利用されます。旧既定 `dev` から作成済みのブランチが存在すると、新しい `public-dev` 既定が適用されたように表示しながら Internal 起点で共有作業を継続します。同等の経路が `begin_stage.sh` の既存 `feat/<stage>` 再利用にも残っています。",
+      "suggestion": "`ensure_task_branch.sh` と同様に、再利用前に解決した base ref が既存ブランチの祖先か確認し、少なくとも明示的な警告を出してください。既存 worktreeについても実際の branch を検証し、旧起点ブランチ再利用の回帰テストを `start-loop.sh` と `begin_stage.sh` に追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "`runs/2026-08-04T1626_BRANCH-LAYOUT/e2e/` は空で、実環境 E2E 証跡はありません。本差分は Git ブランチ・worktree・CI 判定のみを変更し、OCI アプリやデプロイ済み動作を変更しないため、jetuse-dev 実環境 E2E の未実施には正当性があります。ただし追加された単体テストは初回 bootstrap、CI の ref/merge-base 解決失敗、`start-loop.sh`／`begin_stage.sh` の既存ブランチ再利用を網羅していません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

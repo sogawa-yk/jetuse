@@ -70,6 +70,7 @@ def _ensure_ledger(cur) -> None:
              owner_key VARCHAR2(255) NOT NULL,
              filename VARCHAR2(400 CHAR) NOT NULL,
              ext VARCHAR2(10) NOT NULL,
+             upload_ext VARCHAR2(10),
              external_file_id VARCHAR2(128),
              state VARCHAR2(10) NOT NULL
                CONSTRAINT ck_rag_ledger_state CHECK (state IN ('pending','confirmed')),
@@ -78,6 +79,13 @@ def _ensure_ledger(cur) -> None:
              updated_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
              CONSTRAINT uq_rag_ledger_ext UNIQUE (external_file_id))""",
         "ORA-00955")
+    # SYNC-02: 送信用拡張子。原本(ext)と送信名(upload_ext)を分ける。xlsx / スキャン PDF は
+    # 抽出して `.txt` で送るため両者が食い違う。既存表には後付けし、既存行は ext と同値で埋める
+    # (reconcile の照合は upload_ext を使うため、NULL のまま残すと既存行を照合できない)。
+    _create_tolerant(cur, "ALTER TABLE rag_file_ledger ADD (upload_ext VARCHAR2(10))",
+                     "ORA-01430")
+    cur.execute("UPDATE rag_file_ledger SET upload_ext = ext WHERE upload_ext IS NULL")
+
     # 既存(または今作成した)表の形を列・PK・CHECK・UNIQUE・索引まで完全検証する(部分適用・
     # 同名異形で続行しない — codex review-5 M003)。形違いは DdlShapeMismatch で停止(人間対応)。
     _EXPECTED_COLS = {
@@ -85,6 +93,7 @@ def _ensure_ledger(cur) -> None:
         "OWNER_KEY": ("VARCHAR2", 255, "B", "N"),
         "FILENAME": ("VARCHAR2", 400, "C", "N"),
         "EXT": ("VARCHAR2", 10, "B", "N"),
+        "UPLOAD_EXT": ("VARCHAR2", 10, "B", "Y"),
         "EXTERNAL_FILE_ID": ("VARCHAR2", 128, "B", "Y"),
         "STATE": ("VARCHAR2", 10, "B", "N"),
         "LOCATOR": ("CLOB", None, None, "N"),
@@ -207,13 +216,27 @@ def reserve(owner_key: str, filename: str, ext: str) -> str:
                     f"RAG file quota exceeded (limit {limit})"
                 )
         cur.execute(
-            """INSERT INTO rag_file_ledger(id, owner_key, filename, ext, state, locator)
-               VALUES (:id, :o, :f, :e, 'pending', :loc)""",
+            """INSERT INTO rag_file_ledger(id, owner_key, filename, ext, upload_ext,
+                                           state, locator)
+               VALUES (:id, :o, :f, :e, :e, 'pending', :loc)""",
             id=rid, o=owner_key, f=filename[:400], e=ext.lstrip(".").lower()[:10],
             loc=json.dumps(current_locator(), ensure_ascii=False),
         )
         conn.commit()
     return rid
+
+
+def set_upload_ext(reservation_id: str, upload_ext: str) -> None:
+    """送信名の拡張子を記録する(SYNC-02)。抽出して送る形式(xlsx / スキャン PDF)は原本の
+    ext と食い違うため、**外部 File を作る前に**記録しておく。後回しにすると set_external
+    の直前で落ちた行を reconcile が名前照合できず、迷子の File が残る。"""
+    with connect() as conn:
+        conn.cursor().execute(
+            """UPDATE rag_file_ledger SET upload_ext = :u,
+                 updated_at = SYSTIMESTAMP WHERE id = :id""",
+            u=upload_ext.lstrip(".").lower()[:10], id=reservation_id,
+        )
+        conn.commit()
 
 
 def set_external(reservation_id: str, external_file_id: str) -> None:
@@ -357,14 +380,16 @@ def close_upload_gate() -> None:
 
 def _stale_pending(cur) -> list[dict]:
     cur.execute(
-        """SELECT id, owner_key, ext, external_file_id, locator FROM rag_file_ledger
+        """SELECT id, owner_key, ext, external_file_id, locator, upload_ext
+             FROM rag_file_ledger
            WHERE state = 'pending'
              AND created_at < SYSTIMESTAMP - NUMTODSINTERVAL(:s, 'SECOND')""",
         s=PENDING_STALE_S,
     )
     return [
         {"id": r[0], "owner_key": r[1], "ext": r[2], "external_file_id": r[3],
-         "locator": r[4] if isinstance(r[4], dict) else json.loads(r[4] or "{}")}
+         "locator": r[4] if isinstance(r[4], dict) else json.loads(r[4] or "{}"),
+         "upload_ext": r[5] or r[2]}
         for r in cur.fetchall()
     ]
 
@@ -409,12 +434,13 @@ def reconcile(list_files_fn, delete_file_fn, delete_original_fn,
             cur.execute("SELECT oci_file_id FROM rag_files WHERE oci_file_id IS NOT NULL")
             grandfathered_ext_ids = {r[0] for r in cur.fetchall()}
         cur.execute(
-            "SELECT id, owner_key, ext, external_file_id, locator FROM rag_file_ledger "
-            "WHERE state = 'confirmed'"
+            "SELECT id, owner_key, ext, external_file_id, locator, upload_ext "
+            "FROM rag_file_ledger WHERE state = 'confirmed'"
         )
         confirmed = [
             {"id": r[0], "owner_key": r[1], "ext": r[2], "external_file_id": r[3],
-             "locator": r[4] if isinstance(r[4], dict) else json.loads(r[4] or "{}")}
+             "locator": r[4] if isinstance(r[4], dict) else json.loads(r[4] or "{}"),
+             "upload_ext": r[5] or r[2]}
             for r in cur.fetchall()
         ]
 
@@ -452,7 +478,9 @@ def reconcile(list_files_fn, delete_file_fn, delete_original_fn,
     # 期限切れ pending: 行 locator の project から実 File(名前照合)/原本を探し削除→解放
     for row in stale:
         k = _loc_key(row.get("locator"))
-        fkey = file_key(row["owner_key"], row["id"], row["ext"])
+        # 名前照合は**送信名**(upload_ext)で行う。原本の削除は元の ext のまま
+        # (変換して送った行は両者が食い違う — SYNC-02)。
+        fkey = file_key(row["owner_key"], row["id"], row.get("upload_ext") or row["ext"])
         ext_id = row["external_file_id"] or by_name_by_loc.get(k, {}).get(fkey)
         loc = row.get("locator") or None
         if ext_id:

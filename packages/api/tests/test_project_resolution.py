@@ -186,7 +186,7 @@ def _api_error(cls, status):
 
 
 def test_upload_surfaces_notfound_as_503(monkeypatch):
-    def raise_404(owner, filename, content, attributes=None):
+    def raise_404(owner, filename, content, attributes=None, ocr_engine=None):
         raise _api_error(openai.NotFoundError, 404)
 
     monkeypatch.setattr(rag, "add_file", raise_404)
@@ -197,7 +197,7 @@ def test_upload_surfaces_notfound_as_503(monkeypatch):
 
 
 def test_upload_surfaces_badrequest_as_502(monkeypatch):
-    def raise_400(owner, filename, content, attributes=None):
+    def raise_400(owner, filename, content, attributes=None, ocr_engine=None):
         raise _api_error(openai.BadRequestError, 400)
 
     monkeypatch.setattr(rag, "add_file", raise_400)
@@ -206,7 +206,7 @@ def test_upload_surfaces_badrequest_as_502(monkeypatch):
 
 
 def test_upload_surfaces_project_resolution_as_503(monkeypatch):
-    def raise_unresolved(owner, filename, content, attributes=None):
+    def raise_unresolved(owner, filename, content, attributes=None, ocr_engine=None):
         raise genai.ProjectResolutionError("set PROJECT_OCID or grant generative-ai-project")
 
     monkeypatch.setattr(rag, "add_file", raise_unresolved)

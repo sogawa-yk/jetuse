@@ -5,9 +5,12 @@
 ## 開発方式
 
 - **spec-driven**: 各タスクは `specs/` 配下の仕様を正とする。仕様にない実装判断が必要になったら、実装せず `docs/decisions/` にADR案を書いて人間レビューを要求する。
-- **1タスク = 1ブランチ + PR**。Public 変更は `main` から分岐して `main` へ入れ、直後に `main → dev` で同期する。Internal 固有変更は `dev` から分岐して `dev` のみに入れる。`dev` 全体を `main` へ merge しない。正本は `docs/guides/branching-and-releases.md`。
-  - **どちら起点か判定の目安**: 変更ファイルが **main にも dev にも在る共有物**（docs・CLAUDE.md・specs・`.claude/` ループ機構・公開アプリコード等）なら **main 起点**。**dev だけに在るファイル**（internal 固有機能）のみ dev 起点。共有物を dev 起点にすると `main` に届かず両系統が乖離する（実例: 2026-07 の docs 整理を dev 起点にして main 側 PR を後追いで足す羽目になった）。
-  - **`main → dev` 同期は `ops/sync-main-to-dev.sh`** を使う（同期ブランチを `refactor/*` で切り deploy-dev.yml の自動配備を回避。push / PR は人間ゲート）。
+- **1タスク = 1ブランチ + PR**。**4ブランチ体制**（ADR-0028）: `main`（Public 安定・Deploy ボタンの配信元）/ `public-dev`（Public 統合）/ `internal-dev`（Internal 統合）/ `internal-stable`（Internal 安定）。正本は `docs/guides/branching-and-releases.md`。
+  - **共有変更は `public-dev` 起点**で `public-dev` へ入れ、`public-dev → internal-dev` で同期する。Internal 固有変更のみ `internal-dev` 起点。**`internal-dev` を `public-dev` / `main` へ merge しない**（merge は先端を丸ごと運ぶため内部固有が漏れる。後から公開するなら cherry-pick）。
+  - **`main` / `internal-stable` へ feature branch を直接向けない。** release PR と hotfix のみ。`main` への merge は即座に公開配信物（`orm-main` の ZIP と `:latest` イメージ）を差し替える。
+  - **どちら起点か判定の目安**: 共有物（docs・CLAUDE.md・specs・`.claude/` ループ機構・公開アプリコード・infra・ops 等）なら **`public-dev` 起点**。**`ops/internal-only-paths.txt` に列挙されたもの**のみ `internal-dev` 起点。共有物を internal 側にすると `main` に届かず両系統が乖離する（実例: 2026-07 の docs 整理を dev 起点にして main 側 PR を後追いで足す羽目になった）。**この判定は `ops/check-branch-base.sh` が CI（`pull_request`）で検査する**。ローカルは base を推測できないため既定でスキップ＝**合格ではない**。手元で確かめるなら `BRANCH_BASE=internal-dev make lint`。
+  - **同期は `ops/sync-public-to-internal.sh`** を使う（同期ブランチを `refactor/*` で切り deploy-dev.yml の自動配備を回避。push / PR は人間ゲート）。
+  - **DB migration の番号帯**: Public=`0xx_` / Internal 固有=`5xx_`。既存の重複（`017`〜`021`）はリネームしない（`schema_migrations` の記録と食い違うため）。
 - **実機検証主義**: 「ドキュメントにそう書いてある」は完了条件にならない。OCI実環境での実行結果をもって完了とする。検証結果は `docs/verification/` にレポートとして残す。
 - **比較ドキュメント主義**（ユーザー指示 2026-06-11）: 複数のOCIサービス/方式の選択肢から1つを採用する場合は、`docs/comparison/` に比較ドキュメントを残す（プリセールス転用可能な粒度。可能なら定量比較付き）。実機の発見・Tipsは `docs/tips.md` に追記。
 - **コミット前チェック**: `make lint && make test && make build` を通す（単一コマンド入口は root `Makefile`。`make help` で一覧。build/test/lint/e2e/deploy/down）。
@@ -30,7 +33,7 @@
 
 - **開発モデル（2026-07-26〜）**: **ローカル(macOS)が主開発環境**（実装・単体は `make`。OCI認証は config_file＝`~/.oci/config`）。**OCI compute インスタンス `dev`（VM.Standard.E6.Flex / OL9.7 / ap-osaka-1・ブートボリューム150GB）は長時間タスクの無人実行機**（`dispatch-remote` で `claude -p` を委譲・`AUTH_MODE=instance_principal`）。移動でローカルが切れても委譲実行は継続する。コードは OneDrive 配下に置かない（`.git` 破損回避）。
 - コンパートメント: `jetuse-proto`（OCIDは `.env` の `COMPARTMENT_OCID`）。計画書の `jetuse-spike` は存在しないため代替使用（ADR-0001）。
-- ツール: Python 3.13（ローカル macOS・venv: `.venv`。2026-07-28 に 3.12→3.13 へ更新。インスタンス `dev` は 3.12 のまま）/ Node 22 / Terraform 1.15 / podman 5.6 / OCI CLI 3.85。
+- ツール: Python 3.13（ローカル macOS・venv: `.venv`。2026-07-28 に 3.12→3.13 へ更新。インスタンス `dev` は 3.12 のまま）/ Node 22 / Terraform 1.15（2026-08-03 に 1.6.6→1.15.8 へ更新。**1.7 未満だと `terraform test` の `mock_provider` が動かず `make lint` が落ちる**）/ podman 5.6 / OCI CLI 3.85。
 - **大阪リージョン（ap-osaka-1）はOpenAI互換 agentic API フル対応**: ベースURL `https://inference.generativeai.ap-osaka-1.oci.oraclecloud.com/openai/v1` 配下に Responses / Conversations / Files / Vector Stores / File Search / Code Interpreter。
 - 認証は IAM署名（`oci-genai-auth` パッケージでopenai-pythonに署名注入）を採用。
 - 大阪のオンデマンドモデル: gpt-oss-120b/20b, command-a-03-2025, command-a-reasoning/vision, gemini-2.5-pro/flash, llama-3.3-70b 等。**Grok系・Llama 4系は大阪不可**（ADR-0001）。
@@ -50,7 +53,7 @@ packages/*     # jetuse_shared(セキュリティlib) / registry(登録簿) / ag
 spikes/sp3_03_scaffold/  # 生成デモの実行時スキャフォールド（dev のみ。後続で本来の場所へ移設予定）
 infra/terraform/  # Terraform（modules/ + environments/{dev=共有基盤, app=開発者ごと}）
 infra/orm/     # ワンクリック Resource Manager スタック（IAM+アプリ）
-ops/           # 運用スクリプト（dev-env-up/down・deploy・sync-main-to-dev 等。破壊系は明示フラグ必須）
+ops/           # 運用スクリプト（dev-env-up/down・deploy・sync-public-to-internal・check-branch-base 等。破壊系は明示フラグ必須）
 .claude/       # ループ機構（skills/hooks/loop・下記「ループエンジニアリング」）
 ```
 
@@ -69,6 +72,6 @@ ops/           # 運用スクリプト（dev-env-up/down・deploy・sync-main-to
   `LOOP_TASK` が無いセッションでは hooks は完全 no-op（通常開発に影響しない）。
 - **毎ターン**: `loop-protocol` の手順（実装→`codex-review`→履歴記録→STATE 更新）を厳守。
   完了ゲート = review_verdict=PASS かつ area の test/lint 緑 かつ実環境 E2E 通過。PASS 後は非 blocker を追わず停止（手順5.5）。
-- **単一の真実源**: 現在状態は `STATE.md`、不変の実行履歴は `runs/<run-id>/`（追記のみ）。
+- **単一の真実源**: 現在状態は `STATE.md`（**ローカル・git 追跡外**。worktree ごとに持ち、コミットしない）、不変の実行履歴は `runs/<run-id>/`（追記のみ）。完了時に `runs/<run-id>/STATE.md` へ写しを残すので、後から状態を辿れる。
 - **自己改善**: 成果物の問題は `loop-doctor` へ（コードでなく「ループの仕組み」を直す）。
 - **人間ゲート**: コミット / PR / push / リリース、および仕組み（スキル・hooks・完了条件・設定）の編集は承認なしに行わない。

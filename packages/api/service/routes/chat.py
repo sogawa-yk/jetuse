@@ -20,10 +20,17 @@ from jetuse_core import (
     rag_select_ai,
 )
 from jetuse_core import conversations as conv_repo
+from jetuse_core import http_tools as http_tools_repo
 from jetuse_core import mcp_servers as mcp_repo
 from jetuse_core.auth import AuthContext, require_user
-from jetuse_core.chat import GenParams, create_oci_conversation
+from jetuse_core.chat import (
+    GenParams,
+    create_oci_conversation,
+    resolve_max_doc_searches,
+    resolve_max_tool_hops,
+)
 from jetuse_core.logging import log_with
+from jetuse_core.model_compat import agent_refusal
 from jetuse_core.models import DEFAULT_MODEL, MODELS, model_status
 from jetuse_core.owner_keys import owner_key_gate, user_owner_key
 from jetuse_core.settings import get_settings
@@ -240,6 +247,20 @@ async def stream_chat_response(  # noqa: ANN202
                 status_code=400, detail="rag_filters is not supported in agent mode"
             )
 
+    # AGT-04: エージェント専用のパラメータを黙って無視しない（無視すると「上限を上げたのに
+    # 変わらない」「adb を選んだのに出典が粗い」が起きる）。**保存済みエージェント
+    # (agent_id) は別ディスパッチ**（Select AI / ホスト型コンテナ）でこのループを通らないので、
+    # 受理せず断る。**dispatch より前に**弾く（後ろに置くと agent_id 経路で素通りする）。
+    if req.max_tool_hops is not None or req.agent_rag_backend != "vector_store":
+        param = "max_tool_hops" if req.max_tool_hops is not None else "agent_rag_backend"
+        if req.agent_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{param} is not supported for saved agents (agent_id)",
+            )
+        if not req.agent:
+            raise HTTPException(status_code=400, detail=f"{param} requires agent mode")
+
     # agent と rag は併用できない。**RAG ディスパッチより前に**弾く（後ろに置くと
     # 非Responses系バックエンドでは agent 指定が黙って無視されたまま RAG が走る）。
     if (req.agent or req.agent_id) and req.rag:
@@ -342,27 +363,78 @@ async def stream_chat_response(  # noqa: ANN202
     if agent_def:
         return await agent_dispatch.hosted_agent_stream_response(req, user, agent_def)
 
+    # 外部HTTPツール(TOOL-01): owner所有のものだけ解決してエージェントループへ配線する。
+    # 1件でも解決できなければ 404 で止める。黙って外すと、業務APIを参照しないまま
+    # もっともらしい回答を返してしまう(削除済み・他人所有・不正idのいずれも同じ)
+    http_tool_defs: list = []
+    if req.agent and req.http_tool_ids:
+        wanted = list(dict.fromkeys(req.http_tool_ids))
+        rows = await asyncio.to_thread(http_tools_repo.get_tools, user.subject, wanted)
+        if len(rows) != len(wanted):
+            missing = sorted(set(wanted) - {r["id"] for r in rows})
+            raise HTTPException(
+                status_code=404, detail=f"http tool not found: {', '.join(missing)}"
+            )
+        http_tool_defs = [http_tools_repo.to_tooldef(r) for r in rows]
+
     mcp_defs: list[dict] = []
     if req.agent and req.mcp_server_ids:
         # owner所有のサーバーのみ解決(AGT-02)
         mcp_defs = await asyncio.to_thread(
             mcp_repo.get_servers, user.subject, req.mcp_server_ids
         )
-    # rag_searchツール(AGT-01c): 有効ならユーザーのVector Storeを解決
+    # AGT-04: ホップ上限は**エージェントループを使う要求だけ**で解決する。無条件に呼ぶと、
+    # 設定値が天井超えのときに素のチャットまで 400 になる（壊すのは当該機能だけに閉じる）。
+    # 設定値が不正でもここで断る（クランプしない — ADR-0025）
+    max_tool_hops: int | None = None
+    if req.agent:
+        try:
+            max_tool_hops = resolve_max_tool_hops(req.max_tool_hops)
+            if req.agent_rag_backend == "adb":
+                # AGT-05: 文書検索の上限も入口で検証する（設定が壊れていると
+                # ストリームの途中で落ち、打ち切りとの区別がつかなくなる）。
+                # 数えるのは adb 経路の function tool だけなので、そこに限る
+                resolve_max_doc_searches()
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    # rag_searchツール(AGT-01c): 有効ならユーザーのVector Storeを解決。
+    # adb バックエンド(AGT-04)は Vector Store を使わず rag_adb を直接引く
     agent_rag_store: str | None = None
     eff_tools = agent_def["enabled_tools"] if agent_def else (req.enabled_tools or [])
+    if req.agent_rag_backend != "vector_store" and "rag_search" not in eff_tools:
+        # バックエンドだけ指定しても rag_search が無効なら文書検索は行われない。
+        # 受理すると「adb を選んだのに出典が粗い(そもそも検索していない)」になる
+        raise HTTPException(
+            status_code=400,
+            detail="agent_rag_backend requires rag_search in enabled_tools",
+        )
     if (req.agent or agent_def) and eff_tools and "rag_search" in eff_tools:
-        agent_rag_store = await asyncio.to_thread(rag.resolve_store_for_read, rag_ns)
+        if req.agent_rag_backend == "adb":
+            # 使えないまま素通しすると、検索が毎回失敗したまま回答だけ返る。
+            # 「表が無い(未導入)」と「今つながらない」を区別して理由ごと断る
+            state = await asyncio.to_thread(rag_adb.availability)
+            if state != rag_adb.READY:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"adb rag backend is not available ({state})",
+                )
+        else:
+            # Vector Store 経路は owner_key 移行ゲートを通してから解決する
+            # (add_file/delete_file/一覧と同じ fail-closed 一貫性 — SP2-02)
+            agent_rag_store = await asyncio.to_thread(rag.resolve_store_for_read, rag_ns)
 
     if agent_def and agent_def["mcp_server_ids"] and agent_def["mine"]:
         # 共有エージェントのMCP(所有者の私有資源)は実行ユーザーには適用しない(specs/11)
         mcp_defs += await asyncio.to_thread(
             mcp_repo.get_servers, user.subject, agent_def["mcp_server_ids"]
         )
-    if req.agent and MODELS[req.model].api != "responses":
-        raise HTTPException(
-            status_code=400, detail="agent mode requires a responses-family model"
-        )
+    if req.agent:
+        # AGT-06: Responses 系かどうかだけでは足りない(ツールを渡せない Responses 系がある)。
+        # 断る理由は登録簿が持ち、そのまま利用者に見える文言で返す
+        refusal = agent_refusal(req.model)
+        if refusal:
+            raise HTTPException(status_code=400, detail=refusal)
 
     rag_store: str | None = None
     if req.rag:
@@ -461,6 +533,10 @@ async def stream_chat_response(  # noqa: ANN202
                     instructions=agent_def["instructions"] if agent_def else None,
                     project_ocid=agent_def.get("project_ocid") if agent_def else None,
                     rag_store=agent_rag_store,
+                    http_tools=http_tool_defs,
+                    rag_backend=req.agent_rag_backend,  # AGT-04
+                    rag_owner=rag_ns,
+                    max_tool_hops=max_tool_hops,
                 )
             elif agent_def:
                 # ツールなしエージェント: instructionsをsystemとして付与(AGT-03)
@@ -504,7 +580,12 @@ async def stream_chat_response(  # noqa: ANN202
                 if "delta" in ev:
                     parts.append(ev["delta"])
                 if "usage" in ev:
-                    usage = ev["usage"]
+                    # エージェントは**ホップごとに** usage を流す(AGT-04 で最終回答の
+                    # 1 往復も含めた)。上書きすると最後の 1 往復しか記録されず、
+                    # 会話の使用量も監査ログもターン全体を大幅に過少計上する
+                    usage = {
+                        k: (usage or {}).get(k, 0) + v for k, v in ev["usage"].items()
+                    }
                 if "citations" in ev:  # 日本語ファイル名の文字化け対策(元名へ解決)
                     ev["citations"] = rag.resolve_citation_filenames(
                         rag_ns, ev["citations"]
@@ -580,7 +661,12 @@ def _model_entry(k: str, m) -> dict:
         "vision": m.vision,  # 画像添付UIの出し分け(MM-01)
         "multi_image": m.multi_image,  # 複数画像可否(ENH-09)
         "available": ok,  # PORT-02: リージョン/テナンシで利用不可と判明したものはfalse
+        # AGT-06: エージェントモードの可否。UIが選ばせる前に出し分けられるようにする
+        # (選ばせてから 400 で断るより、選べないほうがよい)
+        "agent": m.agent,
     }
+    if m.agent_blocked_reason:
+        entry["agent_blocked_reason"] = m.agent_blocked_reason
     if not ok and hint:
         entry["unavailable_reason"] = hint
     return entry

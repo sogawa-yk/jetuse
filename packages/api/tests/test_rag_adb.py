@@ -526,8 +526,8 @@ def test_add_file_ingests_into_adb_when_ready(monkeypatch):
     seen_fid = {}
     monkeypatch.setattr(rag_adb, "availability", lambda: rag_adb.READY)
     monkeypatch.setattr(rag_adb, "ingest",
-                        lambda o, fid, name, content: (seen.update(owner=o, name=name),
-                                                       seen_fid.update(v=fid)))
+                        lambda o, fid, name, content, **kw: (
+                            seen.update(owner=o, name=name), seen_fid.update(v=fid)))
     out = rag.add_file("u", "a.md", b"body")
     assert out["status"] == "processing"
     assert seen == {"owner": "u", "name": "a.md"}
@@ -832,7 +832,7 @@ def test_ingest_rejects_files_with_too_many_chunks(monkeypatch):
     marked = {}
     monkeypatch.setattr(rag_adb, "_mark_failed", lambda o, d, f, msg: marked.update(msg=msg))
     monkeypatch.setattr(rag_adb, "chunk_units",
-                        lambda name, content: [{"sheet": "本文", "cells": f"L{i}:L{i}",
+                        lambda name, content, **kw: [{"sheet": "本文", "cells": f"L{i}:L{i}",
                                                 "text": "本文"}
                                                for i in range(rag_adb.MAX_CHUNKS + 1)])
     assert rag_adb.ingest("u", "f1", "huge.md", b"x") == 0

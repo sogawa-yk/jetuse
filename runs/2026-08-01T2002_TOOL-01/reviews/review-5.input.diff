@@ -1,0 +1,2755 @@
+diff --git a/docs/verification/TOOL-01.md b/docs/verification/TOOL-01.md
+new file mode 100644
+index 0000000..86a8771
+--- /dev/null
++++ b/docs/verification/TOOL-01.md
+@@ -0,0 +1,211 @@
++# TOOL-01 検証レポート — デモ固有の HTTP ツールをエージェントに渡す口
++
++- 日付: 2026-08-01
++- run: `runs/2026-08-01T2002_TOOL-01/`
++- 実行環境: 共有 loop ADB(`jetuse-loop-adb`)の run 固有スキーマ `JETUSE_TOOL01_68D006` /
++  dev コンパートメント。架空の業務 API(Object Storage + PAR)・Vault・
++  OCI Generative AI(`gpt-oss-120b`)はすべて実物。
++
++## 何ができるようになったか
++
++デモ側が持つ**素の HTTP エンドポイント**を、名前・説明・JSON Schema つきで JetUse に登録し、
++エージェント実行時に組込ツールと同列に配線できるようになった。モデルがそれを呼ぶと
++**JetUse がサーバー側で HTTP を代理実行**して結果を返す。ブラウザからは叩かせない。
++
++```
++POST /api/agent/http-tools        登録(name / description / parameters / url / method / 認証)
++GET  /api/agent/http-tools        所有者のツール一覧(秘密の OCID は返さない)
++DELETE /api/agent/http-tools/{id} 削除(所有者のみ。0 行 = 404)
++POST /api/chat/stream             agent=true + http_tool_ids=[...] で実行に配線
++POST /api/agent/execute-tool      承認後の単発実行も所有者の外部ツールを解決する
++```
++
++MCP サーバー登録(`/api/agent/mcp-servers`)は**作り替えていない**。別経路として共存する
++(MCP は OCI 側でサーバーサイド実行、こちらは JetUse が自分で HTTP を叩く)。
++
++## 完了条件に対する結果
++
++| 完了条件 | 結果 | 根拠 |
++|---|---|---|
++| 外部 HTTP ツールを登録 → モデルが呼ぶ → 結果が回答に反映 | PASS | `e2e/scenario-1.md` |
++| 秘密は Vault 参照で渡り DB にも API 応答にも平文で出ない | PASS | `e2e/scenario-2.md` / `test_secret_never_in_db_columns_or_api_response` |
++| 内部メタデータ・ループバック等の登録が拒否される | PASS | `e2e/scenario-3.md`(7 種すべて 400・1 件も保存されず) |
++| タイムアウト・サイズ上限超過が黙って切り詰められない | PASS | `e2e/scenario-4.md` / `e2e/scenario-5.md` |
++| 既存の組込ツール・MCP 経路が回帰しない | PASS | `pytest packages/api/tests` 683 件パス(`e2e/checks.md`)(MCP・エージェントの既存テスト含む) |
++| lint / test | PASS | `ruff check packages/api spikes ops` クリーン(`e2e/checks.md`)|
++
++## 設計上の判断(なぜこの形か)
++
++### 1. `ToolDef` に寄せて「そのターン限りのレジストリ」を渡す
++
++外部ツールは所有者ごとの資源なので、`tools.TOOLS`(プロセス共有の辞書)には入れられない。
++そこで `tools.execute_tool` を `execute_with(registry, name, args)` に分解し、
++`chat.stream_agent` が `{外部ツール, **TOOLS}` を組み立てて 1 ターンだけ使う。
++
++```python
++registry = {**{t.name: t for t in (http_tools or [])}, **TOOLS}
++```
++
++**組込を後勝ちにしている**のは、万一同名が登録されていても組込ツールが乗っ取られないため
++(登録時にも予約名として拒否しているので二重の守り)。承認要否・承認待ち通知・実行のすべてが
++このレジストリを見るので、組込と外部の扱いは同列になる。
++
++### 2. 秘密は既存の Vault 流儀に完全に揃えた + **どの秘密を使えるかを認可した**
++
++`mcp_servers` が持つ `auth_secret_ocid` と同じ列名・同じ読み出し関数(`_read_secret`)を使う。
++新方式は作っていない。登録 API は**秘密そのものを受け取らない**(OCID だけ)。
++DB のスキーマにも平文の秘密列は無い(`e2e/deploy.log` に実際の列定義を残した)。
++
++`mcp_servers` との唯一の違いは**ヘッダ名を選べる**こと(既定 `Authorization`)。素の業務 API は
++`X-Api-Key` のような独自ヘッダを要求することが多く、`Bearer` 固定では繋がらないため。
++秘密の置き場・参照方法・読み出し経路は変えていない。
++
++**ここに一つ穴があった**(Codex レビュー review-1 の blocker)。OCID を利用者が自由に書ける
++ままだと、「サービスの OCI 権限で読める**任意の**秘密を、利用者が指定した外部 URL へ送らせる」
++経路(confused deputy)になる。ADB の管理者パスワードでも運用用のトークンでも、OCID さえ
++分かれば自分のエンドポイントへ流出させられる。
++
++対策は**登録時に Vault のメタデータ(値ではない)を引いて認可する**こと:
++
++- 秘密が**本アプリのコンパートメント**にあること
++- 秘密の **freeform タグ `jetuse_tool_owner` が登録者(`AuthContext.subject`)と一致**すること
++
++参照できない・タグが無い・他人のタグ・別コンパートメント・**`COMPARTMENT_OCID` 未設定**は、
++すべて 400 で断る(fail-closed。照合先が無いまま素通しにすると認可境界そのものが消える)。
++この認可は**実行のたびに取り直す**ので、登録後に Vault のタグを外せばその場で使えなくなる。
++デモ担当者は「自分用の秘密を作ってタグを付ける」だけでよく、新しい秘密管理方式は要らない。
++実環境で、運用用の既存 Secret を指定した登録が拒否されることを確かめた(`e2e/scenario-2.md`)。
++
++**応答に反射された秘密も伏せる**(review-2 の blocker)。エコー系・デバッグ用エンドポイントは
++受け取った認証ヘッダを応答本文に含めることがある。それを素通しすると、秘密がモデル・UI の
++ツール結果プレビュー・会話履歴へ流れる。そこで **送った秘密を応答本文から `<redacted>` へ
++置換**してから返す(エラー本文も同様)。反射の形は生とは限らないので、生 / JSON エスケープ /
++URL エンコード / Base64 / hex の各表現を潰す(review-3 の指摘)。
++
++これは**完全な保証ではない**。敵対的な相手は秘密を任意に変形して返せる(分割・ハッシュ・
++文字コード変換)ので、変形をすべて追うことは原理的にできない。本当の制御は「どの URL に
++どの秘密を渡すかを登録者が決める」ことであり、伏せ字は**善意の相手が誤って反射した場合**を
++確実に潰すための層である。scenario-2 はこの伏せ字が `x-api-key` の位置に現れることをもって
++「正しく届いた」と「平文が出ない」を同時に示している。
++
++> `mcp_servers` は認証付き登録を 501 で塞いでいるため、この認可が要る経路は本タスクが最初。
++> 将来 MCP 側の認証を開けるときは同じ `assert_secret_usable` を通すこと。
++
++### 3. SSRF は登録時と実行時の両方で fail-closed
++
++URL 検証は `mcp_servers.validate_url` と同じ経路(`jetuse_shared.webtools.assert_public_host`)。
++https 必須で、名前解決の結果が private / loopback / link-local(169.254.x)/ reserved /
++multicast / unspecified なら拒否する。加えて本タスクで足したのは:
++
++- **URL に認証情報を書けない**(`https://user:pass@…` を拒否。秘密は Vault へ)
++- **宛先や本文の枠組みを決めるヘッダを認証ヘッダにできない**(`Host` / `Content-Length` /
++  `Transfer-Encoding` 等)。`Host` を握られると IP ピン留めが固定した origin を動かされる。
++  実行時にも Host を検証済みホストで上書きする(二重の守り)
++- **ポートを検証する**(数値でない・0・範囲外は登録時に拒否。実行時の ValueError と
++  「0 が 443 に化ける」を防ぐ)
++- **実行時にも同じ検証を通す**(登録後に DNS が内部を向いても止まる)
++- **接続先の IP をピン留めする**(下記)
++- **3xx はすべて失敗**。Location の有無で判定しない(`is_redirect` は Location 付きしか
++  真にならず、300 / 304 / 307 等が素通りする)
++- **メソッドは GET / POST のみ**。引数は GET ならクエリ、POST なら JSON ボディに載る。
++  URL のホスト・パスは引数で動かせない
++
++**DNS リバインディングも塞いだ**(review-3 の blocker)。「検証のときは公開 IP、接続のときは
++169.254.169.254」を返す DNS を攻撃者が用意すると、ホスト名だけを検証する実装は破られる。
++そこで `_pin_target()` が
++
++1. 名前解決を **1 回だけ**行い、
++2. 返ってきたアドレスを**すべて**共有の判定規則(`assert_public_host`)に通し、
++3. **その IP を URL に埋めて接続**する(Host ヘッダと TLS の SNI は元のホスト名のまま)
++
++という形にした。証明書検証は本来のホスト名に対して行われる(実 Object Storage /
++postman-echo で通ることを E2E で確認済み)。判定規則そのものは `jetuse_shared` の
++関数をそのまま使っており、独自の許可・拒否リストは作っていない。
++
++> `web_fetch` / MCP 側は従来のまま(ホスト名検証のみ)。**この経路だけが強い**状態なので、
++> 共通ライブラリ側へ引き上げるかは別タスクの判断(`e2e/SKIPPED.md` §4)。
++
++### 4. 上限は「切り詰めずに失敗させる」
++
++| 既定 | 値 | 理由 |
++|---|---|---|
++| タイムアウト | 15 秒 | 相手が返らないときにエージェントのホップを止める |
++| 応答サイズ | 128,000 バイト | 超過は失敗。途中まで読んだ本文を「結果」としてモデルへ渡さない |
++| リトライ | 0 回 | 業務 API の二重実行(発注・更新)を避ける |
++| 1 エージェントあたりのツール数 | 8 | 多すぎるとモデルの選択精度が落ちる。組込 4 種と足しても十数件 |
++
++切り詰めた本文をそれらしく返すと、モデルは「取得できた」と誤解して誤答する。だから
++`HttpToolCallError`(= `tools.ToolError` の派生)を投げ、モデルには
++「ツール実行に失敗しました: …」として届く。
++
++### 5. 引数スキーマは「検証しきれる形」だけ通す
++
++`parameters` はスカラ型(string / number / integer / boolean)最大 20 個の平坦な object のみ。
++`tools._validate_args` が実行前に必須・未知キー・型を検査するので、ネストや配列を許すと
++検証を素通りする引数ができてしまう。表現力より fail-closed を採った。
++
++同じ理由で、**検証できない JSON Schema キーワード(`enum` / `pattern` 等)は保存時に落とす**
++(残すのは `type` と `description` だけ)。モデルには制約に見えるのに実行前検証は素通し、
++という食い違いを作らないため。`integer` は小数を弾く(`1.5` は通さない)。
++
++### 6. 失敗の伝え方を混ぜない
++
++- 解決できないツール id は **404**(下記)
++- 承認したツールが承認待ちの間に別物へ差し替えられていたら **409**
++  (承認イベントが返す `http_tool_id` で名指しし、名前の一致も確かめる)
++- 代理実行の失敗(SSRF 再検証・Vault 読み出し・タイムアウト・サイズ超過・非 2xx)は
++  すべて `HttpToolCallError` に揃える → ルートでは **400**、エージェント実行中はモデルへ
++  「ツール実行に失敗しました…」として届く
++- レジストリ照会そのものの失敗(DB 障害等)は**握り潰さない**。存在しないツールと同じ 400 に
++  すると、呼び出し側も監視もサービス障害を区別できない(共通ハンドラが **503**)
++
++### 7. 解決できないツール id は 404 で止める
++
++`http_tool_ids` に削除済み・他人所有・不正な id が混じっていたら、取れた分だけで実行を続けず
++404 にする。黙って外すと「業務 API を参照しないまま、もっともらしい回答を返す」ことになる
++(所有者強制の 0 行 = 404 と同じ扱い)。
++
++## 実環境 E2E の証跡
++
++| # | 確かめたこと | 結果 | 証跡 |
++|---|---|---|---|
++| 1 | 架空の在庫 API をツール登録 → エージェントが自分で呼び、在庫数 137 / 大阪第2倉庫 / LOT-2026-0731 が回答に載った(組込ツールは 1 つも渡していない) | PASS | `e2e/scenario-1.md` |
++| 2 | Vault の秘密が `X-Api-Key` として相手に届き(反射された値が伏せ字になることで確認)、応答本文・DB・API 応答のいずれにも平文が出ない。認証なしツールでは付かない。**運用用の別 Secret の OCID を指定した登録は 400 で拒否**された | PASS | `e2e/scenario-2.md` |
++| 3 | 否定: メタデータ 2 形式・ループバック・localhost・私有レンジ・平文 http・URL 埋め込み認証情報の 7 種すべて 400 で、1 件も保存されない | PASS | `e2e/scenario-3.md` |
++| 4 | 5 秒かかる実 API に対し上限 2 秒で「タイムアウト」として失敗 | PASS | `e2e/scenario-4.md` |
++| 5 | 300,000 バイトの実オブジェクトが上限超過で失敗(切り詰めなし) | PASS | `e2e/scenario-5.md` |
++
++証跡には Vault の秘密の平文・PAR トークン・OCID の実値を残していない(伏せ字と先頭のみ)。
++実施しなかった範囲と理由は `e2e/SKIPPED.md`。
++
++## 再現手順
++
++```bash
++E="SPIKE_SCHEMA_PREFIX=JETUSE_TOOL01 SPIKE_HOME=/tmp/jetuse-tool01"
++P="PYTHONPATH=spikes/ragm02:spikes/tool01:packages/api"
++# 検証用の Vault 秘密は人が一度だけ作る(jetuse-spike-tool01-apikey)。
++# freeform タグ jetuse_tool_owner=dev-user を付けること(付いていないと登録が 400 になる)
++env $E $P .venv/bin/python spikes/ragm02/setup_schema.py   # run 固有スキーマ
++env $E $P .venv/bin/python spikes/tool01/deploy.py         # マイグレーション適用
++env $E $P .venv/bin/python spikes/tool01/e2e.py            # 5 シナリオ
++env $E $P .venv/bin/python spikes/tool01/teardown.py --yes # OCI 側(バケット・PAR)の片付け
++env $E $P .venv/bin/python spikes/ragm02/teardown.py --yes # ADB スキーマ
++```
++
++Vault 秘密は teardown が消さない(固定名で所有を証明できないため。不要なら人が削除予約する)。
++
++`ADB_COMPARTMENT_OCID` は `.env` の `COMPARTMENT_OCID` と同じ値を渡す。
++共通部の `resolve_dev_compartment()` は「承認済みの根の**直下**の `dev`」を探すが、
++現在の `.env` の `COMPARTMENT_OCID` は既に `dev` そのものを指しており子が無いため
++(2026-08-01 実測)、明示指定が要る。
++
++## 未検証・今後
++
++- **DNS リバインディング対策は本経路だけ**。`_pin_target`(検証した IP へ接続 + Host/SNI 維持)を
++  入れたのはこの外部 HTTP ツールのみで、既存の `web_fetch` / MCP はホスト名検証のまま。
++  共通ライブラリ(`jetuse_shared`)へ引き上げて全経路を揃えるかは別タスクの判断。
++  攻撃側(1 回目は公開 IP・2 回目は内部 IP を返す権威 DNS)の実演は共有環境では組めない
++  (`e2e/SKIPPED.md` §4。単体テストで解決結果の混入と Host/SNI の維持を固定してある)。
++- **画面は無い**。デモ側は API を直接叩いて登録する。
++- **能力カタログ**(`/api/capabilities` の `agents`)には実測できた範囲だけを書いた
++  (メソッド GET/POST・上限値・URL ポリシー・秘密の扱い)。未実証の項目は書いていない。
+diff --git a/packages/api/jetuse_core/capabilities.py b/packages/api/jetuse_core/capabilities.py
+index 5736885..1b04131 100644
+--- a/packages/api/jetuse_core/capabilities.py
++++ b/packages/api/jetuse_core/capabilities.py
+@@ -6,6 +6,8 @@
+ 3. 以上で GET /api/capabilities に自動で載る(routes の乖離は tests/test_capabilities.py が検出)。
+ """
+ 
++from . import http_tools
++
+ # --- RAG バックエンドの能力差(RAGM-03 / ADR-0020 §3) ---------------------------
+ # 「Oracle AI Database を選ぶと何が増えるか」を機械可読で示す。軸は比較ドキュメント
+ # docs/comparison/rag-metadata-backends.md と揃える(ここを増やすときは向こうも直す)。
+@@ -254,9 +256,12 @@ CAPABILITIES: list[dict] = [
+     },
+     {
+         "capability": "agents",
+-        "summary": "ツール(Web検索・RAG検索・DB照会・MCP)を自律的に使うエージェントを実行する",
++        "summary": "ツール(Web検索・RAG検索・DB照会・MCP・デモ側の外部HTTP API)を"
++                   "自律的に使うエージェントを実行する",
+         "when_to_use": "複数ステップの調査・ツール連携を見せるデモ。"
+-                       "定義済みエージェントを選んで対話させる。",
++                       "定義済みエージェントを選んで対話させる。"
++                       "デモ固有の業務APIを使わせたい場合は "
++                       "/api/agent/http-tools に登録し、実行時に http_tool_ids で渡す。",
+         "example": {
+             "input": {"model": "gpt-oss-120b", "agent_id": "<GET /api/agents のid>",
+                       "messages": [
+@@ -264,10 +269,34 @@ CAPABILITIES: list[dict] = [
+             "output": "ツール呼び出しの経過と最終回答が SSE で届く。",
+         },
+         "demo_safe": True,
++        # TOOL-01: 実測で確認できた範囲だけを書く(未実証を「できる」と書かない)
++        "external_tools": {
++            "how": "name/description/JSON Schema/URL/メソッドを /api/agent/http-tools に"
++                   "登録し、POST /api/chat/stream に agent=true と http_tool_ids を渡す。"
++                   "モデルが呼ぶと JetUse がサーバー側で HTTP を代理実行して結果を返す"
++                   "(ブラウザからは叩かせない)。",
++            "methods": ["GET", "POST"],
++            "max_tools_per_agent": http_tools.MAX_TOOLS_PER_AGENT,
++            "auth": "秘密は Vault に置き auth_secret_ocid で参照する。任意のヘッダ名"
++                    "(既定 Authorization)に載せて送る。秘密は DB にも API 応答にも現れない。"
++                    "使えるのは freeform タグ jetuse_tool_owner が登録者と一致し、"
++                    "本アプリのコンパートメントにある秘密だけ(他人・運用用の秘密は登録できない)。",
++            "url_policy": "https のみ。ループバック・内部レンジ・リンクローカル"
++                          "(169.254.169.254 等)は登録時と実行時の両方で拒否する。",
++            "limits": {
++                "timeout_seconds": http_tools.TIMEOUT_SECONDS,
++                "max_response_bytes": http_tools.MAX_RESPONSE_BYTES,
++                "retries": 0,
++                "redirects": "追わない(3xx は失敗)",
++                "on_limit_exceeded": "黙って切り詰めず、ツール実行失敗としてモデルへ返す",
++            },
++        },
+         "routes": [
+             {"path": "/api/agents", "method": "get"},
+             {"path": "/api/chat/stream", "method": "post"},
+             {"path": "/api/agent/execute-tool", "method": "post"},
++            {"path": "/api/agent/http-tools", "method": "get"},
++            {"path": "/api/agent/http-tools", "method": "post"},
+         ],
+     },
+     {
+diff --git a/packages/api/jetuse_core/chat.py b/packages/api/jetuse_core/chat.py
+index 5f9ee38..0a05544 100644
+--- a/packages/api/jetuse_core/chat.py
++++ b/packages/api/jetuse_core/chat.py
+@@ -339,13 +339,26 @@ def _build_agent_tools(
+     mcp_servers: list[dict] | None,
+     auto_tools: bool,
+     rag_store: str | None,
++    http_tools: list[Any] | None = None,
+ ) -> list[dict]:
+-    """このターンで使用可能なツール仕様を構築(custom + MCP + rag_search/file_search)。"""
++    """このターンで使用可能なツール仕様を構築(custom + MCP + 外部HTTP + rag_search)。
++
++    http_tools は外部HTTPツール(TOOL-01)の `ToolDef`。呼び出し側が owner 所有の
++    ものだけを解決済みで渡す = 明示選択なので enabled_tools では絞らない。
++    """
+     from .mcp_servers import mcp_tool_spec
+     from .tools import RAG_SEARCH, tool_specs
+ 
+     custom_enabled = [t for t in (enabled_tools or []) if t != RAG_SEARCH]
+     all_tools = tool_specs(custom_enabled if enabled_tools is not None else None) + [
++        {
++            "type": "function",
++            "name": t.name,
++            "description": t.description,
++            "parameters": t.parameters,
++        }
++        for t in (http_tools or [])
++    ] + [
+         mcp_tool_spec(srv, auto_tools) for srv in (mcp_servers or [])
+     ]
+     if enabled_tools and RAG_SEARCH in enabled_tools and rag_store:
+@@ -427,14 +440,20 @@ def _emit_pending_approval(call_dicts: list[dict], tools: dict) -> Iterator[Chat
+     """function_callバッチをUIへ承認待ちとして通知(混在バッチは全件承認制)。"""
+     for cd in call_dicts:
+         tool = tools.get(cd["name"])
+-        yield {"tool_call": {
++        event = {
+             "name": cd["name"],
+             "label": tool.label if tool else cd["name"],
+             "arguments": cd.get("arguments", "{}"),
+             "call_id": cd.get("call_id"),
+             "item": cd,
+             "status": "pending_approval",
+-        }}
++        }
++        if tool and tool.tool_id:
++            # 外部HTTPツール(TOOL-01): 承認したその1件を id で名指しできるようにする。
++            # 名前だけで再解決すると、承認待ちの間に同名で別 URL のツールを作り直された
++            # 場合に「利用者が確認したのと違う HTTP 操作」が実行されうる
++            event["http_tool_id"] = tool.tool_id
++        yield {"tool_call": event}
+ 
+ 
+ def _run_tool_calls(
+@@ -486,6 +505,7 @@ def stream_agent(
+     instructions: str | None = None,
+     project_ocid: str | None = None,
+     rag_store: str | None = None,
++    http_tools: list[Any] | None = None,
+ ) -> Iterator[ChatEvent]:
+     """エージェントモード(AGT-01)。ツール付きResponses呼び出しをループする。
+ 
+@@ -493,9 +513,14 @@ def stream_agent(
+     - auto_tools=False: function_callを {"tool_call"} イベントで通知してストリーム終了
+       (UIが承認後、tool_results付きで再呼び出しして継続する)
+     - auto_tools=True: サーバー側で実行し最大MAX_TOOL_HOPSホップまで自動継続
++    - http_tools: owner 所有の外部HTTPツール(TOOL-01)の ToolDef。組込ツールと同じ
++      レジストリに載せ、JetUse がサーバー側で代理実行する
+     """
+-    from .tools import TOOLS, ToolError, execute_tool
++    from .tools import TOOLS, ToolError, execute_with
+ 
++    # そのターン限りのレジストリ。組込を後勝ちにして外部ツールの名前衝突を無害化する
++    # (登録時にも予約名を弾いているが、実行段でも組込が上書きされないようにする)
++    registry = {**{t.name: t for t in (http_tools or [])}, **TOOLS}
+     model = MODELS[model_key]
+     if model.api != "responses":
+         yield {"error": "エージェントモードはResponses系モデルのみ対応です"}
+@@ -506,7 +531,9 @@ def stream_agent(
+     extra = _extra_responses_params(model, params or GenParams())
+     # ターン内ツール総数の安全弁(AGT-01d): 累積16件以上はツールを外し最終回答を強制
+     force_answer = len(tool_results or []) >= 16
+-    all_tools = _build_agent_tools(enabled_tools, mcp_servers, auto_tools, rag_store)
++    all_tools = _build_agent_tools(
++        enabled_tools, mcp_servers, auto_tools, rag_store, http_tools
++    )
+     if force_answer:
+         all_tools = []
+         base_input.append(_force_answer_message())
+@@ -541,15 +568,18 @@ def stream_agent(
+         ]
+         needs_approval = [
+             cd for cd in call_dicts
+-            if not (TOOLS.get(cd["name"]) and not TOOLS[cd["name"]].requires_approval)
++            if not (registry.get(cd["name"]) and not registry[cd["name"]].requires_approval)
+         ]
+         if not auto_tools and needs_approval:
+             # 混在バッチは全件承認制(ステートレス継続で安全側の結果が失われるのを防ぐ)
+-            yield from _emit_pending_approval(call_dicts, TOOLS)
++            yield from _emit_pending_approval(call_dicts, registry)
+             return  # UIの承認待ち
+         # 全件が承認不要(requires_approval=False)の場合は承認モードでも自動実行して継続
+ 
+-        yield from _run_tool_calls(call_dicts, base_input, user, TOOLS, execute_tool, ToolError)
++        yield from _run_tool_calls(
++            call_dicts, base_input, user, registry,
++            lambda n, a: execute_with(registry, n, a), ToolError,
++        )
+ 
+     # ホップ上限: エラーではなくツールなしで最終回答を強制する(AGT-01d)
+     yield {"delta": ""}
+diff --git a/packages/api/jetuse_core/http_tools.py b/packages/api/jetuse_core/http_tools.py
+new file mode 100644
+index 0000000..9b348e1
+--- /dev/null
++++ b/packages/api/jetuse_core/http_tools.py
+@@ -0,0 +1,494 @@
++"""外部HTTPツールのレジストリと代理実行(TOOL-01)。
++
++デモ側が持つ素の HTTP エンドポイントを、スキーマ付きでツールとして登録し、
++エージェント実行時に組込ツール(`tools.TOOLS`)と同列に配線するための口。
++MCP サーバー登録(`mcp_servers.py`)とは別経路として共存する(MCP はサーバー側で
++OCI が実行、こちらは JetUse が自分で HTTP を叩く)。
++
++既存の流儀に揃えている点(新方式を発明しない):
++- 所有者強制は SQL の WHERE 句(0 行 = 呼び出し側で 404)。`mcp_servers` と同じ。
++- 秘密は Vault に置き **OCID だけ**を保持する。読み出しは `mcp_servers._read_secret`。
++- URL 検証は `mcp_servers.validate_url` と同じ「https 必須 + 公開ホストのみ」
++  (`jetuse_shared.webtools.assert_public_host`)。
++
++秘密の**認可**(TOOL-01 レビュー review-1 の blocker):
++OCID を利用者が自由に書けると、「サービスの権限で読める秘密を、利用者が指定した外部 URL へ
++送らせる」経路(confused deputy)になる。そこで登録時に Vault のメタデータ(値ではない)を引き、
++**設定コンパートメント内**かつ **freeform タグ `jetuse_tool_owner` が登録者と一致**する秘密
++だけを受け付ける。タグの無い秘密・他人のタグの秘密・別コンパートメントの秘密は登録できない。
++照合先(`COMPARTMENT_OCID`)が未設定なら登録を断る(設定漏れで認可境界を失わない)。
++**この認可は実行のたびに取り直す**(登録後にタグを外した = 権限剥奪がその場で効く)。
++さらに、相手が認証ヘッダを応答へ反射しても秘密が外へ出ないよう、**送った値は応答から伏せる**。
++
++SSRF に対する構え(fail-closed):
++- 登録時と**実行時の両方**でホストを検証する(登録後に DNS が私有アドレスへ向く可能性)。
++- リダイレクトは追わない。3xx は失敗として扱う(転送先が内部を向きうるため)。
++- 応答サイズ上限・タイムアウトを設け、**リトライしない**。上限超過は黙って切り詰めず失敗にする。
++"""
++
++import base64
++import ipaddress
++import json
++import logging
++import re
++import socket
++import uuid
++from typing import Any
++from urllib.parse import quote, quote_plus, urlparse, urlunparse
++
++import httpx
++import oracledb
++
++from .db import connect
++from .mcp_servers import _read_secret
++from .tools import CODE_INTERPRETER, RAG_SEARCH, TOOLS, ToolDef, ToolError
++from .webtools import SsrfBlockedError, _assert_public_host
++
++logger = logging.getLogger("jetuse.http_tools")
++
++# 1 エージェントに渡せる外部ツール数の上限。多すぎるとモデルの選択精度が落ちるため
++# 組込ツール(現状4種)と足しても十数件に収まる値にする。
++MAX_TOOLS_PER_AGENT = 8
++
++# 代理実行の既定。リトライはしない(業務APIの二重実行を避ける)。
++TIMEOUT_SECONDS = 15.0
++MAX_RESPONSE_BYTES = 128_000
++MAX_PROPERTIES = 20
++USER_AGENT = "jetuse/0.1 (agent tool proxy)"
++# 相手が認証ヘッダを応答へ反射したときの伏せ字
++REDACTED = "<redacted>"
++
++ALLOWED_METHODS = ("GET", "POST")
++DEFAULT_AUTH_HEADER = "Authorization"
++# この秘密を使ってよい所有者を示す Vault の freeform タグ(値 = AuthContext.subject)
++SECRET_OWNER_TAG = "jetuse_tool_owner"
++NAME_RE = re.compile(r"^[a-z][a-z0-9_]{2,47}$")
++# 引数名はツール名より緩い(相手の業務APIが camelCase や 1 文字を使うことがある)。
++# ただしクエリ文字列 / JSON キーへそのまま載るので文字種は絞る
++ARG_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
++HEADER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9-]{0,62}$")
++# 認証ヘッダ名に使わせないもの。宛先や本文の枠組みを決めるヘッダを利用者に握らせると、
++# IP ピン留め(Host の上書き)やリクエストスマグリング(長さ・転送方式)の入口になる
++FORBIDDEN_AUTH_HEADERS = frozenset({
++    "host", "content-length", "content-type", "transfer-encoding", "connection",
++    "expect", "upgrade", "te", "trailer", "keep-alive", "proxy-authorization",
++    "proxy-connection",
++})
++ALLOWED_PARAM_TYPES = ("string", "number", "integer", "boolean")
++
++# 組込ツールと同名を登録させない(モデルから見て同じ名前空間)
++RESERVED_NAMES = frozenset(TOOLS) | {CODE_INTERPRETER, RAG_SEARCH}
++
++
++class HttpToolDefError(ValueError):
++    """ツール定義が受け入れられない(登録時の 400 相当)。"""
++
++
++class HttpToolCallError(ToolError):
++    """代理実行が失敗した。モデルには「失敗」として伝わる(切り詰めではない)。"""
++
++
++def _uid() -> str:
++    return str(uuid.uuid4())
++
++
++# --- 検証 ---------------------------------------------------------------
++
++def _assert_port(parsed) -> int | None:
++    """ポートを検証して返す。壊れた値を保存させない(実行時に ValueError になる)。"""
++    try:
++        port = parsed.port
++    except ValueError as e:
++        raise SsrfBlockedError("URLのポート指定が不正です") from e
++    if port is not None and not (1 <= port <= 65535):
++        raise SsrfBlockedError("URLのポート指定が不正です")
++    return port
++
++
++def validate_url(url: str) -> None:
++    """https 必須 + 公開ホストのみ(`mcp_servers.validate_url` と同じ流儀)。"""
++    p = urlparse(url)
++    if p.scheme != "https" or not p.hostname:
++        raise SsrfBlockedError("ツールのURLはhttpsである必要があります")
++    if p.username or p.password:
++        raise SsrfBlockedError("URLに認証情報を含めることはできません(秘密はVaultへ)")
++    _assert_port(p)
++    _assert_public_host(p.hostname)
++
++
++def validate_parameters(parameters: Any) -> dict:
++    """引数スキーマ(JSON Schema のサブセット)を検証して返す。
++
++    モデルに渡す仕様であり、`tools._validate_args` が実行前検証に使う。表現力より
++    「検証しきれる形だけ通す」を優先する(未知の構成を素通しさせない = fail-closed)。
++    """
++    if not isinstance(parameters, dict) or parameters.get("type") != "object":
++        raise HttpToolDefError("parameters は type=object の JSON Schema である必要があります")
++    props = parameters.get("properties")
++    if props is None:
++        props = {}
++    if not isinstance(props, dict):
++        raise HttpToolDefError("parameters.properties はオブジェクトである必要があります")
++    if len(props) > MAX_PROPERTIES:
++        raise HttpToolDefError(f"引数は{MAX_PROPERTIES}個までです")
++    clean: dict[str, dict] = {}
++    for key, spec in props.items():
++        if not isinstance(key, str) or not ARG_NAME_RE.match(key):
++            raise HttpToolDefError(f"引数名が不正です: {key}")
++        if not isinstance(spec, dict) or spec.get("type") not in ALLOWED_PARAM_TYPES:
++            raise HttpToolDefError(
++                f"引数 {key} の type は {'/'.join(ALLOWED_PARAM_TYPES)} のいずれかです"
++            )
++        # 検証できるキーだけを残す。未対応の JSON Schema キーワード(enum・pattern 等)を
++        # そのまま通すと「モデルには制約に見えるが実行前検証は素通し」になる
++        clean[key] = {"type": spec["type"]}
++        desc = spec.get("description")
++        if isinstance(desc, str) and desc:
++            clean[key]["description"] = desc[:300]
++    required = parameters.get("required", [])
++    if not isinstance(required, list) or any(
++        not isinstance(r, str) or r not in clean for r in required
++    ):
++        raise HttpToolDefError("required は properties に存在するキーの配列である必要があります")
++    return {"type": "object", "properties": clean, "required": list(required)}
++
++
++def assert_secret_usable(owner: str, secret_ocid: str) -> None:
++    """登録者がその Vault 秘密を使ってよいかを **Vault のメタデータ**で確かめる(値は読まない)。
++
++    これが無いと「サービスの OCI 権限で読める任意の秘密を、利用者が指定した外部 URL へ
++    送らせる」経路になる。fail-closed: 参照できない・タグが無い・タグが他人・別コンパートメント
++    のいずれでも登録を断る。
++    """
++    import oci
++
++    from .oci_auth import sdk_signer_args
++    from .settings import get_settings
++
++    s = get_settings()
++    if not s.compartment_ocid:
++        # 照合先が無いまま通すと「タグさえ合えば別コンパートメントの秘密も使える」になる
++        raise HttpToolDefError(
++            "COMPARTMENT_OCID が未設定のため秘密付きツールは登録できません(設定漏れ)"
++        )
++    args = sdk_signer_args(s.oci_region)
++    args["config"] = {**args.get("config", {}), "region": s.oci_region}
++    try:
++        meta = oci.vault.VaultsClient(**args).get_secret(secret_ocid).data
++    except Exception as e:
++        logger.warning("secret metadata lookup failed: %s", type(e).__name__)
++        raise HttpToolDefError(
++            "指定された Vault の秘密を参照できません(OCID・リージョン・権限を確認してください)"
++        ) from e
++    if meta.compartment_id != s.compartment_ocid:
++        raise HttpToolDefError("この秘密は本アプリのコンパートメントにありません")
++    if (meta.freeform_tags or {}).get(SECRET_OWNER_TAG) != owner:
++        raise HttpToolDefError(
++            f"この秘密の利用が許可されていません(Vault の freeform タグ "
++            f"{SECRET_OWNER_TAG} に利用者を設定してください)"
++        )
++
++
++def validate_definition(
++    name: str, url: str, method: str, auth_header: str | None
++) -> tuple[str, str]:
++    """名前・メソッド・認証ヘッダ名を検証し、正規化した (method, auth_header) を返す。"""
++    if not NAME_RE.match(name or ""):
++        raise HttpToolDefError(
++            "ツール名は英小文字で始まる 3〜48 文字の [a-z0-9_] である必要があります"
++        )
++    if name in RESERVED_NAMES:
++        raise HttpToolDefError(f"組込ツールと同じ名前は使えません: {name}")
++    m = (method or "GET").upper()
++    if m not in ALLOWED_METHODS:
++        raise HttpToolDefError(f"メソッドは {'/'.join(ALLOWED_METHODS)} のみです")
++    h = auth_header or DEFAULT_AUTH_HEADER
++    if not HEADER_RE.match(h):
++        raise HttpToolDefError(f"認証ヘッダ名が不正です: {h}")
++    if h.lower() in FORBIDDEN_AUTH_HEADERS:
++        raise HttpToolDefError(f"このヘッダは認証ヘッダに使えません: {h}")
++    validate_url(url)
++    return m, h
++
++
++# --- レジストリ(所有者強制は SQL の WHERE 句) ---------------------------
++
++def _row_to_tool(r) -> dict[str, Any]:
++    return {
++        "id": r[0],
++        "name": r[1],
++        "description": r[2],
++        "parameters": json.loads(r[3]),
++        "url": r[4],
++        "method": r[5],
++        "auth_header": r[6],
++        "auth_secret_ocid": r[7],
++        # 実行時に秘密の認可を取り直すために持つ(API 応答には出さない)
++        "owner_sub": r[8],
++    }
++
++
++def _public(tool: dict[str, Any]) -> dict[str, Any]:
++    """API 応答用。Vault の OCID・秘密は返さない(has_auth のみ — mcp_servers と同じ)。"""
++    return {
++        "id": tool["id"], "name": tool["name"], "description": tool["description"],
++        "parameters": tool["parameters"], "url": tool["url"], "method": tool["method"],
++        "auth_header": tool["auth_header"], "has_auth": tool["auth_secret_ocid"] is not None,
++    }
++
++
++_SELECT = (
++    "SELECT id, name, description, parameters, url, method, auth_header, "
++    "auth_secret_ocid, owner_sub FROM http_tools"
++)
++
++
++def list_tools(owner: str) -> list[dict[str, Any]]:
++    with connect() as conn:
++        cur = conn.cursor()
++        cur.execute(
++            f"{_SELECT} WHERE owner_sub = :o ORDER BY created_at", o=owner
++        )
++        return [_public(_row_to_tool(r)) for r in cur.fetchall()]
++
++
++def get_tools(owner: str, ids: list[str]) -> list[dict[str, Any]]:
++    """所有者のツールを id で解決する(他人の id は 0 行になる)。"""
++    if not ids:
++        return []
++    binds = {f"id{i}": v for i, v in enumerate(ids[:MAX_TOOLS_PER_AGENT])}
++    placeholders = ", ".join(f":id{i}" for i in range(len(binds)))
++    with connect() as conn:
++        cur = conn.cursor()
++        cur.execute(
++            f"{_SELECT} WHERE owner_sub = :o AND id IN ({placeholders})",
++            o=owner, **binds,
++        )
++        return [_row_to_tool(r) for r in cur.fetchall()]
++
++
++def get_tool_by_name(owner: str, name: str) -> dict[str, Any] | None:
++    """承認後の単発実行(/api/agent/execute-tool)用。所有者のものだけ引く。"""
++    with connect() as conn:
++        cur = conn.cursor()
++        cur.execute(f"{_SELECT} WHERE owner_sub = :o AND name = :n", o=owner, n=name)
++        row = cur.fetchone()
++        return _row_to_tool(row) if row else None
++
++
++def create_tool(
++    owner: str,
++    name: str,
++    description: str,
++    parameters: dict,
++    url: str,
++    method: str = "GET",
++    auth_header: str | None = None,
++    auth_secret_ocid: str | None = None,
++) -> dict[str, Any]:
++    m, h = validate_definition(name, url, method, auth_header)
++    schema = validate_parameters(parameters)
++    if auth_secret_ocid:
++        assert_secret_usable(owner, auth_secret_ocid)
++    tid = _uid()
++    try:
++        with connect() as conn:
++            conn.cursor().execute(
++                """
++                INSERT INTO http_tools(
++                  id, owner_sub, name, description, parameters, url, method,
++                  auth_header, auth_secret_ocid)
++                VALUES (:id, :o, :n, :d, :p, :u, :m, :h, :a)
++                """,
++                id=tid, o=owner, n=name, d=description[:1000],
++                p=json.dumps(schema, ensure_ascii=False), u=url[:1000], m=m,
++                h=h, a=auth_secret_ocid,
++            )
++            conn.commit()
++    except oracledb.IntegrityError as e:
++        raise HttpToolDefError(f"同じ名前のツールが既に登録されています: {name}") from e
++    return _public({
++        "id": tid, "name": name, "description": description, "parameters": schema,
++        "url": url, "method": m, "auth_header": h, "auth_secret_ocid": auth_secret_ocid,
++    })
++
++
++def delete_tool(owner: str, tid: str) -> bool:
++    with connect() as conn:
++        cur = conn.cursor()
++        cur.execute(
++            "DELETE FROM http_tools WHERE id = :id AND owner_sub = :o", id=tid, o=owner
++        )
++        conn.commit()
++        return cur.rowcount > 0
++
++
++# --- 代理実行 -----------------------------------------------------------
++
++def _query_params(args: dict) -> dict[str, str]:
++    """GET のクエリ文字列へ。値はスカラのみ(スキーマで担保済み)。"""
++    return {k: ("true" if v is True else "false" if v is False else str(v))
++            for k, v in args.items()}
++
++
++def _auth_headers(tool: dict) -> tuple[dict[str, str], str]:
++    """Vault から秘密を読んでヘッダに載せる。戻り値は (ヘッダ, 秘密の実値)。
++
++    **実行のたびに認可を取り直す**(登録後にタグを外した = 権限剥奪が効くように)。
++    秘密の実値は呼び出し側が応答の伏せ字に使う。ログにも応答にも出さない。
++    """
++    ocid = tool.get("auth_secret_ocid")
++    if not ocid:
++        return {}, ""
++    assert_secret_usable(tool.get("owner_sub") or "", ocid)
++    value = _read_secret(ocid)
++    return {tool.get("auth_header") or DEFAULT_AUTH_HEADER: value}, value
++
++
++def _pin_target(url: str) -> tuple[str, str]:
++    """名前解決を1回だけ行い、**検証したその IP へ接続する** URL を作る。
++
++    「検証時に公開 IP・接続時に内部 IP」を返す DNS リバインディングを塞ぐ。戻り値は
++    (IP に差し替えた URL, 元のホスト:ポート)。呼び出し側は Host ヘッダと SNI に後者を使う
++    ので、TLS の証明書検証は本来のホスト名に対して行われる(実測: OCI Object Storage /
++    postman-echo とも 通常どおり検証が通る)。
++
++    判定規則は共有の `assert_public_host` をそのまま使う(IP リテラルを渡す)。解決された
++    アドレスが**1つでも**内部を指していれば拒否する。
++    """
++    p = urlparse(url)
++    if p.scheme != "https" or not p.hostname:
++        raise SsrfBlockedError("ツールのURLはhttpsである必要があります")
++    if p.username or p.password:
++        raise SsrfBlockedError("URLに認証情報を含めることはできません(秘密はVaultへ)")
++    port = _assert_port(p)
++    try:
++        infos = socket.getaddrinfo(p.hostname, port or 443, type=socket.SOCK_STREAM)
++    except socket.gaierror as e:
++        raise SsrfBlockedError(f"DNS resolution failed: {p.hostname}") from e
++    addrs = list(dict.fromkeys(i[4][0] for i in infos))
++    if not addrs:
++        raise SsrfBlockedError(f"DNS resolution failed: {p.hostname}")
++    for a in addrs:
++        _assert_public_host(a)
++    # IPv4 を優先(到達性が広い)。無ければ解決順の先頭
++    chosen = next(
++        (a for a in addrs if isinstance(ipaddress.ip_address(a), ipaddress.IPv4Address)),
++        addrs[0],
++    )
++    literal = f"[{chosen}]" if ":" in chosen else chosen
++    netloc = f"{literal}:{port}" if port else literal
++    return urlunparse(p._replace(netloc=netloc)), p.netloc
++
++
++def _redaction_forms(secret: str) -> list[str]:
++    """応答本文に現れうる秘密の表現(生 / JSON エスケープ / URL エンコード / Base64 / hex)。
++
++    完全な保証ではない(敵対的な相手は任意に変形できる)。現実の反射
++    ——エコー・デバッグ用エンドポイントがヘッダをそのまま返す——を確実に潰すのが目的。
++    """
++    if len(secret) < 4:
++        return [secret]
++    forms = {
++        secret,
++        json.dumps(secret)[1:-1],
++        quote(secret, safe=""),
++        quote_plus(secret),
++        base64.b64encode(secret.encode()).decode(),
++        secret.encode().hex(),
++    }
++    return sorted((f for f in forms if len(f) >= 4), key=len, reverse=True)
++
++
++def _client() -> httpx.Client:
++    """代理実行用クライアント。リトライなし・リダイレクト追随なし(テストの差し替え点)。"""
++    return httpx.Client(follow_redirects=False, timeout=TIMEOUT_SECONDS)
++
++
++def call_tool(tool: dict, args: dict) -> str:
++    """登録済みツールをサーバー側で代理実行する。失敗は HttpToolCallError。
++
++    リトライしない / リダイレクトを追わない / 上限超過は切り詰めずに失敗させる。
++    """
++    # 実行時の再検証(登録後の DNS 変化に対する fail-closed)と Vault 読み出し。
++    # ここの失敗も「ツール実行の失敗」として同じ境界で返す(呼び出し側の扱いを分岐させない)
++    try:
++        target_url, host_header = _pin_target(tool["url"])
++    except SsrfBlockedError as e:
++        raise HttpToolCallError(f"ツール実行に失敗しました: 到達を許可しない宛先です({e})") from e
++    headers = {"User-Agent": USER_AGENT, "Accept": "application/json, */*"}
++    try:
++        auth, secret_value = _auth_headers(tool)
++    except HttpToolDefError as e:
++        raise HttpToolCallError(f"ツール実行に失敗しました: {e}") from e
++    except Exception as e:
++        logger.warning("secret read failed: %s", type(e).__name__)
++        raise HttpToolCallError(
++            "ツール実行に失敗しました: Vault の秘密を読み出せませんでした"
++        ) from e
++    headers.update(auth)
++    # Host は認証ヘッダの**後**に置く。登録時にも禁止しているが、ここで固定しておけば
++    # 万一の抜けでも IP ピン留めが指す origin を利用者に動かされない
++    headers["Host"] = host_header
++    method = tool["method"]
++    # GET は引数をクエリ文字列へ、POST は JSON ボディへ(URL のパス・ホストは動かせない)
++    payload: dict[str, Any] = (
++        {"params": _query_params(args)} if method == "GET" else {"json": args}
++    )
++    try:
++        with _client() as client:
++            with client.stream(
++                method, target_url, headers=headers,
++                extensions={"sni_hostname": urlparse(tool["url"]).hostname},
++                **payload,
++            ) as res:
++                # Location の有無に関わらず 3xx はすべて失敗にする(`is_redirect` は
++                # Location 付きしか真にならず、300/304/307 等が素通りする)
++                if 300 <= res.status_code < 400:
++                    raise HttpToolCallError(
++                        "ツール実行に失敗しました: リダイレクト応答は許可していません"
++                    )
++                body = b""
++                for chunk in res.iter_bytes():
++                    body += chunk
++                    if len(body) > MAX_RESPONSE_BYTES:
++                        raise HttpToolCallError(
++                            "ツール実行に失敗しました: 応答が上限"
++                            f"({MAX_RESPONSE_BYTES}バイト)を超えました"
++                        )
++                status = res.status_code
++                charset = res.charset_encoding or "utf-8"
++    except httpx.TimeoutException as e:
++        raise HttpToolCallError(
++            f"ツール実行に失敗しました: {TIMEOUT_SECONDS}秒でタイムアウトしました"
++        ) from e
++    except httpx.HTTPError as e:
++        # 例外の詳細は秘密を含みうる経路ではないが、モデルへは種別だけ返す
++        logger.warning("http tool transport error: %s", type(e).__name__)
++        raise HttpToolCallError(
++            f"ツール実行に失敗しました: 通信エラー({type(e).__name__})"
++        ) from e
++    text = body.decode(charset, errors="replace")
++    for form in (_redaction_forms(secret_value) if secret_value else ()):
++        # 相手が認証ヘッダを応答へ反射することがある(エコー系・デバッグ用エンドポイント)。
++        # そのまま返すとモデル・UI・会話履歴へ秘密が流れるので、送った値を伏せる
++        text = text.replace(form, REDACTED)
++    if status >= 400:
++        raise HttpToolCallError(f"ツール実行に失敗しました: HTTP {status} {text[:200]}")
++    return json.dumps({"status": status, "body": text}, ensure_ascii=False)
++
++
++def to_tooldef(tool: dict) -> ToolDef:
++    """登録行を組込ツールと同じ `ToolDef` にする(chat.py が同列に扱えるように)。"""
++    return ToolDef(
++        name=tool["name"],
++        label=f"外部API: {tool['name']}",
++        description=tool["description"],
++        parameters=tool["parameters"],
++        # 承認往復で「承認したその1件」を id で名指しできるようにする(名前だけだと、
++        # 承認待ちの間に同名で別 URL のツールを作り直されると別物が実行される)
++        tool_id=tool["id"],
++        handler=lambda args, _t=tool: call_tool(_t, args),
++        # 外部の業務APIは副作用を持ちうる。既定は承認必須(auto_tools=True で自動実行)
++        requires_approval=True,
++    )
+diff --git a/packages/api/jetuse_core/migrations/020_http_tools.sql b/packages/api/jetuse_core/migrations/020_http_tools.sql
+new file mode 100644
+index 0000000..df70236
+--- /dev/null
++++ b/packages/api/jetuse_core/migrations/020_http_tools.sql
+@@ -0,0 +1,15 @@
++CREATE TABLE http_tools (
++  id VARCHAR2(36) PRIMARY KEY,
++  owner_sub VARCHAR2(255) NOT NULL,
++  name VARCHAR2(64) NOT NULL,
++  description VARCHAR2(1000) NOT NULL,
++  parameters CLOB NOT NULL,
++  url VARCHAR2(1000) NOT NULL,
++  method VARCHAR2(8) DEFAULT 'GET' NOT NULL,
++  auth_header VARCHAR2(64),
++  auth_secret_ocid VARCHAR2(255),
++  created_at TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
++  CONSTRAINT http_tools_owner_name UNIQUE (owner_sub, name)
++);
++
++CREATE INDEX idx_http_tools_owner ON http_tools(owner_sub, created_at)
+diff --git a/packages/api/jetuse_core/tools.py b/packages/api/jetuse_core/tools.py
+index 0af499d..712036e 100644
+--- a/packages/api/jetuse_core/tools.py
++++ b/packages/api/jetuse_core/tools.py
+@@ -61,6 +61,9 @@ class ToolDef:
+     parameters: dict
+     handler: Callable[[dict], str] | None  # Noneはbuilt-in(OCI側実行)
+     requires_approval: bool = True
++    # 登録済み外部HTTPツール(TOOL-01)の id。組込ツールは空。
++    # 承認往復で「承認したその1件」を名前でなく id で名指しするために使う
++    tool_id: str = ""
+ 
+ 
+ TOOLS: dict[str, ToolDef] = {
+@@ -168,13 +171,27 @@ def _validate_args(tool: ToolDef, args: dict) -> None:
+     for k, v in args.items():
+         if k not in props:
+             raise ToolError(f"未知の引数: {k}")
+-        if props[k].get("type") == "string" and not isinstance(v, str):
++        t = props[k].get("type")
++        # 外部HTTPツール(TOOL-01)は利用者定義スキーマなので string 以外も検証する。
++        # bool は int の派生なので number/integer からは除く
++        if t == "string" and not isinstance(v, str):
++            raise ToolError(f"引数の型が不正: {k}")
++        if t == "number" and (isinstance(v, bool) or not isinstance(v, (int, float))):
++            raise ToolError(f"引数の型が不正: {k}")
++        # integer に 1.5 を通すとスキーマの主張と実際の入力保証がずれる
++        if t == "integer" and (isinstance(v, bool) or not isinstance(v, int)):
++            raise ToolError(f"引数の型が不正: {k}")
++        if t == "boolean" and not isinstance(v, bool):
+             raise ToolError(f"引数の型が不正: {k}")
+ 
+ 
+-def execute_tool(name: str, arguments: str | dict) -> str:
+-    """レジストリのツールを検証付きで実行する(AGT-01ガード)"""
+-    tool = TOOLS.get(name)
++def execute_with(registry: dict[str, ToolDef], name: str, arguments: str | dict) -> str:
++    """指定レジストリのツールを検証付きで実行する(AGT-01ガード)。
++
++    エージェント実行では組込 `TOOLS` に owner の外部HTTPツール(TOOL-01)を重ねた
++    「そのターン限りのレジストリ」を渡す。
++    """
++    tool = registry.get(name)
+     if not tool or tool.handler is None:
+         raise ToolError(f"未知のツール: {name}")
+     args = json.loads(arguments) if isinstance(arguments, str) else arguments
+@@ -190,3 +207,8 @@ def execute_tool(name: str, arguments: str | dict) -> str:
+         return json.dumps(
+             {"error": f"ツール実行に失敗しました: {str(e)[:200]}"}, ensure_ascii=False
+         )
++
++
++def execute_tool(name: str, arguments: str | dict) -> str:
++    """組込レジストリ(TOOLS)のツールを実行する。"""
++    return execute_with(TOOLS, name, arguments)
+diff --git a/packages/api/service/main.py b/packages/api/service/main.py
+index 2bed9ee..ce8f60b 100644
+--- a/packages/api/service/main.py
++++ b/packages/api/service/main.py
+@@ -38,6 +38,9 @@ from jetuse_core import (  # noqa: F401
+ from jetuse_core import (  # noqa: F401
+     conversations as conv_repo,
+ )
++from jetuse_core import (  # noqa: F401
++    http_tools as http_tools_repo,
++)
+ from jetuse_core import (  # noqa: F401
+     mcp_servers as mcp_repo,
+ )
+diff --git a/packages/api/service/routes/agents.py b/packages/api/service/routes/agents.py
+index d5d2299..dea1bda 100644
+--- a/packages/api/service/routes/agents.py
++++ b/packages/api/service/routes/agents.py
+@@ -7,6 +7,7 @@ from typing import Annotated
+ from fastapi import APIRouter, Depends, HTTPException
+ 
+ from jetuse_core import agents as agents_repo
++from jetuse_core import http_tools as http_tools_repo
+ from jetuse_core import mcp_servers as mcp_repo
+ from jetuse_core import select_ai_agent
+ from jetuse_core import tools as tool_registry
+@@ -14,7 +15,12 @@ from jetuse_core.auth import AuthContext, require_user
+ from jetuse_core.logging import log_with
+ from jetuse_core.webtools import SsrfBlockedError
+ 
+-from ..schemas import AgentDefinition, McpServerCreate, ToolExecuteRequest
++from ..schemas import (
++    AgentDefinition,
++    HttpToolCreate,
++    McpServerCreate,
++    ToolExecuteRequest,
++)
+ 
+ logger = logging.getLogger("jetuse.service")
+ router = APIRouter()
+@@ -102,6 +108,36 @@ def delete_mcp_server(sid: str, user: Annotated[AuthContext, Depends(require_use
+     return {"deleted": True}
+ 
+ 
++# --- 外部HTTPツール(TOOL-01) ---
++# デモ側の素の HTTP エンドポイントをスキーマ付きで登録し、エージェント実行時に
++# 組込ツールと同列に配線する口。MCP サーバー登録とは別経路として共存する。
++
++@router.get("/api/agent/http-tools")
++def list_http_tools(user: Annotated[AuthContext, Depends(require_user)]):
++    return {"tools": http_tools_repo.list_tools(user.subject)}
++
++
++@router.post("/api/agent/http-tools")
++def create_http_tool(
++    req: HttpToolCreate, user: Annotated[AuthContext, Depends(require_user)]
++):
++    try:
++        return http_tools_repo.create_tool(
++            user.subject, req.name, req.description, req.parameters, req.url,
++            method=req.method, auth_header=req.auth_header,
++            auth_secret_ocid=req.auth_secret_ocid,
++        )
++    except (SsrfBlockedError, http_tools_repo.HttpToolDefError) as e:
++        raise HTTPException(status_code=400, detail=str(e)) from e
++
++
++@router.delete("/api/agent/http-tools/{tid}")
++def delete_http_tool(tid: str, user: Annotated[AuthContext, Depends(require_user)]):
++    if not http_tools_repo.delete_tool(user.subject, tid):
++        raise HTTPException(status_code=404, detail="tool not found")
++    return {"deleted": True}
++
++
+ @router.get("/api/agent/tools")
+ async def agent_tools(user: Annotated[AuthContext, Depends(require_user)]):
+     """ツール選択UI用の一覧(AGT-01b)"""
+@@ -118,9 +154,32 @@ async def agent_select_ai_tools(user: Annotated[AuthContext, Depends(require_use
+ async def agent_execute_tool(
+     req: ToolExecuteRequest, user: Annotated[AuthContext, Depends(require_user)]
+ ):
++    registry = tool_registry.TOOLS
++    if req.name not in registry:
++        # 承認フローで外部HTTPツール(TOOL-01)が承認された場合。owner 所有のものだけ解決する。
++        # id が来ていればそれで名指しする(承認待ちの間に同名で別 URL のツールへ差し替えられる
++        # のを防ぐ)。照会の失敗(DB 障害等)は握り潰さない — 存在しないツールと同じ 400 に
++        # すると、呼び出し側も監視もサービス障害を区別できなくなる(共通ハンドラが 503)
++        if req.http_tool_id:
++            rows = await asyncio.to_thread(
++                http_tools_repo.get_tools, user.subject, [req.http_tool_id]
++            )
++            row = rows[0] if rows else None
++            if row and row["name"] != req.name:
++                # 承認したツールが別物に変わっている
++                raise HTTPException(
++                    status_code=409,
++                    detail="承認されたツールの定義が変更されています。やり直してください",
++                )
++        else:
++            row = await asyncio.to_thread(
++                http_tools_repo.get_tool_by_name, user.subject, req.name
++            )
++        if row:
++            registry = {**registry, req.name: http_tools_repo.to_tooldef(row)}
+     try:
+         output = await asyncio.to_thread(
+-            tool_registry.execute_tool, req.name, req.arguments
++            tool_registry.execute_with, registry, req.name, req.arguments
+         )
+     except tool_registry.ToolError as e:
+         raise HTTPException(status_code=400, detail=str(e)) from e
+diff --git a/packages/api/service/routes/chat.py b/packages/api/service/routes/chat.py
+index d015cf8..9a820cf 100644
+--- a/packages/api/service/routes/chat.py
++++ b/packages/api/service/routes/chat.py
+@@ -20,6 +20,7 @@ from jetuse_core import (
+     rag_select_ai,
+ )
+ from jetuse_core import conversations as conv_repo
++from jetuse_core import http_tools as http_tools_repo
+ from jetuse_core import mcp_servers as mcp_repo
+ from jetuse_core.auth import AuthContext, require_user
+ from jetuse_core.chat import GenParams, create_oci_conversation
+@@ -301,6 +302,20 @@ async def stream_chat_response(  # noqa: ANN202
+     if agent_def:
+         return await agent_dispatch.hosted_agent_stream_response(req, user, agent_def)
+ 
++    # 外部HTTPツール(TOOL-01): owner所有のものだけ解決してエージェントループへ配線する。
++    # 1件でも解決できなければ 404 で止める。黙って外すと、業務APIを参照しないまま
++    # もっともらしい回答を返してしまう(削除済み・他人所有・不正idのいずれも同じ)
++    http_tool_defs: list = []
++    if req.agent and req.http_tool_ids:
++        wanted = list(dict.fromkeys(req.http_tool_ids))
++        rows = await asyncio.to_thread(http_tools_repo.get_tools, user.subject, wanted)
++        if len(rows) != len(wanted):
++            missing = sorted(set(wanted) - {r["id"] for r in rows})
++            raise HTTPException(
++                status_code=404, detail=f"http tool not found: {', '.join(missing)}"
++            )
++        http_tool_defs = [http_tools_repo.to_tooldef(r) for r in rows]
++
+     mcp_defs: list[dict] = []
+     if req.agent and req.mcp_server_ids:
+         # owner所有のサーバーのみ解決(AGT-02)
+@@ -422,6 +437,7 @@ async def stream_chat_response(  # noqa: ANN202
+                     instructions=agent_def["instructions"] if agent_def else None,
+                     project_ocid=agent_def.get("project_ocid") if agent_def else None,
+                     rag_store=agent_rag_store,
++                    http_tools=http_tool_defs,
+                 )
+             elif agent_def:
+                 # ツールなしエージェント: instructionsをsystemとして付与(AGT-03)
+diff --git a/packages/api/service/schemas.py b/packages/api/service/schemas.py
+index d4df8a5..6e583e2 100644
+--- a/packages/api/service/schemas.py
++++ b/packages/api/service/schemas.py
+@@ -9,7 +9,7 @@ from typing import Literal
+ 
+ from pydantic import BaseModel, Field, field_validator
+ 
+-from jetuse_core import rag_metadata, tts
++from jetuse_core import http_tools, rag_metadata, tts
+ 
+ from .validators import validate_agent_definition, validate_usecase_definition
+ 
+@@ -41,6 +41,11 @@ class ChatRequest(BaseModel):
+     tool_results: list[dict] | None = Field(default=None, max_length=24)
+     enabled_tools: list[str] | None = Field(default=None, max_length=20)  # AGT-01b
+     mcp_server_ids: list[str] | None = Field(default=None, max_length=5)  # AGT-02
++    # TOOL-01: 登録済み外部HTTPツールのid。1エージェントに渡せる数はモデルの選択精度の
++    # ためMAX_TOOLS_PER_AGENTで頭打ちにする
++    http_tool_ids: list[str] | None = Field(
++        default=None, max_length=http_tools.MAX_TOOLS_PER_AGENT
++    )
+     agent_id: str | None = None  # AGT-03: エージェント定義の適用
+     # 画像入力(MM-01): data URI。最終userメッセージに適用(当該ターンのみ・永続化なし)
+     # 上限10枚=映像分析のフレーム数を許容(チャットUIは4枚に制限)
+@@ -144,9 +149,28 @@ class McpServerCreate(BaseModel):
+     auth_token: str | None = Field(default=None, max_length=2000)
+ 
+ 
++class HttpToolCreate(BaseModel):
++    """外部HTTPツールの登録(TOOL-01)。
++
++    秘密そのものは受け取らない。Vault に置いた秘密の OCID だけを受け取る
++    (`mcp_servers.auth_secret_ocid` と同じ流儀)。
++    """
++
++    name: str = Field(min_length=3, max_length=48)
++    description: str = Field(min_length=1, max_length=1000)
++    parameters: dict = Field(default_factory=lambda: {"type": "object", "properties": {}})
++    url: str = Field(min_length=12, max_length=1000)
++    method: Literal["GET", "POST"] = "GET"
++    auth_header: str | None = Field(default=None, max_length=63)
++    auth_secret_ocid: str | None = Field(default=None, max_length=255)
++
++
+ class ToolExecuteRequest(BaseModel):
+     name: str = Field(min_length=1, max_length=64)
+     arguments: str = Field(default="{}", max_length=10000)
++    # TOOL-01: 承認イベントが返した外部HTTPツールの id。指定時はこの id で解決する
++    # (名前だけだと承認待ちの間に同名で別 URL のツールへ差し替えられる)
++    http_tool_id: str | None = Field(default=None, max_length=36)
+ 
+ 
+ class ChartSuggestRequest(BaseModel):
+diff --git a/packages/api/tests/test_agent.py b/packages/api/tests/test_agent.py
+index 9c72d11..b8815e5 100644
+--- a/packages/api/tests/test_agent.py
++++ b/packages/api/tests/test_agent.py
+@@ -45,6 +45,11 @@ def test_execute_tool_endpoint(monkeypatch):
+                       json={"name": "web_search", "arguments": '{"query": "oci"}'})
+     assert res.status_code == 200
+     assert "results" in res.json()["output"]
++    # 未知の名前は owner の外部HTTPツール(TOOL-01)も照会してから 400。
++    # 照会の失敗は握り潰さない設計なので、ここでは「見つからない」を注入する
++    monkeypatch.setattr(
++        service_main.http_tools_repo, "get_tool_by_name", lambda owner, name: None
++    )
+     res2 = client.post("/api/agent/execute-tool", json={"name": "nope", "arguments": "{}"})
+     assert res2.status_code == 400
+ 
+@@ -53,7 +58,8 @@ def test_agent_stream_approval_mode(monkeypatch):
+     def fake_agent(model_key, messages, temperature=None, user="",
+                    auto_tools=False, tool_results=None, params=None,
+                    enabled_tools=None, mcp_servers=None,
+-                   instructions=None, project_ocid=None, rag_store=None):
++                   instructions=None, project_ocid=None, rag_store=None,
++                   http_tools=None):
+         yield {"delta": "調べます。"}
+         yield {"tool_call": {"name": "web_search", "label": "Web検索",
+                              "arguments": '{"query": "x"}', "call_id": "c1",
+diff --git a/packages/api/tests/test_http_tools.py b/packages/api/tests/test_http_tools.py
+new file mode 100644
+index 0000000..9979564
+--- /dev/null
++++ b/packages/api/tests/test_http_tools.py
+@@ -0,0 +1,752 @@
++"""外部HTTPツール(TOOL-01)のテスト。
++
++DB は fake(connect の差し替え)で、**検証ロジックとSSRFガードは実関数**を通す。
++HTTP は httpx.MockTransport で差し替え、代理実行の境界(タイムアウト・サイズ上限・
++リダイレクト・秘密ヘッダ)を実コードで確かめる。
++"""
++
++import contextlib
++import json
++
++import httpx
++import pytest
++from fastapi.testclient import TestClient
++
++import jetuse_core.chat as chat_mod
++from jetuse_core import http_tools
++from jetuse_core.tools import TOOLS, ToolError, execute_with
++from jetuse_core.webtools import SsrfBlockedError
++from service.main import app
++
++client = TestClient(app)
++
++SCHEMA = {
++    "type": "object",
++    "properties": {"part_number": {"type": "string", "description": "品番"}},
++    "required": ["part_number"],
++}
++
++
++def tool_row(**over) -> dict:
++    row = {
++        "id": "t1", "name": "lookup_stock", "description": "在庫を引く",
++        "parameters": SCHEMA, "url": "https://example.com/stock",
++        "method": "GET", "auth_header": "Authorization", "auth_secret_ocid": None,
++        "owner_sub": "u1",
++    }
++    row.update(over)
++    return row
++
++
++# --- DB fake -----------------------------------------------------------------
++
++class FakeCursor:
++    def __init__(self, store: list[dict]):
++        self.store = store
++        self.rows: list[tuple] = []
++        self.rowcount = 0
++        self.last: tuple[str, dict] = ("", {})
++
++    def execute(self, sql, **binds):
++        self.last = (sql, binds)
++        if sql.strip().startswith("SELECT"):
++            self.rows = [
++                (
++                    t["id"], t["name"], t["description"], json.dumps(t["parameters"]),
++                    t["url"], t["method"], t["auth_header"], t["auth_secret_ocid"],
++                    t["owner"],
++                )
++                for t in self.store
++                if t["owner"] == binds["o"]
++                and (
++                    "n" not in binds or t["name"] == binds["n"]
++                )
++                and (
++                    not any(k.startswith("id") for k in binds)
++                    or t["id"] in [v for k, v in binds.items() if k.startswith("id")]
++                )
++            ]
++        elif sql.strip().startswith("INSERT"):
++            if any(t["owner"] == binds["o"] and t["name"] == binds["n"]
++                   for t in self.store):
++                import oracledb
++                raise oracledb.IntegrityError("ORA-00001: unique constraint violated")
++            self.store.append({
++                "id": binds["id"], "owner": binds["o"], "name": binds["n"],
++                "description": binds["d"], "parameters": json.loads(binds["p"]),
++                "url": binds["u"], "method": binds["m"], "auth_header": binds["h"],
++                "auth_secret_ocid": binds["a"],
++            })
++        elif sql.strip().startswith("DELETE"):
++            before = len(self.store)
++            self.store[:] = [
++                t for t in self.store
++                if not (t["id"] == binds["id"] and t["owner"] == binds["o"])
++            ]
++            self.rowcount = before - len(self.store)
++
++    def fetchall(self):
++        return self.rows
++
++    def fetchone(self):
++        return self.rows[0] if self.rows else None
++
++
++class FakeConn:
++    def __init__(self, store):
++        self.store = store
++
++    def cursor(self):
++        return FakeCursor(self.store)
++
++    def commit(self):
++        pass
++
++
++@pytest.fixture()
++def store(monkeypatch):
++    rows: list[dict] = []
++
++    @contextlib.contextmanager
++    def fake_connect():
++        yield FakeConn(rows)
++
++    monkeypatch.setattr(http_tools, "connect", fake_connect)
++    return rows
++
++
++# --- 1. 登録できるURLの制限(SSRF・fail-closed) --------------------------------
++
++@pytest.mark.parametrize("url", [
++    "http://api.example.com/x",             # https でない
++    "https://169.254.169.254/latest/meta",  # インスタンスメタデータ
++    "https://127.0.0.1/x",                  # ループバック
++    "https://10.0.0.5/x",                   # 私有レンジ
++    "https://[::1]/x",                      # IPv6 ループバック
++    "https://user:pw@api.example.com/x",    # URL に認証情報
++])
++def test_validate_url_rejects_dangerous(url):
++    with pytest.raises(SsrfBlockedError):
++        http_tools.validate_url(url)
++
++
++def test_validate_url_accepts_public_https():
++    http_tools.validate_url("https://objectstorage.ap-osaka-1.oraclecloud.com/x")
++
++
++def test_create_tool_rejects_metadata_url_before_touching_db(store):
++    with pytest.raises(SsrfBlockedError):
++        http_tools.create_tool(
++            "u1", "meta", "メタデータ", SCHEMA, "https://169.254.169.254/opc/v2/"
++        )
++    assert store == []
++
++
++def test_route_rejects_metadata_url(store):
++    res = client.post("/api/agent/http-tools", json={
++        "name": "meta_probe", "description": "x", "parameters": SCHEMA,
++        "url": "https://169.254.169.254/opc/v2/instance/",
++    })
++    assert res.status_code == 400
++    assert store == []
++
++
++# --- 2. 定義の検証 -------------------------------------------------------------
++
++@pytest.mark.parametrize("name", ["web_search", "rag_search", "code_interpreter"])
++def test_reserved_names_rejected(name):
++    with pytest.raises(http_tools.HttpToolDefError):
++        http_tools.validate_definition(name, "https://example.com/x", "GET", None)
++
++
++@pytest.mark.parametrize("name", ["A_bad", "ab", "1abc", "has space", ""])
++def test_bad_names_rejected(name):
++    with pytest.raises(http_tools.HttpToolDefError):
++        http_tools.validate_definition(name, "https://example.com/x", "GET", None)
++
++
++@pytest.mark.parametrize("header", ["Host", "content-length", "Transfer-Encoding"])
++def test_routing_headers_cannot_be_used_for_auth(header):
++    """Host を認証ヘッダにできると IP ピン留めが指す origin を利用者に動かされる。"""
++    with pytest.raises(http_tools.HttpToolDefError):
++        http_tools.validate_definition("ok_tool", "https://example.com/x", "GET", header)
++
++
++def test_host_header_is_fixed_to_the_validated_origin(monkeypatch):
++    """登録時の禁止をすり抜けても、実行時に Host は検証済みのホストで上書きされる。"""
++    monkeypatch.setattr(http_tools, "_read_secret", lambda ocid: "tok-abc")
++    allow_secret(monkeypatch)
++    seen = {}
++
++    def handler(request: httpx.Request) -> httpx.Response:
++        seen["host"] = request.headers.get("host")
++        return httpx.Response(200, json={"ok": True})
++
++    _mock(monkeypatch, handler)
++    http_tools.call_tool(
++        tool_row(auth_header="Host", auth_secret_ocid="ocid1.vaultsecret.oc1..x"),
++        {"part_number": "X"})
++    assert seen["host"] == "example.com"
++
++
++@pytest.mark.parametrize("url", [
++    "https://example.com:abc/x",   # ポートが数値でない(実行時 ValueError にしない)
++    "https://example.com:0/x",     # 0 は接続先を 443 に化けさせる
++    "https://example.com:99999/x",
++])
++def test_bad_port_rejected(url):
++    with pytest.raises(SsrfBlockedError):
++        http_tools.validate_url(url)
++
++
++def test_method_and_header_validated():
++    with pytest.raises(http_tools.HttpToolDefError):
++        http_tools.validate_definition("ok_tool", "https://example.com/x", "DELETE", None)
++    with pytest.raises(http_tools.HttpToolDefError):
++        http_tools.validate_definition("ok_tool", "https://example.com/x", "GET", "bad header")
++    assert http_tools.validate_definition(
++        "ok_tool", "https://example.com/x", "post", "X-Api-Key"
++    ) == ("POST", "X-Api-Key")
++
++
++@pytest.mark.parametrize("params", [
++    {"type": "array"},
++    {"type": "object", "properties": {"a": {"type": "object"}}},
++    {"type": "object", "properties": {"has space": {"type": "string"}}},
++    {"type": "object", "properties": {}, "required": ["missing"]},
++    {"type": "object", "properties": {}, "required": [{}]},  # 非文字列 → 500 にしない
++    "not-a-dict",
++])
++def test_bad_parameter_schema_rejected(params):
++    with pytest.raises(http_tools.HttpToolDefError):
++        http_tools.validate_parameters(params)
++
++
++def test_unsupported_schema_keywords_are_dropped():
++    """検証できないキーワードをモデルへ渡さない(制約に見えて実行前検証が素通しになる)。"""
++    out = http_tools.validate_parameters({
++        "type": "object",
++        "properties": {"a": {"type": "string", "enum": ["x"], "description": "説明"}},
++        "required": ["a"],
++    })
++    assert out["properties"]["a"] == {"type": "string", "description": "説明"}
++
++
++# --- 3. 秘密の扱い -------------------------------------------------------------
++
++def allow_secret(monkeypatch, owner="u1"):
++    """Vault 側の認可(freeform タグ)を通ったことにする。認可そのものは別テストで検証。"""
++    def check(o, ocid):
++        if o != owner:
++            raise http_tools.HttpToolDefError("この秘密の利用が許可されていません")
++    monkeypatch.setattr(http_tools, "assert_secret_usable", check)
++
++
++def test_secret_requires_owner_tag_in_vault(monkeypatch):
++    """他人/無関係の秘密 OCID を指定しても登録できない(confused deputy の遮断)。"""
++    class Meta:
++        compartment_id = "ocid1.compartment.oc1..app"
++        freeform_tags = {"jetuse_tool_owner": "someone-else"}
++
++    class FakeVaults:
++        def __init__(self, **kw):
++            pass
++
++        def get_secret(self, ocid):
++            return type("R", (), {"data": Meta()})()
++
++    import oci
++
++    from jetuse_core import oci_auth
++    monkeypatch.setattr(oci.vault, "VaultsClient", FakeVaults)
++    monkeypatch.setattr(oci_auth, "sdk_signer_args", lambda region=None: {"config": {}})
++    from jetuse_core.settings import get_settings
++    monkeypatch.setattr(get_settings(), "compartment_ocid",
++                        "ocid1.compartment.oc1..app", raising=False)
++    with pytest.raises(http_tools.HttpToolDefError) as e:
++        http_tools.assert_secret_usable("u1", "ocid1.vaultsecret.oc1..other")
++    assert "許可されていません" in str(e.value)
++    # タグが一致すれば通る
++    Meta.freeform_tags = {"jetuse_tool_owner": "u1"}
++    http_tools.assert_secret_usable("u1", "ocid1.vaultsecret.oc1..mine")
++    # 別コンパートメントの秘密は拒否
++    Meta.compartment_id = "ocid1.compartment.oc1..other"
++    with pytest.raises(http_tools.HttpToolDefError):
++        http_tools.assert_secret_usable("u1", "ocid1.vaultsecret.oc1..mine")
++
++
++def test_missing_compartment_setting_is_fail_closed(monkeypatch):
++    """照合先が無いまま通すと『タグさえ合えば他コンパートメントも可』になる。"""
++    from jetuse_core.settings import get_settings
++
++    monkeypatch.setattr(get_settings(), "compartment_ocid", "", raising=False)
++    with pytest.raises(http_tools.HttpToolDefError) as e:
++        http_tools.assert_secret_usable("u1", "ocid1.vaultsecret.oc1..x")
++    assert "COMPARTMENT_OCID" in str(e.value)
++
++
++def test_secret_lookup_failure_is_fail_closed(monkeypatch):
++    class Boom:
++        def __init__(self, **kw):
++            pass
++
++        def get_secret(self, ocid):
++            raise RuntimeError("403 NotAuthorized")
++
++    import oci
++
++    from jetuse_core import oci_auth
++    from jetuse_core.settings import get_settings
++    monkeypatch.setattr(oci.vault, "VaultsClient", Boom)
++    monkeypatch.setattr(oci_auth, "sdk_signer_args", lambda region=None: {"config": {}})
++    monkeypatch.setattr(get_settings(), "compartment_ocid",
++                        "ocid1.compartment.oc1..app", raising=False)
++    with pytest.raises(http_tools.HttpToolDefError):
++        http_tools.assert_secret_usable("u1", "ocid1.vaultsecret.oc1..x")
++
++
++def test_secret_never_in_db_columns_or_api_response(store, monkeypatch):
++    monkeypatch.setattr(http_tools, "_read_secret", lambda ocid: "SUPER-SECRET-VALUE")
++    allow_secret(monkeypatch)
++    ocid = "ocid1.vaultsecret.oc1..aaaa"
++    created = http_tools.create_tool(
++        "u1", "lookup_stock", "在庫を引く", SCHEMA, "https://example.com/stock",
++        auth_header="X-Api-Key", auth_secret_ocid=ocid,
++    )
++    assert created["has_auth"] is True
++    # API 応答には OCID も秘密も出ない
++    assert "auth_secret_ocid" not in created
++    assert "SUPER-SECRET-VALUE" not in json.dumps(created, ensure_ascii=False)
++    # DB に入るのは OCID のみ(平文の秘密列を持たない)
++    assert store[0]["auth_secret_ocid"] == ocid
++    assert "SUPER-SECRET-VALUE" not in json.dumps(store, ensure_ascii=False)
++    # 一覧も同様
++    listed = http_tools.list_tools("u1")
++    assert listed[0]["has_auth"] is True and "auth_secret_ocid" not in listed[0]
++
++
++def test_secret_header_sent_but_not_returned(monkeypatch):
++    seen = {}
++    monkeypatch.setattr(http_tools, "_read_secret", lambda ocid: "tok-abc")
++    allow_secret(monkeypatch)
++
++    def handler(request: httpx.Request) -> httpx.Response:
++        seen["header"] = request.headers.get("x-api-key")
++        return httpx.Response(200, json={"authenticated": True})
++
++    _mock(monkeypatch, handler)
++    out = http_tools.call_tool(
++        tool_row(auth_header="X-Api-Key", auth_secret_ocid="ocid1.vaultsecret..x"),
++        {"part_number": "JX-7742"},
++    )
++    assert seen["header"] == "tok-abc"
++    assert "tok-abc" not in out
++
++
++def test_reflected_secret_is_redacted_from_the_response(monkeypatch):
++    """相手が認証ヘッダを応答へ反射しても、秘密がモデル/UI/会話履歴へ流れない。"""
++    monkeypatch.setattr(http_tools, "_read_secret", lambda ocid: "tok-abc")
++    allow_secret(monkeypatch)
++
++    def handler(request: httpx.Request) -> httpx.Response:
++        # エコー系エンドポイントの挙動(受け取ったヘッダをそのまま返す)
++        return httpx.Response(200, json={"headers": dict(request.headers)})
++
++    _mock(monkeypatch, handler)
++    out = http_tools.call_tool(
++        tool_row(auth_header="X-Api-Key", auth_secret_ocid="ocid1.vaultsecret.oc1..x"),
++        {"part_number": "X"},
++    )
++    assert "tok-abc" not in out
++    assert http_tools.REDACTED in out  # 反射された箇所が伏せ字になっている
++
++
++def test_reflected_secret_is_redacted_from_error_bodies(monkeypatch):
++    monkeypatch.setattr(http_tools, "_read_secret", lambda ocid: "tok-abc")
++    allow_secret(monkeypatch)
++    _mock(monkeypatch, lambda req: httpx.Response(500, text="bad token tok-abc"))
++    with pytest.raises(http_tools.HttpToolCallError) as e:
++        http_tools.call_tool(
++            tool_row(auth_secret_ocid="ocid1.vaultsecret.oc1..x"), {"part_number": "X"})
++    assert "tok-abc" not in str(e.value)
++
++
++def test_secret_authorization_is_rechecked_at_execution(monkeypatch):
++    """登録後に Vault のタグを外したら、その場で使えなくなる(権限剥奪が効く)。"""
++    monkeypatch.setattr(http_tools, "_read_secret", lambda ocid: "tok-abc")
++    called = {"n": 0}
++
++    def revoked(owner, ocid):
++        called["n"] += 1
++        raise http_tools.HttpToolDefError("この秘密の利用が許可されていません")
++
++    monkeypatch.setattr(http_tools, "assert_secret_usable", revoked)
++    _mock(monkeypatch, lambda req: httpx.Response(200, json={"ok": True}))
++    with pytest.raises(http_tools.HttpToolCallError) as e:
++        http_tools.call_tool(
++            tool_row(auth_secret_ocid="ocid1.vaultsecret.oc1..x"), {"part_number": "X"})
++    assert called["n"] == 1 and "許可されていません" in str(e.value)
++
++
++def test_no_auth_header_when_no_secret(monkeypatch):
++    seen = {}
++
++    def handler(request: httpx.Request) -> httpx.Response:
++        seen["auth"] = request.headers.get("authorization")
++        return httpx.Response(200, json={"ok": True})
++
++    _mock(monkeypatch, handler)
++    http_tools.call_tool(tool_row(), {"part_number": "X"})
++    assert seen["auth"] is None
++
++
++# --- 4. 代理実行の境界 ---------------------------------------------------------
++
++def _mock(monkeypatch, handler):
++    monkeypatch.setattr(
++        http_tools, "_client",
++        lambda: httpx.Client(
++            transport=httpx.MockTransport(handler), follow_redirects=False
++        ),
++    )
++
++
++def test_get_passes_args_as_query(monkeypatch):
++    seen = {}
++
++    def handler(request: httpx.Request) -> httpx.Response:
++        seen["url"] = str(request.url)
++        seen["method"] = request.method
++        return httpx.Response(200, json={"stock": 137})
++
++    _mock(monkeypatch, handler)
++    out = http_tools.call_tool(tool_row(), {"part_number": "JX-7742"})
++    assert seen["method"] == "GET" and "part_number=JX-7742" in seen["url"]
++    assert json.loads(out)["status"] == 200
++    assert "137" in json.loads(out)["body"]
++
++
++def test_post_passes_args_as_json_body(monkeypatch):
++    seen = {}
++
++    def handler(request: httpx.Request) -> httpx.Response:
++        seen["body"] = json.loads(request.content)
++        return httpx.Response(200, json={"ok": True})
++
++    _mock(monkeypatch, handler)
++    http_tools.call_tool(tool_row(method="POST"), {"part_number": "JX-7742"})
++    assert seen["body"] == {"part_number": "JX-7742"}
++
++
++def test_oversized_response_fails_not_truncated(monkeypatch):
++    big = b"x" * (http_tools.MAX_RESPONSE_BYTES + 1024)
++    _mock(monkeypatch, lambda req: httpx.Response(200, content=big))
++    with pytest.raises(http_tools.HttpToolCallError) as e:
++        http_tools.call_tool(tool_row(), {"part_number": "X"})
++    assert "上限" in str(e.value)
++
++
++def test_timeout_fails_and_is_not_retried(monkeypatch):
++    calls = {"n": 0}
++
++    def handler(request):
++        calls["n"] += 1
++        raise httpx.ReadTimeout("too slow", request=request)
++
++    _mock(monkeypatch, handler)
++    with pytest.raises(http_tools.HttpToolCallError) as e:
++        http_tools.call_tool(tool_row(), {"part_number": "X"})
++    assert "タイムアウト" in str(e.value)
++    assert calls["n"] == 1  # リトライしない
++
++
++def test_redirect_is_not_followed(monkeypatch):
++    def handler(request):
++        return httpx.Response(302, headers={"location": "https://169.254.169.254/"})
++
++    _mock(monkeypatch, handler)
++    with pytest.raises(http_tools.HttpToolCallError) as e:
++        http_tools.call_tool(tool_row(), {"part_number": "X"})
++    assert "リダイレクト" in str(e.value)
++
++
++@pytest.mark.parametrize("status", [300, 301, 302, 304, 307, 308])
++def test_all_3xx_rejected_even_without_location(monkeypatch, status):
++    """`is_redirect` は Location 付きしか真にならない。3xx はすべて失敗にする。"""
++    _mock(monkeypatch, lambda req: httpx.Response(status))
++    with pytest.raises(http_tools.HttpToolCallError) as e:
++        http_tools.call_tool(tool_row(), {"part_number": "X"})
++    assert "リダイレクト" in str(e.value)
++
++
++def test_connects_to_the_validated_ip(monkeypatch):
++    """検証したIPへ接続する(DNSリバインディング=検証後に内部へ向け直す手を塞ぐ)。"""
++    seen = {}
++
++    def handler(request: httpx.Request) -> httpx.Response:
++        seen["host_in_url"] = request.url.host
++        seen["host_header"] = request.headers.get("host")
++        seen["sni"] = request.extensions.get("sni_hostname")
++        return httpx.Response(200, json={"ok": True})
++
++    _mock(monkeypatch, handler)
++    http_tools.call_tool(tool_row(), {"part_number": "X"})
++    # URL のホストは IP リテラルに差し替わり、Host ヘッダと SNI は元のホスト名のまま
++    import ipaddress
++    ipaddress.ip_address(seen["host_in_url"])
++    assert seen["host_header"] == "example.com" and seen["sni"] == "example.com"
++
++
++def test_pin_target_rejects_internal_resolution(monkeypatch):
++    """名前解決の結果が1つでも内部を指したら接続前に止める。"""
++    monkeypatch.setattr(
++        http_tools.socket, "getaddrinfo",
++        lambda *a, **k: [
++            (2, 1, 6, "", ("93.184.216.34", 443)),
++            (2, 1, 6, "", ("169.254.169.254", 443)),  # 混ぜられた内部アドレス
++        ],
++    )
++    with pytest.raises(SsrfBlockedError):
++        http_tools._pin_target("https://example.com/x")
++
++
++@pytest.mark.parametrize("encode", [
++    lambda s: s,
++    lambda s: json.dumps(s)[1:-1],
++    lambda s: __import__("urllib.parse", fromlist=["quote"]).quote(s, safe=""),
++    lambda s: __import__("base64").b64encode(s.encode()).decode(),
++])
++def test_reflected_secret_redacted_in_common_encodings(monkeypatch, encode):
++    """相手が反射する形は生とは限らない(JSON エスケープ・URL エンコード・Base64)。"""
++    secret = 'tok"a\\b/c value'
++    monkeypatch.setattr(http_tools, "_read_secret", lambda ocid: secret)
++    allow_secret(monkeypatch)
++    _mock(monkeypatch, lambda req: httpx.Response(
++        200, content=f'{{"echo": "{encode(secret)}"}}'.encode()))
++    out = http_tools.call_tool(
++        tool_row(auth_secret_ocid="ocid1.vaultsecret.oc1..x"), {"part_number": "X"})
++    assert encode(secret) not in out and http_tools.REDACTED in out
++
++
++def test_error_status_reported_as_failure(monkeypatch):
++    _mock(monkeypatch, lambda req: httpx.Response(503, text="upstream down"))
++    with pytest.raises(http_tools.HttpToolCallError) as e:
++        http_tools.call_tool(tool_row(), {"part_number": "X"})
++    assert "HTTP 503" in str(e.value)
++
++
++def test_execution_revalidates_host(monkeypatch):
++    """登録後にURLが内部を向いても実行時に止まる(fail-closed)。"""
++    _mock(monkeypatch, lambda req: httpx.Response(200, json={"leaked": True}))
++    # 実行時の失敗は種別を問わず HttpToolCallError に揃える(呼び出し側の扱いを分岐させない)
++    with pytest.raises(http_tools.HttpToolCallError) as e:
++        http_tools.call_tool(tool_row(url="https://169.254.169.254/opc/v2/"), {})
++    assert "許可しない宛先" in str(e.value)
++
++
++def test_vault_read_failure_is_a_tool_failure(monkeypatch):
++    def boom(ocid):
++        raise RuntimeError("vault down")
++
++    monkeypatch.setattr(http_tools, "_read_secret", boom)
++    allow_secret(monkeypatch)
++    _mock(monkeypatch, lambda req: httpx.Response(200, json={"ok": True}))
++    with pytest.raises(http_tools.HttpToolCallError) as e:
++        http_tools.call_tool(
++            tool_row(auth_secret_ocid="ocid1.vaultsecret.oc1..x"), {"part_number": "X"})
++    assert "Vault" in str(e.value)
++
++
++# --- 5. 引数検証(ToolDef 経由) ------------------------------------------------
++
++def test_tooldef_args_validated_before_call(monkeypatch):
++    called = {"n": 0}
++
++    def handler(request):
++        called["n"] += 1
++        return httpx.Response(200, json={"ok": True})
++
++    _mock(monkeypatch, handler)
++    registry = {**TOOLS, "lookup_stock": http_tools.to_tooldef(tool_row())}
++    with pytest.raises(ToolError):  # 必須引数なし
++        execute_with(registry, "lookup_stock", "{}")
++    with pytest.raises(ToolError):  # 未知の引数
++        execute_with(registry, "lookup_stock", json.dumps({"part_number": "a", "x": 1}))
++    with pytest.raises(ToolError):  # 型不正
++        execute_with(registry, "lookup_stock", json.dumps({"part_number": 1}))
++    assert called["n"] == 0
++    assert json.loads(execute_with(
++        registry, "lookup_stock", json.dumps({"part_number": "a"})))["status"] == 200
++
++
++def test_numeric_and_boolean_types_validated():
++    schema = {"type": "object", "properties": {
++        "n": {"type": "integer"}, "b": {"type": "boolean"}}, "required": []}
++    registry = {"t": http_tools.to_tooldef(tool_row(name="t", parameters=schema))}
++    with pytest.raises(ToolError):
++        execute_with(registry, "t", json.dumps({"n": "1"}))
++    with pytest.raises(ToolError):
++        execute_with(registry, "t", json.dumps({"b": 1}))
++    with pytest.raises(ToolError):
++        execute_with(registry, "t", json.dumps({"n": True}))  # bool は integer でない
++    with pytest.raises(ToolError):
++        execute_with(registry, "t", json.dumps({"n": 1.5}))   # 小数は integer でない
++
++
++# --- 6. エージェント実行への配線 -----------------------------------------------
++
++def test_build_agent_tools_includes_external_alongside_builtin():
++    specs = chat_mod._build_agent_tools(
++        ["web_search"], None, False, None, [http_tools.to_tooldef(tool_row())]
++    )
++    names = [s.get("name") for s in specs if s["type"] == "function"]
++    assert "web_search" in names and "lookup_stock" in names
++    ext = next(s for s in specs if s.get("name") == "lookup_stock")
++    assert ext["description"] == "在庫を引く" and ext["parameters"] == SCHEMA
++
++
++def test_stream_agent_executes_external_tool(monkeypatch):
++    """モデルが外部ツールを呼んだら JetUse がサーバー側で代理実行して結果を返す。"""
++    _mock(monkeypatch, lambda req: httpx.Response(200, json={"stock": 137}))
++    sent: list[dict] = []
++
++    class Item:
++        type = "function_call"
++        name = "lookup_stock"
++        arguments = '{"part_number": "JX-7742"}'
++        call_id = "c1"
++
++        def model_dump(self, exclude_none=False):
++            return {"type": self.type, "name": self.name,
++                    "arguments": self.arguments, "call_id": self.call_id}
++
++    class Ev:
++        type = "response.output_item.done"
++        item = Item()
++
++    class Stream:
++        def __init__(self, events):
++            self.events = events
++
++        def __iter__(self):
++            return iter(self.events)
++
++        def close(self):
++            pass
++
++    hops = {"n": 0}
++
++    class FakeResponses:
++        def create(self, **kw):
++            sent.append(kw)
++            hops["n"] += 1
++            return Stream([Ev()] if hops["n"] == 1 else [])
++
++    class FakeClient:
++        responses = FakeResponses()
++
++    monkeypatch.setattr(chat_mod, "make_inference_client", lambda **kw: FakeClient())
++    events = list(chat_mod.stream_agent(
++        "gpt-oss-120b", [{"role": "user", "content": "JX-7742の在庫は?"}],
++        auto_tools=True, http_tools=[http_tools.to_tooldef(tool_row())],
++    ))
++    # ツール仕様がモデルへ渡っている
++    assert any(t.get("name") == "lookup_stock" for t in sent[0]["tools"])
++    # 実行結果がモデルへ返っている
++    outputs = [i for i in sent[1]["input"] if i.get("type") == "function_call_output"]
++    assert outputs and "137" in outputs[0]["output"]
++    assert any(e.get("tool_result", {}).get("name") == "lookup_stock" for e in events)
++
++
++def test_builtin_wins_on_name_collision(monkeypatch):
++    """万一同名が登録されていても組込ツールが上書きされない(登録時にも予約名は拒否)。"""
++    rogue = http_tools.to_tooldef(tool_row(name="web_search"))
++    registry = {**{rogue.name: rogue}, **TOOLS}
++    assert registry["web_search"] is TOOLS["web_search"]
++
++
++# --- 7. ルート(所有者強制・上限) ----------------------------------------------
++
++def test_crud_is_owner_scoped(store):
++    created = client.post("/api/agent/http-tools", json={
++        "name": "lookup_stock", "description": "在庫を引く", "parameters": SCHEMA,
++        "url": "https://example.com/stock",
++    }).json()
++    assert client.get("/api/agent/http-tools").json()["tools"][0]["id"] == created["id"]
++    # 別所有者の行は SQL の WHERE 句で見えない → 削除は 404
++    store[0]["owner"] = "someone-else"
++    assert client.delete(f"/api/agent/http-tools/{created['id']}").status_code == 404
++
++
++def test_duplicate_name_rejected(store):
++    body = {"name": "lookup_stock", "description": "x", "parameters": SCHEMA,
++            "url": "https://example.com/stock"}
++    assert client.post("/api/agent/http-tools", json=body).status_code == 200
++    assert client.post("/api/agent/http-tools", json=body).status_code == 400
++
++
++def test_too_many_tools_per_agent_rejected():
++    over = [f"id{i}" for i in range(http_tools.MAX_TOOLS_PER_AGENT + 1)]
++    res = client.post("/api/chat/stream", json={
++        "model": "gpt-oss-120b", "agent": True, "http_tool_ids": over,
++        "messages": [{"role": "user", "content": "x"}],
++    })
++    assert res.status_code == 422
++
++
++def test_unresolvable_tool_id_is_404_not_silently_dropped(store):
++    """他人所有・削除済み・不正idを黙って外すと、業務APIを見ずに答えてしまう。"""
++    created = client.post("/api/agent/http-tools", json={
++        "name": "lookup_stock", "description": "在庫を引く", "parameters": SCHEMA,
++        "url": "https://example.com/stock",
++    }).json()
++    store[0]["owner"] = "someone-else"
++    res = client.post("/api/chat/stream", json={
++        "model": "gpt-oss-120b", "agent": True, "http_tool_ids": [created["id"]],
++        "messages": [{"role": "user", "content": "在庫は?"}],
++    })
++    assert res.status_code == 404 and "http tool not found" in res.json()["detail"]
++
++
++def test_get_tools_caps_at_limit(store):
++    for i in range(http_tools.MAX_TOOLS_PER_AGENT + 2):
++        store.append({
++            "id": f"t{i}", "owner": "u1", "name": f"tool_{i}", "description": "x",
++            "parameters": SCHEMA, "url": "https://example.com/x", "method": "GET",
++            "auth_header": "Authorization", "auth_secret_ocid": None,
++        })
++    got = http_tools.get_tools("u1", [t["id"] for t in store])
++    assert len(got) == http_tools.MAX_TOOLS_PER_AGENT
++
++
++def test_approval_event_carries_tool_id_and_route_honours_it(store, monkeypatch):
++    """承認したその1件を id で名指しする(同名の別ツールへ差し替えられない)。"""
++    _mock(monkeypatch, lambda req: httpx.Response(200, json={"stock": 137}))
++    created = client.post("/api/agent/http-tools", json={
++        "name": "lookup_stock", "description": "在庫を引く", "parameters": SCHEMA,
++        "url": "https://example.com/stock",
++    }).json()
++    # 承認イベントに id が載る
++    events = list(chat_mod._emit_pending_approval(
++        [{"type": "function_call", "name": "lookup_stock", "arguments": "{}",
++          "call_id": "c1"}],
++        {"lookup_stock": http_tools.to_tooldef({**tool_row(), "id": created["id"]})},
++    ))
++    assert events[0]["tool_call"]["http_tool_id"] == created["id"]
++    # 承認待ちの間に同名で別 URL のツールへ差し替えられたら 409
++    store[0]["name"] = "renamed_tool"
++    res = client.post("/api/agent/execute-tool", json={
++        "name": "lookup_stock", "arguments": '{"part_number": "X"}',
++        "http_tool_id": created["id"]})
++    assert res.status_code == 409
++
++
++def test_execute_tool_route_resolves_owner_http_tool(store, monkeypatch):
++    _mock(monkeypatch, lambda req: httpx.Response(200, json={"stock": 137}))
++    client.post("/api/agent/http-tools", json={
++        "name": "lookup_stock", "description": "在庫を引く", "parameters": SCHEMA,
++        "url": "https://example.com/stock",
++    })
++    res = client.post("/api/agent/execute-tool", json={
++        "name": "lookup_stock", "arguments": '{"part_number": "JX-7742"}'})
++    assert res.status_code == 200 and "137" in res.json()["output"]
+diff --git a/specs/17-demo-platform-redesign.md b/specs/17-demo-platform-redesign.md
+index 2fd79e0..2a8e5fb 100644
+--- a/specs/17-demo-platform-redesign.md
++++ b/specs/17-demo-platform-redesign.md
+@@ -73,7 +73,7 @@ SP1 = 下流（SP2/SP3）を動かすために JetUse API が提供すべき 3 
+ | `chat` | LLM 対話（ストリーミング） | `routes/chat.py` |
+ | `rag.search` | 文書検索Q&A（引用付き） | `routes/rag.py` |
+ | `dbchat` | 自然言語→SQL でデータ照会 | `routes/dbchat.py` |
+-| `agents` | エージェント/ツール実行 | `routes/agents.py` |
++| `agents` | エージェント/ツール実行（**デモ固有の外部 HTTP API をツールとして渡せる** — 下記） | `routes/agents.py` |
+ | `voice` | STT/TTS・文字起こし | `routes/voice.py` |
+ | `minutes` | 議事録（文字起こし+要約） | `routes/minutes.py` |
+ | `translate` | 翻訳 | `jetuse_core/translate.py` |
+@@ -82,8 +82,35 @@ SP1 = 下流（SP2/SP3）を動かすために JetUse API が提供すべき 3 
+ **裏方（カタログに載せない）**: admin / conversations（履歴CRUD）/ tools / mcp_servers / datasets / embeddings /
+ moderation / guardrails（自動適用の横断機能）。
+ 
+-**将来足す能力**: `connector.invoke`（秘密・外部接続。顧客業務デモの説得力の要。早期に1本）／
+-`demo データのプロビジョニング`（デモ専用スキーマ作成 + データ投入。SP3 のデータ生成の着地先・SP2 寄り）。
++### `agents` の外部ツール（TOOL-01・2026-08-01 実装済み）
++
++デモ側が持つ**素の HTTP エンドポイント**を、名前・説明・JSON Schema つきで登録し、エージェント実行時に
++組込ツールと同列に配線できる。**デモ専用のサーバコードを JetUse 側に持たない**（§1）を守ったまま、
++業務ロジックを AI に使わせるための「渡す口」だけを一級機能にしたもの。
++
++```
++POST /api/agent/http-tools   name / description / parameters(JSON Schema) / url / method / 認証
++POST /api/chat/stream        agent=true + http_tool_ids=[...] で実行に配線
++```
++
++- モデルが呼ぶと **JetUse がサーバ側で HTTP を代理実行**して結果を返す（ブラウザから直接叩かせない）。
++- 秘密は **Vault に置き OCID で参照**する（`mcp_servers.auth_secret_ocid` と同じ流儀。新方式を作らない）。
++  ヘッダ名だけ選べる（既定 `Authorization`）。DB にも API 応答にも平文は現れない。
++  **使える秘密は、本アプリのコンパートメントにあり freeform タグ `jetuse_tool_owner` が登録者と
++  一致するものだけ**。これが無いと「サービスの権限で読める任意の秘密を、利用者が指定した外部 URL へ
++  送らせる」経路（confused deputy）になる。
++- **SSRF は fail-closed**: https 必須／内部メタデータ・ループバック・私有レンジ・URL 埋め込み認証情報を
++  登録時と実行時の両方で拒否／リダイレクトを追わない。
++- タイムアウト 15 秒・応答 128KB・リトライ 0・1 エージェント 8 ツールまで。上限超過は黙って切り詰めず
++  「ツール実行が失敗した」としてモデルへ返す。
++- **MCP サーバー登録とは別経路として共存**する（MCP は OCI 側でサーバーサイド実行）。
++
++検証: `docs/verification/TOOL-01.md`。能力カタログ（`/api/capabilities` の `agents.external_tools`）には
++実測できた範囲だけを載せる。
++
++**将来足す能力**: `demo データのプロビジョニング`（デモ専用スキーマ作成 + データ投入。
++SP3 のデータ生成の着地先・SP2 寄り）。
++※ `connector.invoke`（秘密・外部接続）は上記 `agents` の外部 HTTP ツール（TOOL-01）で満たした。
+ 
+ **既存 usecases の扱い = A（存続）**: usecases（fields+template の自作ミニアプリ）は **Public 版のショーケース
+ 機能として存続**する。Internal のビルダーとはペルソナ・用途が別物であり、統合しない。
+diff --git a/spikes/tool01/deploy.py b/spikes/tool01/deploy.py
+new file mode 100644
+index 0000000..1ebde8d
+--- /dev/null
++++ b/spikes/tool01/deploy.py
+@@ -0,0 +1,72 @@
++"""TOOL-01 の実環境デプロイ: run 固有スキーマへ全マイグレーションを適用する。
++
++共有 loop ADB を再利用し、スキーマだけで隔離する(ADB は増やさない)。接続・所有台帳・
++fail-closed ゲートは RAGM-02 の検証共通部(`spikes/ragm02/common.py`)をそのまま使う。
++
++実行:
++  env SPIKE_SCHEMA_PREFIX=JETUSE_TOOL01 SPIKE_HOME=/tmp/jetuse-tool01 \
++      PYTHONPATH=spikes/ragm02:spikes/tool01:packages/api \
++      .venv/bin/python spikes/tool01/deploy.py
++"""
++
++import os
++import sys
++
++from common import banner, connect_schema, prepare_env, require_schema, secret
++
++SCHEMA = require_schema()
++
++
++def use_task_schema() -> None:
++    """`jetuse_core.db` の接続先をこの run のスキーマへ向ける(他タスクの資源に触れない)。"""
++    prepare_env()
++    os.environ["ADB_USER"] = SCHEMA
++    os.environ["ADB_PASSWORD"] = secret("schema_password")
++    os.environ["COMPARTMENT_OCID"] = os.environ["ADB_COMPARTMENT_OCID"]
++    from jetuse_core.settings import get_settings
++
++    get_settings.cache_clear()
++    if get_settings().adb_user != SCHEMA:
++        sys.exit(f"接続先スキーマが {get_settings().adb_user}。E2E は {SCHEMA} でしか実行しない。")
++
++
++def main() -> None:
++    banner(f"TOOL-01 deploy: migrate → {SCHEMA}")
++    use_task_schema()
++    connect_schema().close()  # 所有台帳ゲート(自分が作ったスキーマか)
++
++    from jetuse_core.db import connect
++    from jetuse_core.migrate import migrate
++
++    applied = migrate()
++    print("applied:", applied or "(none — up to date)")
++
++    with connect() as conn:
++        cur = conn.cursor()
++        cur.execute(
++            "SELECT column_name, data_type, nullable FROM user_tab_columns "
++            "WHERE table_name = 'HTTP_TOOLS' ORDER BY column_id"
++        )
++        cols = cur.fetchall()
++        cur.execute(
++            "SELECT constraint_name, constraint_type FROM user_constraints "
++            "WHERE table_name = 'HTTP_TOOLS' ORDER BY constraint_name"
++        )
++        cons = cur.fetchall()
++    if not cols:
++        sys.exit("HTTP_TOOLS 表が作られていない。中止。")
++    print("\nHTTP_TOOLS 列:")
++    for c in cols:
++        print(f"  {c[0]:20s} {c[1]:12s} nullable={c[2]}")
++    print("\nHTTP_TOOLS 制約:")
++    for c in cons:
++        print(f"  {c[0]:30s} {c[1]}")
++    # 平文の秘密を置く列が無いことを構造で示す(列名に SECRET を含むのは OCID 参照のみ)
++    secretish = [c[0] for c in cols if "SECRET" in c[0] and not c[0].endswith("_OCID")]
++    if secretish:
++        sys.exit(f"平文の秘密を置きうる列がある: {secretish}")
++    print("\n平文の秘密列なし(auth_secret_ocid = Vault の参照のみ)")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/spikes/tool01/e2e.py b/spikes/tool01/e2e.py
+new file mode 100644
+index 0000000..ac8210c
+--- /dev/null
++++ b/spikes/tool01/e2e.py
+@@ -0,0 +1,530 @@
++"""TOOL-01 の実環境 E2E(tasks/TOOL-01.md の「E2E シナリオ」)。
++
++**実装(`jetuse_core.http_tools` と FastAPI ルート)をそのまま呼ぶ**。検証用の別実装は書かない。
++相手(架空の業務 API・Vault・OCI Generative AI)はすべて実物。
++
++  1. 架空の業務 API(Object Storage の PAR)をツール登録し、エージェントに
++     「それを使わないと答えられない質問」をして、**モデルが自分で呼び**答えに反映されること
++  2. 秘密ヘッダを要求する API へ **Vault 経由の秘密**が渡ること(証跡に平文を残さない)。
++     併せて、**登録者に許可されていない秘密の OCID は登録できない**こと
++  3. 否定: 内部メタデータ / ループバック / 私有レンジ / http の URL 登録が**拒否される**
++  4. タイムアウトが「黙って切り詰め」ではなく**失敗**としてモデルへ伝わること
++  5. 応答サイズ上限超過が同様に**失敗**として伝わること
++
++隔離: 共有 loop ADB の run 固有スキーマ(`JETUSE_TOOL01_<乱数>`。ADB は増やさない)。
++OCI 側の検証用資源は `jetuse-spike-tool01` 接頭辞。所有台帳・ウォレット・接続ガードは
++RAGM-02 の検証共通部(`spikes/ragm02/common.py`)を env で接頭辞だけ差し替えて再利用する。
++
++実行(`E=SPIKE_SCHEMA_PREFIX=JETUSE_TOOL01 SPIKE_HOME=/tmp/jetuse-tool01`,
++      `P=PYTHONPATH=spikes/ragm02:spikes/tool01:packages/api`):
++  env $E $P .venv/bin/python spikes/ragm02/setup_schema.py   # スキーマ作成(台帳つき)
++  env $E $P .venv/bin/python spikes/tool01/deploy.py         # マイグレーション適用
++  env $E $P .venv/bin/python spikes/tool01/e2e.py
++片付け:
++  env $E $P .venv/bin/python spikes/tool01/teardown.py --yes # OCI 側(バケット・PAR)
++  env $E $P .venv/bin/python spikes/ragm02/teardown.py --yes # ADB スキーマ
++"""
++
++import datetime
++import hashlib
++import json
++import os
++import re
++import sys
++
++from deploy import use_task_schema
++
++from common import ROOT, banner, require_schema
++from fixtures import (
++    BIG_OBJECT_BYTES,
++    PREFIX,
++    QUESTION,
++    STOCK_JSON,
++    STOCK_TOOL,
++    WAREHOUSE,
++)
++
++SCHEMA = require_schema()
++OWNER = "dev-user"  # 認証無効時の AuthContext.subject
++SECRET_NAME = f"{PREFIX}-apikey"
++ECHO_URL = "https://postman-echo.com/get"  # ヘッダをそのまま返す公開エンドポイント
++DELAY_URL = "https://postman-echo.com/delay/5"
++
++EVIDENCE = ROOT / "runs" / (ROOT / ".current_run_id").read_text().strip() / "e2e"
++
++_IDS = re.compile(
++    r"(ocid1\.[a-z0-9]+\.[a-z0-9-]*\.[a-z0-9-]*\.)[a-zA-Z0-9_-]{8,}"
++)
++_PAR = re.compile(r"(/p/)[A-Za-z0-9_=\-]{8,}(/)")
++
++_SECRET_VALUE = ""  # 実行中だけメモリに置く。証跡にもログにも出さない
++
++
++def write(name: str, text: str) -> None:
++    """証跡を書く。OCID・PAR トークン・秘密の実値は残さない。"""
++    EVIDENCE.mkdir(parents=True, exist_ok=True)
++    text = _IDS.sub(lambda m: m.group(1) + "…", text)
++    text = _PAR.sub(lambda m: m.group(1) + "…" + m.group(2), text)
++    if _SECRET_VALUE:
++        text = text.replace(_SECRET_VALUE, "<REDACTED>")
++    (EVIDENCE / name).write_text(text)
++    print(f"  wrote {EVIDENCE / name}")
++
++
++def fence(text: str) -> str:
++    return "```\n" + (text.rstrip() or "(なし)") + "\n```"
++
++
++def sha(value: str) -> str:
++    return hashlib.sha256(value.encode()).hexdigest()
++
++
++# --- 架空の業務 API(Object Storage + PAR) ------------------------------------
++
++def _os_client():
++    import oci
++    from jetuse_core.oci_auth import sdk_signer_args
++
++    region = os.environ.get("OCI_REGION", "ap-osaka-1")
++    args = sdk_signer_args(region)
++    args["config"] = {**args.get("config", {}), "region": region}
++    return oci.object_storage.ObjectStorageClient(**args)
++
++
++def ensure_fake_api() -> dict[str, str]:
++    """架空の業務 API を実在の https エンドポイントとして立てる(PAR)。
++
++    「JetUse が外部の HTTP を代理実行する」ことの検証なので、相手は本物の公開 https で
++    なければならない(SSRF ガードがループバックを弾くため、ローカルの偽サーバは使えない)。
++    """
++    import oci
++
++    client = _os_client()
++    ns = client.get_namespace().data
++    bucket = f"{PREFIX}-{SCHEMA.split('_')[-1].lower()}"
++    comp = os.environ["ADB_COMPARTMENT_OCID"]
++    try:
++        client.get_bucket(ns, bucket)
++        print(f"  既存バケットを再利用: {bucket}")
++    except oci.exceptions.ServiceError as e:
++        if e.status != 404:
++            raise
++        client.create_bucket(ns, oci.object_storage.models.CreateBucketDetails(
++            name=bucket, compartment_id=comp, public_access_type="NoPublicAccess"))
++        print(f"  バケット作成: {bucket}")
++    client.put_object(ns, bucket, "stock.json", STOCK_JSON)
++    client.put_object(ns, bucket, "big.json", b"x" * BIG_OBJECT_BYTES)
++
++    expires = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=6)
++    urls = {}
++    for obj in ("stock.json", "big.json"):
++        par = client.create_preauthenticated_request(
++            ns, bucket, oci.object_storage.models.CreatePreauthenticatedRequestDetails(
++                name=f"{PREFIX}-{obj}", object_name=obj,
++                access_type="ObjectRead", time_expires=expires,
++            )).data
++        urls[obj] = f"https://objectstorage.{os.environ.get('OCI_REGION', 'ap-osaka-1')}" \
++                    f".oraclecloud.com{par.access_uri}"
++    print(f"  架空業務 API: {bucket}/stock.json（PAR・{expires:%Y-%m-%d %H:%M} まで）")
++    return {"bucket": bucket, "namespace": ns, **urls}
++
++
++def secret_ocid() -> str:
++    """検証用に人が作った Vault 秘密(`jetuse-spike-tool01-apikey`)の OCID を引く。"""
++    import oci
++    from jetuse_core.oci_auth import sdk_signer_args
++
++    region = os.environ.get("OCI_REGION", "ap-osaka-1")
++    args = sdk_signer_args(region)
++    args["config"] = {**args.get("config", {}), "region": region}
++    vaults = oci.vault.VaultsClient(**args)
++    found = [
++        s for s in vaults.list_secrets(
++            os.environ["ADB_COMPARTMENT_OCID"], name=SECRET_NAME).data
++        if s.lifecycle_state == "ACTIVE"
++    ]
++    if not found:
++        sys.exit(f"Vault 秘密 {SECRET_NAME} が無い。中止(平文の代替は使わない)。")
++    return found[0].id
++
++
++def other_secret_ocid() -> str:
++    """**この検証用ではない**既存 Secret の OCID(否定シナリオの相手)。値は読まない。"""
++    import oci
++    from jetuse_core.oci_auth import sdk_signer_args
++
++    region = os.environ.get("OCI_REGION", "ap-osaka-1")
++    args = sdk_signer_args(region)
++    args["config"] = {**args.get("config", {}), "region": region}
++    vaults = oci.vault.VaultsClient(**args)
++    others = [
++        s for s in vaults.list_secrets(os.environ["ADB_COMPARTMENT_OCID"]).data
++        if s.lifecycle_state == "ACTIVE" and s.secret_name != SECRET_NAME
++    ]
++    if not others:
++        sys.exit("否定シナリオに使える別 Secret が無い。中止。")
++    return others[0].id
++
++
++# --- シナリオ ------------------------------------------------------------------
++
++def register(client, **body) -> dict:
++    res = client.post("/api/agent/http-tools", json=body)
++    if res.status_code != 200:
++        sys.exit(f"ツール登録に失敗: {res.status_code} {res.text}")
++    return res.json()
++
++
++def scenario_1(client, urls: dict) -> bool:
++    """架空の業務 API をツール登録 → エージェントが自分で呼び、答えに反映される。"""
++    banner("シナリオ1: 外部HTTPツールをエージェントが自分で呼ぶ")
++    tool = register(client, url=urls["stock.json"], **STOCK_TOOL)
++    listed = client.get("/api/agent/http-tools").json()["tools"]
++
++    res = client.post("/api/chat/stream", json={
++        "model": "gpt-oss-120b",
++        "messages": [{"role": "user", "content": QUESTION}],
++        "agent": True, "auto_tools": True,
++        "enabled_tools": [],          # 組込ツールは一切渡さない(外部ツールだけで答えさせる)
++        "http_tool_ids": [tool["id"]],
++    })
++    frames = [json.loads(ln[6:]) for ln in res.text.splitlines()
++              if ln.startswith("data: ") and ln[6:].strip() not in ("[DONE]", "")]
++    answer = "".join(f.get("delta", "") for f in frames)
++    calls = [f["tool_call"] for f in frames if "tool_call" in f]
++    results = [f["tool_result"] for f in frames if "tool_result" in f]
++
++    called = any(c.get("name") == STOCK_TOOL["name"] for c in calls)
++    reflected = "137" in answer and WAREHOUSE in answer
++    ok = called and reflected and not any("error" in f for f in frames)
++
++    write("scenario-1.md", f"""# シナリオ1 — 外部 HTTP ツールをエージェントが自分で呼ぶ
++
++**確かめたこと**: 素の HTTP エンドポイント(架空の在庫 API)を JSON Schema つきで登録し、
++`POST /api/chat/stream` の agent 実行に `http_tool_ids` で渡すと、**モデルが自分の判断で
++それを呼び**、JetUse がサーバー側で代理実行した結果が最終回答に反映される。
++
++- 相手: Object Storage の PAR(実在の https エンドポイント。JetUse 側に業務ロジックは無い)
++- 組込ツールは 1 つも渡していない(`enabled_tools: []`)ので、この答えは登録した外部ツール
++  からしか得られない。
++
++## 登録
++
++{fence(json.dumps(tool, ensure_ascii=False, indent=2))}
++
++一覧 `GET /api/agent/http-tools`:
++
++{fence(json.dumps(listed, ensure_ascii=False, indent=2))}
++
++## 質問
++
++{fence(QUESTION)}
++
++## モデルが起こしたツール呼び出し
++
++{fence(json.dumps(calls, ensure_ascii=False, indent=2))}
++
++## 代理実行の結果(モデルへ返した内容)
++
++{fence(json.dumps(results, ensure_ascii=False, indent=2))}
++
++## 最終回答
++
++{fence(answer)}
++
++- ツールが呼ばれた: **{called}**
++- 在庫数 137 と保管倉庫 {WAREHOUSE} が回答に載った: **{reflected}**
++
++判定: **{'PASS' if ok else 'FAIL'}**
++""")
++    return ok
++
++
++def scenario_2(client, ocid: str) -> bool:
++    """Vault の秘密がヘッダとして届く。証跡には平文を残さない(SHA-256 で示す)。"""
++    global _SECRET_VALUE
++    banner("シナリオ2: Vault の秘密が認証ヘッダとして届く")
++    from jetuse_core import http_tools
++
++    _SECRET_VALUE = http_tools._read_secret(ocid)  # 期待値の突き合わせ用(出力しない)
++
++    with_auth = register(
++        client, name="echo_with_secret", description="ヘッダをそのまま返す検証用API",
++        parameters={"type": "object", "properties": {}}, url=ECHO_URL,
++        method="GET", auth_header="X-Api-Key", auth_secret_ocid=ocid,
++    )
++    without = register(
++        client, name="echo_without_secret", description="同じAPIを認証なしで登録したもの",
++        parameters={"type": "object", "properties": {}}, url=ECHO_URL, method="GET",
++    )
++    # 否定: 登録者に許可されていない(タグの無い)秘密は登録できない — レビュー TOOL-01-001。
++    # 相手はアプリ運用用の既存 Secret。これが通ると「サービスの権限で読める秘密を、
++    # 利用者が指定した外部 URL へ送らせる」経路になる
++    foreign = other_secret_ocid()
++    denied = client.post("/api/agent/http-tools", json={
++        "name": "steal_other_secret", "description": "他人の秘密を使おうとする",
++        "parameters": {"type": "object", "properties": {}}, "url": ECHO_URL,
++        "method": "GET", "auth_header": "X-Api-Key", "auth_secret_ocid": foreign,
++    })
++    denied_ok = denied.status_code == 400
++
++    got = client.post("/api/agent/execute-tool",
++                      json={"name": "echo_with_secret", "arguments": "{}"})
++    plain = client.post("/api/agent/execute-tool",
++                        json={"name": "echo_without_secret", "arguments": "{}"})
++    out_with = got.json()["output"]
++    out_plain = plain.json()["output"]
++    echoed = json.loads(json.loads(out_with)["body"])["headers"]
++    echoed_plain = json.loads(json.loads(out_plain)["body"])["headers"]
++
++    # 相手は受け取ったヘッダをそのまま返すが、JetUse が**送った値だけ**を伏せ字にする。
++    # 伏せ字が x-api-key の位置に現れる = その値が Vault の秘密と完全一致していた証拠であり、
++    # 同時に「秘密が呼び出し元/モデルへ出ない」ことの証拠でもある(レビュー TOOL-01-001)
++    delivered = echoed.get("x-api-key") == http_tools.REDACTED
++    leaked = _SECRET_VALUE in out_with
++    absent = "x-api-key" not in echoed_plain
++    # DB と API 応答に平文が現れないこと
++    from jetuse_core.db import connect
++    with connect() as conn:
++        cur = conn.cursor()
++        cur.execute(
++            "SELECT name, auth_header, auth_secret_ocid FROM http_tools "
++            "WHERE owner_sub = :o ORDER BY name", o=OWNER)
++        rows = cur.fetchall()
++    row_text = json.dumps(rows, ensure_ascii=False)
++    api_text = json.dumps(client.get("/api/agent/http-tools").json(), ensure_ascii=False)
++    not_in_db = _SECRET_VALUE not in row_text
++    not_in_api = _SECRET_VALUE not in api_text
++    ok = (delivered and absent and not_in_db and not_in_api and denied_ok
++          and not leaked)
++
++    write("scenario-2.md", f"""# シナリオ2 — Vault 経由の秘密が認証ヘッダとして届く
++
++**確かめたこと**: 登録時には秘密そのものを渡さず **Vault の OCID だけ**を渡す。代理実行の
++瞬間に JetUse が Vault から読み、指定ヘッダに載せて送る。DB にも API 応答にも平文は現れない。
++
++- 秘密: Vault `{SECRET_NAME}`(OCID 参照。値はランダム文字列。この証跡に実値は書かない)
++- 相手: `{ECHO_URL}`(**リクエストヘッダをそのまま返す**公開エンドポイント)
++
++## 登録(認証あり / なしの対照)
++
++{fence(json.dumps([with_auth, without], ensure_ascii=False, indent=2))}
++
++> 応答に `auth_secret_ocid` は出ない(`has_auth` だけ)。`mcp_servers` と同じ流儀。
++
++## 否定: 許可されていない秘密は登録できない
++
++登録者に紐づいていない(freeform タグ `jetuse_tool_owner` が一致しない)既存 Secret の OCID を
++指定して登録を試みた。これが通ると、サービスの OCI 権限で読める秘密を利用者が指定した外部 URL
++へ送らせられる(confused deputy)。
++
++- 対象: このコンパートメントにある**アプリ運用用の別 Secret**(値は一切読んでいない)
++- 結果: HTTP {denied.status_code}
++
++{fence(json.dumps(denied.json(), ensure_ascii=False, indent=2))}
++
++- 拒否された: **{denied_ok}**
++
++## 相手が受け取ったヘッダ(= 呼び出し元へ返った本文)
++
++相手はヘッダをそのまま返すが、JetUse は**送った秘密の実値だけ**を `{http_tools.REDACTED}` に
++置き換えてから返す。伏せ字が `x-api-key` の位置に現れることは、
++
++1. その値が Vault の秘密と**完全一致していた**(= 正しく届いた)
++2. かつ**呼び出し元・モデル・会話履歴に平文が出ない**
++
++の両方を同時に示す。
++
++認証ありツールの応答本文:
++
++{fence(json.dumps(echoed, ensure_ascii=False, indent=2))}
++
++認証なしツールの応答本文:
++
++{fence(json.dumps(echoed_plain, ensure_ascii=False, indent=2))}
++
++- 秘密が届いた(伏せ字が一致位置に出た): **{delivered}**
++- 応答本文に平文が出ていない: **{not leaked}**
++- 認証なしでは付かない: **{absent}**
++
++## DB の中身(所有者のツール行)
++
++{fence(row_text)}
++
++- DB に平文の秘密が無い: **{not_in_db}**(保持しているのは Vault の OCID だけ)
++- API 応答に平文の秘密が無い: **{not_in_api}**
++
++判定: **{'PASS' if ok else 'FAIL'}**
++""")
++    return ok
++
++
++DANGEROUS = [
++    ("インスタンスメタデータ", "https://169.254.169.254/opc/v2/instance/"),
++    ("メタデータ(旧IP形式)", "https://169.254.169.254/latest/meta-data/"),
++    ("ループバック", "https://127.0.0.1:8000/internal"),
++    ("localhost 名前解決", "https://localhost/internal"),
++    ("私有レンジ", "https://10.0.0.10/admin"),
++    ("平文 http", "http://example.com/api"),
++    ("URL に認証情報", "https://user:pass@example.com/api"),
++]
++
++
++def scenario_3(client) -> bool:
++    """否定: 危険な URL の登録が拒否される(fail-closed)。"""
++    banner("シナリオ3(否定): 内部を向く URL の登録が拒否される")
++    rows = []
++    ok = True
++    for i, (label, url) in enumerate(DANGEROUS):
++        res = client.post("/api/agent/http-tools", json={
++            "name": f"blocked_probe_{i}", "description": "拒否されるはず",
++            "parameters": {"type": "object", "properties": {}}, "url": url,
++        })
++        rejected = res.status_code == 400
++        ok = ok and rejected
++        detail = res.json().get("detail", "") if res.status_code == 400 else res.text
++        rows.append(f"| {label} | `{url}` | {res.status_code} | {detail} |")
++    listed = [t["name"] for t in client.get("/api/agent/http-tools").json()["tools"]]
++    none_stored = not any(n.startswith("blocked_probe_") for n in listed)
++    ok = ok and none_stored
++
++    write("scenario-3.md", f"""# シナリオ3(否定) — 内部を向く URL の登録が拒否される
++
++**確かめたこと**: この機能は SSRF の入口になりうる。登録の時点で https 以外・内部メタデータ・
++ループバック・私有レンジ・URL 埋め込みの認証情報を **400 で拒否**し、1 件も保存しない。
++判定は `mcp_servers.validate_url` と同じ経路(`jetuse_shared.webtools.assert_public_host`)で、
++名前解決の結果が私有/ループバック/リンクローカル/予約/マルチキャストなら弾く(fail-closed)。
++
++| 種別 | URL | HTTP | 応答 |
++|---|---|---|---|
++{chr(10).join(rows)}
++
++登録後のツール一覧: {listed or '(なし)'}
++- 1 件も保存されていない: **{none_stored}**
++
++> 実行時にも同じ検証を通す(登録後に DNS が内部へ向いても止まる)。
++> 単体テスト `test_execution_revalidates_host` で固定。
++
++判定: **{'PASS' if ok else 'FAIL'}**
++""")
++    return ok
++
++
++def scenario_4(client) -> bool:
++    """タイムアウトが「黙って切り詰め」ではなく失敗として伝わる。"""
++    banner("シナリオ4: タイムアウトが失敗として伝わる")
++    from jetuse_core import http_tools
++
++    tool = register(
++        client, name="slow_api", description="遅い検証用API",
++        parameters={"type": "object", "properties": {}}, url=DELAY_URL, method="GET",
++    )
++    original = http_tools.TIMEOUT_SECONDS
++    http_tools.TIMEOUT_SECONDS = 2.0  # 相手は 5 秒待つ実 API。上限だけ縮めて実測する
++    try:
++        res = client.post("/api/agent/execute-tool",
++                          json={"name": "slow_api", "arguments": "{}"})
++    finally:
++        http_tools.TIMEOUT_SECONDS = original
++    detail = res.json().get("detail", "")
++    ok = res.status_code == 400 and "タイムアウト" in detail
++
++    write("scenario-4.md", f"""# シナリオ4 — タイムアウトが失敗として伝わる(切り詰めない)
++
++**確かめたこと**: 相手が返ってこないとき、部分的な結果を黙って返さず「ツール実行に失敗した」
++としてモデル/呼び出し元へ伝える。リトライもしない(業務 API の二重実行を避ける)。
++
++- 相手: `{DELAY_URL}`(5 秒待って返す実 API)
++- 上限: 既定 {original} 秒 → この検証だけ 2.0 秒に縮めて実測
++
++登録: `{tool['name']}` / `{tool['method']}`
++
++応答 `POST /api/agent/execute-tool`: HTTP {res.status_code}
++
++{fence(detail)}
++
++判定: **{'PASS' if ok else 'FAIL'}**
++""")
++    return ok
++
++
++def scenario_5(client, urls: dict) -> bool:
++    """応答サイズ上限超過が失敗として伝わる(切り詰めない)。"""
++    banner("シナリオ5: 応答サイズ上限超過が失敗として伝わる")
++    from jetuse_core import http_tools
++
++    register(
++        client, name="huge_api", description="大きな応答を返す検証用API",
++        parameters={"type": "object", "properties": {}}, url=urls["big.json"],
++        method="GET",
++    )
++    res = client.post("/api/agent/execute-tool",
++                      json={"name": "huge_api", "arguments": "{}"})
++    detail = res.json().get("detail", "")
++    ok = res.status_code == 400 and "上限" in detail
++
++    write("scenario-5.md", f"""# シナリオ5 — 応答サイズ上限超過が失敗として伝わる(切り詰めない)
++
++**確かめたこと**: 応答が上限を超えたら、途中まで読んだ内容を「それらしい結果」として
++モデルへ返さない。失敗として伝える(切り詰めた本文で誤答させないため)。
++
++- 相手: 実 Object Storage 上の {BIG_OBJECT_BYTES:,} バイトのオブジェクト
++- 上限: `http_tools.MAX_RESPONSE_BYTES` = {http_tools.MAX_RESPONSE_BYTES:,} バイト
++
++応答 `POST /api/agent/execute-tool`: HTTP {res.status_code}
++
++{fence(detail)}
++
++判定: **{'PASS' if ok else 'FAIL'}**
++""")
++    return ok
++
++
++def main() -> None:
++    banner(f"TOOL-01 実環境 E2E(スキーマ {SCHEMA})")
++    use_task_schema()
++
++    from fastapi.testclient import TestClient
++    from jetuse_core.db import connect
++    from service.main import app
++
++    with connect() as conn:  # 前回の残りがあると所有者ごとの一覧が混ざる
++        cur = conn.cursor()
++        cur.execute("DELETE FROM http_tools WHERE owner_sub = :o", o=OWNER)
++        conn.commit()
++
++    urls = ensure_fake_api()
++    ocid = secret_ocid()
++    client = TestClient(app)
++
++    results = {
++        "シナリオ1(外部ツールをエージェントが自分で呼ぶ)": scenario_1(client, urls),
++        "シナリオ2(Vault 経由の秘密が届く・平文を残さない)": scenario_2(client, ocid),
++        "シナリオ3(否定: 内部を向く URL の登録が拒否される)": scenario_3(client),
++        "シナリオ4(タイムアウトが失敗として伝わる)": scenario_4(client),
++        "シナリオ5(サイズ上限超過が失敗として伝わる)": scenario_5(client, urls),
++    }
++    lines = "\n".join(f"- {'PASS' if v else 'FAIL'} — {k}" for k, v in results.items())
++    write("summary.md", f"""# TOOL-01 実環境 E2E サマリ
++
++実行環境: 共有 loop ADB の run 固有スキーマ `{SCHEMA}` / dev コンパートメント。
++架空の業務 API(Object Storage + PAR)・Vault・OCI Generative AI(gpt-oss-120b)は実物。
++JetUse 側に業務ロジックは持たせていない(渡す口だけ)。
++
++{lines}
++
++## 検証で作った資源(すべて `{PREFIX}` 接頭辞)
++
++- Object Storage バケット `{urls['bucket']}`(stock.json / big.json + PAR 2 本)
++- Vault 秘密 `{SECRET_NAME}`(検証用の使い捨てトークン)
++- ADB スキーマ `{SCHEMA}`
++
++片付けは `spikes/tool01/teardown.py --yes` と `spikes/ragm02/teardown.py --yes`。
++""")
++    banner("結果")
++    print(lines)
++    sys.exit(0 if all(results.values()) else 1)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/spikes/tool01/fixtures.py b/spikes/tool01/fixtures.py
+new file mode 100644
+index 0000000..4d7e940
+--- /dev/null
++++ b/spikes/tool01/fixtures.py
+@@ -0,0 +1,48 @@
++"""TOOL-01 の検証用フィクスチャ(**架空**の業務 API の中身)。
++
++顧客データ・顧客名は持ち込まない。ここにあるのは実在しない品番・倉庫だけ。
++JetUse 側に業務ロジックは持たせない(渡す口だけを作る)ので、この API の中身は
++使い捨ての静的 JSON で足りる。
++"""
++
++import json
++
++PREFIX = "jetuse-spike-tool01"
++
++# 架空の在庫 — モデルが学習で知りうる値ではない(だから「使わないと答えられない」)
++PART_NUMBER = "JX-7742"
++STOCK_QTY = 137
++WAREHOUSE = "大阪第2倉庫"
++LOT = "LOT-2026-0731"
++
++STOCK_JSON = json.dumps(
++    {
++        "part_number": PART_NUMBER,
++        "stock_qty": STOCK_QTY,
++        "warehouse": WAREHOUSE,
++        "lot": LOT,
++        "as_of": "2026-08-01",
++    },
++    ensure_ascii=False,
++).encode()
++
++# サイズ上限の検証用(応答が MAX_RESPONSE_BYTES を超える架空 API)
++BIG_OBJECT_BYTES = 300_000
++
++STOCK_TOOL = {
++    "name": "lookup_inventory",
++    "description": (
++        "社内在庫システムに品番を問い合わせ、在庫数・保管倉庫・ロット番号を返す。"
++        "品番ごとの在庫を聞かれたら必ずこれを使う(社外の情報源では答えられない)"
++    ),
++    "parameters": {
++        "type": "object",
++        "properties": {
++            "part_number": {"type": "string", "description": "品番(例 JX-7742)"}
++        },
++        "required": ["part_number"],
++    },
++    "method": "GET",
++}
++
++QUESTION = f"品番 {PART_NUMBER} の在庫数・保管倉庫・ロット番号を教えてください。"
+diff --git a/spikes/tool01/teardown.py b/spikes/tool01/teardown.py
+new file mode 100644
+index 0000000..2a83bed
+--- /dev/null
++++ b/spikes/tool01/teardown.py
+@@ -0,0 +1,72 @@
++"""TOOL-01 の OCI 側検証資源を片付ける(既定は dry-run。実削除は `--yes`)。
++
++消すのは**この run が作ったもの**だけ:
++- Object Storage バケット `jetuse-spike-tool01-<スキーマ接尾辞>`(PAR とオブジェクトごと)。
++  名前に run 固有のスキーマ接尾辞が入るので、他 run のものと衝突しない。
++
++**Vault 秘密は消さない**。名前が固定で所有を証明できないため、別 run / 人が管理する同名の
++秘密を消しうる(「既存リソースは参照のみ」)。不要になったら人が削除予約する。
++ADB スキーマの片付けは `spikes/ragm02/teardown.py --yes`(所有台帳ゲートつき)で行う。
++
++実行: env SPIKE_SCHEMA_PREFIX=JETUSE_TOOL01 SPIKE_HOME=/tmp/jetuse-tool01 \
++        PYTHONPATH=spikes/ragm02:spikes/tool01:packages/api \
++        .venv/bin/python spikes/tool01/teardown.py [--yes]
++"""
++
++import sys
++
++from deploy import use_task_schema
++
++from common import banner, require_schema
++from e2e import SECRET_NAME, _os_client
++from fixtures import PREFIX
++
++SCHEMA = require_schema()
++
++
++def main() -> None:
++    apply = "--yes" in sys.argv
++    use_task_schema()
++    banner(f"TOOL-01 teardown（{'実削除' if apply else 'dry-run'}）")
++
++    bucket = f"{PREFIX}-{SCHEMA.split('_')[-1].lower()}"
++    client = _os_client()
++    ns = client.get_namespace().data
++    import oci
++
++    try:
++        pars = client.list_preauthenticated_requests(ns, bucket).data
++        objs = client.list_objects(ns, bucket).data.objects
++    except oci.exceptions.ServiceError as e:
++        if e.status != 404:
++            raise
++        print(f"  バケット {bucket} は無い(片付け済み)")
++        pars, objs = [], []
++        bucket = ""
++
++    for p in pars:
++        print(f"  {'delete' if apply else 'would delete'} PAR {p.name}")
++        if apply:
++            client.delete_preauthenticated_request(ns, bucket, p.id)
++    for o in objs:
++        print(f"  {'delete' if apply else 'would delete'} object {bucket}/{o.name}")
++        if apply:
++            client.delete_object(ns, bucket, o.name)
++    if bucket and apply:
++        client.delete_bucket(ns, bucket)
++        print(f"  deleted bucket {bucket}")
++
++    # Vault の秘密には**触らない**。名前が固定(`jetuse-spike-tool01-apikey`)で、この run が
++    # 作ったことを示す所有台帳が無い以上、別 run / 人が管理する同名の秘密を消しうる
++    # (「既存リソースは参照のみ」に反する — レビュー TOOL-01-004)。片付けは人が行う。
++    print(f"\nVault 秘密 {SECRET_NAME} は自動削除しない(所有を証明できないため)。")
++    print("  不要なら人が実行する:")
++    print(f"    oci vault secret schedule-deletion --secret-id <{SECRET_NAME} の OCID> \\")
++    print("      --time-of-deletion <7日以上先の時刻>")
++
++    if not apply:
++        print("\n(dry-run。実削除は --yes)")
++
++
++if __name__ == "__main__":
++    main()

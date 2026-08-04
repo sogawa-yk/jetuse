@@ -8,7 +8,6 @@ index し、k-NNベクトル検索 → 取得チャンクをLLMに渡して回�
 """
 
 import hashlib
-import io
 import logging
 from typing import Any
 
@@ -69,13 +68,21 @@ def delete_owner(owner: str, endpoint: str | None = None) -> None:
 
 # ---- テキスト抽出・チャンク ----
 
-def _extract_text(filename: str, content: bytes) -> str:
+def _extract_text(filename: str, content: bytes, *, ocr_engine: str | None = None) -> str:
     name = (filename or "").lower()
-    if name.endswith(".pdf"):
-        from pypdf import PdfReader
+    from . import extract_scan
 
-        reader = PdfReader(io.BytesIO(content))
-        return "\n".join((p.extract_text() or "") for p in reader.pages)
+    if name.endswith(".pdf") or extract_scan.is_image(name):
+        # PDF は頁ごと、画像は 1 頁。テキスト層の無い頁だけ OCR を通す(PREP-03)。
+        # 画像をここへ通さないと、末尾の `decode(errors="replace")` が化けた本文を
+        # "indexed" にしてしまう(利用者には正常に見える)。
+        return "\n".join(extract_scan.page_texts(filename, content, engine=ocr_engine))
+    if name.endswith(".xlsx"):
+        # xlsx は zip なので、そのまま decode すると文字化けした本文が "indexed" になる
+        # (利用者には正常に見える)。抽出したテキストを渡す(PREP-01)。
+        from . import extract_xlsx
+
+        return extract_xlsx.render_text(extract_xlsx.extract(filename, content))
     return content.decode("utf-8", errors="replace")
 
 
@@ -120,9 +127,10 @@ def ensure_index(owner: str, lease=None) -> str:
     return idx
 
 
-def ingest(owner: str, file_id: str, filename: str, content: bytes, lease=None) -> int:
+def ingest(owner: str, file_id: str, filename: str, content: bytes, lease=None,
+           *, ocr_engine: str | None = None) -> int:
     """1ファイルをチャンク+埋め込みしてindexに投入。投入チャンク数を返す。"""
-    text = _extract_text(filename, content)
+    text = _extract_text(filename, content, ocr_engine=ocr_engine)
     chunks = _chunk(text)
     if not chunks:
         return 0

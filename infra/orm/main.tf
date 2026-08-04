@@ -6,15 +6,24 @@
 # apply 途中で不可解に失敗するため、plan 時に明示エラーで止める。
 resource "terraform_data" "region_guard" {
   lifecycle {
+    # リージョン購読一覧が読めているか。読めないと deploy_region_key が "" になり、
+    # 下の2つが「このリージョンは未対応です」という**誤った理由**で落ちる(実測: PUBLIC-IAM-02)。
+    # 権限不足でも data source は 401/404 を返さず null になるため、ここで先に権限として案内する。
     precondition {
-      condition     = contains(local.ocir_supported_region_keys, local.deploy_region_key) || (var.api_image_url != "" && var.fn_router_image != "")
+      condition     = local.region_subscriptions_readable
+      error_message = "テナンシのリージョン購読一覧を取得できませんでした。デプロイ実行ユーザーのグループに `Allow group <deployer-group> to inspect tenancies in tenancy` が必要です(この1文が無いと Terraform は権限エラーではなく null を受け取り、リージョン判定とホームリージョン解決が同時に壊れます)。詳細は docs/setup/public-deploy-dedicated-compartment.md。"
+    }
+    # 購読一覧が読めていないときは deploy_region_key が空になるだけなので、ここは判定しない
+    # (判定すると「権限不足」と「リージョン未対応」が同時に出て、利用者が原因を誤る)。
+    precondition {
+      condition     = !local.region_subscriptions_readable || contains(local.ocir_supported_region_keys, local.deploy_region_key) || (var.api_image_url != "" && var.fn_router_image != "")
       error_message = "JetUse のワンクリックデプロイは ap-osaka-1 / ap-tokyo-1 / us-ashburn-1 / us-chicago-1 のみ対応です(コンテナイメージの事前push先)。他リージョンでは、イメージを自リージョンOCIRへミラーし api_image_url と fn_router_image の両方を指定してください。"
     }
     # GenAI(推論+agentic API)の対応リージョンは OCIR より狭い。実証済は kix/ord のみで、
     # nrt/iad は apply が通っても GenAI が動かず RAG/会話/生成が全滅する。イメージのミラー
     # (api_image_url 指定)では回避できないため、未検証リージョンは明示オプトインを要求する。
     precondition {
-      condition     = var.allow_unvalidated_genai_region || contains(local.genai_validated_region_keys, local.deploy_region_key)
+      condition     = !local.region_subscriptions_readable || var.allow_unvalidated_genai_region || contains(local.genai_validated_region_keys, local.deploy_region_key)
       error_message = "リージョン ${var.region}(key=${local.deploy_region_key}) は GenAI(推論/agentic API)が未検証です。JetUse の RAG/会話メモリ/デモ生成は GenAI に依存し、実証済は 大阪(kix)/シカゴ(ord) のみです。デプロイ前に対象リージョンの GenAI/agentic API の提供状況を確認し、承知の上で進める場合は allow_unvalidated_genai_region=true を設定してください。"
     }
     # ocir_namespace を公開既定から変えると、api_image_url/fn_router_image が空のままでは

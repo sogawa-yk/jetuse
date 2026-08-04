@@ -1,0 +1,1 @@
+tasks/MEM-01.md の受け入れ条件をすべて満たし、pytest 全件パス・ruff クリーン・STATE.md の review_verdict が PASS・実環境 E2E の証跡込みで Codex レビュー PASS であること。着手前に「Oracle 側が Agent Memory として提供している機能の実体」を実機で確定し、無い機能を前提に設計しないこと。ADR-0006 の既存長期メモリは置き換えず併存させる。顧客名を書かない。未承認のコミット・PR・push を行わない。

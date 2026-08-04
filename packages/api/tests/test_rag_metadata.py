@@ -62,6 +62,39 @@ def test_normalize_attributes_rejects_non_finite_number():
             rm.normalize_attributes({"chunk_id": bad})
 
 
+def test_kind_is_string_only_on_both_ingest_and_search():
+    """RAGM-04: `kind` は文字列のみ。数値・真偽は**黙って文字列化せず**拒否する。
+
+    文字列化すると、マネージド側は `0`(数値)・ADB 側は `"0"`(文字列)で入り、
+    同じフィルタがバックエンドで違う結果になる(ADB の build_where は非文字列を拒否する)。
+    """
+    for bad in (0, 1, 1.5, True, False):
+        with pytest.raises(rm.MetadataError) as e:
+            rm.normalize_attributes({"kind": bad})
+        assert "string" in str(e.value)
+        with pytest.raises(rm.MetadataError):
+            rm.validate_filters({"type": "eq", "key": "kind", "value": bad})
+    assert rm.normalize_attributes({"kind": "spec"}) == {"kind": "spec"}
+    assert rm.validate_filters({"type": "eq", "key": "kind", "value": "spec"}) == {
+        "type": "eq", "key": "kind", "value": "spec",
+    }
+
+
+def test_kind_length_limit_is_in_bytes_and_applies_to_filters_too():
+    """上限は ADB 列(VARCHAR2(32))に合わせたまま**広げない**。
+
+    検索側にも同じ上限を掛ける: 取り込めない長さの値で絞っても必ず 0 件になり、
+    ①-b と同じ「静かに該当なし」になるため。
+    """
+    assert len("分類" * 6) < rm.MAX_KIND_BYTES < len(("分類" * 6).encode("utf-8"))
+    for bad in ("k" * (rm.MAX_KIND_BYTES + 1), "分類" * 6):
+        with pytest.raises(rm.MetadataError):
+            rm.normalize_attributes({"kind": bad})
+        with pytest.raises(rm.MetadataError):
+            rm.validate_filters({"type": "eq", "key": "kind", "value": bad})
+    assert rm.normalize_attributes({"kind": "k" * rm.MAX_KIND_BYTES})["kind"]
+
+
 def test_normalize_attributes_rejects_non_mapping():
     for bad in ("{}", [("file", "a")], 3):
         with pytest.raises(rm.MetadataError):

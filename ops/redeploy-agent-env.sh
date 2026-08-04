@@ -8,7 +8,16 @@ TAG="${1:?tag required}"
 TFV=infra/terraform/environments/dev/terraform.tfvars
 ev() { grep "^$1=" .env | cut -d= -f2- || true; }
 tfv() { grep -E "^  $1 *=" "$TFV" | head -1 | sed -E 's/.*= *"(.*)"/\1/' || true; }
-REGION=ap-osaka-1; NS=idqcucnenh88
+. "$(dirname "$0")/_region.sh"
+REGION=$(jetuse_region); jetuse_use_cli_region "$REGION"
+OCIR=$(jetuse_ocir_host "$REGION")
+# OCIR の名前空間はテナンシ固有なので**リポジトリに埋めない**（規約）。
+# Object Storage の名前空間と同じ値なので、.env の OS_NAMESPACE を既定に使う。
+# **.env は source していない**ので、環境変数ではなくファイルから読む。
+NS="${OCIR_NAMESPACE:-$(ev OCIR_NAMESPACE)}"
+[ -n "$NS" ] || NS="$(ev OS_NAMESPACE)"
+# どちらも無いなら止める（誤ったテナンシの repository を掴まないため）
+[ -n "$NS" ] || { echo "OCIR_NAMESPACE か OS_NAMESPACE を .env に設定してください" >&2; exit 1; }
 COMP=$(ev COMPARTMENT_OCID)
 ADB_OBJ=$(tfv ADB_WALLET_OBJECT); ADB_OBJ=${ADB_OBJ:-adb_wallet.zip}
 ENVVARS='[
@@ -38,7 +47,7 @@ one() {
     --query "data.items[?\"hosted-application-id\"=='$app' && \"lifecycle-state\"!='DELETED'].id | [0]" --raw-output)
   [ -z "$dep" ] && { echo "[$sdk] no deployment" >&2; return 1; }
   oci generative-ai hosted-deployment update --hosted-deployment-id "$dep" \
-    --active-artifact '{"artifactType":"SIMPLE_DOCKER_ARTIFACT","containerUri":"kix.ocir.io/'"$NS"'/'"$repo"'","tag":"'"$TAG"'"}' \
+    --active-artifact '{"artifactType":"SIMPLE_DOCKER_ARTIFACT","containerUri":"'"$OCIR"'/'"$NS"'/'"$repo"'","tag":"'"$TAG"'"}' \
     --force >/dev/null
   sleep 10
   while :; do

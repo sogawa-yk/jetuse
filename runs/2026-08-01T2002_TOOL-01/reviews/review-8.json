@@ -1,0 +1,47 @@
+{
+  "review_n": 8,
+  "timestamp": "2026-08-01T21:15:54+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-8.input.diff",
+  "raw_output_path": "reviews/review-8.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker はありませんが、秘密を含み得る URL の平文保存と、不正 charset 応答のエラー処理に major が2件あります。実環境 E2E は6シナリオとも成功していますが、「秘密がDB/API応答に平文で出ない」という主張は認証ヘッダ値だけを対象としており、PAR URL を除外しているため裏付けが不十分です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 2,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "TOOL-01-001",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/http_tools.py",
+      "line": 297,
+      "issue": "URLを平文でDBへ保存し、_public()でもそのまま返しています。E2Eで使用したObject Storage PARはパス中のトークン自体がBearer認証情報であり、証跡では実際に伏せ字にしています。このため「秘密はVault参照のみで、DB/API応答に平文で出ない」という完了条件を満たしません。一般の署名付きURLやquery tokenも同様です。",
+      "suggestion": "認証情報を含むendpoint URL全体をVault参照または暗号化列として扱い、一覧応答では機密部分をマスクしてください。平文URLだけを許す設計ならqueryを拒否し、OCI PAR等の署名付きURLも登録不可にしたうえで、登録・一覧・DBの各経路に回帰テストを追加してください。"
+    },
+    {
+      "id": "TOOL-01-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/http_tools.py",
+      "line": 476,
+      "issue": "上流が未知のcharsetをContent-Typeで返すとbody.decode()がLookupErrorを送出します。この処理はHTTP例外のtry外にありHttpToolCallErrorへ変換されないため、execute_with()の汎用例外処理がJSONエラーを正常な戻り値として返します。その結果、単発実行はHTTP 200、エージェント側は成功したtool_resultとして扱い、文書化された「代理実行の失敗は400またはツール失敗」という契約が崩れます。",
+      "suggestion": "charsetをcodecs.lookup()で検証して未知ならUTF-8へフォールバックするか、UnicodeError/LookupErrorを捕捉してHttpToolCallErrorへ変換してください。不正charsetに対してexecute-toolが400を返し、エージェントでも失敗扱いになるテストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 6,
+    "adequacy": "insufficient",
+    "notes": "runs/2026-08-01T2002_TOOL-01/e2e/ のscenario-1〜6、checks.md、deploy.log、SKIPPED.mdを確認しました。外部ツール呼出し、Vault認証ヘッダ、SSRF拒否、timeout、応答上限、gzip展開後上限の6シナリオはいずれもPASSで、未実施範囲の理由も概ね妥当です。ただしscenario-1でDB保存・一覧返却されるPAR URL自体が認証情報であるにもかかわらず、秘密非露出の評価はscenario-2のヘッダ値だけを対象としているため、diffの秘密管理に関する主張全体の証跡としては不十分です。不正charset経路も未検証です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されておらず、指示に従いブラウザ検証は実施していません。"
+    }
+  }
+}

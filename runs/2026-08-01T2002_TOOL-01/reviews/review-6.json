@@ -1,0 +1,47 @@
+{
+  "review_n": 6,
+  "timestamp": "2026-08-01T21:07:58+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-6.input.diff",
+  "raw_output_path": "reviews/review-6.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "主要フローと6本の実環境 E2E は十分に裏づけられており、blocker はありません。一方、承認後に指定IDが解決できない場合のHTTPステータスと、非有限数の引数検証に改善余地があります。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 1,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "TOOL-01-001",
+      "severity": "major",
+      "file": "packages/api/service/routes/agents.py",
+      "line": 173,
+      "issue": "承認後の `http_tool_id` が削除済み・他人所有・不正で `rows` が空の場合、明示的な404を返さず、そのまま組込レジストリで `execute_with` を呼び、最終的に「未知のツール」の400になります。検証レポートが定義する「解決できないツール id は404」と公開エラー契約が一致せず、この経路のテストもありません。",
+      "suggestion": "`row is None` の時点で情報を漏らさない一律の404を返してください。削除済みID、他人所有ID、不正IDを `/api/agent/execute-tool` に渡すルートテストも追加してください。"
+    },
+    {
+      "id": "TOOL-01-002",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/tools.py",
+      "line": 181,
+      "issue": "`number` の型検証は `float('nan')` や無限大を許可します。Pythonの `json.loads` は `NaN`、`Infinity`、指数オーバーフローによる無限大を受理できるため、GETでは `nan`/`inf`、POSTでは標準JSONでない値を外部APIへ送る可能性があります。",
+      "suggestion": "`number` と `integer` の検証で `math.isfinite` を確認し、NaN、正負Infinity、`1e309`を拒否するテストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 6,
+    "adequacy": "sufficient",
+    "notes": "`runs/2026-08-01T2002_TOOL-01/e2e/` の6シナリオを確認しました。外部ツール登録・モデルによる自律呼出し・回答反映、Vault秘密の送信と伏字化、許可外Secret拒否、SSRF登録拒否、タイムアウト、通常およびgzip展開後のサイズ上限を実環境で網羅し、687件のテストとlint結果も添付されています。DNSリバインディング攻撃側の実演、承認UI往復、Vaultタグ剥奪は `SKIPPED.md` に理由と代替単体テストが明示されており妥当です。ただし、承認後に存在しない `http_tool_id` を渡す経路は未検証で、finding TOOL-01-001の不整合が残ります。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲットURLが提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

@@ -64,3 +64,9 @@ docs/verification/*.html
 
 # SPIKE-M1 の検証リソース台帳（OCID を含む運用状態。証跡ではない）
 .spike-m1-registry.json
+
+# ループの「現在状態」。タスクごとの worktree が同じパスを全面上書きするため、追跡すると
+# 並列ループを main へ入れるたびに必ず衝突する（実例: SPIKE-M1 / RP-01 / RAGM-02 で 3 回）。
+# 上位ループ(stage-runner)は元からコミット対象外にしており、その規律に揃える。
+# 不変の履歴は runs/<run-id>/ にあり、完了時に runs/<run-id>/STATE.md へ写しを残す。
+STATE.md
