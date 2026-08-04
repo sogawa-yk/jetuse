@@ -27,7 +27,8 @@ DOMAIN="${IDENTITY_DOMAIN_URL:-$(_ns IDENTITY_DOMAIN_URL)}"
 echo "== build & push ${REPO}:${TAG}"
 . "$(dirname "$0")/_container.sh"
 CE=$(jetuse_container_engine) || exit 1
-"$CE" build -t "${REPO}:${TAG}" packages/hosted-agent-sample
+# 配備先(Container Instance)の shape は x86。Apple Silicon の素の build は arm64 になり弾かれる。
+"$CE" build --platform "${JETUSE_BUILD_PLATFORM:-linux/amd64}" -t "${REPO}:${TAG}" packages/hosted-agent-sample
 "$CE" push "${REPO}:${TAG}"
 
 echo "== create hosted application"

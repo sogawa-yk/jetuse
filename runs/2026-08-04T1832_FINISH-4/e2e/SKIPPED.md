@@ -25,3 +25,18 @@ goal は4件すべての E2E 合格。**この run は4件を順に進める**�
 なおこの値自体は既に `packages/api/jetuse_core/http_tools.py` を含む7ファイルで追跡済みの
 **公開テスト用エンドポイント**であり、環境依存の秘匿値ではない。それでも「新しく足さない」側に倒した。
 review-4 の指摘内容（SKIPPED.md の自己矛盾・dist ガードの失敗経路未検証）は本 PR で対応済み。
+
+
+## E2E-6（build の platform 固定）で実施していない経路
+
+`ops/deploy-hosted-agent.sh` にも同じ `--platform` 固定を入れたが、**実行はしていない**。
+
+理由: ホスト型エージェントの配備は Container Instance とは別のリソース群
+（Generative AI Hosted Application）を作る独立した操作で、検証には専用の環境準備が要る。
+今回の修正は両スクリプトで**同一の1行**であり、`ops/dev-env-up.sh` 側で
+「arm64 → 弾かれる / amd64 → 通る」を実機で確認済み。同じ引数を同じエンジンへ渡すため、
+挙動が分かれる理由がない。
+
+**次にホスト型エージェントを配備するときに確認すること**: build ログに
+`platform=linux/amd64` が出ること、および Hosted Application の作成が
+architecture エラーで落ちないこと。
