@@ -1,0 +1,39 @@
+{
+  "review_n": 20,
+  "timestamp": "2026-08-04T18:06:22+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-20.input.diff",
+  "raw_output_path": "reviews/review-20.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "OCID 検査スクリプト自体は主要分岐がテストされていますが、CI の push 対象が4ブランチに限定されているため、public リポジトリの feature branch へ実 OCID を直接 push する経路を防げません。新規混入を止めるという変更の中核要件を満たさないため FAIL です。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "OCID-CI-001",
+      "severity": "blocker",
+      "file": ".github/workflows/ci.yml",
+      "line": 28,
+      "issue": "`no-real-ocid` job は push でも実行されるように見えますが、workflow 全体の `on.push.branches` が `main`, `public-dev`, `internal-dev`, `internal-stable` に限定されています。したがって feature branch へ実 OCID を push しても検査されず、public GitHub 上への漏えいは PR 作成前に成立します。「push で入る経路も塞ぐ」というコメントおよび ADR-0029 の目的と不整合です。",
+      "suggestion": "全 push branch でこの検査が走るよう `push.branches` の限定を外すか、OCID 検査を全 branch push 対象の独立 workflow に分離してください。必要なら他の重い job には個別の `if` を付け、OCID 検査だけを常時実行してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "実環境 E2E ディレクトリは空で、実行シナリオの証跡はありません。本差分は静的検査・CI・退避済みスクリプトの設定変更が中心で、jetuse-dev へのデプロイを要する実行経路ではないため、実環境 E2E 未実施自体は blocker としません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されておらず、指示どおりブラウザ検証は実施していません。"
+    }
+  }
+}

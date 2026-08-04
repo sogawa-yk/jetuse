@@ -1,0 +1,47 @@
+{
+  "review_n": 21,
+  "timestamp": "2026-08-04T18:08:49+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-21.input.diff",
+  "raw_output_path": "reviews/review-21.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker はありません。ただし、ローカルの漏えい防止が未追跡ファイルを検査しない点と、`git grep` の実行異常を「検出なし」として扱う fail-open なエラー処理は修正が必要です。実環境 E2E は本変更の性質上対象外ですが、追加された自動テストの実行結果も証跡にはありません。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 2,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "major",
+      "file": "Makefile",
+      "line": 23,
+      "issue": "`make lint` が `ops/check-no-real-ocid.sh` を `--all` なしで実行するため、新規の未追跡ファイルに実 OCID があっても成功します。ADR と workflow の説明では public repository への push 前に漏えいを防止する唯一の仕組みを `make lint` としていますが、その主張を満たしません。",
+      "suggestion": "ローカル lint では `ops/check-no-real-ocid.sh --all` を実行してください。性能上の理由で既定動作を維持するなら、CI 用とローカル防止用の target を分け、通常のコミット前フローが未追跡ファイルも検査するようにしてください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "ops/check-no-real-ocid.sh",
+      "line": 68,
+      "issue": "3経路すべての `git grep` に無条件の `|| true` が付いているため、終了コード1の「一致なし」だけでなく、オプション非対応、index/read failure、pathspec error などの終了コード2以上も握り潰します。全経路が異常終了しても空の `$HITS` が作られ、スクリプトは `[ocid] OK` を返す fail-open 動作になります。過去の同種障害を防ぐ目的の検査としてエラー処理が不十分です。",
+      "suggestion": "`git grep` を helper 関数で実行し、終了コード0と1だけを許容して、2以上は診断を出して検査全体を失敗させてください。そのうえで、`git grep` を意図的に異常終了させた場合にスクリプトが非0で終了するテストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "`runs/2026-08-04T1626_BRANCH-LAYOUT/e2e/` は空で、実環境シナリオの証跡はありません。本差分はローカル/CI の静的検査、文書、archive spike の環境変数化が中心であり、jetuse-dev へのデプロイを伴う実環境 E2E は対象外と判断します。ただし、追加された pytest 13シナリオについても実行結果の証跡は提示されていないため、テスト成功自体は未検証です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されておらず、指示に従ってブラウザツールは使用していません。"
+    }
+  }
+}
