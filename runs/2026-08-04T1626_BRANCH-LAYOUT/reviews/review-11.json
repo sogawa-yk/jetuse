@@ -1,0 +1,39 @@
+{
+  "review_n": 11,
+  "timestamp": "2026-08-04T17:15:44+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-11.input.diff",
+  "raw_output_path": "reviews/review-11.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "4長期ブランチのいずれか1参照でも取得されていない場合、Git エラーが空結果へ変換され、未取り込みコミットを「clean」と誤判定します。認証情報・OCID・エンドポイント実値や OCI リソース変更はありません。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "blocker",
+      "file": "ops/stalled.py",
+      "line": 106,
+      "issue": "`git log HEAD --not origin/main --not origin/public-dev --not origin/internal-dev --not origin/internal-stable` は、浅い clone、single-branch fetch、移行途中などで参照が1つでも欠けるとコマンド全体が失敗します。ところが `_git()` は失敗を空文字列へ変換するため `ahead=[]` となり、未コミット変更もなければ直後のフォールバックで `merged=True` となります。その結果、実際には未出荷コミットがある作業を「clean」として隠し、この検出器の安全上の目的を破ります。",
+      "suggestion": "使用前に4参照すべてを `git rev-parse --verify` 等で検証し、不足時は fail-closed で `unknown` に分類してください。あるいは存在する参照だけで比較しつつ、不足があることを明示してください。少なくとも「4参照あり」「各長期ブランチだけへ取り込み済み」「参照が1つ欠落」「Git コマンド失敗」「どこにも未取り込み」の回帰テストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "`runs/2026-08-04T1626_BRANCH-LAYOUT/e2e/` は空で、実行シナリオや結果はありません。本差分はローカル Git/worktree 状態の判定変更であり、jetuse-dev へのデプロイを伴う実環境 E2E は対象外です。ただし、上記の欠落参照を含むローカル統合テスト証跡もありません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}
