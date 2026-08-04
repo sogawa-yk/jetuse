@@ -68,15 +68,27 @@ health のプローブは `list_voices`（課金なし）で判定するため�
 - 400 では他リージョンを試さず打ち切ること
 - 全滅時のヒントに直近の HTTP status / code と「一時障害」の可能性が載ること
 
-## 未実施（完了主張の範囲）
+### 配備経路での確認（PR #124 merge 後に実施）
 
-**配備済みスタックの API Gateway → Functions 経路は通していない。** `/api/tts` を担うのは
-fn-router のコンテナ画像で、修正の反映には再ビルドが要る。Public版ではそれを `main` への
-merge 時に release.yml が行うため、merge 前に配備経路を通すことは通常の手順の中では成立しない。
+merge（`60aefaf`）→ release.yml による画像生成 → 配布 ZIP でスタック `jetuse-pub` を更新 → apply。
+置換されたのは SPA ファイル・Container Instance・エージェント3種のみで、
+**ADB / バケット / VCN / Identity Domain は無変更**（plan で事前確認）。
 
-したがって本レポートは **ライブラリ層を実サービスに対して検証したところまで**を裏づけとする。
-merge 後に画像が生成されたら、スタックを更新して `POST /api/tts` が 200 で MP3 を返すことを
-確認すること。証跡は `runs/2026-08-03T1600_FIX-TTS/e2e/`（`SKIPPED.md` に制約を明記）。
+| スイート | 修正前 | 修正後 |
+|---|---|---|
+| `ops/e2e/public-deploy.mjs` | 38 / 39 | **39 / 39 PASS** |
+| `ops/e2e/agents-3sdk.mjs` | 9 / 9 | **9 / 9 PASS** |
+| 4xx/5xx レスポンス | `503 POST /api/tts` 1件 | **0件** |
+
+```
+PASS  TTS: 音声合成 — 200 ID3 ... ORACLE TSSE ...
+PASS  TTS: health が実合成の結果を反映(verified)
+      — {"status":"ok","region":"us-phoenix-1","candidate_regions":["us-phoenix-1","us-chicago-1"],"verified":true}
+```
+
+配備経路（API Gateway → Functions）でシカゴの 5xx から Phoenix へフォールバックし、
+実際に MP3 が返ることを確認した。health と実合成の食い違いも解消。
+証跡は `runs/2026-08-03T1600_FIX-TTS/e2e/scenario-1.md`。
 
 ## 残る未解明
 
