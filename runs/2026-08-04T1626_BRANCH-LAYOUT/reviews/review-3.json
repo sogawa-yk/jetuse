@@ -1,0 +1,55 @@
+{
+  "review_n": 3,
+  "timestamp": "2026-08-04T16:38:43+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-3.input.diff",
+  "raw_output_path": "reviews/review-3.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "CIでの中核的な起点判定は機能しますが、Internal 固有パスの不足とローカル検査の差分範囲により誤判定が残ります。認証情報、OCID、環境固有エンドポイントの新規コミットは確認されません。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 2,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "major",
+      "file": "ops/internal-only-paths.txt",
+      "line": 39,
+      "issue": "Internal 固有パスの一覧が既知の Internal バックエンドや migration を網羅していません。例えば `packages/api/service/routes/builder.py`、`packages/api/service/demo_context.py`、builder 系テストに加え、ADR-0028で新設した Internal migration の `packages/api/jetuse_core/migrations/5xx_` 帯も未登録です。これらだけを変更する正当な internal-dev 宛PRは「共有物のみ」と誤判定されて失敗します。",
+      "suggestion": "既存の Internal 差分を棚卸しして service・tests・5xx migration を一覧へ追加し、少なくとも Internal migration-only、Internal service-only、Public migration の分類テストを追加してください。可能なら Internal コードを専用ディレクトリへ集約して一覧をディレクトリ単位にしてください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "ops/check-branch-base.sh",
+      "line": 81,
+      "issue": "変更一覧を `$MB` から `HEAD` までのコミット済み差分だけで取得しているため、ドキュメントで案内された `BRANCH_BASE=internal-dev make lint` は作業ツリーの未コミット・未追跡ファイルを検査しません。コミット前チェックとして実行すると、今回防止したい共有物-only変更をローカルで見逃します。",
+      "suggestion": "ローカルでは merge-base と作業ツリーを比較し、未追跡ファイルも `git ls-files --others --exclude-standard -z` などで追加してください。未コミットの共有変更、staged変更、未追跡ファイル、CIのclean checkoutをそれぞれテストしてください。"
+    },
+    {
+      "id": "F003",
+      "severity": "minor",
+      "file": ".claude/skills/stage-runner/references/stage-report-template.md",
+      "line": 28,
+      "issue": "4ブランチ移行後も統合差分の例が `dev...feat/<stage-id>` のままです。旧 `dev` を削除した環境ではこのテンプレートどおりの確認コマンドが失敗し、Internal ステージでも正しい起点を表現できません。",
+      "suggestion": "実際の起点を記録するプレースホルダーを設け、`<base-branch>...feat/<stage-id>`（public-dev または internal-dev）へ変更してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "`runs/2026-08-04T1626_BRANCH-LAYOUT/e2e/` は空で、実環境シナリオ・結果・証跡パスはありません。本差分はGitブランチ、worktree、CI判定の変更であり、OCIへデプロイして検証できる実行経路を変更していないため、jetuse-dev実環境E2Eは対象外と判断します。追加されたシェル統合テストは複数分岐を扱っていますが、上記のInternalパス網羅性と未コミット差分は未テストです。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

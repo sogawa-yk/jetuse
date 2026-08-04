@@ -127,7 +127,7 @@ cd packages/web && VITE_AUTH_REQUIRED=false npm run dev
 ```
 - コミット前: `make lint && make test && make build`（単一コマンド入口 = root `Makefile`。個別は `make help`）
 - 検証は実機確認主義（結果は `docs/verification/`）。複数人での実機E2Eは [docs/guides/dev-environments.md](./docs/guides/dev-environments.md)
-- ブランチとリリース: `main` = Public 正式版、`dev` = Internal 次期版。Public の変更は `main` から `dev` へ forward merge（[運用詳細](./docs/guides/branching-and-releases.md)）。
+- ブランチとリリース: `main` = Public 安定版（Deploy ボタンの配信元）、`public-dev` = Public 統合、`internal-dev` / `internal-stable` = Internal 側。Public の変更は `public-dev` へ入れ、リリース時に `main` へ（[運用詳細](./docs/guides/branching-and-releases.md)）。
 
 ## ドキュメント早見
 
@@ -143,4 +143,4 @@ cd packages/web && VITE_AUTH_REQUIRED=false npm run dev
 
 ## ライセンス / 位置づけ
 
-`main` は Public 正式版、`dev` は Internal 正式版の次期開発ラインとして運用する。利用条件はリポジトリのライセンスを参照。
+`main` は Public 安定版、`internal-stable` は Internal 正式版として運用する（開発は `public-dev` / `internal-dev`）。利用条件はリポジトリのライセンスを参照。

@@ -79,8 +79,9 @@ cd packages/web && npm run build && npm run lint
 
 ## 5. 変更の進め方(Gitフロー)
 
-- **1タスク = 1ブランチ + PR**。Public または両版向けは `main` から分岐して `main` へ入れ、直後に `main → dev` の同期PRを出す。Internal 固有・先行機能は `dev` から分岐して `dev` のみに入れる。
-- `dev` 全体を `main` へ merge しない。Internal 機能を後から Public 化するときは、対象変更だけを最新 `main` 上へ移植する。
+- **1タスク = 1ブランチ + PR**。Public または両版向け（＝ほとんど）は `public-dev` から分岐して `public-dev` へ入れ、`ops/sync-public-to-internal.sh` で `internal-dev` への同期PRを出す。Internal 固有・先行機能は `internal-dev` から分岐して `internal-dev` のみに入れる。起点は `ops/check-branch-base.sh` が CI で検査する。
+- `internal-dev` を `public-dev` / `main` へ merge しない。Internal 機能を後から Public 化するときは、対象変更だけを最新 `public-dev` 上へ cherry-pick で移植する。
+- `main` / `internal-stable` は release 先。feature branch を直接向けない（`main` への merge は即座に公開配信物を差し替える）。
 - 詳細、hotfix、tag 規約は **[branching-and-releases.md](./branching-and-releases.md)** を参照。
 - spec-driven: 仕様にない実装判断が要るときは実装せず `docs/decisions/` にADR案を書いて人間レビューを依頼。
 - **人間承認が必要な操作**: 本番相当の `terraform apply`、IAMポリシー変更、Identity Domain設定変更、スパイク用以外のリソース削除。

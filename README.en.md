@@ -98,4 +98,4 @@ the `docs/comparison/` selection studies, [docs/guides/customize.md](./docs/guid
 
 ## License / status
 
-`main` is the formal Public edition and `dev` is the next Internal release line. See the repository license for usage terms.
+`main` is the stable Public edition and `internal-stable` is the Internal release line; development happens on `public-dev` and `internal-dev`. See the repository license for usage terms.

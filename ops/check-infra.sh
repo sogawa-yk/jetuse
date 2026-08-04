@@ -21,10 +21,11 @@ for a in "$@"; do case "$a" in --fix) FIX=1;; *) echo "unknown flag: $a" >&2; ex
 # infra に変更があるか。**未コミットの差分だけを見ない** —— ブランチで既にコミット済みだと
 # 空になり、infra を変えたのに未検査で緑になってしまう(review-2)。
 # 基準ブランチとの差分も見る(基準が取れない環境では「変更あり」に倒す = 安全側)。
-# 基準ブランチは 1 つに決められない —— このリポジトリは main 起点と dev 起点の両方がある
-# (docs/guides/branching-and-releases.md)。**どちらかとの差分が空なら「変更なし」**とみなす。
-# 片方だけを見ると、もう片方由来のブランチで常に「変更あり」になる(review-3)。
-INFRA_BASES="${INFRA_BASE_REF:-origin/main origin/dev}"
+# 基準ブランチは 1 つに決められない —— このリポジトリは public-dev 起点と internal-dev 起点の
+# 両方がある (docs/guides/branching-and-releases.md)。**どれかとの差分が空なら「変更なし」**
+# とみなす。1 つだけを見ると、別系統由来のブランチで常に「変更あり」になる(review-3)。
+# main / internal-stable も含めるのは、release ブランチから切った hotfix を拾うため。
+INFRA_BASES="${INFRA_BASE_REF:-origin/public-dev origin/internal-dev origin/main origin/internal-stable}"
 # 検査対象は infra だけではない —— **検査の仕組み自体**を壊す変更こそ検知したい。
 # これらを外すと、terraform を入れていない環境で検査機構を壊しても素通りする(review-5)。
 WATCH="infra ops/check-infra.sh scripts/package-orm-stacks.sh Makefile loop-config.yml .claude"

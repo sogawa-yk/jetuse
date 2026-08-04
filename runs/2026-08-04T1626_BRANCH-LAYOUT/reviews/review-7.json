@@ -1,0 +1,39 @@
+{
+  "review_n": 7,
+  "timestamp": "2026-08-04T16:53:07+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-7.input.diff",
+  "raw_output_path": "reviews/review-7.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "正規の `public-dev → internal-dev` 同期 PR が起点検査に拒否され、ADR-0028 の中核同期フローを継続できません。認証情報、OCID、エンドポイント実値、OCIリソース変更は差分内に確認されません。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "blocker",
+      "file": "ops/check-branch-base.sh",
+      "line": 159,
+      "issue": "`internal-dev` 宛 PR を変更パスだけで判定するため、`ops/sync-public-to-internal.sh` が作る正規の同期 PR も、Public 側の変更が共有物だけなら FAIL します。同期ブランチは `internal-dev` から作成して `public-dev` を merge するため、base 比の変更は通常 shared-only となり、「誤起点の feature PR」と区別できません。初回 bootstrap の SKIP 後は一方向同期が停止し、Internal ⊇ Public を維持できません。",
+      "suggestion": "同期 PR を安全に識別して例外化してください。CI から head ref を渡し、同期専用ブランチ名に加えて `origin/public-dev` の先端が PR HEAD の祖先であることなどを検証してから許可します。shared-only の通常 feature PR、正規 sync PR、同期名を偽装した PR を網羅する回帰テストも追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "`runs/2026-08-04T1626_BRANCH-LAYOUT/e2e/` は空で、実環境シナリオの証跡はありません。本差分はブランチ・CI・Git worktree 運用のみを変更し、OCIランタイムへデプロイされるコードを変更していないため、jetuse-dev 実環境 E2E は対象外と判断します。ただし同期スクリプトと起点検査を組み合わせたローカル統合テストがなく、上記の正規同期拒否経路を検出できていません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}
