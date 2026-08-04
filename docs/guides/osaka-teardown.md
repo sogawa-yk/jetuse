@@ -99,36 +99,20 @@ oci container-instances container-instance stop \
 
 `jetuse-dev-app-api` を止めても `mnpdemo-*` は動き続ける(別インスタンス)。
 
-### 4-b. **Resource Manager の destroy で消す**（2026-08-03 訂正）
+### 4-b. Terraform で消す(**state のある分はこちらから**)
 
-**大阪は Resource Manager スタック `jetuse-dev-app` で配備されている**（2026-07-07 作成・
-直近の APPLY は 2026-07-23）。**state は OCI 側にあり、ローカルには無いのが正常**。
-
-> **旧版の誤り（残しておく）**: この節はもともと
-> `cd infra/terraform/environments/dev && terraform destroy -var region=ap-osaka-1` と書いていた。
-> **これは危険**。ローカルの `environments/dev/terraform.tfstate` は
-> **2026-08-03 のシカゴ apply でシカゴの state になった**ので、同じ場所で destroy すると
-> **大阪ではなくシカゴが消える**。ローカル state を使う指示にしてはいけない。
+Terraform が作ったものは Terraform で消す。手で消すと state と実体がずれる。
 
 ```bash
-STACK=<jetuse-dev-app のスタック OCID>   # oci resource-manager stack list で引く
-
-# 1) **必ず先に plan-destroy を読む**
-oci resource-manager job create-destroy-job --stack-id "$STACK" \
-  --execution-plan-strategy FROM_PLAN_JOB_ID --plan-job-id <plan-destroy の job id> --region ap-osaka-1
-#   ※ まず `job create-plan-destroy-job` で plan を作り、その出力を読んでから上を実行する
-
-# 2) plan の中身を確認する（下記を目視してから進む）
-oci resource-manager job get-job-logs --job-id <plan job id> --region ap-osaka-1
+cd infra/terraform/environments/app
+terraform destroy -var-file=<dev>.tfvars -state=<dev>.tfstate   # 開発者ごとのスタック
+cd ../dev
+terraform destroy -var region=ap-osaka-1 -var ...               # 共有基盤
 ```
 
-**plan-destroy で必ず目視すること**:
-- `mnpdemo-mock-v3` / `mnpdemo-mock-v2` / `mnpdemo-apigw` が**入っていない**
-  （CLI で作った Terraform 管理外のリソース。**本来入らない**。入っていたら止めて調べる）
-- `jetuseloop2`（ADB）/ `jetuse-loop-project` が**入っていない**（ループ共有）
-- 消えるのが `jetuse-dev-*` の JetUse 配備物だけであること
-
-**ローカルの `terraform destroy` は使わない。** state が OCI 側にあるので噛み合わない。
+**`terraform destroy` の前に必ず `terraform plan -destroy` を読む。**
+`mnpdemo-*` と `jetuseloop2` が対象に入っていないことを目視すること
+(これらは Terraform 管理外なので**本来入らない**。入っていたら止めて調べる)。
 
 ### 4-c. 消す対象(2026-08-03 の実測棚卸し)
 

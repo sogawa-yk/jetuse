@@ -126,9 +126,59 @@ h2{font-size:16px;margin:30px 0 12px;padding-bottom:6px;border-bottom:1px solid 
 .tag.harm{color:var(--ng);border-color:var(--ng)}
 .tag.size{color:var(--warn);border-color:var(--warn)}
 .empty{color:var(--mut);font-size:14px;padding:10px 0}
+.sm-lead{color:var(--ng);font-size:13.5px;margin:0 0 10px}
 .foot{margin-top:36px;padding-top:14px;border-top:1px solid var(--bd);
       color:var(--mut);font-size:12.5px}
 """
+
+
+STALL_JA = {
+    "review": ("レビューが終わっていない", "**放っておくと欠陥が本番に残る。**"),
+    "unshipped": ("PR が出ていない", "レビューは通っているが出荷されていない。"),
+    "unknown": ("状態が読めない", "確認が要る。"),
+    "pr": ("PR が出ている", "マージの判断待ち。"),
+    "parked": ("意図的に止めている", "理由は ER にある。"),
+}
+
+
+def _stalled_section() -> str:
+    """止まっている作業。**ER と同じ1ページに出す**（見る場所を1つにするため）。
+
+    実害: 2026-08-04 に、レビュー未完了のまま 6 日放置されていた作業から
+    **マージ済みコードの blocker が 2 件**見つかった（他人の資産を消しうるもの）。
+    「やりかけ」も取りこぼさないようにする。
+    """
+    try:
+        sys.path.insert(0, str(ROOT / "ops"))
+        import stalled  # noqa: PLC0415
+        items = stalled.scan()
+    except Exception as e:  # noqa: BLE001 - レポート生成を落とさない
+        return f'<h2>止まっている作業</h2><p class="empty">確認できませんでした（{html.escape(type(e).__name__)}）。</p>'
+
+    need = [i for i in items if i["status"] in ("review", "unshipped", "unknown")]
+    other = [i for i in items if i not in need]
+    if not items:
+        return '<h2>止まっている作業</h2><p class="empty">ありません。</p>'
+
+    def card(i: dict, warn: bool) -> str:
+        label, note = STALL_JA.get(i["status"], (i["status"], ""))
+        d = f'{i["days"]}日前' if i.get("days") is not None else "不明"
+        tag = f'<span class="tag {"harm" if warn else ""}">{html.escape(label)}</span>'
+        return ('<div class="er"><div class="hd">'
+                f'<span class="id">{html.escape(i["name"])}</span>'
+                f'<span class="ti">{html.escape(i["why"])}</span>{tag}'
+                f'<span class="tag">最終更新 {d}</span></div>'
+                + (f'<div class="sm">{html.escape(note)}</div>' if note and warn else "")
+                + "</div>")
+
+    out = ["<h2>止まっている作業</h2>"]
+    if need:
+        out.append('<p class="sm-lead">下の項目は<strong>放っておくと問題になります</strong>。</p>')
+        out += [card(i, True) for i in need]
+    else:
+        out.append('<p class="empty">放っておくと問題になるものはありません。</p>')
+    out += [card(i, False) for i in other]
+    return "".join(out)
 
 
 def cmd_report(items: list[dict], out: pathlib.Path) -> None:
@@ -190,6 +240,8 @@ def cmd_report(items: list[dict], out: pathlib.Path) -> None:
 </div>
 
 {''.join(parts)}
+
+{_stalled_section()}
 
 <div class="foot">
   自動生成: <code>ops/er.py report</code> ／ 元データ: <code>docs/enhance/ER-*.md</code>（{len(items)} 件）<br>
