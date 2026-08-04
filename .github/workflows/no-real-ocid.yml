@@ -1,0 +1,23 @@
+name: no-real-ocid
+
+# 実 OCID の混入検査（ADR-0029）。**ci.yml から分離して全ブランチの push で走らせる。**
+# ci.yml の on.push.branches は長期4ブランチに限定されているため、そこに同居させると
+# feature branch への push が素通りする。このリポジトリは public で、push した時点で
+# 内容は GitHub 上に出るので、PR を待っていては遅い。
+#
+# 限界（ADR-0029 の residual）: CI は **検出**しかできない。push 済みの内容は履歴に残る。
+# **防止するのはローカルの `make lint`**（ops/check-no-real-ocid.sh を含む）であり、
+# この workflow は「気づかず放置される」のを防ぐための後追いの網。
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check no real OCID
+        run: ops/check-no-real-ocid.sh

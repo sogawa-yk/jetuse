@@ -1,0 +1,39 @@
+{
+  "review_n": 14,
+  "timestamp": "2026-08-04T17:42:18+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-14.input.diff",
+  "raw_output_path": "reviews/review-14.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "OCID・認証情報・エンドポイントの実値は含まれず、実リソースやIAMの変更もありません。ただし、現行IAM構成と推奨する将来構成が同じ設定手順内で矛盾しており、読者が不要なregistry権限を新規設定する可能性があります。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 1,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "major",
+      "file": "docs/setup/dynamic-group-matching-rules.md",
+      "line": 17,
+      "issue": "22〜27行目では、非実行環境であるregistryをDynamic GroupとFunctions用any-user Policyから外すべきだとしていますが、表と具体的なMatching Ruleはregistryを加入対象にし、154行目もregistryへのPolicy作成を指示しています。「現在デプロイ済みの構成」と「新規に設定すべき構成」が区別されていないため、このsetup文書に従うと、将来誤配置されたResource Principalへdev権限を与えるルールと、不要なFunctions呼び出し権限を再作成してしまいます。IAM適用を人間ゲートに留めることと、文書上の推奨設定を安全にすることは両立します。",
+      "suggestion": "現行構成の記録と推奨設定を明確に分離してください。コピペ用のMatching RuleとPolicy作成対象からregistryを除外し、既存IAMからの削除は人間承認後に実施する未完了作業として別記してください。現行状態をそのまま示す必要がある場合は、表・コード・154行目を「現行設定（新規適用禁止）」と明記してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "`runs/2026-08-04T1626_BRANCH-LAYOUT/e2e/` は空で、実行シナリオや結果は添付されていません。差分はIAM設定ドキュメントのみで、実環境への適用や動作変更を含まないため、jetuse-devでの実環境E2E未実施は妥当です。将来IAM設定を変更する際は、人間ゲートを経たうえで別途検証が必要です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

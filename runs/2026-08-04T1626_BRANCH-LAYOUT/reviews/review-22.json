@@ -1,0 +1,39 @@
+{
+  "review_n": 22,
+  "timestamp": "2026-08-04T18:12:17+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-22.input.diff",
+  "raw_output_path": "reviews/review-22.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "既追跡の中間生成物が追跡解除されておらず、新しい OCID 検査は現在の index に対して即座に失敗します。実環境 E2E はリポジトリ内の検査スクリプト変更には対象外です。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "B-001",
+      "severity": "blocker",
+      "file": ".gitignore",
+      "line": 62,
+      "issue": "ignore パターンを追加しただけで、ADR が予定する既追跡ファイルの追跡解除が差分に含まれていません。.gitignore は既追跡ファイルには効かず、staged index には未受容の完全長 OCID が10件残っています（tenancy 1件、compartment 3件を含む）。そのため `ops/check-no-real-ocid.sh` の cached scan と新しい GitHub Actions workflow、`make lint` は、この差分を適用した直後から必ず失敗します。また、禁止対象の実 OCIDも引き続き公開リポジトリの追跡対象です。",
+      "suggestion": "ADR記載どおり対象の `*.raw.txt`、`*.payload.txt`、`*.input.diff`、`turn-*.diff` を `git rm --cached` 相当の削除として差分に含めてください。追跡を維持する証跡に残る実値はマスクし、最終的な staged index に対して検査が成功することを確認してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "`runs/2026-08-04T1626_BRANCH-LAYOUT/e2e/` は空で、実行シナリオや結果は添付されていません。ただし変更対象はローカル/CI向けのリポジトリ検査であり、jetuse-devへのデプロイや実環境経路を変更しないため、実環境E2Eは対象外と判断します。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されておらず、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

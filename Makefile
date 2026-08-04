@@ -20,6 +20,7 @@ lint:   ## web + api + infra の lint（CI と同じものを見る）
 	$(PY)/ruff check packages/api
 	ops/check-infra.sh
 	ops/check-branch-base.sh
+	ops/check-no-real-ocid.sh --all
 
 e2e:    ## 実OCIへの E2E smoke（DB migrate 冪等）。scenario は tasks/<id>.md の「E2E シナリオ」参照
 	$(PY)/python -m jetuse_core.migrate

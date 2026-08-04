@@ -37,8 +37,6 @@ dist/
 .DS_Store
 tmp/
 
-# ループ実行履歴・E2E証跡(環境依存の識別子を含みうる — コミットしない。STATE.md/docs は別)
-runs/
 
 # Obsidian 出力先の絶対パス（環境依存・共有しない・ハンドオフ ch.5）
 .obsidian-dir
@@ -57,6 +55,15 @@ docs/archive/spikes/data/*.wav
 # 人間向け報告書 HTML（ADR-0018）。報告書は仕様でも証跡でもなく「読み物」なので、
 # 原本は runs/ に生成しつつ git には入れず、報告パイプで各自の閲覧環境へ配置する。
 runs/**/*.html
+
+# codex レビューの中間生成物とターン差分（ADR-0029）。
+# 判定と結論は review-<n>.json / STATE.md / summary.md に残るので、証跡の追跡性は落ちない。
+# ここは公開リポジトリで、実 OCID の主要な混入経路でもある（マスク漏れは
+# ops/check-no-real-ocid.sh が別途止める）。既追跡分は同 ADR で追跡解除した。
+runs/**/reviews/*.raw.txt
+runs/**/reviews/*.payload.txt
+runs/**/reviews/*.input.diff
+runs/**/diffs/turn-*.diff
 docs/verification/*.html
 
 # 無人 claude 実行ログ（ヘッドレス委譲・ハンドオフ ch.4）

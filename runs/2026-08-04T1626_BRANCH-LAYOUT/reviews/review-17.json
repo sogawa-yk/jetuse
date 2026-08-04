@@ -1,0 +1,55 @@
+{
+  "review_n": 17,
+  "timestamp": "2026-08-04T17:56:05+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-17.input.diff",
+  "raw_output_path": "reviews/review-17.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "OCID 検査の中心的な方針は妥当ですが、allowlist ファイル自体を検査対象から完全除外しており、tenancy / compartment OCID をコメントや先頭空白で混入できるため、公開リポジトリ向けセキュリティゲートとして不十分です。実環境 E2E は空ですが、変更対象は CI・ローカル検査であり、実環境デプロイの対象外と判断します。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 0,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "OCID-001",
+      "severity": "blocker",
+      "file": "ops/check-no-real-ocid.sh",
+      "line": 52,
+      "issue": "allowlist 全体を git grep から除外する一方、禁止種別の検査は行頭に完全一致する `^ocid1...` だけです。このため `# ocid1.tenancy...` のようなコメント、または先頭空白付きの tenancy / compartment OCID は検出されず、そのままコミットできます。「この2種は allowlist にあっても拒否する」という安全保証を迂回でき、実 OCID 混入防止ゲートの目的を破ります。",
+      "suggestion": "allowlist を丸ごと信頼せず、全行を検証してください。空行と OCID を含まないコメント以外は、前後空白を除去したうえで「完全な OCID 1個だけ」であることを要求し、tenancy / compartment は無条件で拒否してください。コメントや不正形式の行に OCID が含まれる場合も失敗させ、先頭空白・末尾コメント・コメント内 OCID のテストを追加してください。"
+    },
+    {
+      "id": "OCID-002",
+      "severity": "minor",
+      "file": "ops/check-no-real-ocid.sh",
+      "line": 80,
+      "issue": "検出元が index のみ、または `--all` で見つけた未追跡ファイルの場合でも、ファイル名の表示には通常の `git grep` しか使っていません。staged-only テストのように作業ツリー側がマスク済みの場合や未追跡ファイルの場合、FAIL にはなるものの原因ファイルが表示されません。",
+      "suggestion": "検出時に source と path を保持するか、診断でも `--cached`、通常の作業ツリー、必要なら `--untracked` をそれぞれ検索して該当パスを表示してください。該当シナリオでファイル名が stderr に含まれることもテストしてください。"
+    },
+    {
+      "id": "OCID-003",
+      "severity": "minor",
+      "file": "docs/archive/spikes/spike14b_aisdk.mjs",
+      "line": 16,
+      "issue": "必須環境変数がない場合に明示的に停止せず、`...MASKED` を実リクエストのヘッダーとして送信します。その結果、設定不足が不明瞭な OCI API エラーとして現れます。空文字列も `??` では拒否されません。",
+      "suggestion": "スクリプト実行時に `COMPARTMENT_OCID` と `GENAI_PROJECT_OCID` の存在・非空・基本形式を検証し、不足時はリクエスト前に明確なエラーで終了してください。マスク値はドキュメント例だけに使用してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "`runs/2026-08-04T1626_BRANCH-LAYOUT/e2e/` は空で、実行シナリオや結果は添付されていません。ただし差分は OCID の静的検査、CI、テストおよびアーカイブ済み spike の設定変更であり、jetuse-dev へのデプロイや実環境 UI/API フローを変更していないため、実環境 E2E は対象外と判断しました。新規 pytest の実行結果は証跡として添付されていません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザ E2E は実施していません。"
+    }
+  }
+}
