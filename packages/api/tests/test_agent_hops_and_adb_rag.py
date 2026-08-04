@@ -373,6 +373,21 @@ def test_route_rejects_agent_params_without_agent_mode():
                        json={**base, "agent_rag_backend": "adb"}).status_code == 400
 
 
+def test_explicit_default_backend_is_treated_as_unspecified(monkeypatch):
+    """API-01: 検査が走るのは**既定でない値**のときだけ、という境界を固定する。
+
+    `agent_rag_backend="vector_store"` を明示しても、エージェント外・`rag_search` 無しでも
+    通る(未指定と同じ扱い)。OpenAPI の description をこの境界どおりに書いているので、
+    ここが変わると仕様の記述が実挙動と食い違う(review-1 F-002)。
+    """
+    import service.main as service_main
+    monkeypatch.setattr(service_main, "stream_chat", _one_delta)
+    res = client.post("/api/chat/stream", json={
+        "model": "gpt-oss-120b", "messages": [{"role": "user", "content": "x"}],
+        "agent_rag_backend": "vector_store"})
+    assert res.status_code == 200
+
+
 def test_route_sums_usage_across_hops(monkeypatch):
     """ホップごとの usage を合算して記録する（最後の 1 往復だけにしない）。"""
     logged = {}

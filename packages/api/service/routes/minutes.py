@@ -14,8 +14,9 @@ from jetuse_core.auth import AuthContext, require_user
 from jetuse_core.models import MODELS
 
 from ..deps import require_speech
+from ..openapi_errors import error_responses
 from ..schemas import MinutesGenerateRequest
-from ..sse import KEEPALIVE_FRAME, KEEPALIVE_SECONDS, SSE_HEADERS
+from ..sse import KEEPALIVE_FRAME, KEEPALIVE_SECONDS, SSE_HEADERS, SSEResponse
 
 logger = logging.getLogger("jetuse.service")
 router = APIRouter()
@@ -88,7 +89,21 @@ async def delete_minutes(
     return {"deleted": True}
 
 
-@router.post("/api/minutes/{mid}/generate")
+@router.post(
+    "/api/minutes/{mid}/generate",
+    response_class=SSEResponse,
+    responses=error_responses(
+        400, 404, 409, 503,
+        **{
+            "400": "未登録の `model`。",
+            "404": "その `mid` の議事録ジョブが無い（他人所有も同じ）。",
+            "409": "**文字起こしがまだ終わっていない**（`GET /api/minutes/{mid}` の `status` が"
+                   " `completed` になってから呼ぶ）。リクエスト自体は正しいので待って再送する。",
+            "503": "ジョブ取得で **ADB に到達できない**"
+                   "（`{\"detail\": \"database unavailable\"}`）。",
+        },
+    ),
+)
 async def generate_minutes(
     mid: str,
     req: MinutesGenerateRequest,

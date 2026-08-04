@@ -15,6 +15,7 @@ from jetuse_core.auth import AuthContext, require_user
 from jetuse_core.logging import log_with
 from jetuse_core.webtools import SsrfBlockedError
 
+from ..openapi_errors import error_responses
 from ..schemas import (
     AgentDefinition,
     HttpToolCreate,
@@ -151,10 +152,32 @@ async def agent_select_ai_tools(user: Annotated[AuthContext, Depends(require_use
     return {"tools": select_ai_agent.SELECT_AI_TOOLS}
 
 
-@router.post("/api/agent/execute-tool")
+@router.post(
+    "/api/agent/execute-tool",
+    responses=error_responses(
+        400, 404, 409, 422, 503,
+        **{
+            "400": "未知のツール名（外部 HTTP ツールは承認イベントの `http_tool_id` が必須）"
+                   "／ツールの実行がツール側の理由で失敗。",
+            "404": "`http_tool_id` のツールが無い（削除済み・他人所有・不正 id）。",
+            "409": "承認したツールの定義が変わっている（同じ id の `name` が別物になっている）。"
+                   "承認をやり直す。**再送しても直らない**。",
+            "422": "`arguments` が上限超過など、入力の形が不正。",
+            "503": "外部 HTTP ツールの解決で **ADB に到達できない**"
+                   "（`{\"detail\": \"database unavailable\"}`）。存在しないツールの 400 と"
+                   "区別している（障害を「無いもの」として扱わない）。",
+        },
+    ),
+)
 async def agent_execute_tool(
     req: ToolExecuteRequest, user: Annotated[AuthContext, Depends(require_user)]
 ):
+    """承認された 1 回のツール実行（エージェントの承認往復で使う）。
+
+    **いつ使うか**: `POST /api/chat/stream` の SSE で承認イベントが来たとき、利用者が許可した
+    ツールをこの口で実行し、結果を次の呼び出しの `tool_results` に載せて続ける。
+    自動実行（`auto_tools=true`）なら JetUse 側で実行するのでこの口は使わない。
+    """
     registry = tool_registry.TOOLS
     if req.name not in registry:
         # 承認フローで外部HTTPツール(TOOL-01)が承認された場合。owner 所有のものだけ解決する。

@@ -13,6 +13,7 @@ from jetuse_core.auth import AuthContext, require_user
 
 from ..demo_context import DemoContext, require_demo, require_demo_owner
 from ..schemas import ChatRequest
+from ..sse import SSEResponse
 from . import chat as chat_routes
 from . import rag as rag_routes
 
@@ -23,7 +24,7 @@ Ctx = Annotated[DemoContext, Depends(require_demo)]
 OwnerCtx = Annotated[DemoContext, Depends(require_demo_owner)]
 
 
-@router.post("/chat")
+@router.post("/chat", response_class=SSEResponse)
 async def demo_chat(  # noqa: ANN202
     req: ChatRequest,
     ctx: Ctx,

@@ -21,7 +21,7 @@ from ..schemas import (
     Nl2SqlRequest,
     SeedDatasetsRequest,
 )
-from ..sse import KEEPALIVE_FRAME, KEEPALIVE_SECONDS, SSE_HEADERS
+from ..sse import KEEPALIVE_FRAME, KEEPALIVE_SECONDS, SSE_HEADERS, SSEResponse
 
 logger = logging.getLogger("jetuse.service")
 router = APIRouter()
@@ -29,7 +29,7 @@ router = APIRouter()
 
 # --- NL2SQL(SQL-02): 生成はSSE(実測30秒前後でkeepalive必須) ---
 
-@router.post("/api/chat/nl2sql")
+@router.post("/api/chat/nl2sql", response_class=SSEResponse)
 async def nl2sql_generate(
     req: Nl2SqlRequest, user: Annotated[AuthContext, Depends(require_user)]
 ):

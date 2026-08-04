@@ -15,7 +15,7 @@ from jetuse_core.logging import log_with
 from jetuse_core.webtools import SsrfBlockedError, extract_url
 
 from ..schemas import ExtractUrlRequest, SttSessionCreate, TranslateRequest, TtsRequest
-from ..sse import KEEPALIVE_FRAME, KEEPALIVE_SECONDS, SSE_HEADERS
+from ..sse import KEEPALIVE_FRAME, KEEPALIVE_SECONDS, SSE_HEADERS, SSEResponse
 
 logger = logging.getLogger("jetuse.service")
 router = APIRouter()
@@ -57,7 +57,7 @@ async def stt_audio(
     return {"ok": True}
 
 
-@router.get("/api/stt/sessions/{sid}/events")
+@router.get("/api/stt/sessions/{sid}/events", response_class=SSEResponse)
 async def stt_events(
     sid: str, user: Annotated[AuthContext, Depends(require_user)]
 ):

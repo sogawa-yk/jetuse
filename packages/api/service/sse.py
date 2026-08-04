@@ -7,6 +7,8 @@ service/main.py の各ストリーミングハンドラから分離。生成す�
 import json
 from typing import Any
 
+from fastapi.responses import StreamingResponse
+
 # SSEレスポンスヘッダ(GW/中継のバッファリング抑止)
 SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 SSE_MEDIA_TYPE = "text/event-stream"
@@ -22,3 +24,15 @@ DONE_FRAME = "data: [DONE]\n\n"
 def sse_event(payload: Any) -> str:
     """1イベントをSSEフレームへ。`json.dumps(..., ensure_ascii=False)` を踏襲。"""
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+class SSEResponse(StreamingResponse):
+    """SSE を返すルートの宣言用(API-01)。
+
+    **中身は StreamingResponse と同じ**で、効くのは OpenAPI の 200 の media type。
+    既定の `JSONResponse` のままだと仕様は `application/json` + 空 schema と宣言し、
+    実際は `text/event-stream` を返すという嘘になる(生成クライアントが JSON として
+    デコードしようとする — review-9 F-001)。ハンドラ側の返却物は変えない。
+    """
+
+    media_type = SSE_MEDIA_TYPE

@@ -6,7 +6,7 @@ import logging
 import threading
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from jetuse_core import agents as agents_repo
@@ -35,8 +35,9 @@ from jetuse_core.models import DEFAULT_MODEL, MODELS, model_status
 from jetuse_core.settings import get_settings
 
 from .. import agent_dispatch
-from ..schemas import ChatRequest
-from ..sse import KEEPALIVE_FRAME, KEEPALIVE_SECONDS, SSE_HEADERS
+from ..openapi_errors import error_responses
+from ..schemas import CHAT_REQUEST_EXAMPLES, ChatRequest
+from ..sse import KEEPALIVE_FRAME, KEEPALIVE_SECONDS, SSE_HEADERS, SSEResponse
 
 logger = logging.getLogger("jetuse.service")
 router = APIRouter()
@@ -63,7 +64,7 @@ def _stream_agent(*args, **kwargs):
     return svc_main.stream_agent(*args, **kwargs)
 
 
-@router.get("/api/chat/ping")
+@router.get("/api/chat/ping", response_class=SSEResponse)
 async def chat_ping(
     user: Annotated[AuthContext, Depends(require_user)],
     events: int = 5,
@@ -81,12 +82,64 @@ async def chat_ping(
     return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
 
 
-@router.post("/api/chat/stream")
+@router.post(
+    "/api/chat/stream",
+    response_class=SSEResponse,
+    responses={
+        200: {
+            "description": "SSE ストリーム。`data: {...}` を逐次返し `data: [DONE]` で終端する。"
+            "フレームは `{\"delta\": \"...\"}`(本文) / `{\"citations\": [...]}`(出典) / "
+            "`{\"tool_call\": {...}}`(ツール実行) / `{\"error\": \"...\"}`(途中失敗) / "
+            "`{\"ka\": 1}`(キープアライブ)。**HTTP 200 のまま本文中で失敗しうる**ので "
+            "`error` フレームも読むこと。",
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        },
+        **error_responses(
+        400, 404, 413, 422, 503,
+        **{
+            "400": "`agent` と `rag` の併用 / エージェント専用パラメータを非エージェントで指定 /"
+                   " 未登録の `model` / `rag=true` で文書が未アップロード。",
+            "404": "`agent_id` のエージェントが無い / `http_tool_ids` のツールが無い /"
+                   " `conversation_id` の会話が無い（いずれも他人所有も同じ 404）。",
+            "413": "`images` が 1 枚 2MB / 合計 10MB を超えた。",
+            "422": "`images` を `agent`/`rag` と併用、非 vision モデルで画像、"
+                   "最終メッセージが user でない、data URI でない、など。",
+            "503": "`conversation_id` / `agent_id` / ツール解決で **ADB に到達できない**"
+                   "（`{\"detail\": \"database unavailable\"}`）。DB を使わない素のチャットは"
+                   "この影響を受けない。",
+        },
+    ),
+    },
+)
 async def chat_stream(  # noqa: ANN202
-    req: ChatRequest,
+    # 名前つきの例は requestBody 側に置く（schema 側は生の値。正本は CHAT_REQUEST_EXAMPLES）
+    req: Annotated[ChatRequest, Body(openapi_examples=CHAT_REQUEST_EXAMPLES)],
     user: Annotated[AuthContext, Depends(require_user)],
 ):
-    """チャットストリーミング(CHAT-01)。LLMの2系統APIを正規化したSSEを返す。"""
+    """チャットストリーミング(CHAT-01)。LLMの2系統APIを正規化したSSEを返す。
+
+    `text/event-stream` で `data: {...}` を逐次返し、`data: [DONE]` で終端する。
+
+    **呼ぶ前に分かるように**(API-01)。ここで 400 になる組み合わせは3つ:
+
+    - **排他**: `agent`(または `agent_id`)と `rag` は併用できない
+      → 400 `agent and rag cannot be combined`。
+      エージェントに文書検索させるなら `agent=true` +
+      `enabled_tools=["rag_search"]`(`rag` は使わない)。
+    - **依存**: エージェントの文書検索は `enabled_tools` に `rag_search` が要る。
+      **入れないと成功はするが検索は行われない**(黙って検索されない)。
+      さらに `agent_rag_backend="adb"` を指定した場合は、`rag_search` が無いと 400
+      `agent_rag_backend requires rag_search in enabled_tools` で断る
+      (「adb を選んだのに出典が粗い＝そもそも検索していない」を防ぐため)。
+    - **似た名前**: `rag_backend` は `rag=true` の検索バックエンド、
+      `agent_rag_backend` はエージェントの `rag_search` のバックエンド。
+      エージェントモードで `rag_backend` を指定しても効かない(エラーにもならない)。
+
+    他に 400 になるもの: `rag_filters` は `rag=true` かつ `rag_backend=vector_store` かつ
+    非エージェントのときだけ(それ以外は無視せず断る)。`max_tool_hops` と
+    `agent_rag_backend="adb"` は `agent=true` 必須・`agent_id` には指定できない
+    (既定値 `agent_rag_backend="vector_store"` は明示しても検査されない)。
+    """
     return await stream_chat_response(req, user, user.subject)
 
 

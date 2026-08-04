@@ -17,6 +17,8 @@ from jetuse_core import extract_scan, extract_xlsx, rag, rag_adb, rag_metadata
 from jetuse_core.auth import AuthContext, require_user
 from jetuse_core.genai import ProjectResolutionError
 
+from ..openapi_errors import error_responses
+
 logger = logging.getLogger("jetuse.service")
 router = APIRouter()
 
@@ -171,7 +173,21 @@ async def list_rag_files(user: Annotated[AuthContext, Depends(require_user)]):
     return await list_files_response(user.subject)
 
 
-@router.post("/api/rag/files")
+@router.post(
+    "/api/rag/files",
+    responses=error_responses(
+        413, 422, 502, 503,
+        **{
+            "413": f"ファイルが {rag.MAX_BYTES // (1024 * 1024)}MB を超えた。",
+            "422": f"拡張子が {_ALLOWED_HINT} 以外 / 空ファイル / `attributes` が"
+                   " JSON オブジェクトでない・未知のキー / `ocr_engine` が未知の名前。",
+            "502": "OCI Generative AI 側が 4xx/5xx を返した（レート制限・障害など。"
+                   "権限不足・プロジェクト未解決は 503 側）。`detail` に上流の HTTP コードが入る。",
+            "503": "Vector Store の準備中・OCR サービスが使えない・権限/プロジェクト設定が未整備。"
+                   "時間を置いて再送する（`GET /api/rag/health` で切り分けできる）。",
+        },
+    ),
+)
 async def upload_rag_file(
     file: UploadFile,
     user: Annotated[AuthContext, Depends(require_user)],
@@ -181,6 +197,26 @@ async def upload_rag_file(
     # 省略時は既定(DU)。**自動では切り替えない**(切り替え根拠を OCR 前に持てないため)
     ocr_engine: Annotated[str | None, Form()] = None,
 ):
+    """文書を取り込んで検索できるようにする（`multipart/form-data`）。
+
+    **いつ使うか**: `POST /api/chat/stream` に `rag=true`（素の文書 Q&A）または
+    `agent=true` + `enabled_tools=["rag_search"]`（エージェントに検索させる）を渡す**前**に、
+    検索対象をここへ入れる。取り込みは呼び出しユーザーの名前空間に閉じる。
+
+    **例**（`attributes` は出典メタデータ。版で絞りたいときに付ける — 検索時は
+    `rag_filters` で参照する。省略可）:
+
+    ```
+    curl -X POST "$BASE/api/rag/files" \\
+      -H "authorization: Bearer $TOKEN" \\
+      -F "file=@manual.pdf" \\
+      -F 'attributes={"current_version":"Y","doc":"manual"}'
+    ```
+
+    応答は取り込んだファイルの情報（`file_id` / `filename` など）。一覧は
+    `GET /api/rag/files`、削除は `DELETE /api/rag/files/{file_id}`。
+    新規デプロイの1件目は Vector Store の反映待ちで 1 分程度かかることがある。
+    """
     return await upload_file_response(user.subject, file, attributes, ocr_engine)
 
 
