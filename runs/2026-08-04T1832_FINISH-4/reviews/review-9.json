@@ -1,39 +1,30 @@
 {
   "review_n": 9,
-  "timestamp": "2026-08-04T21:58:59+09:00",
+  "timestamp": "2026-08-05T19:08:09+09:00",
   "reviewer": "codex",
   "model": "gpt-5.6-sol",
   "input_diff_path": "reviews/review-9.input.diff",
   "raw_output_path": "reviews/review-9.raw.txt",
   "codex_exit_code": 0,
   "verdict": "PASS",
-  "summary": "追加された一次証跡は、同一セッションを通じた DB 読み戻し、LLM 構造化、409 ガード、設計、永続化を裏づけており、Internal 統合 E2E の完了主張は妥当です。ただし review-9.json が追加済み証跡を存在しないものとして FAIL を記録しており、run のレビュー記録と現行差分が矛盾しています。",
+  "summary": "Containerfile の依存解決分離は既存の静的 dependencies と整合し、公開シグネチャや実行時依存を損なう差分は確認されませんでした。.dockerignore にも認証情報・環境依存値の除外があり、変更後イメージのキャッシュ、ローカル動作、jetuse-dev 配備後の複数経路が証跡で確認されています。",
   "severity_counts": {
     "blocker": 0,
-    "major": 1,
+    "major": 0,
     "minor": 0
   },
-  "findings": [
-    {
-      "id": "F-001",
-      "severity": "major",
-      "file": "runs/2026-08-04T1832_FINISH-4/reviews/review-9.json",
-      "line": 9,
-      "issue": "レビュー結果が同じ差分内の証跡と矛盾しています。summary と E2E-001 は「実行コマンド、HTTP 応答、セッション ID、DB 読み戻し結果がない」としていますが、demo-platform/README.md にコマンド、HTTP status、同一セッション ID が記録され、7a〜7h の各ファイルに応答本文と最終読み戻し結果も追加されています。このため verdict=FAIL、blocker=1、adequacy=insufficient は現行差分に対するレビュー記録として不正確です。",
-      "suggestion": "追加された demo-platform/README.md と 7a〜7h の証跡を含めて review-9.json を再生成し、解消済みの E2E-001 を削除してください。verdict、severity_counts、summary、e2e.adequacy、e2e.notes も再生成結果に合わせて整合させてください。"
-    }
-  ],
+  "findings": [],
   "e2e": {
     "attached": true,
-    "scenarios_reviewed": 7,
+    "scenarios_reviewed": 4,
     "adequacy": "sufficient",
-    "notes": "runs/2026-08-04T1832_FINISH-4/e2e/ の7シナリオを確認しました。今回の核心である scenario-7 は demo-platform/README.md および 7a〜7h に、実行コマンド、HTTP status、応答本文、同一セッション ID、設計後の DB 読み戻しが記録され、正常系と409エラー系を含む8項目を裏づけています。全体でも最低2シナリオを十分に超えています。Hosted Application 配備と Public ORM apply の未実施範囲には SKIPPED.md および scenario-3 で具体的な理由と後続確認条件があります。実値の OCID、秘密情報、未マスクの API Gateway endpoint は追加されていません。",
+    "notes": "`runs/2026-08-04T1832_FINISH-4/e2e/scenario-8-containerfile-layers.md` から、cold build とコード変更後の再ビルド、旧新イメージの依存・起動等価性、変更後イメージ `dev-sogawa-20ac5b1` の jetuse-dev 配備、共有依存変更時のキャッシュ無効化を確認した。実環境では GET 系の疎通・DB 経路、SSE 実推論、DB 書き込みの複数シナリオが成功しており、今回の差分を十分に裏づけている。関連する一次証跡は同 run の `e2e/demo-platform/` と `scenario-8-containerfile-layers.md`。CI キャッシュ効果は未検証と明示されており、本差分が CI キャッシュ設定を変更しないため未実施理由は妥当。",
     "live_check": {
       "performed": false,
       "target_url": "",
       "result": "not_performed",
       "scenarios": [],
-      "notes": "ライブのターゲット URL が提供されていないため、指示どおりブラウザ E2E は実施していません。"
+      "notes": "ライブターゲット URL が提供されておらず、指示に従ってブラウザツールは使用していない。"
     }
   }
 }

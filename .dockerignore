@@ -1,0 +1,35 @@
+# ビルドコンテキストの絞り込み。指定が無いとリポジトリ全体(2.7GB)が毎回転送される。
+# Containerfile が使うのは packages/{api,jetuse_shared} と agent-containers 系だけ。
+
+.git
+.venv
+node_modules
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+
+# ループの実行履歴(223MB)。イメージには一切入らない
+runs
+.agent-runs
+
+# 環境依存値・資格情報。**イメージへ入れない**
+.env
+.obsidian-dir
+**/*.tfvars
+**/*.tfstate
+**/*.tfstate.*
+**/.terraform
+infra/terraform/environments/*/wallet*
+
+# SPA の成果物は Object Storage へ配信するもので API イメージには不要
+packages/web/dist
+packages/web/src
+packages/web/public
+
+# ドキュメント・検証記録
+docs
+specs
+tasks
+spikes
+.claude
