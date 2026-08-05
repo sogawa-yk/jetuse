@@ -147,7 +147,12 @@ def _md(text: str) -> str:
                 i += 1
             out.append(f"<blockquote>{_inline(' '.join(buf))}</blockquote>")
         else:
-            buf = []
+            # **1行目は無条件に取り込む。** 段落の継続条件だけでループを回すと、`|` で始まるのに
+            # 表として解釈されなかった行（次行が区切りでない＝折り返した表など）で継続条件が
+            # 即 false になり、`i` が進まないまま外側 while が回り続けて**永久に固まる**
+            # （2026-08-05 の実害: ER-0012 の折り返した表で `ops/er.py report` がハング）。
+            buf = [ln.strip()]
+            i += 1
             while i < len(lines) and lines[i].strip() and not lines[i].startswith(("#", "|", ">")) \
                     and not lines[i].lstrip().startswith(("- ", "* ")):
                 buf.append(lines[i].strip())
