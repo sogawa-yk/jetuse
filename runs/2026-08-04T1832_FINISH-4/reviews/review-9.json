@@ -1,30 +1,55 @@
 {
   "review_n": 9,
-  "timestamp": "2026-08-05T19:08:09+09:00",
+  "timestamp": "2026-08-05T19:35:36+09:00",
   "reviewer": "codex",
   "model": "gpt-5.6-sol",
   "input_diff_path": "reviews/review-9.input.diff",
   "raw_output_path": "reviews/review-9.raw.txt",
   "codex_exit_code": 0,
   "verdict": "PASS",
-  "summary": "Containerfile の依存解決分離は既存の静的 dependencies と整合し、公開シグネチャや実行時依存を損なう差分は確認されませんでした。.dockerignore にも認証情報・環境依存値の除外があり、変更後イメージのキャッシュ、ローカル動作、jetuse-dev 配備後の複数経路が証跡で確認されています。",
+  "summary": "実装コードの変更はなく blocker はありません。ただし、ER-0012 のセキュリティ対策を完了扱いにする証跡が不足しているほか、ER-0015 の改善案では記載された再発条件を検出できず、更新されたレビュー記録にも内容上の不整合があります。",
   "severity_counts": {
     "blocker": 0,
-    "major": 0,
+    "major": 3,
     "minor": 0
   },
-  "findings": [],
+  "findings": [
+    {
+      "id": "review-001",
+      "severity": "major",
+      "file": "docs/enhance/ER-0012-公開リポジトリに実OCIDが残っている.md",
+      "line": 13,
+      "issue": "実 OCID の除去と再混入防止を完了したとしていますが、添付された E2E 証跡には、追跡対象全体のスキャン結果、tenancy/compartment OCID を allowlist できないことの負例、記載された14テストの実行結果がありません。セキュリティ要件の完了主張を今回の証跡から確認できません。",
+      "suggestion": "`ops/check-no-real-ocid.sh --all` の実行ログ、ダミーの tenancy/compartment OCID が拒否される負例、および関連テスト14件の結果を証跡に追加してください。用意できない場合は完了確認が未検証である旨を明記してください。"
+    },
+    {
+      "id": "review-002",
+      "severity": "major",
+      "file": "docs/enhance/ER-0015-環境を作る手順にマイグレーションが無い.md",
+      "line": 54,
+      "issue": "提案(b)の「現在の checkout に存在する migration」と `schema_migrations` の比較では、今回の原因である「main checkout に internal 固有 migration 自体が存在しない」状態を未適用として検出できません。DBとmainの双方が016までなら差分0のまま正常終了し、再発防止になりません。",
+      "suggestion": "Internal 環境では internal 系 checkout であることを明示的に検査するか、環境ごとの期待 migration・最低バージョンをリポジトリ非依存のマニフェストとして照合し、不足時は非0で終了させてください。単なる件数表示は補助情報として扱ってください。"
+    },
+    {
+      "id": "review-003",
+      "severity": "major",
+      "file": "runs/2026-08-04T1832_FINISH-4/reviews/review-9.json",
+      "line": 21,
+      "issue": "更新後の finding は「summary と findings が scope 未指定およびリージョン数の誤算入を指摘している」と述べていますが、同ファイルの更新後 summary にその指摘はなく、ER-0019 にもイメージ別 scope とビルド5回の区別が既に記載されています。さらに同じ `review_n` の timestamp・判定内容を上書きしており、レビュー履歴として追跡しにくい状態です。",
+      "suggestion": "生成済み review-9 は当時の結果として変更せず、修正後の評価を新しい review 番号で保存してください。上書き運用を続ける場合でも、現在の差分と矛盾する finding を削除し、summary・severity_counts・e2e 所見を整合させてください。"
+    }
+  ],
   "e2e": {
     "attached": true,
-    "scenarios_reviewed": 4,
-    "adequacy": "sufficient",
-    "notes": "`runs/2026-08-04T1832_FINISH-4/e2e/scenario-8-containerfile-layers.md` から、cold build とコード変更後の再ビルド、旧新イメージの依存・起動等価性、変更後イメージ `dev-sogawa-20ac5b1` の jetuse-dev 配備、共有依存変更時のキャッシュ無効化を確認した。実環境では GET 系の疎通・DB 経路、SSE 実推論、DB 書き込みの複数シナリオが成功しており、今回の差分を十分に裏づけている。関連する一次証跡は同 run の `e2e/demo-platform/` と `scenario-8-containerfile-layers.md`。CI キャッシュ効果は未検証と明示されており、本差分が CI キャッシュ設定を変更しないため未実施理由は妥当。",
+    "scenarios_reviewed": 8,
+    "adequacy": "insufficient",
+    "notes": "E2E-1〜8を確認しました。scenario-4/6 は ER-0003 のコンテナエンジン解決と amd64 固定、scenario-7 と demo-platform の8経路は ER-0015 の migration 必要性、scenario-8 は変更後イメージの実OCI配備と ADB 停止・復旧の観測を裏づけています。正常系、拒否経路、DB永続化、実推論を含み、SKIPPED.md の未実施理由も概ね妥当です。一方、今回完了扱いにした ER-0012 の OCID 全体スキャンおよび拒否テストが証跡に含まれないため、差分全体の完了主張を裏づけるには不十分です。",
     "live_check": {
       "performed": false,
       "target_url": "",
       "result": "not_performed",
       "scenarios": [],
-      "notes": "ライブターゲット URL が提供されておらず、指示に従ってブラウザツールは使用していない。"
+      "notes": "ライブターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
     }
   }
 }
