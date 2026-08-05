@@ -230,10 +230,12 @@ def _detail_html(item: dict, body: str) -> str:
 
 STALL_JA = {
     "review": "レビューが終わっていない",
+    "unreleased": "リリースされていない",
     "unshipped": "PR が出ていない",
     "unknown": "状態が読めない",
     "pr": "PR が出ている",
     "parked": "意図的に止めている",
+    "clean": "出すべきものは残っていない",
 }
 
 
@@ -249,7 +251,7 @@ def _stalled_rows() -> tuple[list[str], list[str]]:
     for i in items:
         d = f'{i["days"]}日前' if i.get("days") is not None else "不明"
         row = f'| `{i["name"]}` | {STALL_JA.get(i["status"], i["status"])} | {i["why"]} | {d} |'
-        (warn if i["status"] in ("review", "unshipped", "unknown") else rest).append(row)
+        (warn if i["status"] in ("review", "unreleased", "unshipped", "unknown") else rest).append(row)
     return warn, rest
 
 
