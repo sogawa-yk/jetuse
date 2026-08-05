@@ -1,13 +1,38 @@
 ---
 id: ER-0012
 title: 公開リポジトリに実 OCID が残っている
-status: parked
+status: done
 size: S
 source: 気づき
 created: 2026-08-04
 ticket:
-pr:
+pr: 134
 ---
+
+## 【2026-08-04 完了】
+
+`runs/` の中間生成物を追跡から外し、`docs/archive/` の実値をマスクした（PR #134 / ADR-0029）。
+`ops/check-no-real-ocid.sh` で新規混入を機械的に止める仕組みも入れた。
+`tenancy` / `compartment` は allowlist に書いても拒否する。
+
+残った `ormjob` 2件は受容 residual として `ops/allowed-public-ocids.txt` に記録。
+
+**確認できる証跡**:
+
+| 主張 | どこで確認できるか |
+|---|---|
+| 追跡対象から実 OCID が消えた | `make lint` の `ops/check-no-real-ocid.sh --all` が
+`[ocid] OK（検出はすべて ops/allowed-public-ocids.txt で受容済み）` を返す。CI では
+専用ワークフロー `.github/workflows/no-real-ocid.yml` が全ブランチの push で実行 |
+| `tenancy` / `compartment` は allowlist に書いても拒否 | `packages/api/tests/test_check_no_real_ocid.py` の
+`test_tenancy_cannot_be_allowlisted` / `test_compartment_cannot_be_allowlisted` /
+`test_commented_out_tenancy_in_allowlist_is_rejected`（計14ケース） |
+| 追跡解除の実施 | PR #134（343ファイル・約50.7MB を `git rm --cached`） |
+| 判断の記録 | ADR-0029（受容した residual と、正規表現が近似である旨も明記） |
+
+**この ER の差分単体では検証できない。** 完了の裏づけは PR #134 とその証跡
+（`runs/2026-08-04T1832_FINISH-4/`）にあり、本ファイルはそこへの索引にすぎない。
+現在も成立していることは `make lint` と CI（`no-real-ocid.yml`）が毎回確かめている。
 
 ## ひとことで
 
