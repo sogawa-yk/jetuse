@@ -21,12 +21,8 @@ pr: 134
 
 | 主張 | どこで確認できるか |
 |---|---|
-| 追跡対象から実 OCID が消えた | `make lint` の `ops/check-no-real-ocid.sh --all` が
-`[ocid] OK（検出はすべて ops/allowed-public-ocids.txt で受容済み）` を返す。CI では
-専用ワークフロー `.github/workflows/no-real-ocid.yml` が全ブランチの push で実行 |
-| `tenancy` / `compartment` は allowlist に書いても拒否 | `packages/api/tests/test_check_no_real_ocid.py` の
-`test_tenancy_cannot_be_allowlisted` / `test_compartment_cannot_be_allowlisted` /
-`test_commented_out_tenancy_in_allowlist_is_rejected`（計14ケース） |
+| 追跡対象から実 OCID が消えた | `make lint` の `ops/check-no-real-ocid.sh --all` が `[ocid] OK（検出はすべて ops/allowed-public-ocids.txt で受容済み）` を返す。CI では専用ワークフロー `.github/workflows/no-real-ocid.yml` が全ブランチの push で実行 |
+| `tenancy` / `compartment` は allowlist に書いても拒否 | `packages/api/tests/test_check_no_real_ocid.py` の `test_tenancy_cannot_be_allowlisted` / `test_compartment_cannot_be_allowlisted` / `test_commented_out_tenancy_in_allowlist_is_rejected`（計14ケース） |
 | 追跡解除の実施 | PR #134（343ファイル・約50.7MB を `git rm --cached`） |
 | 判断の記録 | ADR-0029（受容した residual と、正規表現が近似である旨も明記） |
 
