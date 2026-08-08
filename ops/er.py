@@ -147,7 +147,12 @@ def _md(text: str) -> str:
                 i += 1
             out.append(f"<blockquote>{_inline(' '.join(buf))}</blockquote>")
         else:
-            buf = []
+            # **1行目は無条件に取り込む。** 段落の継続条件だけでループを回すと、`|` で始まるのに
+            # 表として解釈されなかった行（次行が区切りでない＝折り返した表など）で継続条件が
+            # 即 false になり、`i` が進まないまま外側 while が回り続けて**永久に固まる**
+            # （2026-08-05 の実害: ER-0012 の折り返した表で `ops/er.py report` がハング）。
+            buf = [ln.strip()]
+            i += 1
             while i < len(lines) and lines[i].strip() and not lines[i].startswith(("#", "|", ">")) \
                     and not lines[i].lstrip().startswith(("- ", "* ")):
                 buf.append(lines[i].strip())
@@ -225,10 +230,12 @@ def _detail_html(item: dict, body: str) -> str:
 
 STALL_JA = {
     "review": "レビューが終わっていない",
+    "unreleased": "リリースされていない",
     "unshipped": "PR が出ていない",
     "unknown": "状態が読めない",
     "pr": "PR が出ている",
     "parked": "意図的に止めている",
+    "clean": "出すべきものは残っていない",
 }
 
 
@@ -244,7 +251,7 @@ def _stalled_rows() -> tuple[list[str], list[str]]:
     for i in items:
         d = f'{i["days"]}日前' if i.get("days") is not None else "不明"
         row = f'| `{i["name"]}` | {STALL_JA.get(i["status"], i["status"])} | {i["why"]} | {d} |'
-        (warn if i["status"] in ("review", "unshipped", "unknown") else rest).append(row)
+        (warn if i["status"] in ("review", "unreleased", "unshipped", "unknown") else rest).append(row)
     return warn, rest
 
 

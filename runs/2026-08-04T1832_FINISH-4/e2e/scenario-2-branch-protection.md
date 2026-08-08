@@ -55,6 +55,17 @@ rc=1
 **この PR 自身が検証になる。** 保護下の `public-dev` に対し、PR + CI 必須を満たして
 マージできることをもって確認する（結果は下記に追記）。
 
-- PR: #137
-- CI / マージ結果は本 PR のマージ時に確定する（このファイル自身が PR の一部のため、
-  結果は PR 本文とマージ済みの事実をもって証跡とする）
+**確定した（2026-08-04）。** protection 適用後、以下がすべて PR 経由・CI 必須を満たして
+マージされた。direct push は拒否されるが、PR 経由なら通ることが実運用で確認できている。
+
+| PR | 宛先 | 結果 |
+|---|---|---|
+| #137 | public-dev | MERGED（protection 適用直後の1本目） |
+| #139 | public-dev | MERGED |
+| #141 | internal-dev | MERGED |
+| #142 | public-dev | MERGED |
+| #143 | internal-dev | MERGED |
+| #144 | public-dev | MERGED |
+| #138 | **main** | MERGED（Public リリース。安定枝も PR 経由で通る） |
+
+`#138` が重要 —— **保護した `main` にも release PR なら入る**ことの確認。
