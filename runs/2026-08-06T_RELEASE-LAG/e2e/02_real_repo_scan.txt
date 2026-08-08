@@ -1,0 +1,11 @@
+# シナリオ2: 実リポジトリでの検出（public / internal 両ペア）
+
+$ .venv/bin/python ops/stalled.py
+public-dev → main unreleased 2日前     `public-dev` が `main` より 16 commit 先行。release PR が出ていない（merge すると公開配信物が差し替わる）
+internal-dev → internal-stable unreleased 1日前     `internal-dev` が `internal-stable` より 10 commit 先行。release PR が出ていない
+API-01         parked     2日前     ER-0011 で意図的に止めている
+
+$ git rev-list --count origin/main..origin/public-dev
+16
+$ git rev-list --count origin/internal-stable..origin/internal-dev
+10

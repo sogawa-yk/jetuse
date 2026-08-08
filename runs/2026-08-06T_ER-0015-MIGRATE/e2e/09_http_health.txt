@@ -1,0 +1,12 @@
+# シナリオ9: HTTP ルート込みで /api/health を叩く（実 ADB）
+
+実行: ADB_WALLET_DIR="" AUTH_REQUIRED=false PYTHONPATH=packages/api .venv/bin/python http_check2.py
+
+app 作成中...
+app OK。/api/health を叩く
+{"ts": "2026-08-06T06:11:37.360Z", "level": "INFO", "logger": "httpx", "message": "HTTP Request: GET https://generativeai.ap-osaka-1.oci.oraclecloud.com/20231130/openai/v1/vector_stores \"HTTP/1.1 200 OK\""}
+{"ts": "2026-08-06T06:11:37.621Z", "level": "INFO", "logger": "httpx", "message": "HTTP Request: GET https://inference.generativeai.ap-osaka-1.oci.oraclecloud.com/openai/v1/files \"HTTP/1.1 200 OK\""}
+{"ts": "2026-08-06T06:11:40.021Z", "level": "INFO", "logger": "jetuse.service", "message": "request", "method": "GET", "path": "/api/health", "status": 200, "duration_ms": 3572.1}
+{"ts": "2026-08-06T06:11:40.022Z", "level": "INFO", "logger": "httpx", "message": "HTTP Request: GET http://testserver/api/health \"HTTP/1.1 200 OK\""}
+HTTP 200  3.58s
+schema = {"status": "ok", "applied": 21, "expected": 21}

@@ -1,0 +1,47 @@
+{
+  "review_n": 4,
+  "timestamp": "2026-08-06T12:03:11+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-4.input.diff",
+  "raw_output_path": "reviews/review-4.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "スキーマ差分の判定ロジックと単体・変異テストは充実しています。しかし、新規の実DB診断経路を追加しながら実環境検証を対象外として完了扱いにしており、添付証跡だけでは完了を裏づけられません。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 0,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "docs/enhance/ER-0015-環境を作る手順にマイグレーションが無い.md",
+      "line": 4,
+      "issue": "status を done に変更している一方、添付された6シナリオはすべてローカルのfake DB・静的照合・変異検査で、jetuse-devへのデプロイや実Oracle DBに対する `/api/health` の証跡がない。SKIPPED.mdの「新しく動く経路が無い」という説明にも反して、差分は本番リクエストごとに `user_tables` と `schema_migrations` を実DBから読む新経路を追加している。壊れた共有スキーマを作らない理由は behind 再現を省略する根拠にはなるが、正常DBでの読取・応答・タイムアウトを一切検証しない根拠にはならない。",
+      "suggestion": "jetuse-devへ配備し、最低2シナリオの実環境証跡を追加する。例えば、(1) migration適用済みスキーマで `/api/health` が `schema.status=ok` を返す正常系、(2)隔離した `jetuse-spike-*` スキーマでの behind、または既存の先行スキーマを読み取り専用で参照する foreign 系を検証する。共有ADBを壊す必要がある経路だけをSKIPPEDにし、HTTP応答、実Oracle SQL、非DDL性を確認してから done とする。"
+    },
+    {
+      "id": "F-002",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/health.py",
+      "line": 192,
+      "issue": "pending migration が1件でもあれば「DB を使う機能は 503 のままになる」と断定しているが、未適用ファイルがインデックス追加などの場合、機能は正常に動作し得る。実際に列挙された Internal migration にも複数の index migration が含まれるため、診断メッセージが影響を過大評価する。",
+      "suggestion": "「影響するDB機能が503になる可能性がある」など、schemaがbehindである事実と実際の機能影響を分けて表現する。対応するテストも、503の断定ではなく原因候補と対処先が示されることを検証する。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 6,
+    "adequacy": "insufficient",
+    "notes": "01_pytestの34件、5種類の変異検査、別プロセスCLI、ブランチ集合照合、RUN_DB_BOOTSTRAP設定照合、internal相当checkoutでの再実行を確認した。ロジックの回帰検出としては強いが、証跡はすべてローカルであり、見出しにあるjetuse-dev実環境へのデプロイ・実Oracle DB・実HTTP経路は検証されていない。SKIPPED理由は壊れた共有スキーマを作らない点では妥当だが、正常系や読み取り専用の実DB検証まで省略する理由としては不十分。証跡パスは `runs/2026-08-06T_ER-0015-MIGRATE/e2e/`。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されておらず、指示に従いブラウザツールは使用していない。"
+    }
+  }
+}

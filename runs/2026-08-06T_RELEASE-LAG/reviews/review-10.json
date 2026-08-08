@@ -1,0 +1,39 @@
+{
+  "review_n": 10,
+  "timestamp": "2026-08-06T01:36:55+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-10.input.diff",
+  "raw_output_path": "reviews/review-10.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "未リリース検出、fetch/gh 障害時の保守的な判定、release PR の識別は概ね正しく、blocker はありません。ただし gh JSON の値型を検証しておらず、異常応答でレポート生成全体が落ちる経路が残っています。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 1,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "major",
+      "file": "ops/stalled.py",
+      "line": 107,
+      "issue": "PR レコードは必須キーの存在しか検証していません。例えば `headRefName: []` を含む JSON は正常値として返され、その後 `_by_head()` が list を辞書キーにして `TypeError` を送出します。また `isCrossRepository: \"false\"` は truthy になり、自リポジトリの release PR を誤って除外します。「想定外 JSON は None に落としてレポートを継続する」というエラー処理が値型の異常では成立せず、対応するテストもありません。",
+      "suggestion": "`number` は int、`headRefName` / `baseRefName` は str、`isCrossRepository` は bool と厳密に検証し、不一致なら `None` を返してください。各フィールドの誤型、とくに非 hashable な `headRefName` と文字列の boolean を使った回帰テストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 6,
+    "adequacy": "sufficient",
+    "notes": "`runs/2026-08-06T_RELEASE-LAG/e2e/` の6シナリオを確認しました。37件の単体テスト、実リポジトリでの両 release pair の検出と rev-list 実測値の一致、PR 判定3分岐、オフライン耐性、判定不能時の保守的表示、明示 refspec を網羅しています。OCI 配備対象外であることは SKIPPED.md に技術的理由と代替検証が記載されており妥当です。ただし F-001 の値型異常は証跡・テストとも未網羅です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されておらず、指示に従いブラウザツールは使用していません。"
+    }
+  }
+}

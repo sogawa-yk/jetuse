@@ -1,0 +1,22 @@
+# シナリオ4: 実ブランチの migration 集合
+
+## origin/main (21 本)
+## origin/public-dev (21 本)
+## origin/internal-dev (32 本)
+## origin/internal-stable (32 本)
+
+## internal-dev のみが持つもの（= 逆向き差分で検出される版）
+017_demos_v2.sql
+018_demos_idx_owner.sql
+019_demos_idx_visibility.sql
+020_conversations_demo_id.sql
+021_conversations_idx_demo.sql
+022_demo_backend_targets.sql
+023_dbt_idx.sql
+024_rag_files_filename_char.sql
+025_builder_sessions.sql
+026_builder_sessions_idx.sql
+027_builder_sessions_sufficient.sql
+
+## public-dev のみが持つもの（空であることが前提: Internal ⊇ Public）
+(上が空 = internal-dev は public-dev の厳密な上位集合)

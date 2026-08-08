@@ -1,0 +1,47 @@
+{
+  "review_n": 3,
+  "timestamp": "2026-08-06T01:09:41+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-3.input.diff",
+  "raw_output_path": "reviews/review-3.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "標準的な full clone では未リリース検出と失敗時の劣化動作を確認できています。ただし remote-tracking ref が欠ける環境では遅延を黙って見落とす正確性上の問題があり、修正が必要です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 1,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "major",
+      "file": "ops/stalled.py",
+      "line": 137,
+      "issue": "release pair の remote-tracking ref が1本でも無い場合、項目を黙ってスキップします。直前の `git fetch origin` は設定済みの fetch refspec に従うため、single-branch clone では4ブランチを取得できないことがあります。また fetch 失敗時にローカル ref も無ければ `fetched=False` の警告さえ表示されず、レポートが「問題なし」と誤認させます。",
+      "suggestion": "4長期ブランチを明示的な refspec で fetchするか、必要な ref が欠けていた release pair を `status=\"unknown\"` として要注意一覧へ追加してください。single-branch clone、および fetch 失敗かつ ref 不在のテストも追加してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "minor",
+      "file": "docs/enhance/ER-0021-未リリース分が一覧に出ない.md",
+      "line": 84,
+      "issue": "検証表が「単体14件」と記載していますが、同文書の前段と添付証跡は20件です。",
+      "suggestion": "「単体20件」へ修正し、証跡と記述を一致させてください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "sufficient",
+    "notes": "`runs/2026-08-06T_RELEASE-LAG/e2e/` の4シナリオを確認しました。20件の単体テスト、実リポジトリでのpublic/internal両ペアとrev-list実測値の一致、release PR判定3分岐、オフライン・gh未導入時の耐障害性が記録されており、最低2本の要件を満たします。OCI E2Eを省略した理由もSKIPPED.mdで技術的に妥当です。ただし、remote ref不在時に黙ってスキップする問題は証跡では解消されていません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおり実ブラウザE2Eは実施していません。"
+    }
+  }
+}

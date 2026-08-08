@@ -1,0 +1,39 @@
+{
+  "review_n": 8,
+  "timestamp": "2026-08-06T01:30:50+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-8.input.diff",
+  "raw_output_path": "reviews/review-8.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "未リリース検出の主要経路と障害時の保守的な判定は十分に実装・検証されています。ただし、gh の JSON が辞書配列であっても必須キーを欠く場合、レポート生成全体が例外で停止する未処理経路があります。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 1,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "REV-001",
+      "severity": "major",
+      "file": "ops/stalled.py",
+      "line": 250,
+      "issue": "`_open_pr_records()` は結果が `list[dict]` であることしか検証しないため、`[{}]` や `[{\"headRefName\":\"public-dev\"}]` は正常値として返されます。その後 `scan()` の `x[\"headRefName\"]` / `x[\"number\"]` で `KeyError` が発生し、想定外の gh JSON を `None` に落としてレポート生成を継続するというエラー処理の主張を満たしません。`_open_prs()` と release PR の `rel['number']` にも同じ前提があります。既存テストは null・object・scalar 配列のみで、必須キー欠落を網羅していません。",
+      "suggestion": "`_open_pr_records()` で各レコードの `number`、`headRefName`、`baseRefName`、`isCrossRepository` の存在と型を検証し、不正なレコードが1件でもあれば `None` を返してください。あわせて `[{}]`、必須キー欠落、型不正を入力するテストと、`scan()` が例外を出さず unknown を返す統合テストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 6,
+    "adequacy": "sufficient",
+    "notes": "01 の単体テスト32件、02 の実リポジトリ上の両 release pair と rev-list 実測値、03 のPR判定3分岐、04 のオフライン耐性、05 の判定不能時の保守的表示、06 の明示 refspec を確認しました。OCI 配備対象に ops/ が含まれないため実OCI E2Eを省略する理由は SKIPPED.md に具体的に記載されており妥当です。ただし finding の必須キー欠落 JSON 経路は未検証です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されておらず、指示に従い実ブラウザE2Eは実施していません。"
+    }
+  }
+}
