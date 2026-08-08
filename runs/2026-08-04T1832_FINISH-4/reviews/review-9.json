@@ -1,39 +1,55 @@
 {
   "review_n": 9,
-  "timestamp": "2026-08-04T21:58:59+09:00",
+  "timestamp": "2026-08-05T19:35:36+09:00",
   "reviewer": "codex",
   "model": "gpt-5.6-sol",
   "input_diff_path": "reviews/review-9.input.diff",
   "raw_output_path": "reviews/review-9.raw.txt",
   "codex_exit_code": 0,
   "verdict": "PASS",
-  "summary": "追加された一次証跡は、同一セッションを通じた DB 読み戻し、LLM 構造化、409 ガード、設計、永続化を裏づけており、Internal 統合 E2E の完了主張は妥当です。ただし review-9.json が追加済み証跡を存在しないものとして FAIL を記録しており、run のレビュー記録と現行差分が矛盾しています。",
+  "summary": "実装コードの変更はなく blocker はありません。ただし、ER-0012 のセキュリティ対策を完了扱いにする証跡が不足しているほか、ER-0015 の改善案では記載された再発条件を検出できず、更新されたレビュー記録にも内容上の不整合があります。",
   "severity_counts": {
     "blocker": 0,
-    "major": 1,
+    "major": 3,
     "minor": 0
   },
   "findings": [
     {
-      "id": "F-001",
+      "id": "review-001",
+      "severity": "major",
+      "file": "docs/enhance/ER-0012-公開リポジトリに実OCIDが残っている.md",
+      "line": 13,
+      "issue": "実 OCID の除去と再混入防止を完了したとしていますが、添付された E2E 証跡には、追跡対象全体のスキャン結果、tenancy/compartment OCID を allowlist できないことの負例、記載された14テストの実行結果がありません。セキュリティ要件の完了主張を今回の証跡から確認できません。",
+      "suggestion": "`ops/check-no-real-ocid.sh --all` の実行ログ、ダミーの tenancy/compartment OCID が拒否される負例、および関連テスト14件の結果を証跡に追加してください。用意できない場合は完了確認が未検証である旨を明記してください。"
+    },
+    {
+      "id": "review-002",
+      "severity": "major",
+      "file": "docs/enhance/ER-0015-環境を作る手順にマイグレーションが無い.md",
+      "line": 54,
+      "issue": "提案(b)の「現在の checkout に存在する migration」と `schema_migrations` の比較では、今回の原因である「main checkout に internal 固有 migration 自体が存在しない」状態を未適用として検出できません。DBとmainの双方が016までなら差分0のまま正常終了し、再発防止になりません。",
+      "suggestion": "Internal 環境では internal 系 checkout であることを明示的に検査するか、環境ごとの期待 migration・最低バージョンをリポジトリ非依存のマニフェストとして照合し、不足時は非0で終了させてください。単なる件数表示は補助情報として扱ってください。"
+    },
+    {
+      "id": "review-003",
       "severity": "major",
       "file": "runs/2026-08-04T1832_FINISH-4/reviews/review-9.json",
-      "line": 9,
-      "issue": "レビュー結果が同じ差分内の証跡と矛盾しています。summary と E2E-001 は「実行コマンド、HTTP 応答、セッション ID、DB 読み戻し結果がない」としていますが、demo-platform/README.md にコマンド、HTTP status、同一セッション ID が記録され、7a〜7h の各ファイルに応答本文と最終読み戻し結果も追加されています。このため verdict=FAIL、blocker=1、adequacy=insufficient は現行差分に対するレビュー記録として不正確です。",
-      "suggestion": "追加された demo-platform/README.md と 7a〜7h の証跡を含めて review-9.json を再生成し、解消済みの E2E-001 を削除してください。verdict、severity_counts、summary、e2e.adequacy、e2e.notes も再生成結果に合わせて整合させてください。"
+      "line": 21,
+      "issue": "更新後の finding は「summary と findings が scope 未指定およびリージョン数の誤算入を指摘している」と述べていますが、同ファイルの更新後 summary にその指摘はなく、ER-0019 にもイメージ別 scope とビルド5回の区別が既に記載されています。さらに同じ `review_n` の timestamp・判定内容を上書きしており、レビュー履歴として追跡しにくい状態です。",
+      "suggestion": "生成済み review-9 は当時の結果として変更せず、修正後の評価を新しい review 番号で保存してください。上書き運用を続ける場合でも、現在の差分と矛盾する finding を削除し、summary・severity_counts・e2e 所見を整合させてください。"
     }
   ],
   "e2e": {
     "attached": true,
-    "scenarios_reviewed": 7,
-    "adequacy": "sufficient",
-    "notes": "runs/2026-08-04T1832_FINISH-4/e2e/ の7シナリオを確認しました。今回の核心である scenario-7 は demo-platform/README.md および 7a〜7h に、実行コマンド、HTTP status、応答本文、同一セッション ID、設計後の DB 読み戻しが記録され、正常系と409エラー系を含む8項目を裏づけています。全体でも最低2シナリオを十分に超えています。Hosted Application 配備と Public ORM apply の未実施範囲には SKIPPED.md および scenario-3 で具体的な理由と後続確認条件があります。実値の OCID、秘密情報、未マスクの API Gateway endpoint は追加されていません。",
+    "scenarios_reviewed": 8,
+    "adequacy": "insufficient",
+    "notes": "E2E-1〜8を確認しました。scenario-4/6 は ER-0003 のコンテナエンジン解決と amd64 固定、scenario-7 と demo-platform の8経路は ER-0015 の migration 必要性、scenario-8 は変更後イメージの実OCI配備と ADB 停止・復旧の観測を裏づけています。正常系、拒否経路、DB永続化、実推論を含み、SKIPPED.md の未実施理由も概ね妥当です。一方、今回完了扱いにした ER-0012 の OCID 全体スキャンおよび拒否テストが証跡に含まれないため、差分全体の完了主張を裏づけるには不十分です。",
     "live_check": {
       "performed": false,
       "target_url": "",
       "result": "not_performed",
       "scenarios": [],
-      "notes": "ライブのターゲット URL が提供されていないため、指示どおりブラウザ E2E は実施していません。"
+      "notes": "ライブターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
     }
   }
 }
