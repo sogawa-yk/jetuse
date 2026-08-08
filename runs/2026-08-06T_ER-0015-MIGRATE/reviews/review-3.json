@@ -1,0 +1,47 @@
+{
+  "review_n": 3,
+  "timestamp": "2026-08-06T11:58:30+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-3.input.diff",
+  "raw_output_path": "reviews/review-3.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "実装の正確性・境界条件・副作用防止・テスト網羅に blocker / major は見当たりません。実 OCI E2E の省略理由も妥当ですが、検証件数の内訳と CLI 目視出力に軽微な証跡不整合があります。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 0,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "MINOR-001",
+      "severity": "minor",
+      "file": "docs/enhance/ER-0015-環境を作る手順にマイグレーションが無い.md",
+      "line": 126,
+      "issue": "回帰テストを「health 12 / ランナー・判定 22」と記載していますが、添付された pytest 証跡では test_health_schema.py が11件、test_migrate_foreign_schema.py が23件です。後者の空文字パラメータ化が2ケースとして収集されるため、合計34件だけが一致しています。",
+      "suggestion": "記載を「health 11 / ランナー・判定 23」に修正するか、テスト関数数と収集ケース数を区別して記載してください。SKIPPED.md の同じ内訳も合わせて修正してください。"
+    },
+    {
+      "id": "MINOR-002",
+      "severity": "minor",
+      "file": "runs/2026-08-06T_ER-0015-MIGRATE/e2e/03_cli_stderr.txt",
+      "line": 13,
+      "issue": "目視出力の警告文が現行差分の foreign_warning() と一致しません。証跡は「不足している表」「API は503のまま」と断定していますが、現行実装とテストはその断定を明示的に削除しています。この部分は修正前コードから採取された証跡に見えます。",
+      "suggestion": "現行コミットで CLI driver を再実行して証跡を差し替え、現行警告文が stderr に出ることと、旧来の「不足」「503」断定が含まれないことも subprocess テストで検証してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 6,
+    "adequacy": "not_applicable",
+    "notes": "実 OCI で未適用スキーマを再現すると共有 ADB の既存個人スキーマを意図的に不整合状態へ変更するため、SKIPPED.md の対象外理由は妥当です。代替証跡は34件のテスト、5種の変異検査、別プロセスCLI、実ブランチ集合、bootstrap設定、internal相当checkoutを網羅しており、読み取り専用診断と集合判定の主張を十分に裏づけています。ただしテスト件数の内訳と CLI 目視出力には findings 記載の軽微な不整合があります。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されておらず、指示どおりブラウザ E2E は実施していません。"
+    }
+  }
+}

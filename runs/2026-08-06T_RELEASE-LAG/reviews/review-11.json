@@ -1,0 +1,39 @@
+{
+  "review_n": 11,
+  "timestamp": "2026-08-06T01:40:45+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-11.input.diff",
+  "raw_output_path": "reviews/review-11.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "未リリース検出、取得不能時の保守的な判定、PR の head/base/fork 識別は妥当で、blocker はありません。主要ロジックは十分に検証されていますが、Obsidian レポート側の新しい表示分類に直接の回帰テストがありません。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 0,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "minor",
+      "file": "ops/er.py",
+      "line": 250,
+      "issue": "`unreleased` を要注意側へ分類し、日本語表示するユーザー向け経路が変更されていますが、追加テストは `needs_attention()` のみを検証しており、`_stalled_rows()` の分類と `STALL_JA` の表示を直接確認していません。将来、両者の重複したステータス一覧が乖離しても検出できません。",
+      "suggestion": "`stalled.scan()` が `unreleased` を返すように差し替え、`_stalled_rows()` の `warn` に「リリースされていない」の行が入り、`rest` には入らないことをテストしてください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 6,
+    "adequacy": "sufficient",
+    "notes": "`runs/2026-08-06T_RELEASE-LAG/e2e/` の6シナリオを確認しました。42件の単体テスト、実リポジトリでの両 release pair と `rev-list` 実測値の一致、release PR の3分岐、オフライン耐性、判定不能時の保守的表示、明示 refspec を網羅しており、差分の主張を十分に裏づけています。OCI 配備対象に `ops/` が含まれないため実 OCI E2E を省略する理由も `SKIPPED.md` に具体的に記載され、妥当です。認証情報、OCID、実エンドポイントのコミットや OCI/IAM リソース変更はありません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおり実ブラウザ E2E は実施していません。"
+    }
+  }
+}

@@ -1,0 +1,15 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.13.7, pytest-9.1.1, pluggy-1.6.0 -- /Users/sogawa/Documents/GitHub/jetuse/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/sogawa/Documents/GitHub/jetuse/packages/api
+configfile: pyproject.toml
+plugins: cov-7.1.0, anyio-4.14.2, langsmith-0.10.10
+collecting ... collected 1 item
+
+tests/test_migrate_foreign_schema.py::test_cli_prints_the_warning_and_does_not_claim_up_to_date PASSED [100%]
+
+============================== 1 passed in 0.27s ===============================
+
+--- 同じ driver を手で起こして目視した実出力（現行実装） ---
+この DB には、いまの checkout に無い migration が 11 件適用されている(900_absent_everywhere, 901_absent_everywhere, 902_absent_everywhere, 903_absent_everywhere, 904_absent_everywhere ほか)。DB のほうが先を行っており、系統の取り違え(例: Internal で育てたスキーマを Public 系の checkout から流している)か、意図的に古いイメージを向けているかのどちらか。配備しているイメージとこの checkout が対応しているか確かめること。Internal 機能を使う環境なら internal 系の checkout から流し直す。
+applied: (none)
