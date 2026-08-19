@@ -1,0 +1,6 @@
+# シナリオ8: ~/.oci/config の中身まで見る
+
+空の DEFAULT                  NG oci config DEFAULT: tenancy user fingerprint key_file ~/.oci/config を見直す
+key_file の実体なし              NG oci config DEFAULT: key_file が指す先が無い ~/.oci/config を見直す
+token の実体なし                 NG oci config DEFAULT: security_token_file が指す先が無い ~/.oci/config を見直す
+%% を含む値（補間）                 OK oci config プロファイル DEFAULT 

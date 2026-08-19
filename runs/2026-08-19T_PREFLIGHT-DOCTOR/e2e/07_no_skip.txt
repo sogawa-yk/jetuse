@@ -1,0 +1,11 @@
+# シナリオ7: CI で skip しないこと
+
+手元に無いツールは**doctor が通る値を返す偽物**を置く。置かないと
+ツールが揃わない環境で検査そのものが飛び、doctor が壊れていても気づけない。
+
+...........                                                              [100%]
+11 passed in 5.07s
+  SKIPPED の件数: 0
+
+## 空の [DEFAULT] を通さない
+  NG        oci config     DEFAULT に tenancy user fingerprint key_file が無い ~/.oci/config を見直す

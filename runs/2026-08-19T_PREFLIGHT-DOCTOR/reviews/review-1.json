@@ -1,0 +1,55 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-08-19T14:50:29+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "前提チェックの入口は追加されていますが、サポート済みの instance/resource principal 環境を誤って失敗させる一方、空または未設定の .env を成功扱いします。また、欠落コマンドを模擬するテストヘルパーが正しく実行ファイルを解決できていません。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 3,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "major",
+      "file": "ops/doctor.sh",
+      "line": 49,
+      "issue": "AUTH_MODE に関係なく $HOME/.oci/config を必須にしています。リポジトリでは instance_principal と resource_principal が正式にサポートされているため、正当な dev インスタンスや配備環境でも doctor が失敗します。",
+      "suggestion": ".env の AUTH_MODE を安全に読み取り、空または config_file の場合だけ OCI config を要求してください。instance_principal/resource_principal では対応する認証プローブを行うか、少なくとも config 不在をエラーにしないでください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "ops/doctor.sh",
+      "line": 100,
+      "issue": ".env はファイルの存在だけで OK になり、空ファイル、値が空の雛形、プレースホルダーの OCIDでも成功します。さらに grep が0件のとき「0」を出力してから `echo 0` も実行するため、詳細欄が二重行になります。前提不足を早期検出するという機能の中心的な主張を満たしません。",
+      "suggestion": "用途共通の必須キーを定義し、キー存在・非空・OCIDやURLのプレースホルダーでないことを検証してください。件数取得は `grep -c ... || true` などで出力を一度だけにしてください。AUTH_MODE別・機能別の任意キーは明確に分離してください。"
+    },
+    {
+      "id": "F003",
+      "severity": "major",
+      "file": "packages/api/tests/test_ops_doctor.py",
+      "line": 179,
+      "issue": "`command` はシェル組み込みですが、shell=False の subprocess で実行しようとしています。executable=\"/bin/bash\" を指定しても `command -v` がシェル構文として評価されるわけではないため、実在コマンドのパスを取得できず、多数の shim が単に exit 0 する偽物になります。その結果、missing=[\"codex\"] のテストも terraform/python3 など別要因で失敗し得て、欠落対象を正確に分離できません。",
+      "suggestion": "`shutil.which(c)` を使って実在パスを取得するか、`[\"/bin/bash\", \"-c\", \"command -v -- \\\"$1\\\"\", \"_\", c]` のように明示的にシェルを起動してください。戻り値が期待した1件だけ欠落していることも検証し、npm、container、OCI config、.env、古いTerraformをパラメータ化してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 2,
+    "adequacy": "insufficient",
+    "notes": "証跡は runs/2026-08-19T_PREFLIGHT-DOCTOR/e2e/01_doctor_ok.txt の全要件成功（exit=0）と、02_doctor_missing_codex.txt の codex 欠落（exit=1）の2本です。最低2シナリオは満たしますが、追加された必須分岐のうち npm、container、OCI config、.env、Terraform下限、instance/resource principal を検証しておらず、特に今回指摘した誤判定経路を裏づけていないため十分とはいえません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されておらず、指示に従いブラウザツールは使用していません。"
+    }
+  }
+}
