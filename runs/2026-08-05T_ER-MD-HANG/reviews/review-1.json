@@ -1,0 +1,30 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-08-05T20:26:53+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "無限ループの原因に対し、フォールバック分岐で必ず入力を1行消費する修正は正確で、正常な表の回帰テストも含まれています。認証情報・実OCID・環境依存値や、承認外のリソース操作は差分にありません。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "not_applicable",
+    "notes": "runs/2026-08-05T_ER-MD-HANG/e2e は空です。ただし変更対象はローカルの Markdown→HTML 変換器と文書のみで、jetuse-dev へのデプロイやブラウザ経路を持たないため、実環境 E2E は対象外と判断します。追加されたテストはハング候補4形、内容保持、実ER全件、正常な表を網羅しています。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲット URL が提供されておらず、指示に従いブラウザ検証は実施していません。"
+    }
+  }
+}

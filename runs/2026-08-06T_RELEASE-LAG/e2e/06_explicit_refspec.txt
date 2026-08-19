@@ -1,0 +1,17 @@
+# シナリオ6: 取り込みが「成功したのに更新されていない」を防ぐ
+
+review-5 blocker: 引数なしの git fetch origin は remote.origin.fetch に従うため、
+refspec から外れた長期ブランチが更新されないまま成功する。
+
+実際に発行しているコマンド:
+    git
+    fetch
+    --quiet
+    --no-tags
+    origin
+    +refs/heads/internal-dev:refs/remotes/origin/internal-dev
+    +refs/heads/internal-stable:refs/remotes/origin/internal-stable
+    +refs/heads/main:refs/remotes/origin/main
+    +refs/heads/public-dev:refs/remotes/origin/public-dev
+
+この結果、手元の remote.origin.fetch 設定に関わらず4本すべてが更新される。

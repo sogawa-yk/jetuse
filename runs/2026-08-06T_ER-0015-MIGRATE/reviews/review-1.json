@@ -1,0 +1,39 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-08-06T11:37:00+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "中心となる差分判定の向きでは、ER-0015 で実際に発生した初回の checkout 取り違えを検出できません。添付証跡は5シナリオありますが、すべてこの前提違いを見逃しており、完了を裏づけるには不十分です。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "packages/api/jetuse_core/migrate.py",
+      "line": 44,
+      "issue": "`DB - checkout` が検出するのは、Internal migration が既にDBへ適用された後にPublic checkoutを使った場合だけです。実害の再現状態は `DB=Public migration集合`、`checkout=Public migration集合` なので差分は空となり、警告なしで `applied: (none)` と終了します。逆に警告が出る状態ではInternal用テーブルは既に作成済みであり、「不足している表は作られず503のまま」という警告文も成立しません。テストはDBへ `INTERNAL_ONLY` を事前投入した別状態を「ER-0015そのもの」としており、この欠陥を固定してしまっています。",
+      "suggestion": "実際の再現ケース（DBとPublic checkoutが同一集合だが、環境はInternal migrationを要求する状態）をテストに追加してください。系統を確実に判定するには、環境が期待するmigration集合またはpublic/internal系統をDB・環境設定・配備メタデータのいずれかから取得して比較する必要があります。状態追加を避ける場合でも、適用0件だけでは最新性や系統を判定できないことを明示警告し、今回の検出を完了扱いにしないでください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-08-06T_ER-0015-MIGRATE/e2e/` の単体15件、変異検査、CLI stderr、実ブランチ集合、bootstrap非対称性を確認しました。実OCIを未実施としたSKIPPED.mdの理由自体は妥当です。しかし主要テストはDBにInternal固有11版を既に投入しており、実害時の `DB=Public、checkout=Public、期待系統=Internal` を再現していません。変異検査も同じ誤った検出条件に対する感度しか示さないため、diffの中心的な完了主張を裏づけません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されておらず、指示に従いブラウザツールは使用していません。"
+    }
+  }
+}

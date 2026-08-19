@@ -1,0 +1,44 @@
+# シナリオ6: internal 系 checkout でも同じ結論を出すか
+
+public-dev の作業ツリーへ internal-dev 固有の migration 11 本を一時的に置き、
+internal-dev の checkout 相当を作ってテストを実行する。
+
+## 実行前（public 相当）: checkout_versions() = 21 本
+
+## 置いたファイル
+  + 017_demos_v2.sql
+  + 018_demos_idx_owner.sql
+  + 019_demos_idx_visibility.sql
+  + 020_conversations_demo_id.sql
+  + 021_conversations_idx_demo.sql
+  + 022_demo_backend_targets.sql
+  + 023_dbt_idx.sql
+  + 024_rag_files_filename_char.sql
+  + 025_builder_sessions.sql
+  + 026_builder_sessions_idx.sql
+  + 027_builder_sessions_sufficient.sql
+
+## internal 相当: checkout_versions() = 32 本
+..................................                                       [100%]
+34 passed in 0.67s
+
+## 撤去
+  checkout_versions() = 21 本
+..................................                                       [100%]
+34 passed in 0.70s
+
+## 作業ツリーに残骸が無いこと
+(上が空 = 元に戻っている)
+
+## 変異: 集合を checkout から推定する版に戻すと internal 相当で壊れるか
+（Codex review-2 の blocker が実在したことの確認）
+FAILED tests/test_health_schema.py::test_behind_flips_the_overall_ok - Assert...
+FAILED tests/test_health_schema.py::test_foreign_when_the_db_is_ahead - Asser...
+FAILED tests/test_health_schema.py::test_expectations_do_not_depend_on_the_current_branch
+4 failed, 30 passed in 0.75s
+
+## 復元後
+..................................                                       [100%]
+34 passed in 0.71s
+AM packages/api/tests/test_health_schema.py
+(上が空 = 元に戻っている)

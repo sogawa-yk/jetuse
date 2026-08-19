@@ -1,0 +1,30 @@
+{
+  "review_n": 13,
+  "timestamp": "2026-08-06T01:47:09+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-13.input.diff",
+  "raw_output_path": "reviews/review-13.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "未リリース検出、取得不能時の保守的な unknown 化、PR の head/base/fork 判定、表示側の要注意分類まで整合しており、blocker 相当の問題はありません。認証情報・OCID・環境固有エンドポイントの実値や、未承認のリソース変更も含まれていません。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 6,
+    "adequacy": "sufficient",
+    "notes": "runs/2026-08-06T_RELEASE-LAG/e2e/ の6シナリオを確認。54件の回帰テスト、実リポジトリでの両 release pair と rev-list 実測値（16/10）の照合、PR判定3分岐、オフライン耐性、判定不能経路、明示refspecを網羅しており、差分の主張を十分に裏づけている。OCI配備対象外である理由は SKIPPED.md に具体的に記載され、ローカル運用ツールのみの変更という差分内容とも整合する。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザE2Eは未実施。"
+    }
+  }
+}

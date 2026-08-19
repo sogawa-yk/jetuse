@@ -1,0 +1,15 @@
+# シナリオ5: 判定できない状態を「問題なし」と言わない
+
+review-4 blocker: fetch 失敗 + 古い ref で n==0 だと**行ごと消えて**いた。
+実リポジトリは 16/10 commit 先行しているため、n==0 を再現できる合成リポジトリで確認する。
+
+  手元の ref 上は差ゼロ（前回 fetch 時点で揃っていた状態）
+
+  取り込み成功 -> 0 行
+      （差が無いと確認できたので黙る）
+
+  取り込み失敗(オフライン) -> 2 行
+      public-dev → main                unknown
+        手元の `origin/main`↔`origin/public-dev` に差は無いが、**origin を取得できておらず、リリース遅れが無いとは言えない**
+      internal-dev → internal-stable   unknown
+        手元の `origin/internal-stable`↔`origin/internal-dev` に差は無いが、**origin を取得できておらず、リリース遅れが無いとは言えない**

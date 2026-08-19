@@ -1,0 +1,55 @@
+{
+  "review_n": 5,
+  "timestamp": "2026-08-06T01:18:16+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-5.input.diff",
+  "raw_output_path": "reviews/review-5.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "未リリース検出の基本経路と主要な回帰テストは充実していますが、fetch 成功を全対象 ref の更新成功と誤認するため、絞られた refspec では核心の未リリースを再び黙って見落とします。また、git コマンドの失敗を差分ゼロとして扱う経路と、git 起動不能時に scan 全体が落ちる経路が残っています。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 2,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "blocker",
+      "file": "ops/stalled.py",
+      "line": 115,
+      "issue": "`git fetch origin` の終了コードだけで `fetched=True` としていますが、このコマンドは `remote.origin.fetch` に従うため、refspec から除外された長期ブランチが更新されなくても成功します。除外前に作られた `origin/internal-dev` 等が残っている場合は存在確認も通り、古い ref 上の差分ゼロを信頼して行を黙って削除します。これは本変更が防ぐべき未リリースの見落としを再発させます。",
+      "suggestion": "各 RELEASE_PAIRS の4ブランチを明示的な refspec（例: `+refs/heads/<branch>:refs/remotes/origin/<branch>`）で取得し、ブランチ単位の取得成否を `_release_lag` に渡してください。少なくとも fetch refspec が絞られ、古い remote-tracking ref が既に残っている実リポジトリを使った回帰テストを追加してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "ops/stalled.py",
+      "line": 163,
+      "issue": "`_git()` は git の非ゼロ終了を空文字へ潰し、ここでは空文字を `0` に変換しています。そのため `rev-list` が欠損オブジェクトやリポジトリ異常などで失敗しても、fetch が成功していれば「差分なし」として未リリース行が消えます。",
+      "suggestion": "git ヘルパーから stdout と成否を区別して返し、`rev-list` の失敗時は当該ペアを `unknown` にしてください。`rev-list` の非ゼロ終了を注入し、行が消えないことをテストしてください。"
+    },
+    {
+      "id": "F003",
+      "severity": "major",
+      "file": "ops/stalled.py",
+      "line": 136,
+      "issue": "`_fetch_origin()` は git の `OSError` を捕捉しますが、その直後の `_release_lag()` は例外処理のない `_git()` を呼びます。したがって git executable が起動不能な場合、`_fetch_origin()` が False を返しても scan 全体はここで `FileNotFoundError` となります。追加テストも `_fetch_origin()` 単体しか確認しておらず、レポート生成が落ちないという主張を裏づけていません。",
+      "suggestion": "`_git()` または `_release_lag()` で `OSError`/`SubprocessError` を処理し、判定不能な2ペアを `unknown` として返してください。git 起動不能を注入した `scan()` の回帰テストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-08-06T_RELEASE-LAG/e2e/` の5シナリオを確認しました。23件の単体テスト、実リポジトリでの16/10 commit検出、PR判定3分岐、オフライン耐性、判定不能時の表示を確認でき、OCI配備を省略する `SKIPPED.md` の理由も妥当です。ただし核心となる「既存の古い ref が残った状態で fetch refspec が対象ブランチを除外する」経路、`rev-list` 非ゼロ終了、git 起動不能時の `scan()` 全体は未検証であり、実装上も失敗します。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲット URL が提供されていないため、指示どおりブラウザ E2E は実施していません。"
+    }
+  }
+}
