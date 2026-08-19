@@ -125,22 +125,37 @@ PAYLOAD="${REV_DIR}/review-${N}.payload.txt"
   fi
   printf '\n\n===== 実環境 E2E 証跡 (jetuse-dev / Codex は実行せず証跡を評価する) =====\n'
   if [ -d "$E2E_DIR" ] && [ -n "$(ls -A "$E2E_DIR" 2>/dev/null)" ]; then
-    # **バイナリは中身を流さない。** codex は stdin を UTF-8 として読むため、スクリーンショット
-    # (PNG) を1つ混ぜるだけで "input is not valid UTF-8" となり rc=1 で全体が落ちる
-    # (2026-08-19 VID-01 で実際に発生。エージェントが PNG を e2e/ の外へ退避して回避していた＝
-    # 証跡の置き場を仕組みの都合で歪めていた)。中身の代わりに存在・種別・サイズを提示する。
-    # **「添付できなかった」ことは必ず伝える** —— 黙って落とすと、証跡が無いのか添付できなかったのか
-    # をレビュアーが区別できない。
+    # **codex の stdin は UTF-8 でなければならない。** 不正な1バイトで
+    # "input is not valid UTF-8" となり rc=1、レビューが判定不能(verdict=ERROR)になる
+    # (2026-08-19 VID-01 で発生)。壊し方は2つあり、両方を塞ぐ:
+    #   (a) バイナリ証跡(スクリーンショット PNG 等)をそのまま流す
+    #   (b) **バイト単位で切る**こと。`tail -c` は文字境界を見ないので、日本語の証跡が
+    #       上限を超えると先頭が文字の途中になり不正 UTF-8 になる
+    # `grep -I` は NUL の有無を見るだけで UTF-8 妥当性検査ではないため、判定にも使わない。
+    # ここでは実際にデコードを試み、**文字単位で**切り出す。
     find "$E2E_DIR" -type f | sort | while read -r ef; do
       printf -- '--- %s ---\n' "$ef"
-      if LC_ALL=C grep -qI . "$ef" 2>/dev/null || [ ! -s "$ef" ]; then
-        tail -c 8000 "$ef"
-        printf '\n'
-      else
-        printf '(バイナリ証跡: %s バイト。テキストでないため中身は添付していない。\n' "$(wc -c < "$ef" | tr -d '[:space:]')"
-        printf ' ファイルが存在すること自体が証跡である。中身の評価はできないので、\n'
-        printf ' このファイルに依存する主張はテキスト証跡側で裏づけられているかを見ること)\n'
-      fi
+      EF="$ef" python3 - <<'PYATTACH'
+import os, sys
+LIMIT = 8000  # 文字数。バイト数で切ると文字の途中で割れる
+path = os.environ["EF"]
+raw = open(path, "rb").read()
+try:
+    text = raw.decode("utf-8")
+except UnicodeDecodeError:
+    # **黙って落とさない。** 証跡が無いのか添付できなかったのかを区別できるようにする。
+    sys.stdout.write(
+        f"(バイナリ証跡: {len(raw)} バイト。テキストでないため中身は添付していない。\n"
+        " ファイルが存在すること自体が証跡である。中身の評価はできないので、\n"
+        " このファイルに依存する主張はテキスト証跡側で裏づけられているかを見ること)\n")
+    sys.exit(0)
+if len(text) > LIMIT:
+    sys.stdout.write(f"(先頭を省略: 全 {len(text)} 文字のうち末尾 {LIMIT} 文字)\n")
+    text = text[-LIMIT:]
+sys.stdout.write(text)
+if not text.endswith("\n"):
+    sys.stdout.write("\n")
+PYATTACH
     done
   else
     printf '(証跡なし: %s が空。デプロイ/E2E 未実施または対象外。完了主張ならその妥当性を厳しく見ること)\n' "$E2E_DIR"

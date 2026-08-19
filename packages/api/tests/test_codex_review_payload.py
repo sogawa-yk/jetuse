@@ -30,7 +30,7 @@ def _extract_attach_block(src: str) -> str:
     スクリプト全体は codex を実際に呼ぶので走らせられない。添付部分だけを切り出して
     同じ shell で評価する。切り出せなくなったら（＝構造が変わったら）テストは失敗する。
     """
-    m = re.search(r"(find \"\$E2E_DIR\" -type f \| sort \| while read -r ef; do.*?\n    done)",
+    m = re.search(r"(find \"\$E2E_DIR\" -type f \| sort \| while read -r ef; do.*?\nPYATTACH\n    done)",
                   src, re.S)
     assert m, "証跡添付のループを見つけられない（run_codex_review.sh の構造が変わった）"
     return m.group(1)
@@ -92,16 +92,61 @@ def test_japanese_text_is_not_treated_as_binary(tmp_path):
     assert "シナリオ2" in out
 
 
+# --- Codex review-5 の major 指摘（2026-08-19）の再現 ---------------------------
+#
+# 最初の修正は PNG は防げたが、**UTF-8 を保証できていなかった**。壊し方は2つある。
+
+def test_long_japanese_text_is_not_cut_mid_character(tmp_path):
+    """**バイト単位で切らない。** `tail -c N` は文字境界を見ないので、日本語の証跡が
+    上限を超えると先頭が文字の途中になり不正 UTF-8 を作る —— 直そうとしていた症状そのもの。
+    """
+    body = ("これは実環境 E2E の証跡です。雨天の屋外でリポーターが話している場面を検出しました。\n"
+            * 400).encode("utf-8")
+    assert len(body) > 8000, "上限を超える長さでないと境界を試せない"
+    out = _run_attach(tmp_path, {"scenario-long.txt": body})
+    out.decode("utf-8")   # ここで例外なら codex が rc=1 で落ちる
+    assert "リポーター" in out.decode("utf-8")
+
+
+def test_invalid_utf8_without_nul_is_not_treated_as_text(tmp_path):
+    """**NUL の無い不正 UTF-8 もテキストとして通さない。**
+
+    `grep -I` は NUL の有無を見るだけで UTF-8 妥当性検査ではない。Shift_JIS のログや
+    壊れたファイルは NUL を含まないまま不正 UTF-8 になる。
+    """
+    sjis = "雨天の屋外".encode("shift_jis")   # NUL を含まないが UTF-8 として不正
+    assert b"\x00" not in sjis
+    out = _run_attach(tmp_path, {"scenario-sjis.txt": sjis})
+    out.decode("utf-8")
+    assert "バイナリ" in out.decode("utf-8"), "不正 UTF-8 をテキストとして流している"
+
+
+def test_truncation_is_disclosed(tmp_path):
+    """省略したことを伝える（全部読めたのか一部なのかを判らなくしない）。"""
+    body = ("あ" * 20000).encode("utf-8")
+    out = _run_attach(tmp_path, {"long.txt": body}).decode("utf-8")
+    assert "省略" in out
+
+
+def test_detection_fails_when_byte_truncation_returns(tmp_path):
+    """**バイト切りに戻したら落ちること**を確かめる（テストが実効か）。"""
+    d = tmp_path / "e2e"; d.mkdir(parents=True, exist_ok=True)
+    (d / "long.txt").write_bytes(("これは日本語の証跡です。" * 800).encode("utf-8"))
+    naive = f'find "{d}" -type f | sort | while read -r ef; do tail -c 8000 "$ef"; done'
+    r = subprocess.run(["bash", "-c", naive], capture_output=True)
+    try:
+        r.stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        return  # 期待どおり壊れる
+    raise AssertionError("バイト切りでも UTF-8 のまま = この境界を試せていない")
+
+
 def test_detection_fails_when_binary_guard_is_removed(tmp_path):
     """**ガードを外したら壊れること**を確かめる（テストが実効か）。"""
-    src = SCRIPT.read_text(encoding="utf-8")
-    block = _extract_attach_block(src)
-    naive = re.sub(r'if LC_ALL=C grep -qI \. "\$ef".*?\n      else\n.*?\n      fi\n',
-                   '        tail -c 8000 "$ef"\n        printf \'\\n\'\n', block, flags=re.S)
-    assert naive != block, "変異を作れない（構造が変わった）"
     d = tmp_path / "e2e"; d.mkdir(parents=True, exist_ok=True)
     (d / "shot.png").write_bytes(PNG)
-    r = subprocess.run(["bash", "-c", f'set -u\nE2E_DIR="{d}"\n{naive}\n'], capture_output=True)
+    naive = f'find "{d}" -type f | sort | while read -r ef; do tail -c 8000 "$ef"; done'
+    r = subprocess.run(["bash", "-c", naive], capture_output=True)
     try:
         r.stdout.decode("utf-8")
     except UnicodeDecodeError:
