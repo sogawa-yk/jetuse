@@ -1,0 +1,71 @@
+{
+  "review_n": 3,
+  "timestamp": "2026-08-09T09:01:05+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-3.input.diff",
+  "raw_output_path": "reviews/review-3.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "環境別 Dynamic Group の分離を任意の共通 override で迂回できる権限境界上の欠陥と、stack 一覧の不正 JSON を「0件」と扱う危険な経路があります。E2E は16項目を主張していますが、raw log と環境間アクセス拒否の実測がなく、最終差分の裏付けとして不十分です。",
+  "severity_counts": {
+    "blocker": 2,
+    "major": 3,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "B001",
+      "severity": "blocker",
+      "file": "ops/orm-stack.sh",
+      "line": 73,
+      "issue": "`JETUSE_SHARED_DYNAMIC_GROUP` が両環境の `DG_NAME` を無条件に上書きできます。public-dev で `jetuse-internal-dg` が設定されると、internal-dev の Resource Principal に public-dev の20文の権限が付与され、差分が目的とするコンパートメント間の権限分離が再び崩壊します。追加テストも固定の `DG_NAME` だけを抽出しており、この経路を検出しません。",
+      "suggestion": "共通 override を削除するか、環境別変数へ分けて許可された DG 名との一致を fail-closed で検証してください。public-dev に internal-dev の DG を指定した場合に停止する実行テストも追加してください。"
+    },
+    {
+      "id": "B002",
+      "severity": "blocker",
+      "file": "ops/orm-stack.sh",
+      "line": 95,
+      "issue": "`find_stack` は OCI CLI が成功終了しても、出力の JSON 解析に失敗すると `ids=[]` に置き換えます。警告混入や CLI 出力仕様の変化を「stack が存在しない」と誤認し、同名 stack の新規作成後に空 state から既存リソースを再作成する危険があります。",
+      "suggestion": "JSON 解析例外はそのまま非ゼロ終了させてください。正常な0件、不正JSON、非list、複数件を分けたテストを追加し、不正JSONでは stack create/update/job が一切呼ばれないことを確認してください。"
+    },
+    {
+      "id": "M001",
+      "severity": "major",
+      "file": "ops/orm-stack.sh",
+      "line": 79,
+      "issue": "`ORM_REGION` を ORM stack API の所在リージョンと Terraform provider の管理対象リージョンの両方に使用しています。schema の説明は後者だけを意味しますが、値を変更すると既存 stack を別リージョンで検索して見失い、新規 stack を作成します。また、既存 stack をChicagoに置いたまま資源だけを別リージョンへ配備できません。",
+      "suggestion": "`ORM_STACK_REGION` と Terraform の `region` を別設定に分離してください。既存 stack の所在を固定したまま管理対象リージョンを変更するテストと、所在リージョン変更時に同名新規作成を防ぐテストを追加してください。"
+    },
+    {
+      "id": "M002",
+      "severity": "major",
+      "file": "ops/start-adb-if-stopped.sh",
+      "line": 62,
+      "issue": "各リージョンの OCI CLI エラーを `|| true` で握り潰します。別リージョンまたは別envで同名 ADB が1台見つかれば `found_any=1` となるため、一部リージョンの認証・通信障害や `all` の片側未確認を残したまま成功終了し、対象 ADBが停止した状態を見逃し得ます。",
+      "suggestion": "envごとに検索成功数とADB検出数を管理し、CLI失敗、0件、複数リージョンでの重複を非ゼロ終了にしてください。`all` は両envをそれぞれ解決できた場合だけ成功させてください。"
+    },
+    {
+      "id": "M003",
+      "severity": "major",
+      "file": "runs/2026-08-08T_ORM-FOUNDATIONS/e2e/SKIPPED.md",
+      "line": 3,
+      "issue": "「実 OCI で全部やった」と完了を主張していますが、添付内容は結果の要約だけで、ORM job ID、raw job log、実行コマンド、終了コードがありません。またシナリオ10の共有DG構成は最終構成と異なり、シナリオ16も IAM 定義の観測だけで、別環境の Resource Principal から public-dev へのアクセスが実際に拒否されることを検証していません。",
+      "suggestion": "機密値を除去した plan/apply のraw log、job ID、コマンドと終了コードを保存してください。最終構成で internal-dev principal から public-dev の代表的リソースへの拒否と、public-dev principalから同環境への許可を実測し、古い共有DGシナリオが最終結果ではないことを明記してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 16,
+    "adequacy": "insufficient",
+    "notes": "証跡パスは `runs/2026-08-08T_ORM-FOUNDATIONS/e2e/SKIPPED.md` と `runs/2026-08-08T_ORM-FOUNDATIONS/e2e/16_permission_boundary.txt`。internal-dev移行、public-dev構築、state取得、ADB起動、リージョン解決、IAM境界の計16項目が記載され、最低2シナリオという数の条件は満たします。記載上は最終planが両環境でNo changes、applyがdestroyなし、DG matching ruleとpolicyが環境別になったとされていますが、再確認可能なraw証跡がなく、最終の権限境界について許可・拒否の実アクセス試験もありません。SKIPPED.mdは未実施理由を示す文書ではなく、むしろ未検証範囲を残したまま「全部やった」と主張しているため不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されておらず、指示に従いブラウザツールは使用していません。"
+    }
+  }
+}

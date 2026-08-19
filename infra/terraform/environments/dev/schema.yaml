@@ -1,0 +1,103 @@
+# ORM スタックの変数定義（ADR-0031）。
+# **これが無いと adb_admin_password がコンソールで平文表示される。**
+# `type: password` を書くとマスクされる（infra/orm/schema.yaml と同じ扱い）。
+title: JetUse 共有基盤 (dev)
+description: 開発環境の共有基盤。environments/dev の構成を ORM スタックとして管理する。
+schemaVersion: 1.1.0
+version: "20260807"
+locale: en
+
+variableGroups:
+  - title: 必須
+    variables:
+      - compartment_ocid
+      - tenancy_ocid
+      - prefix
+      - region
+      - adb_admin_password
+  - title: 任意
+    variables:
+      - spa_par_expiry
+      - enable_adb
+      - enable_opensearch
+      - enable_dynamic_group
+      - enable_runtime_policy
+      - existing_dynamic_group
+      - registry_username
+      - registry_password
+      - image_pull_secret_id
+      - api_image_url
+      - fn_router_image
+
+variables:
+  compartment_ocid:
+    type: oci:identity:compartment:id
+    title: コンパートメント
+    required: true
+  tenancy_ocid:
+    type: string
+    title: テナンシ OCID
+    required: true
+  prefix:
+    type: string
+    title: 資源名の接頭辞
+    required: true
+    description: 変えると全資源が作り直しになる。既存環境では触らないこと。
+  region:
+    type: string
+    title: 配備先リージョン
+    required: true
+    description: ORM スタックの所在ではなく、**Terraform が資源を作るリージョン**。
+  adb_admin_password:
+    type: password
+    title: ADB ADMIN パスワード
+    required: true
+  spa_par_expiry:
+    type: string
+    title: SPA PAR の失効日時 (RFC3339)
+    required: false
+    description: 空なら apply 時刻 +1年。state を持ち替えるときは既存値を入れて据え置く。
+  enable_adb:
+    type: boolean
+    title: ADB を作る
+    required: false
+  enable_opensearch:
+    type: boolean
+    title: OpenSearch を作る
+    required: false
+  enable_dynamic_group:
+    type: boolean
+    title: 動的グループを作る
+    required: false
+    description: テナンシの DynamicResourceGroups には上限がある。既存を共用するなら false。
+  enable_runtime_policy:
+    type: boolean
+    title: ランタイムポリシーを作る
+    required: false
+  existing_dynamic_group:
+    type: string
+    title: 共用する既存の動的グループ名
+    required: false
+    description: enable_dynamic_group=false のときポリシーが参照する。空だと権限が付かない。
+  # **秘密を持ちうる変数は password 型で宣言する。** 宣言が無いと ORM のコンソールで
+  # 平文表示される（Terraform 側の sensitive はコンソールのマスクに効かない）。
+  registry_password:
+    type: password
+    title: OCIR のパスワード / Auth Token
+    required: false
+  registry_username:
+    type: string
+    title: OCIR のユーザー名
+    required: false
+  image_pull_secret_id:
+    type: string
+    title: イメージ pull 用 Vault Secret の OCID
+    required: false
+  api_image_url:
+    type: string
+    title: API イメージの URL
+    required: false
+  fn_router_image:
+    type: string
+    title: Functions ルーターのイメージ URL
+    required: false

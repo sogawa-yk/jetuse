@@ -1,0 +1,55 @@
+{
+  "review_n": 14,
+  "timestamp": "2026-08-09T10:15:36+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-14.input.diff",
+  "raw_output_path": "reviews/review-14.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker はありません。ただし、既存 stack の `api_environment` を無条件に削除する後方互換性上の問題と、中心的な IAM 権限境界および ADB 起動ヘルパー異常系の検証不足があります。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 3,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "M001",
+      "severity": "major",
+      "file": "ops/orm-stack.sh",
+      "line": 333,
+      "issue": "既存 stack variables から `api_environment` を無条件に削除しますが、`api_image_url` と `fn_router_image` は引き継ぐため、既存 Container Instance や Function が動作している stack では環境変数だけが消えます。`AUTH_REQUIRED`、OIDC 設定、ADB 接続情報等が失われ、認証の無効化や稼働障害につながり得ます。「Container Instance を作らない」というコメントも、保持された `api_image_url` と矛盾します。",
+      "suggestion": "`api_environment` が空でない既存 stack は安全な移行先が指定されるまで停止してください。秘密を password 型の独立変数または Vault Secret OCID 参照へ移行し、Container Instance・Function の設定が維持されることを plan とテストで確認してから旧 map を削除してください。少なくとも `api_image_url` または `fn_router_image` が設定済みなのに `api_environment` を落とす組み合わせは拒否してください。"
+    },
+    {
+      "id": "M002",
+      "severity": "major",
+      "file": "runs/2026-08-08T_ORM-FOUNDATIONS/e2e/SKIPPED.md",
+      "line": 9,
+      "issue": "ADR の主要なセキュリティ主張である環境間 Resource Principal 分離は、Dynamic Group matching rule と Policy 文の確認だけで、同一環境への成功と他環境への 403 拒否が実測されていません。文書自身も、技術的・権限的制約ではなく単に工程を実施しなかったと明記しています。",
+      "suggestion": "public-dev principal から同一環境資源への成功、および internal-dev principal から public-dev 資源への 403 拒否を実測し、コマンド、終了コード、マスク済み応答を保存してください。それまでは ADR の結論を「IAM 定義上は分離、実挙動は未検証」に限定してください。"
+    },
+    {
+      "id": "M003",
+      "severity": "major",
+      "file": "packages/api/tests/test_ops_orm_stack.py",
+      "line": 328,
+      "issue": "ADB 起動ヘルパーのテストは `STARTING` 等の文字列がソースに存在することを確認するだけです。実行テストも未知 env の拒否に限られ、検索失敗、空結果、同一リージョン重複、リージョン間重複、各 lifecycle state で `start` API が呼ばれないという重要な fail-closed 契約を検証していません。添付 E2E も正常な Chicago ADB 起動だけです。",
+      "suggestion": "一時 PATH に呼び出しを記録する `oci` スタブを置き、検索失敗、0件、重複、AVAILABLE、STOPPED、遷移中、異常状態を実行テストしてください。STOPPED が一意かつ全リージョン検索成功の場合だけ start が1回呼ばれ、それ以外では0回であることを検証してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 16,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-08-08T_ORM-FOUNDATIONS/e2e/` の16シナリオを確認しました。internal-dev の import plan（28 import、4 add、2 change、0 destroy）と移行後の No changes、public-dev の構築、quotaExceeded、専用 DG への Policy 差し替え、最終 No changes、Chicago ADB 起動は複数のマスク済みログで裏づけられています。証跡パスは `SKIPPED.md`、`16_permission_boundary.txt`、`logs/*.log` です。一方、中心的な環境間アクセスの成功・403拒否は未実測で、SKIPPED.md に正当な実施不能理由がありません。また `api_environment` を保持する既存 stack の移行と、ADB ヘルパーの異常系も未検証です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}
