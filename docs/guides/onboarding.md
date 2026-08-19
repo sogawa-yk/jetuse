@@ -19,9 +19,35 @@
 |---|---|
 | OCIアクセス | テナンシ/コンパートメント `jetuse-proto` への権限、`~/.oci/config`(DEFAULTプロファイル, APIキー) |
 | 秘密値 | `.env`(ADB等の接続情報)。**リポジトリには無い**ので管理者/チームから受領 |
-| ツール | Python 3.13（開発ホスト `dev` は 3.12）/ Node 22 / podman / Terraform 1.15+ / OCI CLI。`dev` には導入済み |
+| ツール | Python 3.13（開発ホスト `dev` は 3.12）/ Node 22 / podman か docker / Terraform **1.7+**（現行 1.15）/ OCI CLI / **`codex` CLI** |
 
 > 開発ホスト(`dev` インスタンス)上で作業する場合、ツールとウォレットは整備済み。手元PCで動かす場合は上記ツールを各自導入する。
+
+**`codex` CLI はループの必須要件。** レビューは Codex が採点し（実装は Claude、採点は Codex）、
+完了条件の1つが `review_verdict=PASS` なので、**無いとループは実装まで進んでからレビューで落ちる**。
+`.claude/skills/codex-review` が呼ぶ。
+
+**Terraform は 1.7 未満だと `make lint` が落ちる。** `terraform test` の `mock_provider` が
+1.7 で入ったため。
+
+### 揃っているか確かめる
+
+```bash
+make doctor
+```
+
+必須（`codex` / `oci` / `terraform` / `python3` / `node` / `npm` / コンテナエンジン / `.env`）が
+1つでも欠けると**非ゼロで止まる**。任意（`gh` / `preview` / `.obsidian-dir` / `.venv`）は警告だけ。
+
+`~/.claude/skills/preview` はホーム側の個人スキルで、**リポジトリには入っていない**（ADR-0018:
+置き場の解決は各自に委ねる）。無い場合、報告は artifact へフォールバックする（作業は止まらない）。
+
+`make doctor` が見る対象は **`ops/*.sh` が実際に呼ぶコマンド**と機械で照合してある
+（`packages/api/tests/test_ops_doctor.py`）。**新しいコマンドを `ops/` で使い始めて
+doctor に足し忘れると CI が落ちる。**
+
+`.claude/skills/*/scripts/` は照合対象外（レビュー指示の散文からコマンドを拾えず精度が出ない）。
+そこから来る依存は `codex` だけで、これは名指しのテストで押さえている。
 
 ## 2. セットアップ(初回)
 

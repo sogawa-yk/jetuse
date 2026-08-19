@@ -1,0 +1,3 @@
+# シナリオ3: .env が雛形のまま → 非ゼロで止まる
+  NG        .env           未設定 COMPARTMENT_OCID TENANCY_OCID ADB_ADMIN_PASSWORD ADB_OCID 実値を入れる（雛形のままでは動かない）
+必須が 1 件欠けています。上の「対処」を先に済ませてください。

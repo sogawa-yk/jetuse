@@ -1,0 +1,79 @@
+{
+  "review_n": 3,
+  "timestamp": "2026-08-19T15:04:25+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-3.input.diff",
+  "raw_output_path": "reviews/review-3.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "`make doctor` の主要分岐は実装されていますが、新規テストが依然としてホストにインストールされた OCI CLI・Terraform・コンテナエンジン等へ依存し、クリーンな CI で失敗し得ます。また、依存コマンド検出の見逃し、認証済み Codex／OCI_PROFILE／Node バージョンの未検証が残っています。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 4,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "blocker",
+      "file": "packages/api/tests/test_ops_doctor.py",
+      "line": 196,
+      "issue": "`_run_doctor` はホストに存在しない必須コマンドを shim せず `faked` に記録するだけです。`test_missing_codex_fails_loudly` は `faked` を考慮しないため、OCI CLI、Terraform、Node/npm、docker/podman のいずれかがない CI では codex 以外にも NG が出て `len(ng) == 1` が失敗します。証跡05は `.env` だけを隔離しており、このホスト依存性を検証していません。",
+      "suggestion": "テスト対象外の必須コマンドには期待する version 出力を返す固定 shim を作り、Pythonだけ実インタプリタへ接続してください。正常系と欠落系を完全に `tmp_path` 内で再現し、ホストにないツールがあっても同じ結果になるテストを追加してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "packages/api/tests/test_ops_doctor.py",
+      "line": 82,
+      "issue": "外部コマンド抽出用 `_CMD` は区切り直後の最初のトークンしか拾いません。例えば `if ! kubectl ...` は `if` を拾って除外した後の `kubectl` を検出せず、`VAR=x kubectl ...` も代入だけを拾って終了します。行頭に kubectl を置いた変異検査だけでは、一般的なシェル構文で依存追加を見逃すため「新しいコマンドを使うと CI が落ちる」という中心的な保証を満たしません。",
+      "suggestion": "ShellCheck等のシェル構文解析結果を利用するか、少なくとも制御構文・`!`・環境変数代入・`env`・コマンド置換を処理できる抽出器にしてください。各構文内へ未登録コマンドを加える変異テストも追加してください。"
+    },
+    {
+      "id": "F003",
+      "severity": "major",
+      "file": "ops/doctor.sh",
+      "line": 59,
+      "issue": "`AUTH_MODE=config_file` では config ファイル内のセクション数しか確認せず、`.env` の `OCI_PROFILE` が存在するかを検証していません。存在しないプロファイル名や空の DEFAULT セクションでも doctor は OK となり、アプリ実行時の OCI 認証で初めて失敗します。",
+      "suggestion": "環境変数優先で `OCI_PROFILE` を読み、空なら DEFAULT として、選択されたプロファイルの存在と必須設定を OCI SDKまたは OCI CLI の非変更プローブで検証してください。存在しないプロファイルのテストも追加してください。"
+    },
+    {
+      "id": "F004",
+      "severity": "major",
+      "file": "ops/doctor.sh",
+      "line": 38,
+      "issue": "Codex は `codex --version` が成功することしか確認していないため、未ログイン・期限切れ認証でも OK になります。onboarding が「導入し認証する」を必須要件とし、認証不足ではレビュー段階まで進んでから失敗するため、追加機能の目的を満たしません。",
+      "suggestion": "利用中の Codex CLI が提供する非対話のログイン状態確認を実施し、未認証なら hard failure にしてください。認証確認ができないバージョンは状態未確認として失敗させるか、少なくとも明確に警告してください。"
+    },
+    {
+      "id": "F005",
+      "severity": "major",
+      "file": "ops/doctor.sh",
+      "line": 106,
+      "issue": "onboarding は Node 22 を要件としている一方、doctor は `node` の存在しか確認せず、古い Node でも成功します。依存パッケージの engine 要件を満たさない環境が preflight を通過し、後続の build/lint で失敗します。",
+      "suggestion": "プロジェクトがサポートする Node の最低バージョンを明示して semantic version 比較し、境界直下・境界値・新しい major のテストを追加してください。npmについても必要な最低版があるなら同様に検証してください。"
+    },
+    {
+      "id": "F006",
+      "severity": "minor",
+      "file": "packages/api/tests/test_ops_doctor.py",
+      "line": 220,
+      "issue": "`assert \"codex\" in shimmed or True` は常に成功するため、何も検証していません。将来 shim の組み立てが壊れてもこのアサーションでは検出できません。",
+      "suggestion": "この行を削除するか、`codex` が shim されていないこと、および `faked`／`shimmed` が期待集合と一致することを実際に検証してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 6,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-08-19T_PREFLIGHT-DOCTOR/e2e/` の正常系、codex欠落、雛形.env、変異検査、.env隔離、AUTH_MODE分岐の6シナリオを確認しました。最低2本は満たし、資源を作成しない理由もSKIPPED.mdにありますが、すべてmacOS手元環境で、想定するjetuse-dev（Python 3.12／instance_principal）は未実施です。特にテストホストからOCI CLI・Terraform・コンテナエンジンを欠落させる経路、OCI_PROFILE不正、Codex未認証、Node下限を検証しておらず、差分のpreflight保証を十分には裏づけていません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されておらず、指示に従ってブラウザツールは使用していません。"
+    }
+  }
+}
