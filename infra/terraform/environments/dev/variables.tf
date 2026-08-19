@@ -113,3 +113,29 @@ variable "rate_limit_rps" {
   type        = number
   default     = 0
 }
+
+variable "spa_par_expiry" {
+  description = <<-D
+    SPA 配信 PAR の失効日時(RFC3339)。空なら apply 時刻起点 +1年の相対期限。
+
+    **state を作り直すときは既存値を明示する。** 空のままだと time_offset が新しい基準時刻で
+    作られ、PAR が **replace = URL が変わる**（API Gateway の配線もやり直しになる）。
+    ORM への移行(ADR-0031)のように state を持ち替える場面では、現行 PAR の time_expires を
+    ここに入れて据え置く。
+  D
+  type        = string
+  default     = ""
+}
+
+variable "existing_dynamic_group" {
+  description = <<-D
+    `enable_dynamic_group = false` のとき、ランタイムポリシーが参照する**既存の動的グループ名**。
+
+    テナンシの DynamicResourceGroups には上限があり、環境ごとに 3 本ずつ作ると足りない
+    (2026-08-08 実測: 50 本で quotaExceeded。うち 48 本は他プロジェクトのもので消せない)。
+    共用する場合、その DG の matching rule が対象コンパートメントの Container Instance /
+    Functions / ADB を含んでいる必要がある。**含めないとポリシーだけができて権限は付かない。**
+  D
+  type        = string
+  default     = ""
+}

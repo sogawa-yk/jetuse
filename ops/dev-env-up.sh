@@ -57,11 +57,38 @@ BUILD_PLATFORM="${JETUSE_BUILD_PLATFORM:-linux/amd64}"
 "$CE" build --platform "$BUILD_PLATFORM" -f packages/api/Containerfile -t "${IMAGE}" .
 "$CE" push "${IMAGE}"
 
+# 共有基盤の state は **ORM が持つ**（ADR-0031）。`terraform_remote_state` は ORM を直接
+# 読めないので、先に落としてローカルファイルとして渡す。**ローカルの
+# environments/dev/terraform.tfstate は移行後は更新されない**ので、そのまま読むと古い値を掴む。
+SHARED_ENV="${JETUSE_SHARED_ENV:-internal-dev}"
+SHARED_STATE="${JETUSE_SHARED_STATE:-}"
+if [ -z "$SHARED_STATE" ]; then
+  # **mktemp が返したパスをそのまま使う。** `$(mktemp ...).tfstate` と後置すると、
+  # 実際の書き込み先は mktemp 管理外の別ファイルになり、権限が umask 任せになる。
+  # 共有 state には ADB のパスワード等が入りうるので 0600 を保ち、終了時に消す。
+  SHARED_STATE="$(mktemp -t jetuse-shared-XXXXXX)"
+  chmod 600 "$SHARED_STATE"
+  trap 'rm -f "$SHARED_STATE"' EXIT
+  echo "== 共有基盤の state を ORM から取得 (${SHARED_ENV})"
+  ops/orm-stack.sh "$SHARED_ENV" state > "$SHARED_STATE"
+  # 落とせたことを確かめる。空や壊れた state を渡すと、terraform は
+  # 「共有基盤の出力が無い」と言うだけで**原因が ORM 取得の失敗だと分からない**。
+  python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1]))
+n=len(d.get('outputs') or {})
+if n == 0:
+    sys.exit('共有 state に outputs が無い（ORM からの取得に失敗している可能性）')
+print(f'   outputs {n} 個')
+" "$SHARED_STATE"
+fi
+
 echo "== terraform plan (state: ${DEV}.tfstate)"
 ( cd "$APPDIR"
   terraform init -input=false >/dev/null
   terraform plan -input=false -var-file="${DEV}.tfvars" \
-    -var "api_image_url=${IMAGE}" -state="${DEV}.tfstate" -out="${DEV}.tfplan"
+    -var "api_image_url=${IMAGE}" -var "shared_state_path=${SHARED_STATE}" \
+    -state="${DEV}.tfstate" -out="${DEV}.tfplan"
 )
 # CLAUDE.md: terraform apply は承認ゲート。ヘッドレス安全のため対話確認はせず、--apply 明示時のみ適用する。
 if [ "$APPLY" -ne 1 ]; then

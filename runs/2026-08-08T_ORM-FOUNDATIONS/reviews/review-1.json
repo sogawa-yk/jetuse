@@ -1,0 +1,63 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-08-08T12:21:50+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "Terraform state の安全な一時保存と既存 ORM stack の確実な解決に blocker があります。さらにリージョン上書きが Terraform へ伝播せず、public-dev の停止 ADB を補助スクリプトで起動できません。",
+  "severity_counts": {
+    "blocker": 2,
+    "major": 2,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "B001",
+      "severity": "blocker",
+      "file": "ops/dev-env-up.sh",
+      "line": 66,
+      "issue": "`mktemp` が作成した 0600 のファイル名に後から `.tfstate` を付加しているため、実際のリダイレクト先は mktemp 管理外の新規ファイルです。権限は通常の umask に依存し、ORM から取得した完全な Terraform state（sensitive 値を含み得る）が他ユーザーから読める状態になり、終了後も削除されません。",
+      "suggestion": "mktemp が返したパス自体を保存先に使い、自動生成した場合だけ `trap` で終了時に削除してください。作成後の権限 0600 もテストしてください。"
+    },
+    {
+      "id": "B002",
+      "severity": "blocker",
+      "file": "ops/orm-stack.sh",
+      "line": 70,
+      "issue": "`find_stack` が OCI CLI の全エラーを `|| true` で空結果へ変換します。認証・通信等で既存 stack の検索に失敗しても「stack が無い」と判定され、同名 stack を新規作成し、`apply --apply` では空 state から既存リソースの再作成を試みる可能性があります。",
+      "suggestion": "CLI エラーは失敗させ、成功した検索結果が0件の場合だけ新規作成してください。display name の一致件数も検証し、複数件なら停止してください。"
+    },
+    {
+      "id": "M001",
+      "severity": "major",
+      "file": "ops/orm-stack.sh",
+      "line": 159,
+      "issue": "`ORM_REGION` は stack API のリージョン選択にだけ使われ、stack variables に `region` が含まれません。`providers.tf` は `var.region` を利用するため、上書き時も Terraform は既定の `us-chicago-1` を対象とし、stack の所在と管理対象リージョンが食い違います。",
+      "suggestion": "`region` を schema と VARS に含めてください。ORM の所在リージョンと Terraform provider の対象を分ける設計なら、別名の設定へ分離し、非既定リージョンのテストを追加してください。"
+    },
+    {
+      "id": "M002",
+      "severity": "major",
+      "file": "ops/start-adb-if-stopped.sh",
+      "line": 17,
+      "issue": "対象 compartment を常に `.env` の `COMPARTMENT_OCID` から取得するため、`PUBLIC_DEV_COMPARTMENT_OCID` にある public-dev ADB は起動できません。`orm-stack.sh public-dev apply` が停止を検出してこのスクリプトを案内しても、internal-dev compartment しか探索しません。",
+      "suggestion": "環境名または compartment を引数化し、`internal-dev` / `public-dev` を `orm-stack.sh` と同じ対応表で解決してください。両 compartment の STOPPED、AVAILABLE、未検出をテストしてください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 15,
+    "adequacy": "insufficient",
+    "notes": "証跡パスは `runs/2026-08-08T_ORM-FOUNDATIONS/e2e/SKIPPED.md`。internal-dev の import 前後、public-dev の新規構築と既存 DG 共用、state stdout、Chicago ADB 起動、リージョン表など15項目が記録され、最低2シナリオは満たします。ただし raw log 等はなく要約のみであり、非既定 ORM_REGION、stack lookup エラー、state 一時ファイルの権限・削除、public-dev の停止 ADB 起動が未検証です。SKIPPED.md にこれらの未実施理由もありません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されておらず、指示に従いブラウザツールは使用していません。"
+    }
+  }
+}

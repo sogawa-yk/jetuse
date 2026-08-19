@@ -1,0 +1,55 @@
+{
+  "review_n": 15,
+  "timestamp": "2026-08-09T10:21:35+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-15.input.diff",
+  "raw_output_path": "reviews/review-15.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker はありません。ORM 移行と両環境の Terraform 収束は複数の実環境ログで裏づけられていますが、public-dev の Object Storage namespace 権限が不足する構成と、秘密を含み得る `api_environment` の平文保持が残っています。また、主要な環境間 IAM 境界は実アクセスで未検証です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 3,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "M001",
+      "severity": "major",
+      "file": "ops/orm-stack.sh",
+      "line": 70,
+      "issue": "public-dev は `ENABLE_DG=false` / `ENABLE_POLICY=true` のため compartment-level runtime policy は作成しますが、IAM module の tenancy-level `read objectstorage-namespaces` policy は `enable_dynamic_group=true` の場合しか作成されません。添付証跡にも public-dev 用の tenancy policy はなく、API は `get_namespace()` を使用するため、public-dev Resource Principal の Object Storage 処理が権限不足になる可能性があります。",
+      "suggestion": "既存 Dynamic Group を参照する場合でも namespace 読取 policy を明示的に作成できる変数を IAM module に追加し、public-dev 用 tenancy policy を人間ゲート経由で配備してください。同一環境 Resource Principal から `get_namespace` と Object Storage 操作が成功する E2E も追加してください。"
+    },
+    {
+      "id": "M002",
+      "severity": "major",
+      "file": "ops/orm-stack.sh",
+      "line": 336,
+      "issue": "既存 stack に `api_image_url` または `fn_router_image` がある場合、秘密を含み得る `api_environment` を ORM variables へそのまま引き継ぎます。schema ではこの map を password 型としてマスクできず、コード自身も ORM コンソールで平文表示されると認識したまま処理を続行するため、ADB パスワードや OIDC credential が管理画面へ露出し得ます。",
+      "suggestion": "秘密を Vault Secret OCID 参照または個別の password 型変数へ移行してください。安全な移行が済むまでは、イメージ設定済み stack に秘密を含む `api_environment` があれば警告だけでなく fail-closed で停止してください。"
+    },
+    {
+      "id": "M003",
+      "severity": "major",
+      "file": "runs/2026-08-08T_ORM-FOUNDATIONS/e2e/SKIPPED.md",
+      "line": 9,
+      "issue": "ADR は「ワークロードの越境が塞がった」と実施済みの結果を記載していますが、証跡は Dynamic Group matching rule と Policy 文の確認だけです。同一環境への正常アクセスと internal-dev principal から public-dev 資源への 403 拒否は未実測で、SKIPPED.md も実施不能な理由ではなく単に工程を実施しなかったと明記しています。",
+      "suggestion": "public-dev Resource Principal から同一環境の namespace・bucket 操作が成功するシナリオと、internal-dev Resource Principal から同じ public-dev 資源への操作が 403 になるシナリオを実測し、コマンド、終了コード、マスク済み応答を保存してください。それまでは ADR の結論を「IAM 定義上は分離、実挙動は未検証」に限定してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 16,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-08-08T_ORM-FOUNDATIONS/e2e/` の16シナリオを確認しました。internal-dev の import plan（28 import、4 add、2 change、0 destroy）、imports.tf 除去後の複数回の No changes、public-dev の構築・quotaExceeded・専用 DG への policy 差し替え・最終 No changes、Chicago ADB 起動など、最低2シナリオの条件は満たしています。証跡パスは `SKIPPED.md`、`16_permission_boundary.txt`、添付された `logs/*.log` です。一方、中心的な環境間アクセスの成功・403拒否は未実施で、正当な実施不能理由もありません。public-dev の namespace 読取権限と `api_environment` を保持する既存 stack の安全性も未検証のため、diff 全体の裏づけとしては不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

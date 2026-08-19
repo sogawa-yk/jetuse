@@ -1,0 +1,55 @@
+{
+  "review_n": 9,
+  "timestamp": "2026-08-09T09:50:34+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-9.input.diff",
+  "raw_output_path": "reviews/review-9.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "破壊的 plan の適用防止が、ORM ジョブログの取得失敗時に迂回される blocker があります。また、環境間の権限分離は定義確認のみで実アクセスが未検証のため、実施済みという主張を十分に裏づけていません。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 1,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "B001",
+      "severity": "blocker",
+      "file": "ops/orm-stack.sh",
+      "line": 376,
+      "issue": "plan ジョブログの取得失敗を `|| true` で握り潰しています。空のログでは `LAST_DESTROY_COUNT` が 0 になるため、実際には destroy/replace を含む plan でも `--apply` が指定されていれば FROM_PLAN_JOB_ID で適用されます。ログ取得権限不足や一時的な OCI API 障害だけで、破壊防止ゲートを迂回できます。",
+      "suggestion": "plan ログを取得・解析できなければ apply を必ず中止してください。`No changes` または `Plan: X to add, Y to change, Z to destroy` を一意に解析し、要約行欠落・複数行・不正値も fail-closed にしてください。ログ取得失敗時に apply job が作成されない OCI CLI スタブテストも追加してください。"
+    },
+    {
+      "id": "M001",
+      "severity": "major",
+      "file": "runs/2026-08-08T_ORM-FOUNDATIONS/e2e/SKIPPED.md",
+      "line": 7,
+      "issue": "ADR は「ワークロードの越境が塞がった」と実施完了を主張していますが、証跡は Dynamic Group matching rule と Policy 文の確認だけです。internal-dev Resource Principal から public-dev への 403、および同一環境への成功は未実測で、SKIPPED.md も技術的制約ではなく単に工程を積まなかったと明記しています。",
+      "suggestion": "各環境の Resource Principal から、同一環境の代表資源への成功と他環境への拒否を最低1本ずつ実測し、実行コマンド、終了コード、マスク済み応答を保存してください。それまでは ADR の結果を「定義上の分離・実挙動は未検証」としてください。"
+    },
+    {
+      "id": "m001",
+      "severity": "minor",
+      "file": "ops/orm-import-blocks.py",
+      "line": 82,
+      "issue": "文字列の `index_key` をそのまま `addr += f'[\"{idx}\"]'` へ埋め込むため、キーに引用符、バックスラッシュ、改行などが含まれる state では不正な Terraform address を生成します。",
+      "suggestion": "Terraform の文字列添字として安全に引用するため、`json.dumps(idx)` 等を使って `addr += f'[{json.dumps(idx)}]'` としてください。特殊文字を含む index_key の単体テストも追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 16,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-08-08T_ORM-FOUNDATIONS/e2e/` の16シナリオを確認しました。internal-dev の import plan（28 import、4 add、2 change、0 destroy）と移行後の No changes、public-dev の構築、quotaExceeded、専用 DG への Policy 差し替え、両環境の最終 No changesは添付ログで裏づけられています。複数シナリオ要件は満たしますが、中心的な環境間アクセス許可・拒否が未実測であり、最終コードのログ取得失敗時に破壊的 apply を拒否する経路にも証跡がないため不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

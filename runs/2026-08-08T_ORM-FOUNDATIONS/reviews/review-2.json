@@ -1,0 +1,79 @@
+{
+  "review_n": 2,
+  "timestamp": "2026-08-08T12:30:29+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-2.input.diff",
+  "raw_output_path": "reviews/review-2.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "共有 Dynamic Group による環境間の権限分離崩壊と、stack variables の取得失敗時に既定値へ戻して apply し得る経路が blocker です。実環境 E2E は複数シナリオを主張していますが、raw log・job ID・テスト結果が添付されておらず、証跡としては不十分です。",
+  "severity_counts": {
+    "blocker": 2,
+    "major": 3,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "B001",
+      "severity": "blocker",
+      "file": "ops/orm-stack.sh",
+      "line": 37,
+      "issue": "public-dev の policy が、添付証跡によれば5コンパートメントすべてを matching rule に含む `jetuse-internal-dg` を参照します。OCI Policy は対象コンパートメント内の権限を Dynamic Group 全体へ付与するため、internal・hosting 環境など別コンパートメントの該当 Resource Principal まで public-dev の Object Storage、ADB、Generative AI 等へアクセスでき、5面構成の権限境界が成立しません。",
+      "suggestion": "public-dev の主体だけに限定した Dynamic Group を用意してください。上限のため追加できない場合は、quota 引き上げ・不要 DG の整理、または principal compartment を限定できることを実 OCI で検証した Policy 条件を採用し、別コンパートメントの principal から拒否される E2E を追加してください。"
+    },
+    {
+      "id": "B002",
+      "severity": "blocker",
+      "file": "ops/orm-stack.sh",
+      "line": 171,
+      "issue": "既存 stack の variables 取得失敗を `|| echo '{}'` で握り潰し、JSON の解析失敗も空 object として継続します。その状態で stack を更新すると、`enable_opensearch`、`enable_identity_domain`、`api_image_url`、`functions_routes` 等の既存値が消えて既定値へ戻ります。`apply --apply` では、たとえば有効な OpenSearch やアプリ資源の削除・再構成を AUTO_APPROVED で直接実行し得ます。",
+      "suggestion": "既存 stack の取得・JSON 解析・型検証はすべて fail-closed にし、成功時だけ更新してください。既存 variable の欠落がないことを検証し、取得エラー時に stack update/job creation が呼ばれないテストを追加してください。"
+    },
+    {
+      "id": "M001",
+      "severity": "major",
+      "file": "ops/orm-stack.sh",
+      "line": 178,
+      "issue": "`ADB_ADMIN_PASSWORD` を Python のコマンドライン引数へ渡し、生成した JSON を OCI CLI の `--variables` 引数にも直接渡しています。ADB ADMIN パスワードが実行中の process argv に露出し、同一ホスト上の process inspection や診断ログから取得される可能性があります。",
+      "suggestion": "0600 の一時 JSON ファイルを作り、OCI CLI が対応する `file://...` 入力で渡してください。Python にも秘密を argv ではなく権限を限定したファイルまたは標準入力で渡し、終了時に確実に削除してください。"
+    },
+    {
+      "id": "M002",
+      "severity": "major",
+      "file": "ops/orm-stack.sh",
+      "line": 110,
+      "issue": "ADB プリフライトが display name を絞らず `data[0]` だけを検査し、OCI CLI エラーも `|| true` で握り潰します。同一コンパートメントに複数 ADB がある場合は別 ADB の状態を見て対象の STOPPED を見逃し、認証・通信障害時も apply を続行するため、意図している部分適用防止になりません。",
+      "suggestion": "`${PREFIX}-adb` を display name で絞り、0件・複数件・CLI失敗をすべてエラーとして停止してください。対象 STOPPED、AVAILABLE、未検出、重複、CLI失敗をテストしてください。"
+    },
+    {
+      "id": "M003",
+      "severity": "major",
+      "file": "runs/2026-08-08T_ORM-FOUNDATIONS/e2e/SKIPPED.md",
+      "line": 3,
+      "issue": "15項目の結果は自己申告の要約だけで、ORM job ID、取得した job log、コマンド出力、終了コード、テスト結果などの再確認可能な証跡がありません。また、共有 DG を使った別コンパートメント主体からのアクセス拒否や、stack variables 取得失敗時の fail-closed 経路も未検証のまま「全部やった」と完了を主張しています。",
+      "suggestion": "機密値を除去した raw log、job ID、実行コマンドと終了コードを保存してください。少なくとも imports 抜きの No changes、public-dev の最終 No changes、state JSON、対象 ADB 起動、別環境 principal のアクセス拒否、variables 取得失敗時の停止を証跡化してください。"
+    },
+    {
+      "id": "m001",
+      "severity": "minor",
+      "file": "packages/api/tests/test_ops_orm_stack.py",
+      "line": 55,
+      "issue": "`stat` の format に `%Lp` または `%a` を2回書いて2ファイルへ適用しているため、出力先頭2値はいずれも最初の mktemp ファイルの mode になります。したがって `suffixed` は実際の suffix ファイルを検査せず、テストが意図した権限差を確認できません。",
+      "suggestion": "format 指定は1ファイルにつき1値にし、2ファイルの mode を別々に取得してください。可能なら umask を明示して、suffix ファイルが mktemp の保護を継承しないことを決定的に検証してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 15,
+    "adequacy": "insufficient",
+    "notes": "証跡パスは `runs/2026-08-08T_ORM-FOUNDATIONS/e2e/SKIPPED.md`。internal-dev の移行、public-dev の新規構築、state取得、Chicago ADB起動、リージョン解決の計15項目が記載され、最低2シナリオという数の条件は満たします。ただし raw log・ORM job ID・終了コードがなく、最終結果を独立に確認できません。さらに共有DGの環境間アクセス拒否、stack variables取得失敗、複数ADB/CLI失敗の経路が未検証です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されておらず、指示に従いブラウザツールは使用していません。"
+    }
+  }
+}
