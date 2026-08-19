@@ -1,0 +1,63 @@
+{
+  "review_n": 1,
+  "timestamp": "2026-08-06T00:59:49+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-1.input.diff",
+  "raw_output_path": "reviews/review-1.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "未リリース検出の基本ロジックと単体テストは妥当ですが、remote-tracking ref の鮮度と PR の base branch を確認していないため誤判定が生じます。また `status: done` に対し、実行済みテストおよび最低2本の E2E 証跡もありません。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 2,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "E2E-001",
+      "severity": "blocker",
+      "file": "docs/enhance/ER-0021-未リリース分が一覧に出ない.md",
+      "line": 5,
+      "issue": "ER を `status: done` として完了扱いにしていますが、指定された `runs/2026-08-06T_RELEASE-LAG/e2e/` は空です。最低2本の実行シナリオも、未実施理由を記録した `SKIPPED.md` もなく、本文が主張する9件の回帰テストについても実行結果が添付されていません。したがって完了主張を裏づける検証証跡が不足しています。",
+      "suggestion": "少なくとも public/internal の両 release pair を対象に、未リリース検出と release PR 検出を実行した2本以上の証跡を保存してください。実環境 E2E が対象外なら、その技術的理由、代替検証、pytest/lint の実行結果を `e2e/SKIPPED.md` に記録し、確認完了までは ER を done にしないでください。"
+    },
+    {
+      "id": "STALLED-001",
+      "severity": "major",
+      "file": "ops/stalled.py",
+      "line": 90,
+      "issue": "判定対象がローカルの `origin/*` remote-tracking ref のみで、`scan()` の前にも実行手順にも `git fetch` がありません。release が remote で完了した後も古い ref から未リリースと表示したり、逆に新しい未リリース commit を見逃したりします。「リポジトリの実際の状態」を示す一覧として信頼できません。",
+      "suggestion": "判定前に安全な fetch を行い、失敗時は未リリースなしと扱わず `unknown` を返してください。自動 fetch を避けるなら、呼び出し元で fetch 済みを保証し、ref の更新時刻・取得失敗を利用者に明示してください。鮮度が異なる ref のテストも追加してください。"
+    },
+    {
+      "id": "STALLED-002",
+      "severity": "major",
+      "file": "ops/stalled.py",
+      "line": 103,
+      "issue": "`dev in prs` だけで release PR と判定しており、PR の base branch を検証していません。例えば `public-dev` を head とする別用途・別 base 向けの PR があるだけで、`main` への release PR がない未リリース項目を `pr` に格下げし、要注意一覧から外してしまいます。",
+      "suggestion": "`gh pr list` から `baseRefName` も取得し、`(headRefName, baseRefName)` が現在の `(dev, stable)` と一致する場合だけ release PR と判定してください。異なる base の PR が存在する境界テストを追加してください。"
+    },
+    {
+      "id": "STALLED-003",
+      "severity": "minor",
+      "file": "ops/stalled.py",
+      "line": 61,
+      "issue": "`gh pr list` に `--limit` がなく、既定件数を超える open PR があると release PR が結果から欠落し、「PR が出ていない」と誤表示されます。さらに CLI/JSON エラーを空辞書へ潰すため、GitHub の確認不能と本当に PR がない状態を区別できません。",
+      "suggestion": "十分な `--limit` またはページングを指定し、取得失敗は `unknown` として伝播してください。件数上限超過と `gh` 失敗のテストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": false,
+    "scenarios_reviewed": 0,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-08-06T_RELEASE-LAG/e2e/` は空と明記されており、実行シナリオ、結果、ログ、SKIPPED.md のいずれもありません。差分は `status: done` と9件の回帰テストを主張していますが、その実行証跡を確認できません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

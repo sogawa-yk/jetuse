@@ -1,0 +1,45 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.13.7, pytest-9.1.1, pluggy-1.6.0 -- /Users/sogawa/Documents/GitHub/jetuse/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/sogawa/Documents/GitHub/jetuse/packages/api
+configfile: pyproject.toml
+plugins: cov-7.1.0, anyio-4.14.2, langsmith-0.10.10
+collecting ... collected 35 items
+
+tests/test_migrate_foreign_schema.py::test_the_real_failure_is_an_image_that_needs_more_than_the_db_has PASSED [  2%]
+tests/test_migrate_foreign_schema.py::test_foreign_versions_alone_would_not_have_caught_it PASSED [  5%]
+tests/test_migrate_foreign_schema.py::test_nothing_pending_when_the_db_matches_the_image PASSED [  8%]
+tests/test_migrate_foreign_schema.py::test_fresh_database_has_everything_pending PASSED [ 11%]
+tests/test_migrate_foreign_schema.py::test_a_db_ahead_of_the_image_has_nothing_pending PASSED [ 14%]
+tests/test_migrate_foreign_schema.py::test_nothing_foreign_when_db_is_a_subset_of_the_checkout PASSED [ 17%]
+tests/test_migrate_foreign_schema.py::test_fresh_database_is_not_foreign PASSED [ 20%]
+tests/test_migrate_foreign_schema.py::test_internal_schema_seen_from_a_public_checkout_is_detected PASSED [ 22%]
+tests/test_migrate_foreign_schema.py::test_warning_names_the_count_and_examples PASSED [ 25%]
+tests/test_migrate_foreign_schema.py::test_warning_does_not_claim_the_app_is_broken PASSED [ 28%]
+tests/test_migrate_foreign_schema.py::test_warning_lists_everything_when_few PASSED [ 31%]
+tests/test_migrate_foreign_schema.py::test_checkout_versions_reads_real_files_without_extension PASSED [ 34%]
+tests/test_migrate_foreign_schema.py::test_expectations_do_not_depend_on_the_current_branch PASSED [ 37%]
+tests/test_migrate_foreign_schema.py::test_applied_versions_reads_without_applying_anything PASSED [ 40%]
+tests/test_migrate_foreign_schema.py::test_applied_versions_on_a_schema_without_the_table PASSED [ 42%]
+tests/test_migrate_foreign_schema.py::test_applied_versions_sets_a_call_timeout PASSED [ 45%]
+tests/test_migrate_foreign_schema.py::test_warns_even_though_nothing_is_applied PASSED [ 48%]
+tests/test_migrate_foreign_schema.py::test_no_warning_on_a_normal_run PASSED [ 51%]
+tests/test_migrate_foreign_schema.py::test_warning_precedes_any_ddl PASSED [ 54%]
+tests/test_migrate_foreign_schema.py::test_idempotent_second_run_still_warns PASSED [ 57%]
+tests/test_migrate_foreign_schema.py::test_cli_prints_the_warning_and_does_not_claim_up_to_date PASSED [ 60%]
+tests/test_migrate_foreign_schema.py::test_blank_versions_are_not_treated_as_foreign[] PASSED [ 62%]
+tests/test_migrate_foreign_schema.py::test_blank_versions_are_not_treated_as_foreign[   ] PASSED [ 65%]
+tests/test_health_schema.py::test_behind_when_the_image_needs_more_than_the_db_has PASSED [ 68%]
+tests/test_health_schema.py::test_hint_does_not_overstate_the_impact PASSED [ 71%]
+tests/test_health_schema.py::test_behind_flips_the_overall_ok PASSED     [ 74%]
+tests/test_health_schema.py::test_ok_when_the_db_matches_the_image PASSED [ 77%]
+tests/test_health_schema.py::test_foreign_when_the_db_is_ahead PASSED    [ 80%]
+tests/test_health_schema.py::test_foreign_does_not_flip_the_overall_ok PASSED [ 82%]
+tests/test_health_schema.py::test_behind_wins_over_foreign PASSED        [ 85%]
+tests/test_health_schema.py::test_db_unreachable_is_unknown_not_ok PASSED [ 88%]
+tests/test_health_schema.py::test_unknown_does_not_flip_the_overall_ok PASSED [ 91%]
+tests/test_health_schema.py::test_health_check_does_not_apply_migrations PASSED [ 94%]
+tests/test_health_schema.py::test_fresh_schema_reports_every_version_pending PASSED [ 97%]
+tests/test_health_schema.py::test_expectations_do_not_depend_on_the_current_branch PASSED [100%]
+
+============================== 35 passed in 0.65s ==============================

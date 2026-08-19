@@ -1,0 +1,39 @@
+{
+  "review_n": 12,
+  "timestamp": "2026-08-06T01:44:14+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-12.input.diff",
+  "raw_output_path": "reviews/review-12.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "未リリース検出、取得不能時の保守的な unknown 扱い、表示側への接続は一貫しており、blocker はありません。実環境 E2E 証跡も変更対象に即した複数経路を網羅していますが、PR 件数上限の単体テストに検証漏れが1件あります。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 0,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "minor",
+      "file": "packages/api/tests/test_stalled_release_lag.py",
+      "line": 255,
+      "issue": "`test_hitting_the_pr_limit_is_treated_as_unknown` が生成する200件のレコードには必須の `isCrossRepository` がありません。そのため `_open_pr_records()` は件数上限の判定前にレコード形式不正として `None` を返し、`len(recs) >= limit` の処理を削除してもテストが通ります。",
+      "suggestion": "各レコードに `\"isCrossRepository\": False` を追加し、形式検証を通過した200件によって件数上限の分岐そのものを検証してください。可能なら199件は正常なリストとして返る境界テストも追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 6,
+    "adequacy": "sufficient",
+    "notes": "`runs/2026-08-06T_RELEASE-LAG/e2e/` の6シナリオを確認しました。53件の単体テスト、実リポジトリでの両ブランチペアと `git rev-list` 実測値の照合、release PR判定、オフライン耐性、判定不能状態、明示refspecを網羅しています。OCI配備対象外である理由は `SKIPPED.md` に具体的に記載され、ローカル運用ツールというdiffの性質に対して妥当です。ただしシナリオ1内のPR上限テストにはF-001の検証漏れがあります。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブのターゲットURLが提供されていないため、指示どおり実ブラウザE2Eは実施していません。"
+    }
+  }
+}

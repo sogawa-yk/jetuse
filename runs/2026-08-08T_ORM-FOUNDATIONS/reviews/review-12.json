@@ -1,0 +1,47 @@
+{
+  "review_n": 12,
+  "timestamp": "2026-08-09T10:06:43+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-12.input.diff",
+  "raw_output_path": "reviews/review-12.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker はありません。ORM 移行と両開発環境の収束は複数の実環境ログで裏づけられていますが、主要な IAM 権限境界は定義確認に留まり、実アクセスによる許可・拒否が未検証です。また、安全機構のテストが静的な文字列検査に偏っています。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 2,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "M001",
+      "severity": "major",
+      "file": "runs/2026-08-08T_ORM-FOUNDATIONS/e2e/SKIPPED.md",
+      "line": 5,
+      "issue": "ADR は「ワークロードの越境が塞がった」と実施済みの結果を記載していますが、証跡で確認できるのは Dynamic Group の matching rule と Policy 文だけです。internal-dev Resource Principal から public-dev 資源への 403、および同一環境への正常アクセスは未実測です。SKIPPED.md も実施不能な技術的・権限的理由ではなく、単に工程を実施しなかったと明記しています。",
+      "suggestion": "各環境の Resource Principal から、同一環境の代表資源への成功と他環境への 403 拒否を最低1本ずつ実測し、コマンド、終了コード、マスク済み応答を保存してください。それまでは ADR の結論を「IAM 定義上は分離、実挙動は未検証」に限定してください。"
+    },
+    {
+      "id": "M002",
+      "severity": "major",
+      "file": "packages/api/tests/test_ops_orm_stack.py",
+      "line": 331,
+      "issue": "破壊的 plan の拒否、ジョブログ取得失敗時の停止、ADB 検索失敗・重複時の非変更といった安全機構のテストが、変数名や文字列がソースに存在することの確認に留まっています。実際に OCI CLI をスタブ化して apply/start API が呼ばれないことを検証しておらず、この差分の中心的な fail-closed 契約を回帰テストできません。添付 E2E にもこれらの異常系はありません。",
+      "suggestion": "一時 PATH に状態を記録する `oci` スタブを置き、destroy/replace plan、ログ取得失敗、不正な plan 要約、ADB 検索失敗、同一・複数リージョン重複、各 lifecycle state を実行テストしてください。各異常系で apply/start API の呼び出し回数が0であることまで検証してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 16,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-08-08T_ORM-FOUNDATIONS/e2e/` の16シナリオを確認しました。internal-dev の import plan（28 import、4 add、2 change、0 destroy）、imports.tf 除去後の No changes、public-dev の構築・quotaExceeded・専用 DG への Policy 差し替え、両環境の最終 No changes、Chicago の ADB 起動など、最低2シナリオの条件は満たしています。証跡中の OCID はマスクされ、PAR URLや実エンドポイントも抜粋から除外されています。一方、中心的な環境間アクセスの成功・403拒否は未実測で、SKIPPED.md に正当な実施不能理由がないため、diff 全体の裏づけとしては不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

@@ -1,0 +1,7 @@
+# シナリオ4: 落ちている環境（オフライン / gh 無し）でも生成器が死なない
+
+review-2 major: subprocess の TimeoutExpired / OSError が伝播すると
+ops/er.py report ごと落ち、一覧が一切出なくなる。
+
+  gh 未インストール             _open_pr_records()=None  _fetch_origin()=False
+  応答なし(60s timeout)      _open_pr_records()=None  _fetch_origin()=False

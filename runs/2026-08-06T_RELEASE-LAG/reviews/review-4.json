@@ -1,0 +1,47 @@
+{
+  "review_n": 4,
+  "timestamp": "2026-08-06T01:13:34+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-4.input.diff",
+  "raw_output_path": "reviews/review-4.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "未リリース検出の基本経路は実装・検証されていますが、fetch 失敗時に古い参照が同一なら警告なしで未リリースを見逃すため、中心目的を満たしません。また shallow clone では件数と経過日数が不正確になります。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 1,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "blocker",
+      "file": "ops/stalled.py",
+      "line": 151,
+      "issue": "`fetched=False` でもローカルの古い参照間で `n == 0` なら、そのまま項目を返さず終了します。例えば前回 fetch 時点で stable/dev が同一、その後 remote の dev だけ進み、今回の fetch がオフラインで失敗した場合、実際の未リリース分が警告も「古い可能性」表示もなく一覧から完全に漏れます。追加テストはローカル参照を先に進めた状態しか検証しておらず、この境界条件を覆っていません。",
+      "suggestion": "fetch 失敗時は `n == 0` を「遅れなし」と確定せず、各 release pair を `unknown` として表示してください。少なくとも、ローカルでは両 ref が同一かつ `_fetch_origin()` が失敗する `scan()` テストを追加し、警告が残ることを固定してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "ops/stalled.py",
+      "line": 150,
+      "issue": "shallow clone を検出せず `rev-list --count` と `git log --reverse` の結果を完全な履歴として扱っています。全長期ブランチの remote ref が存在していても履歴境界が浅ければ、16 commit の遅れを1 commit、最古日を直近日として表示し得ます。missing-ref 判定ではこのケースを検出できません。",
+      "suggestion": "`git rev-parse --is-shallow-repository` を確認し、shallow の場合は履歴を deepen/unshallow できた場合だけ件数・日数を確定してください。深掘りできなければ status または文面を `unknown` とし、件数・日数が不完全であることを明示するテストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "insufficient",
+    "notes": "`01_pytest_release_lag.txt` の20件成功、`02_real_repo_scan.txt` の両ブランチペアと rev-list 実測値の一致、`03_release_pr_detection.txt` の3分岐、`04_offline_resilience.txt` の例外処理を確認しました。OCI E2E を省略する理由は `SKIPPED.md` に具体的に記載され、この差分が配備経路に含まれないことから妥当です。ただしオフライン検証は、ローカル参照に既に遅れがある場合だけで、fetch 失敗かつ古い参照上では差分ゼロとなる中心的な偽陰性を検証していません。shallow clone の履歴切断も未検証です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されておらず、ユーザー指示に従いブラウザツールは使用していません。"
+    }
+  }
+}

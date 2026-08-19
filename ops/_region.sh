@@ -17,21 +17,29 @@
 # `--region` を各呼び出しに付ける方式は、後から足した呼び出しで抜ける。
 # ここで一度 export するほうが漏れない。
 
-# OCIR のホスト名はリージョンキー(3文字)。JetUse のイメージ push 先 4 リージョン
-# (ADR-0011 / ADR-0017)を持つ。ここに無いリージョンは OCIR_HOST を明示指定する。
+# リージョン → OCIR のリージョンキー(3文字)。**この表だけが正**。
+# JetUse のイメージ push 先 4 リージョン(ADR-0011 / ADR-0017)。
+# 一覧が要る用途(資源を横断で探す等)も、直書きせずここから取る。
+JETUSE_REGION_MAP="us-chicago-1:ord ap-osaka-1:kix ap-tokyo-1:nrt us-ashburn-1:iad"
+
+# 扱うリージョンの一覧。**探索範囲を各スクリプトに直書きさせない。**
+# 直書きすると、リージョンが増減したときに片方だけ古いまま残る
+# (2026-08-08: start-adb-if-stopped.sh が大阪だけを見ていてシカゴの ADB を
+#  見つけられず、「nothing to do」と言って正常終了していた)。
+jetuse_known_regions() {
+  local pair
+  for pair in $JETUSE_REGION_MAP; do echo "${pair%%:*}"; done
+}
+
+# ここに無いリージョンは OCIR_HOST を明示指定する。
 jetuse_ocir_host() {
-  local region="$1"
+  local region="$1" pair
   if [ -n "${OCIR_HOST:-}" ]; then echo "$OCIR_HOST"; return 0; fi
-  case "$region" in
-    us-chicago-1) echo "ord.ocir.io" ;;
-    ap-osaka-1)   echo "kix.ocir.io" ;;
-    ap-tokyo-1)   echo "nrt.ocir.io" ;;
-    us-ashburn-1) echo "iad.ocir.io" ;;
-    *)
-      echo "未対応リージョン: $region (OCIR_HOST=<key>.ocir.io を明示指定してください)" >&2
-      return 1
-      ;;
-  esac
+  for pair in $JETUSE_REGION_MAP; do
+    if [ "${pair%%:*}" = "$region" ]; then echo "${pair##*:}.ocir.io"; return 0; fi
+  done
+  echo "未対応リージョン: $region (OCIR_HOST=<key>.ocir.io を明示指定してください)" >&2
+  return 1
 }
 
 # 以降の `oci` CLI 呼び出しを指定リージョンへ固定する。

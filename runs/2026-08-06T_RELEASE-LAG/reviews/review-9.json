@@ -1,0 +1,39 @@
+{
+  "review_n": 9,
+  "timestamp": "2026-08-06T01:33:57+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-9.input.diff",
+  "raw_output_path": "reviews/review-9.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "未リリース検出の主要経路とエラー時の保守的な挙動は十分に検証されています。ただし、PR レコードの検証から `isCrossRepository` が漏れており、欠損した異常応答で fork の PR を release PR と誤認する余地があります。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 1,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "major",
+      "file": "ops/stalled.py",
+      "line": 104,
+      "issue": "`_open_pr_records()` の必須キー検証が `number`、`headRefName`、`baseRefName` のみで、release PR 判定に必要な `isCrossRepository` を検証していません。後段は `not p.get(\"isCrossRepository\")` と評価するため、このキーが欠けた異常レコードを同一リポジトリの PR とみなし、fork の同名ブランチからの PR によって実際の未リリース警告を隠す可能性があります。",
+      "suggestion": "`isCrossRepository` を必須キーに追加し、値が `bool` であることも検証してください。あわせて、他の3キーは存在確認だけでなく型も検証し、`isCrossRepository` 欠損・null・文字列値を `None` に落とす回帰テストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 6,
+    "adequacy": "sufficient",
+    "notes": "`runs/2026-08-06T_RELEASE-LAG/e2e/` の証跡では、36件の単体テスト、実リポジトリでの2ブランチペア検出と rev-list 実測値の一致、release PR 判定3分岐、オフライン耐性、判定不能時の保守的表示、明示 refspec を確認しています。最低2シナリオを超えて主要経路と境界条件を網羅しています。OCI 配備対象に `ops/` が含まれず実行経路が存在しないことが `SKIPPED.md` に説明されており、実OCI E2Eの未実施理由も妥当です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおり実ブラウザ E2E は実施していません。"
+    }
+  }
+}

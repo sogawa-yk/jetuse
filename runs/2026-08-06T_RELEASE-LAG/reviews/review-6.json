@@ -1,0 +1,39 @@
+{
+  "review_n": 6,
+  "timestamp": "2026-08-06T01:23:48+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-6.input.diff",
+  "raw_output_path": "reviews/review-6.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "未リリース検出、PR 判定、fetch/gh/git 失敗時の保守的な処理は妥当で、blocker はありません。添付証跡も複数シナリオを網羅していますが、経過日数の重要な仕様を固定するテストに小さな不足があります。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 0,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "MINOR-001",
+      "severity": "minor",
+      "file": "packages/api/tests/test_stalled_release_lag.py",
+      "line": 108,
+      "issue": "「最古の未リリース commit からの日数」を検証するテストで、2件の commit が同日に作成され、期待値も0日のため、実装が最新 commit の日付を選んでもテストが通ります。今回の主要仕様である oldest と latest の区別を回帰テストで固定できていません。",
+      "suggestion": "異なる GIT_COMMITTER_DATE を設定した複数 commit を作成し、最新ではなく最古の commit から算出した日数になることを検証してください。可能なら未来日付や不正な日時を含む境界条件も追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 6,
+    "adequacy": "sufficient",
+    "notes": "01_pytest_release_lag.txt は27件全件成功。02_real_repo_scan.txt は public/internal 両ペアの検出値16/10が独立した git rev-list 実測と一致しています。03〜06では別base PR、正しいrelease PR、GitHub取得失敗、オフライン、差分判定不能、明示refspecを確認しています。実OCI E2Eを省略した理由は e2e/SKIPPED.md に記載され、変更対象が配備物・Terraform・API・DB・SPAの実行経路に含まれないため妥当です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲットURLが提供されていないため、指示どおりブラウザE2Eは実施していません。"
+    }
+  }
+}

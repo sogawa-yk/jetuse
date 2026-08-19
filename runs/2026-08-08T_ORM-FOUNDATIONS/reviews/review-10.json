@@ -1,0 +1,63 @@
+{
+  "review_n": 10,
+  "timestamp": "2026-08-09T09:55:58+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-10.input.diff",
+  "raw_output_path": "reviews/review-10.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "ORM ジョブログが既定で権限未制限の `/tmp` ファイルへ保存され、PAR URL などの認証情報を同一ホスト上へ露出し得る blocker があります。さらに部分的に失敗した import の再開不能、旧ローカル state の二重所有、権限境界 E2E の未実施が残っています。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 3,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "B001",
+      "severity": "blocker",
+      "file": "ops/orm-stack.sh",
+      "line": 390,
+      "issue": "完全な ORM job log を `${ORM_LOG_DIR:-/tmp}` へ通常の shell redirection で作成しており、ファイル権限は実行環境の umask 任せです。一般的な umask 022 では 0644 となります。添付履歴も元ログに PAR `access_uri` 等が含まれたことを示しているため、期限内なら認証に使える値が同一ホストの他ユーザーから読める可能性があります。",
+      "suggestion": "スクリプト開始時に `umask 077` を設定するか、ログファイルを 0600 で事前作成してから書き込んでください。`ORM_LOG_DIR` 自体の所有者・権限も検証し、PAR、実エンドポイント、秘密値を含むログの保存・コミット前 redaction をテストしてください。"
+    },
+    {
+      "id": "M001",
+      "severity": "major",
+      "file": "ops/orm-stack.sh",
+      "line": 214,
+      "issue": "import の再実行防止が、ORM state に1資源でもあれば「移行済み」と判定します。Terraform apply/import は原子的ではなく、添付証跡でも ADB の 409 により途中失敗しています。同様の失敗で一部だけ import された場合、再実行はこの検査で拒否され、通常 plan では未 import の既存資源を新規作成しようとするため、安全な回復経路がありません。",
+      "suggestion": "ORM state と移行元 state の resource address を比較し、未 import の address だけに import block を生成する再開可能な処理にしてください。少なくとも部分 state を「移行完了」と扱わず、欠落・余剰を表示して停止または recovery モードへ誘導し、部分失敗後の再実行テストを追加してください。"
+    },
+    {
+      "id": "M002",
+      "severity": "major",
+      "file": "ops/orm-stack.sh",
+      "line": 188,
+      "issue": "移行完了後も旧 `environments/dev/terraform.tfstate` を通常の state パスに残し、import 入力として扱い続けます。ORM state と旧ローカル state が同じ実資源を所有するため、利用者が従来どおり同ディレクトリから `terraform apply` や destroy を行うと、ORM 管理中の資源を別 state から変更・削除できます。",
+      "suggestion": "移行完了確認後は旧 state をコミット外の読み取り専用バックアップへ退避し、通常パスに migration marker を置いてローカル apply/destroy を拒否してください。import の入力も明示的なバックアップパスに変更してください。"
+    },
+    {
+      "id": "M003",
+      "severity": "major",
+      "file": "runs/2026-08-08T_ORM-FOUNDATIONS/e2e/SKIPPED.md",
+      "line": 7,
+      "issue": "ADR の主要なセキュリティ主張である環境間 Resource Principal 分離は、Dynamic Group matching rule と Policy 定義の確認だけです。internal-dev principal から public-dev への拒否、および public-dev principal から同一環境への許可は実測されていません。文書も技術的・権限的制約ではなく、単に工程を実施しなかったと明記しています。",
+      "suggestion": "各環境の Resource Principal から、同一環境の代表資源への成功と他環境への403拒否を最低1本ずつ実測し、実行コマンド、終了コード、マスク済み応答を保存してください。それまでは ADR の結論を「定義上は分離、実挙動は未検証」としてください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 16,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-08-08T_ORM-FOUNDATIONS/e2e/` の16シナリオを確認しました。internal-dev の import plan（28 import、4 add、2 change、0 destroy）と移行後の No changes、public-dev の構築、quotaExceeded、専用 DG への Policy 差し替え、両環境の最終 No changes は添付ログで裏づけられており、最低2シナリオの条件は満たします。一方、中心的な環境間アクセスの許可・拒否は未実測で、SKIPPED.md に正当な実施不能理由もありません。また最終コードの部分 import 回復経路とログファイル権限も証跡で検証されていません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}
