@@ -1,0 +1,55 @@
+{
+  "review_n": 2,
+  "timestamp": "2026-08-06T11:48:57+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-2.input.diff",
+  "raw_output_path": "reviews/review-2.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "スキーマ判定の方向性と対象テストは妥当ですが、Internal 系ブランチでは追加テストが決定的に失敗するため blocker です。また、health 経路のDB呼び出しにSQLタイムアウトがなく、foreign 警告にも事実以上の断定があります。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 1,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "blocker",
+      "file": "packages/api/tests/test_health_schema.py",
+      "line": 20,
+      "issue": "`PUBLIC = mig.checkout_versions()` が現在の checkout を無条件に Public 集合とみなしています。`internal-dev` / `internal-stable` では既に `017`〜`027` を含むため、`PUBLIC + INTERNAL_ONLY` の差分が空になり、`test_behind_when_the_image_needs_more_than_the_db_has` などが失敗します。同じ問題が `test_migrate_foreign_schema.py:49` にもあります。添付証跡は Public 系 checkout でしかテストを実行しておらず、Internal 系へのマージ時にテストスイートを壊します。",
+      "suggestion": "Public/Internal の集合を現在の checkout から暗黙推定せず、fixture で明示してください。少なくとも `public = checkout - INTERNAL_ONLY`、`internal = public | INTERNAL_ONLY` とし、`schema_health()` の各テストでは `checkout_versions()` も期待する集合へ monkeypatch してください。Public と Internal の両 checkout 相当でテストを実行してください。"
+    },
+    {
+      "id": "F-002",
+      "severity": "major",
+      "file": "packages/api/jetuse_core/migrate.py",
+      "line": 38,
+      "issue": "`applied_versions()` は `get_pool().acquire()` を直接使い、`conn.call_timeout` を設定していません。`db.py` は停止・通信障害時の無限ハングを防ぐためSQL往復にも `CALL_TIMEOUT_MS` を設定する契約ですが、この新しい `/api/health` 経路はそれを迂回しています。ADB停止や通信断時に診断エンドポイント自体が応答しなくなる可能性があります。",
+      "suggestion": "`jetuse_core.db.connect()` を使用するか、取得した接続へ `CALL_TIMEOUT_MS` を設定してください。SQL実行が停止した場合に `schema_health()` が有限時間で `unknown` を返すテストも追加してください。"
+    },
+    {
+      "id": "F-003",
+      "severity": "minor",
+      "file": "packages/api/jetuse_core/migrate.py",
+      "line": 85,
+      "issue": "`foreign_versions` が非空で分かるのは「DBにcheckoutより多いmigrationがある」ことだけです。現在のイメージが要求するmigrationはすべてDBに存在するため、「不足している表は作られず、APIは503のまま」とは限りません。意図的に後方互換な旧イメージを先行DBへ接続した場合にも、誤った断定が表示されます。",
+      "suggestion": "警告を「別系統または先行DBの可能性があるため、配備イメージとcheckoutを確認する」のような確認可能な事実に限定してください。503や不足表への言及は、別途 `pending_versions` が確認できる場合だけにしてください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 5,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-08-06T_ER-0015-MIGRATE/e2e/` の単体30件、変異検査4種、CLI stderr、ブランチ別migration集合、`RUN_DB_BOOTSTRAP` 非対称性を確認しました。実OCI未実施には `SKIPPED.md` で既存共有スキーマを壊さないという正当な理由があります。一方、全テストはPublic系checkoutで実行されており、シナリオ4でInternal系の集合を確認しながらInternal系checkout相当のテスト実行がありません。このためF-001を検出できず、後方互換の裏付けとしては不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザE2Eは実施していません。"
+    }
+  }
+}

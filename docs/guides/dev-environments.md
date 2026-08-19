@@ -64,12 +64,86 @@ ops/dev-env-down.sh alice    # アプリ層を破棄(共有基盤・ADBスキー
 
 > `terraform apply` は CLAUDE.md の承認ゲート。`dev-env-up.sh` は plan を提示し確認を取る。
 
+## マイグレーションを後から流す
+
+**`ops/dev-env-up.sh`（＝`make deploy`）は migration を流さない。** 配備を繰り返しても、
+後から追加された migration は自分のスキーマに永久に適用されない。
+
+| 経路 | migration | 根拠 |
+|---|---|---|
+| ORM ワンクリック配備（一般利用者） | **流れる** | `infra/orm/locals.tf` が `RUN_DB_BOOTSTRAP=true` を渡し、`entrypoint.sh` が `jetuse_core.bootstrap` を起動する |
+| `ops/setup-dev-schema.py`（開発者の**初回**） | **流れる** | スクリプト末尾で `python -m jetuse_core.migrate` を実行する |
+| `ops/dev-env-up.sh` / `ops/deploy-dev-app.sh` | **流れない** | `environments/app` は `RUN_DB_BOOTSTRAP` を設定しない |
+
+新しい migration が入ったら、自分のスキーマへ手で流す。`.env` の `ADB_USER` / `ADB_PASSWORD` を
+自分のスキーマに向けたうえで:
+
+```bash
+cd packages/api && ../../.venv/bin/python -m jetuse_core.migrate
+```
+
+`ops/setup-dev-schema.py --dev alice --app-password '<現行パスワード>'` でも流せるが、
+GRANT とリソースプリンシパル設定をやり直すぶん重い。既存スキーマに対して `--app-password`
+無しで実行すると「パスワードが分からないので migrate できない」と**何も変更せずに中止**する。
+
+### 流し忘れたかどうかは `/api/health` で分かる
+
+配備したイメージが要求する migration が DB に無ければ、`GET /api/health` の `schema` が
+`behind` を返し、全体の `ok` も `false` になる。
+
+```json
+{ "ok": false,
+  "schema": { "status": "behind", "applied": 21, "expected": 32,
+              "pending": ["017_demos_v2", "018_demos_idx_owner", "..."],
+              "hint": "このイメージが要求する migration が 11 件未適用..." } }
+```
+
+**判断材料はイメージの中にある。** DB と手元の checkout を見比べても分からない —— どちらにも
+「この環境が何を要求しているか」は書かれていない。書いてあるのは動いているイメージが持つ
+migration の一覧で、それが DB に無ければ答えになる。
+
+| `schema.status` | 意味 | `ok` |
+|---|---|---|
+| `ok` | DB がイメージに追いついている | 落とさない |
+| `behind` | **イメージが要求する版が DB に無い**。DB 系は 503 になる | **false にする** |
+| `foreign` | DB のほうが先行（別系統のイメージで適用された DB を指している） | 落とさない |
+| `unknown` | DB を読めない（停止・未設定など） | 落とさない（他の項目が報告済み） |
+
+### checkout に依存する — Internal 機能を使うなら internal 系から流す
+
+ランナーは**実行している checkout の `migrations/` だけ**を見る。Internal 固有 migration は
+`internal-dev` にしか無いため、`main` / `public-dev` の checkout から流すと**適用 0 件で
+正常終了する**（2026-08-04 の実害・ER-0015）。
+
+```
+main の checkout から実行          → 適用 0 件（内部固有の 017 以降がそもそも存在しない）
+internal-dev の checkout から実行  → 適用 11 件
+```
+
+この取り違えのうち**片方は**ランナーが検出する。DB に適用済みなのに手元の checkout に無い版が
+あれば（＝ Internal で育てた DB を Public 系の checkout から流そうとした）、適用の前に警告を出す。
+
+```
+この DB には、いまの checkout に無い migration が 11 件適用されている(017_demos_v2, ... ほか)。
+いまの checkout はこの DB の系統として正しくない可能性が高い ...
+```
+
+**逆向き（DB がまだ Public 集合で、Internal 版を配備した）はランナーからは見えない。**
+DB も checkout も Public 集合で差が 0 になるからで、これが 2026-08-04 に踏んだ形。
+こちらは上の `/api/health` の `schema` で見る。
+
+**症状は「アプリの不具合」に見える。** `GET /api/demos` が 503 `database unavailable` を返す。
+同じ 503 は共有 ADB の停止でも起きる（ER-0018）ので、切り分けの順は
+`/api/health` の `schema` → ADB の `lifecycle-state` → スキーマの有無。
+
 ## E2E検証
 
 `URL=https://<出力されたホスト>` として:
 1. `curl -o/dev/null -w'%{http_code}' $URL/` → 200(SPA)
 2. `curl $URL/api/chat/models` → モデル一覧JSON(`/api/*`→本人CI 経由)
-3. `curl $URL/api/db/datasets` → 200+空配列(CI→ADBを `JETUSE_ALICE` で接続・マイグレ適用済み。503ならDB/スキーマ未整備)
+3. `curl $URL/api/db/datasets` → 200+空配列(CI→ADBを `JETUSE_ALICE` で接続)。
+   **503 は「未整備」だけを意味しない** —— ADB 停止 / migration 未適用 / スキーマ未作成の
+   どれでも 503 になる。切り分けは「マイグレーションを後から流す」を参照
 4. Playwrightで `$URL` を開きチャット送信→ストリーム描画(auth-offならログイン不要)
 
 ## 注意点

@@ -1,0 +1,30 @@
+{
+  "review_n": 5,
+  "timestamp": "2026-08-06T15:15:57+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-5.input.diff",
+  "raw_output_path": "reviews/review-5.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "スキーマ差分の判定方向、例外時の縮退、call_timeout、公開レスポンスの後方互換性、読み取り専用性はいずれも妥当です。実 ADB を使った正常・behind・foreign・HTTP 経路を含む9シナリオの証跡が差分の主張を十分に裏づけており、blocker はありません。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 9,
+    "adequacy": "sufficient",
+    "notes": "証跡パスは runs/2026-08-06T_ER-0015-MIGRATE/e2e/。単体35件、変異検査、CLI stderr、public/internal migration 集合、bootstrap 経路、internal 相当 checkout、実 ADB の読み取り専用診断、ok/behind/foreign、TestClient 経由の GET /api/health を確認。実 ADB では user_tables と schema_migrations が前後で不変で、未実施の共有スキーマ破壊は SKIPPED.md に合理的な代替検証とともに記載されています。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲット URL が提供されていないため、指示どおりブラウザ E2E は実施していません。"
+    }
+  }
+}

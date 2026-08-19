@@ -161,6 +161,56 @@ def agents_health() -> dict[str, Any]:
     }
 
 
+def schema_health() -> dict[str, Any]:
+    """DB のスキーマが、**いま動いているイメージ**の要求に追いついているか(ER-0015)。
+
+    migration が流れるかどうかは配備経路で違う。ORM ワンクリック配備は
+    `RUN_DB_BOOTSTRAP=true` で自動適用するが、開発者ごとのスタック
+    (`ops/dev-env-up.sh`)は流さない。流れない経路で配備すると、アプリは
+    **必要な表が無い DB に向いたまま正常起動し**、DB を使う機能だけが 503 になる。
+    2026-08-04 はこれで原因に辿り着けなかった。
+
+    DB と migration ランナーの checkout を見比べても分からない —— どちらにも
+    「この環境は何を要求しているか」が書かれていないからだ。書いてあるのは
+    **イメージが持つ migration の一覧**で、それが DB に無ければ答えになる。
+
+    診断のために DDL は流さない(`applied_versions()` は読むだけ)。
+    """
+    from . import migrate as mig
+
+    try:
+        db = mig.applied_versions()
+    except Exception as e:  # noqa: BLE001 - DB 未接続でも /api/health 全体は落とさない
+        return {"status": "unknown", "hint": f"schema_migrations を読めません: {type(e).__name__}"}
+    image = mig.checkout_versions()
+    pending = mig.pending_versions(db, image)
+    foreign = mig.foreign_versions(db, image)
+    out: dict[str, Any] = {"applied": len(db), "expected": len(image)}
+    if pending:
+        out["pending"] = pending
+        return {
+            "status": "behind",
+            **out,
+            # **影響の大きさは断定しない。** 未適用がインデックス追加だけなら機能は動く。
+            # 「スキーマが追いついていない」という事実と、「だから壊れている」という
+            # 推測を混ぜると、過大評価した診断を信じて別のところを探すことになる。
+            "hint": f"このイメージが要求する migration が {len(pending)} 件未適用"
+                    f"({', '.join(pending[:5])}{' ほか' if len(pending) > 5 else ''})。"
+                    "未適用のものが表を作る内容なら、その表を使う機能は 503 になる。"
+                    "docs/guides/dev-environments.md の「マイグレーションを後から流す」を参照",
+        }
+    if foreign:
+        # DB のほうが先を行っている。壊れてはいないが、系統の取り違えが起きている。
+        out["foreign"] = foreign
+        return {
+            "status": "foreign",
+            **out,
+            "hint": f"この DB には、いまのイメージに無い migration が {len(foreign)} 件適用済み"
+                    "(別系統のイメージで適用された DB を指している可能性がある)",
+        }
+    return {"status": "ok", **out}
+
+
 def capability_health() -> dict[str, Any]:
     chat = chat_health()
     capabilities = {
@@ -174,4 +224,10 @@ def capability_health() -> dict[str, Any]:
     }
     # "disabled" は「このスタックでは使わない」の表明なので、全体の ok からは除外する。
     ok = all(c["status"] in ("ok", "disabled") for c in capabilities.values())
-    return {"ok": ok, "capabilities": capabilities}
+    # スキーマは capability ではなく**前提条件**なので capabilities には入れない。
+    # ただし ok には効かせる —— 未適用の migration があるのに ok=true と言うのは、
+    # ER-0015 で人を迷わせたのと同じ嘘になる。"unknown"(DB を読めない)は他の
+    # capability が既に報告しているので、ここで二重に落とさない。
+    schema = schema_health()
+    return {"ok": ok and schema["status"] != "behind", "capabilities": capabilities,
+            "schema": schema}
