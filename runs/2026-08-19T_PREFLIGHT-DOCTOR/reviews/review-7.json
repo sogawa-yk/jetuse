@@ -1,0 +1,55 @@
+{
+  "review_n": 7,
+  "timestamp": "2026-08-19T15:34:02+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-7.input.diff",
+  "raw_output_path": "reviews/review-7.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "実装上の主要な不具合は見当たりませんが、新規分岐の自動テストが不足し、添付 E2E 証跡にも差分反映漏れがあります。実環境 E2E は8シナリオありますが、jetuse-dev ではなくローカル macOS での実行であり、今回追加した一部経路を裏づけていません。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 2,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "major",
+      "file": "packages/api/tests/test_ops_doctor.py",
+      "line": 301,
+      "issue": "追加されたテストは合成 `.env` に必須キー名が含まれることしか確認しておらず、今回変更した `AUTH_MODE` のインラインコメント処理、埋め込み Python の非ゼロ終了、`security_token_file` の欠落・実体なし・読取不可、`%` を含む OCI config、追加した2つの compartment OCID の欠落時動作を自動テストしていません。実装が後退しても通常のテストスイートでは検出できません。",
+      "suggestion": "各分岐を一時 `.env`、OCI config、ファイル権限、失敗する Python shim で再現し、doctor の終了コードと該当する NG 行を検証する parametrized test を追加してください。必須キーについても、各キーを1つずつ除いた場合に非ゼロとなることを検証してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "runs/2026-08-19T_PREFLIGHT-DOCTOR/e2e/SKIPPED.md",
+      "line": 15,
+      "issue": "証跡の説明は今回の修正を検証済みとしていますが、添付結果と一致しません。シナリオ3の出力は追加された `INTERNAL_DEV_COMPARTMENT_OCID` と `PUBLIC_DEV_COMPARTMENT_OCID` を欠落項目として表示しておらず、シナリオ6にも `AUTH_MODE=config_file # local` のケースがありません。また、埋め込み Python の非ゼロ終了経路とファイル読取不可経路の結果もありません。最終差分で証跡を取り直したという完了主張を十分に裏づけていません。",
+      "suggestion": "最終版の doctor でシナリオ3を再取得し、インラインコメント、Python異常終了、token/keyの読取不可、各追加 compartment OCID の個別欠落を含む結果を保存してください。未実施なら表から検証済みの主張を除き、SKIPPED.md に理由を明記してください。"
+    },
+    {
+      "id": "F003",
+      "severity": "minor",
+      "file": "ops/doctor.sh",
+      "line": 57,
+      "issue": "`AUTH_MODE` のコメント除去は引用符を考慮せず最初の `#` 以降を常に削除します。そのため `AUTH_MODE=\"config_file # value\"` のように、シェル上では `# value` が値の一部になる設定も `config_file` として受理し、実際にアプリへ渡る値と doctor の判定が食い違います。",
+      "suggestion": "`.env` のシェル互換な解析方法へ統一するか、少なくとも `#` をコメントとして除去するのは引用符外かつ直前が空白の場合に限定してください。引用内の `#` は未知の AUTH_MODE として失敗するテストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 8,
+    "adequacy": "insufficient",
+    "notes": "`01_doctor_ok.txt` から `08_oci_profile.txt` までの8シナリオを確認しました。正常系、依存コマンド欠落、雛形 `.env`、変異検査、CI隔離、AUTH_MODE分岐、skip防止、OCI profile不備を含み、最低2本の要件は満たします。`08_oci_profile.txt` は token実体なしと `%` を含む値を裏づけています。一方、シナリオ3と6は今回の差分の全主張を反映しておらず、Python異常終了、読取不可、追加OCIDの個別欠落も未検証です。さらに `SKIPPED.md` が実行環境をローカル macOS と明記しており、見出しで示された jetuse-dev 実環境での結果ではありません。資源を作成しない理由は妥当ですが、非破壊な dev ホスト上の doctor 実行を省略する理由としては不十分です。証跡パスは `runs/2026-08-19T_PREFLIGHT-DOCTOR/e2e/` です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

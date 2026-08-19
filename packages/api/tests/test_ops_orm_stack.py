@@ -230,6 +230,10 @@ def test_no_bash4_only_features():
     for path in OPS.glob("*.sh"):
         body = "\n".join(_body(path))
         assert "declare -A" not in body, f"{path.name}: 連想配列は bash 3.2 で動かない"
+        if path.name == "doctor.sh":
+            # doctor は**環境の癖を判定する側**。`date -Is` を成否の判定に使って
+            # GNU / BSD を見分けている（依存ではなくプローブ）。
+            continue
         assert "date -Is" not in body, f"{path.name}: date -Is は GNU 専用（macOS で落ちる）"
 
 
