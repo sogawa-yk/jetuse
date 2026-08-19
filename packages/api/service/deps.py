@@ -21,3 +21,11 @@ def require_speech() -> None:
             status_code=503,
             detail="議事録機能は未設定です(SPEECH_BUCKET)。docs/setup/iam.md「VOICE-01」参照",
         )
+
+
+def require_video() -> None:
+    if not get_settings().video_bucket:
+        raise HTTPException(
+            status_code=503,
+            detail="映像機能は未設定です(VIDEO_BUCKET)。docs/setup/iam.md「VID-01」参照",
+        )
