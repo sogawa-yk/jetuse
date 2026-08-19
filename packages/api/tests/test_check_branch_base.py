@@ -70,13 +70,162 @@ def _commit(r: pathlib.Path, rel: str, body: str = "changed\n") -> None:
     _git(r, "commit", "-qm", f"touch {rel}")
 
 
-def test_base_unspecified_skips_without_failing(tmp_path):
-    """ローカル `make lint` を壊さないため、base 未指定はスキップ（合格ではない）。"""
-    r = _repo(tmp_path)
+def _add_public_dev(r: pathlib.Path) -> None:
+    """`public-dev` を作る。**Internal ⊇ Public** になるよう internal-dev の祖先に置く。
+
+    `_repo()` は internal-dev の1コミット目から feature を切るので、その1コミット目を
+    public-dev とし、internal-dev には内部固有の追加コミットを積む。これが本番の形
+    （internal-dev は public-dev を包含し、独自の内部固有コミットを持つ）。
+    """
+    cur = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=r,
+                         capture_output=True, text=True).stdout.strip()
+    _git(r, "branch", "public-dev", "internal-dev")
+    _git(r, "checkout", "-q", "internal-dev")
+    (r / "ops" / "deploy-dev-app.sh").write_text("internal only\n")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-qm", "internal-only")
+    _git(r, "checkout", "-q", cur)
+
+
+def _recut_from(r: pathlib.Path, base: str, name: str) -> None:
+    """`base` の**先端**から枝を切り直す。
+
+    推定は merge-base で見るので、枝を切った位置が効く。internal-dev の先端から切れば
+    mb(HEAD, internal-dev)=先端 となり public-dev 側と食い違う＝internal 起点と判る。
+    """
+    _git(r, "checkout", "-q", "-b", name, base)
+
+
+def test_base_unspecified_skips_when_branches_are_missing(tmp_path):
+    """long-lived ブランチが無ければ推定できない。**黙って通さず SKIP と言う**（合格ではない）。"""
+    r = _repo(tmp_path)  # public-dev が無い
     _commit(r, "docs/shared.md")
     res = _run(r)
     assert res.returncode == 0
-    assert "SKIP" in res.stdout
+    assert "SKIP" in res.stderr
+
+
+def test_base_is_estimated_as_internal_from_mergebase(tmp_path):
+    """base 未指定でも起点を推定する。**以前はここで黙ってスキップしていた。**
+
+    推定の根拠は Internal ⊇ Public（ADR-0028）。feature は internal-dev から
+    切られているので、merge-base が public/internal で食い違う。
+    """
+    r = _repo(tmp_path)
+    _add_public_dev(r)
+    _recut_from(r, "internal-dev", "feature2")
+    _commit(r, "docs/shared.md")
+    res = _run(r)
+    out = res.stdout + res.stderr
+    assert "起点を推定: internal-dev" in out, out
+    # 共有物のみ＝間違った起点。警告は出すが、推定なので lint は落とさない。
+    assert "WARN" in out and "FAIL" not in out, out
+    assert res.returncode == 0
+
+
+def test_estimated_public_base_is_out_of_scope(tmp_path):
+    """public-dev 起点と推定されたら検査対象外（共有物を触るのは正しい）。"""
+    r = _repo(tmp_path)
+    _add_public_dev(r)
+    _git(r, "checkout", "-q", "-b", "feature-pub", "public-dev")
+    _commit(r, "docs/shared.md")
+    res = _run(r)
+    out = res.stdout + res.stderr
+    assert "起点を推定: public-dev" in out, out
+    assert res.returncode == 0
+    assert "WARN" not in out and "FAIL" not in out, out
+
+
+def test_explicit_base_still_fails_hard(tmp_path):
+    """**推定は CI の強制力を弱めない。** base が明示されていれば従来どおり exit 1。"""
+    r = _repo(tmp_path)
+    _add_public_dev(r)
+    _recut_from(r, "internal-dev", "feature2")
+    _commit(r, "docs/shared.md")
+    res = _run(r, env_base="internal-dev")
+    assert res.returncode == 1, res.stdout + res.stderr
+    assert "FAIL" in res.stderr
+    assert "起点を推定" not in res.stdout
+
+
+def test_estimation_is_not_used_when_base_given(tmp_path):
+    """引数 / BRANCH_BASE / GITHUB_BASE_REF があるときは推定しない（誤って上書きしない）。"""
+    r = _repo(tmp_path)
+    _add_public_dev(r)
+    _recut_from(r, "internal-dev", "feature2")
+    # 内部固有パス（一覧の実体から取る。ハードコードすると一覧の変更で腐る）
+    _commit(r, "docs/verification/demo-platform/NEW.md")
+    for label, args, kw in [("引数", ("internal-dev",), {}),
+                            ("BRANCH_BASE", (), {"env_base": "internal-dev"})]:
+        res = _run(r, *args, **kw)
+        assert "起点を推定" not in res.stdout, (label, res.stdout)
+        assert res.returncode == 0, (label, res.stderr)
+
+
+def test_estimation_cannot_see_a_branch_cut_before_internal_diverged(tmp_path):
+    """**推定の限界を記録する。** internal-dev から切っていても、切った位置が
+    public-dev と同じコミットなら public 起点と区別できない（merge-base が一致するため）。
+
+    実害は小さい: その位置は public-dev にも存在するので、共有物を入れる先として
+    public-dev 起点は正しい。ただし「推定は起点の**宣言**ではない」ことは明示しておく。
+    強制するのは CI（PR の base が明示される）側。
+    """
+    r = _repo(tmp_path)          # feature は internal-dev の1コミット目から切られている
+    _add_public_dev(r)           # その1コミット目が public-dev になる
+    _commit(r, "docs/shared.md")
+    res = _run(r)
+    out = res.stdout + res.stderr
+    assert "起点を推定: public-dev" in out, out
+    assert res.returncode == 0
+
+
+def test_public_branch_is_not_misjudged_when_internal_lags(tmp_path):
+    """**同期遅延でも Public を Internal と誤判定しない。**
+
+    同期（public-dev → internal-dev）は人間ゲートなので、internal-dev が public-dev に
+    追いついていない状態が普通。単純な merge-base 等値比較だとこの状態で誤判定し、
+    正しい Public 起点の作業に WARN を出す（狼少年になり、本物の警告が読まれなくなる）。
+    """
+    r = _repo(tmp_path)
+    _add_public_dev(r)                      # public-dev = P1, internal-dev = P1 + I1
+    _git(r, "checkout", "-q", "public-dev")
+    (r / "docs" / "shared.md").write_text("P2\n")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-qm", "P2")          # public-dev だけ先へ（未同期）
+    _git(r, "checkout", "-q", "-b", "feature2", "public-dev")
+    _commit(r, "docs/shared.md", "work\n")
+    res = _run(r)
+    out = res.stdout + res.stderr
+    assert "起点を推定: public-dev" in out, out
+    assert "WARN" not in out and "FAIL" not in out, out
+    assert res.returncode == 0
+
+
+def test_ancestor_check_abnormal_exit_is_not_called_internal(tmp_path):
+    """**`--is-ancestor` の異常終了を「祖先ではない」と同じ扱いにしない。**
+
+    0=祖先 / 1=祖先でない / それ以外=異常。まとめて else に入れると、判定できなかった
+    場合を internal-dev 起点と確定し、正しい Public の作業に WARN を出す。
+    """
+    r = _repo(tmp_path)
+    _add_public_dev(r)
+    _recut_from(r, "public-dev", "feature2")
+    _commit(r, "docs/shared.md")
+    stub = r.parent / "badanc"
+    stub.mkdir()
+    (stub / "git").write_text(
+        '#!/bin/sh\n'
+        'for a in "$@"; do [ "$a" = "--is-ancestor" ] && exit 3; done\n'
+        'exec /usr/bin/git "$@"\n')
+    (stub / "git").chmod(0o755)
+    res = subprocess.run(
+        ["bash", "ops/check-branch-base.sh"], cwd=r, capture_output=True, text=True,
+        env={"PATH": f"{stub}:/usr/bin:/bin", "HOME": str(r)},
+    )
+    out = res.stdout + res.stderr
+    assert "起点を推定: internal-dev" not in out, f"異常終了を internal と確定した:\n{out}"
+    assert "SKIP" in out, out
+    assert res.returncode == 0
 
 
 def test_public_dev_base_is_out_of_scope(tmp_path):

@@ -255,3 +255,6 @@ if [ "$SOFT_MISSING" -gt 0 ]; then
 else
   echo "すべて揃っています。"
 fi
+# **どちらの版を触っているかは前提と同じくらい間違えやすい。** doctor を通ったあと
+# 最初に見るものとして導線だけ置く（判定そのものは where.sh が持つ）。
+echo "いまどちらの版（public / internal）を触っているかは: make where"

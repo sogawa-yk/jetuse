@@ -49,6 +49,56 @@ doctor に足し忘れると CI が落ちる。**
 `.claude/skills/*/scripts/` は照合対象外（レビュー指示の散文からコマンドを拾えず精度が出ない）。
 そこから来る依存は `codex` だけで、これは名指しのテストで押さえている。
 
+### いまどちらの版を触っているか
+
+```bash
+make where
+```
+
+**Public 版と Internal 版のどちらの作業なのかは、前提の欠落と同じくらい取り違えやすい。**
+言い忘れたまま進めると、共有物が internal 側に着地して `main` へ届かない（2026-07 の実害）。
+
+```
+== いまの作業
+  ブランチ       feat/xxx
+  版             public（公開版）
+  起点           public-dev  (public-dev から分岐（両者の merge-base が一致）)
+
+== 変更（起点からの差分 3 ファイル）
+  内部固有       0 件
+  共有物         3 件
+
+  起点と変更内容は合っています。
+
+== この版の配備先
+  コンパートメント jetuse:public-dev
+  資源の接頭辞    jetuse-pubdev
+  ORM スタック    jetuse-public-dev-foundation
+  ADB             AVAILABLE
+```
+
+起点は **「分岐点が public-dev に含まれるか」**で推定する。
+
+```
+mbi = merge-base(HEAD, internal-dev)
+mbi が public-dev の祖先  → public-dev 起点（分岐点は Public 側にもある）
+そうでない                → internal-dev 起点（分岐点が internal 固有のコミットを含む）
+```
+
+**単純な merge-base 等値比較では駄目。** 同期（`public-dev → internal-dev`）は人間ゲートなので
+internal-dev が public-dev に追いついていない状態が普通にあり、そのとき public-dev 先端から
+切った枝は `mb(pub)` と `mb(int)` が食い違って Internal と誤判定される（2026-08-19 の
+Codex レビューで blocker として検出）。
+
+**推定であって宣言ではない。** 枝を切った位置が public-dev にも存在するコミットなら、
+internal-dev から切っていても区別できない（実害は小さい —— その位置は public-dev にも
+あるので、共有物を入れる先として public-dev は正しい）。強制するのは CI 側。
+
+`make lint`（`ops/check-branch-base.sh`）も同じ推定を使う。以前はローカルでは base を
+指定しない限り**黙ってスキップ**していたため「ローカルでは何も言われず PR で初めて落ちる」
+状態だった。いまは起点を表示し、取り違えていれば WARN を出す。**推定では lint を落とさない**
+（明示された base ではないため）。PR を出せば CI が同じ判定で落とす。
+
 ## 2. セットアップ(初回)
 
 ```bash
