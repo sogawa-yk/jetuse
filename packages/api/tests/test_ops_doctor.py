@@ -36,7 +36,7 @@ UBIQUITOUS = {
     "awk", "sed", "grep", "cat", "cut", "tr", "head", "tail", "sort", "uniq", "wc",
     "find", "xargs", "mkdir", "rm", "cp", "mv", "chmod", "ls", "date", "sleep",
     "env", "basename", "dirname", "mktemp", "git", "bash", "sh", "seq", "tee",
-    "diff", "comm", "join", "paste", "fold", "expr", "id", "stat",
+    "diff", "comm", "join", "paste", "fold", "expr", "id", "stat", "base64", "cmp",
 }
 
 
