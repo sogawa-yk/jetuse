@@ -12,7 +12,7 @@
 | 5 | **`.env` を退避**して CI 相当にする | テストは通り、doctor 自体は正しく落ちる | `05_isolation.txt` |
 | 6 | `AUTH_MODE` の5パターン | typo は NG、引用付きは OK、principal 系は「不要」 | `06_auth_mode.txt` |
 | 7 | **CI で skip しないこと** | SKIPPED 0 件 | `07_no_skip.txt` |
-| 8 | `~/.oci/config` の中身 | 空の `[DEFAULT]` も、`key_file` が指す先が無いものも NG | `08_oci_profile.txt` |
+| 8 | `~/.oci/config` の中身 | 空の `[DEFAULT]` / `key_file`・`security_token_file` の実体なし を NG。`%` を含む値でも壊れない | `08_oci_profile.txt` |
 
 **実行環境は macOS の手元**（bash 3.2 / BSD date / Python 3.14 / AUTH_MODE=config_file）。
 `dev` インスタンス（Python 3.12 / instance_principal）では実行していない。
@@ -68,6 +68,11 @@ doctor が見ている集合と照合する（`test_every_external_command_used_
 | 証跡が古い出力のままだった | `oci config 3 プロファイル` は改修前の表示。**最終形で取り直した** |
 | セッション認証で `key_file` を不要にしていた | 署名鍵はどちらの認証でも要る。不要なのは `user` / `fingerprint` だけ |
 | Python の版判定が文字列パターンだった | `3.1[23]|3.1[4-9]` は将来の 3.20 を弾く。数値比較にした |
+| 埋め込み python の失敗を「問題なし」と読んでいた | 出力が空＝OK としていた。終了状態を別に見る |
+| セッション認証で `security_token_file` の実在を見ていなかった | 指す先が無い／読めないものを通していた |
+| `%` を含む値で `ConfigParser` が補間エラーになる | `RawConfigParser` を使う |
+| `AUTH_MODE=config_file # local` を弾いていた | 空白を全部消していたため `config_file#local` になっていた。行末コメントを落としてから前後の空白だけ取る |
+| 必須の env が `orm-stack.sh` の要求を網羅していなかった | 環境ごとの `*_DEV_COMPARTMENT_OCID` を追加。**doctor の必須鍵とテストの合成 `.env` がずれないよう検査も足した** |
 | 版が足りないホストで正常系が落ちた | Terraform 1.6 / Node 20 の環境では実物でなく固定の偽物を使う（doctor の欠陥と区別が付かなくなるため） |
 | テストが実リポジトリの `.env` / `~/.oci/config` に依存していた | **クリーンな checkout（CI）で必ず落ちる**。テスト側で `ops/` を symlink した一時リポジトリと合成 `.env` / `HOME` を作る |
 | `config_file` 以外の `AUTH_MODE` を一律「不要」にしていた | typo や `AUTH_MODE="config_file"` が素通りする。既知の3値だけ許し、他は NG |

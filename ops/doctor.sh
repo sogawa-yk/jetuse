@@ -52,7 +52,9 @@ fi
 # インスタンス実行(instance_principal)や配備先(resource_principal)では不要で、
 # そこで必須にすると**正しい環境が落ちる**。
 AM="${AUTH_MODE:-}"
-[ -z "$AM" ] && [ -f .env ] && AM="$(awk -F= '/^AUTH_MODE=/{print $2;exit}' .env | tr -d ' \r')"
+# **空白を全部消さない。** `AUTH_MODE=config_file # local` が `config_file#local` になり
+# 未知の値として弾かれる。行末コメントを落としてから前後の空白だけ取る。
+[ -z "$AM" ] && [ -f .env ] && AM="$(awk -F= '/^AUTH_MODE=/{sub(/#.*/,"",$2); gsub(/^[ \t\r]+|[ \t\r]+$/,"",$2); print $2; exit}' .env)"
 AM="${AM:-config_file}"
 # **未知の値を「不要」に倒さない。** typo や dotenv の引用付き（AUTH_MODE="config_file"）を
 # 黙って通すと、アプリ側が解決できない設定のまま前提チェックだけ緑になる。
@@ -69,32 +71,42 @@ case "$AM" in
       if grep -q "^\[${PROF}\]" "$HOME/.oci/config" 2>/dev/null; then
         # **セクション名だけでは足りない。** 空の [DEFAULT] や鍵の欠けたプロファイルでも
         # 通ってしまい、認証は実行時に落ちる。API キー認証に要る4つを見る。
-        MISS="$(PROF="$PROF" python3 - "$HOME/.oci/config" <<'PYOCI'
+        # **この python の失敗を握り潰さない。** 出力が空＝問題なし、と読むと
+        # 例外で落ちたときに「OK」になってしまう。終了状態を別に見る。
+        if MISS="$(PROF="$PROF" python3 - "$HOME/.oci/config" <<'PYOCI'
 import configparser, os, sys
-need = ("tenancy", "user", "fingerprint", "key_file")
-cp = configparser.ConfigParser()
+# `%` を含む値（パスやパスフレーズ）で補間エラーにならないよう RawConfigParser を使う。
+cp = configparser.RawConfigParser()
 try:
-    cp.read(sys.argv[1])
+    if not cp.read(sys.argv[1]):
+        print("読めない"); sys.exit(0)
 except Exception as e:
-    print("読めない: %s" % e); raise SystemExit
+    print("解釈できない: %s" % type(e).__name__); sys.exit(0)
 p = os.environ["PROF"]
 if not cp.has_section(p) and p != "DEFAULT":
-    print("セクションが無い"); raise SystemExit
-sec = cp[p] if cp.has_section(p) else cp.defaults()
+    print("セクションが無い"); sys.exit(0)
+sec = dict(cp.items(p)) if cp.has_section(p) else dict(cp.defaults())
 # セッショントークン認証でも**署名鍵は要る**。不要になるのは user / fingerprint だけ。
-if sec.get("security_token_file"):
-    need = ("tenancy", "key_file")
+token = sec.get("security_token_file")
+need = ("tenancy", "key_file") if token else ("tenancy", "user", "fingerprint", "key_file")
 missing = [k for k in need if not sec.get(k)]
-# 指しているだけで実体が無い key_file は、実行時に初めて落ちる。
-kf = sec.get("key_file")
-if kf and "key_file" not in missing:
-    path = os.path.expanduser(kf)
-    if not os.path.isfile(path):
-        missing.append("key_file が指す先が無い")
+# 指しているだけで実体が無い／読めないファイルは、実行時に初めて落ちる。
+for key in ("key_file", "security_token_file"):
+    v = sec.get(key)
+    if v and key not in missing:
+        path = os.path.expanduser(v)
+        if not os.path.isfile(path):
+            missing.append("%s が指す先が無い" % key)
+        elif not os.access(path, os.R_OK):
+            missing.append("%s が読めない" % key)
 print(" ".join(missing))
 PYOCI
-)"
-        if [ -z "$MISS" ]; then hard "oci config" 0 "プロファイル ${PROF}" ""
+)"; then :; else
+          hard "oci config" 1 "検査できない" "python3 で ~/.oci/config を読めない"
+          MISS="__ERR__"
+        fi
+        if [ "$MISS" = "__ERR__" ]; then :
+        elif [ -z "$MISS" ]; then hard "oci config" 0 "プロファイル ${PROF}" ""
         else hard "oci config" 1 "${PROF}: ${MISS}" "~/.oci/config を見直す"; fi
       else
         hard "oci config" 1 "${PROF} が無い" "~/.oci/config に [${PROF}] を作るか OCI_PROFILE を直す"
@@ -173,7 +185,9 @@ else
   # （`${VAR:?...}` と `ops/_adb.py` の `env()` から拾ったもの）。
   ENV_STATE="$(python3 - <<'PYENV'
 import re
-REQUIRED = ["COMPARTMENT_OCID", "TENANCY_OCID", "ADB_ADMIN_PASSWORD", "ADB_OCID"]
+# `ops/orm-stack.sh` は環境ごとに別の鍵を要求する。片方でも欠けるとその環境が動かない。
+REQUIRED = ["COMPARTMENT_OCID", "TENANCY_OCID", "ADB_ADMIN_PASSWORD", "ADB_OCID",
+            "INTERNAL_DEV_COMPARTMENT_OCID", "PUBLIC_DEV_COMPARTMENT_OCID"]
 placeholder = re.compile(r"^(change-me|<.*>)$|xxxxxxxx")
 vals = {}
 for line in open(".env", encoding="utf-8", errors="replace"):

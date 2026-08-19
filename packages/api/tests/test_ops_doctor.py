@@ -233,11 +233,14 @@ def _run_doctor(tmp_path, missing: list[str]):
     if not repo.exists():
         repo.mkdir()
         (repo / "ops").symlink_to(OPS)
+        # doctor が必須と見なす鍵をすべて入れる（`ops/doctor.sh` の REQUIRED と揃える）。
         (repo / ".env").write_text(
             "COMPARTMENT_OCID=ocid1.compartment.oc1..t\n"
             "TENANCY_OCID=ocid1.tenancy.oc1..t\n"
             "ADB_ADMIN_PASSWORD=dummy\n"
-            "ADB_OCID=ocid1.autonomousdatabase.oc1..t\n")
+            "ADB_OCID=ocid1.autonomousdatabase.oc1..t\n"
+            "INTERNAL_DEV_COMPARTMENT_OCID=ocid1.compartment.oc1..i\n"
+            "PUBLIC_DEV_COMPARTMENT_OCID=ocid1.compartment.oc1..p\n")
         oci_dir = tmp_path / "home" / ".oci"
         oci_dir.mkdir(parents=True)
         # doctor はプロファイルの**中身**まで見る（空の [DEFAULT] や、
@@ -295,3 +298,17 @@ def test_doctor_passes_when_everything_is_present(tmp_path):
     （`if has codex` を潰しても「落ちる」テストだけでは気づけない）。"""
     r, shimmed, faked = _run_doctor(tmp_path, [])
     assert r.returncode == 0, f"揃っているのに落ちた:\n{r.stdout}\n{r.stderr}"
+
+
+def test_required_env_keys_match_the_fixture(tmp_path):
+    """**doctor の必須鍵とテストの合成 `.env` を揃える。**
+
+    ずれると正常系が「必須が欠けている」で落ち、doctor の欠陥と区別が付かない
+    （2026-08-19: 必須を増やしたとき実際にこれで落ちた）。
+    """
+    block = re.search(r"REQUIRED = \[(.*?)\]", DOCTOR.read_text(), re.S).group(1)
+    required = set(re.findall(r'"([A-Z][A-Z0-9_]+)"', block))
+    _run_doctor(tmp_path, [])          # fixture を作らせる
+    env = (tmp_path / "repo" / ".env").read_text()
+    missing = sorted(k for k in required if f"{k}=" not in env)
+    assert not missing, f"合成 .env に足りない鍵: {missing}"
