@@ -1,0 +1,7 @@
+# シナリオ6: AUTH_MODE の判定
+
+config_file               OK oci config プロファイル DEFAULT 
+instance_principal        OK oci config 不要 AUTH_MODE=instance_principal
+resource_principal        OK oci config 不要 AUTH_MODE=resource_principal
+typo                      NG oci config AUTH_MODE=typo 未知の値。config_file / instance_principal / resource_principal のいずれか
+"config_file"             OK oci config プロファイル DEFAULT 

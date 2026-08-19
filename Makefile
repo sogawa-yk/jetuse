@@ -3,10 +3,13 @@
 PY  ?= .venv/bin
 DEV ?= $(USER)
 
-.PHONY: help build test lint e2e deploy down clean
+.PHONY: doctor help build test lint e2e deploy down clean
 
 help:   ## コマンド一覧
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed -E 's/:[^#]*## /\t— /' | sort
+
+doctor: ## 前提チェック（codex / oci / terraform / .env 等が揃っているか）
+	@ops/doctor.sh
 
 build:  ## web(SPA) をビルド（api はコンテナ・deploy 時に build）
 	npm --prefix packages/web run build

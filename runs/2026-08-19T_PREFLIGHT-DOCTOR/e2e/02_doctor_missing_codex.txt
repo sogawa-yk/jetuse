@@ -1,0 +1,31 @@
+# シナリオ2: codex を隠す → 非ゼロ。NG は1件だけ（原因が切り分けられている）
+
+== 必須（欠けると作業が進まない）
+  NG        codex          なし                 レビューが回りません。npm i -g @openai/codex 等で導入し認証する
+  OK        oci            3.71.4                 
+  OK        oci config     プロファイル DEFAULT 
+  OK        terraform      1.15.8                 
+  OK        python3        3.14                   
+  OK        node           v22                    
+  OK        npm            10.9.0                 
+  OK        container      docker                 
+  OK        .env           21 項目              
+
+== あると良い（無くても作業は続けられる）
+  OK        gh             2.88.0                 
+  OK        preview        あり                 
+  OK        .obsidian-dir  設定済み           
+  OK        .venv          あり                 
+  OK        zip            あり                 
+  OK        unzip          あり                 
+  OK        tar            あり                 
+  OK        jq             あり                 
+  OK        curl           あり                 
+
+== 環境の癖（欠落ではないが、踏みやすい）
+  note      bash           3.2.57                 3.x です。連想配列 / mapfile は使えません（ops は対応済み）
+  note      date           BSD                    date -Is は使えません（ops は +%Y-… で対応済み）
+  note      既定 region  ap-osaka-1             --region を渡さない呼び出しはここを向きます
+
+必須が 1 件欠けています。上の「対処」を先に済ませてください。
+  exit=1

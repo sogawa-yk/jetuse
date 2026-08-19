@@ -1,0 +1,63 @@
+{
+  "review_n": 6,
+  "timestamp": "2026-08-19T15:27:54+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-6.input.diff",
+  "raw_output_path": "reviews/review-6.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "`make doctor` の主要な正常系・欠落系は実装されていますが、OCI config 検査に fail-open 経路があり、必要な環境変数の網羅にも不足があります。添付証跡は8シナリオありますが、jetuse-dev E2E として提示されている一方、実際にはローカル macOS の結果であるため不十分です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 3,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "major",
+      "file": "ops/doctor.sh",
+      "line": 74,
+      "issue": "OCI config を検査する埋め込み Python が予期せず非ゼロ終了しても、その終了状態を確認せず `MISS` の出力だけで判定しています。例えば `ConfigParser` の補間エラーが `sec.get()` で発生すると標準出力が空のまま終了し、`[ -z \"$MISS\" ]` により無効なプロファイルを OK とする fail-open になります。",
+      "suggestion": "Python の終了コードと出力を別々に取得し、非ゼロなら必ず hard failure にしてください。OCI config には補間不要の `RawConfigParser` を使い、解析例外を発生させる設定のテストも追加してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "ops/doctor.sh",
+      "line": 82,
+      "issue": "`security_token_file` が設定されたセッション認証では `tenancy` と `key_file` だけを要求し、肝心の `security_token_file` が指すファイルの存在・可読性を検査していません。存在しない、または読めないトークンファイルでも doctor が成功し、OCI利用時に初めて失敗します。通常認証の `key_file` も存在だけで可読性は未確認です。",
+      "suggestion": "セッション認証では `tenancy`、`key_file`、`security_token_file` を要求し、両ファイルを `isfile` と読み取り可否で検査してください。欠落・読取不可の各境界テストを追加してください。"
+    },
+    {
+      "id": "F003",
+      "severity": "major",
+      "file": "ops/doctor.sh",
+      "line": 176,
+      "issue": "必須環境変数の固定リストが、`ops/orm-stack.sh` の実行時必須値を網羅していません。同スクリプトは対象環境に応じて `INTERNAL_DEV_COMPARTMENT_OCID` または `PUBLIC_DEV_COMPARTMENT_OCID` が無いと停止しますが、doctor は両方が無くても成功します。実際、新規正常系テストの合成 `.env` にも両キーが無いため、この不整合を成功条件として固定しています。",
+      "suggestion": "対象ワークフローを引数などで選択し、internal-dev なら `INTERNAL_DEV_COMPARTMENT_OCID`、public-dev なら `PUBLIC_DEV_COMPARTMENT_OCID` を検査してください。全フローの事前検査を目的とするなら両方を要求し、各欠落ケースをテストしてください。"
+    },
+    {
+      "id": "F004",
+      "severity": "minor",
+      "file": "ops/doctor.sh",
+      "line": 55,
+      "issue": "`.env` の AUTH_MODE 読み取りで空白をすべて削除するため、シェルから読み込める `AUTH_MODE=config_file # local` のようなインラインコメントが `config_file#local` となり、未知の値として拒否されます。OCI_PROFILEでもコメントが値へ混入します。",
+      "suggestion": "リポジトリの `.env` 読み込み規則と同じ方法で解析するか、引用符を考慮して値の後ろのインラインコメントだけを除去してください。その形式の回帰テストも追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 8,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-08-19T_PREFLIGHT-DOCTOR/e2e/01_doctor_ok.txt` から `08_oci_profile.txt` までを確認しました。正常系、Codex欠落、雛形.env、変異検査、CI隔離、AUTH_MODE分岐、skip防止、OCIプロファイル不備の8シナリオがあり、最低2本の要件は満たします。ただし `SKIPPED.md` は実行環境がローカルmacOS（bash 3.2、Python 3.14、config_file）であり、jetuse-dev（Python 3.12、instance_principal）は未実施と明記しているため、入力見出しの「jetuse-dev実環境E2E」を裏づけません。また、埋め込みPythonの異常終了、security_token_file欠落、環境別コンパートメント変数欠落の経路も未検証です。実OCI資源を作成しない理由自体は妥当ですが、非破壊で実行できるjetuse-dev上のdoctor検証を省略する十分な理由にはなっていません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されておらず、指示に従いブラウザツールは使用していません。"
+    }
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "review_n": 4,
+  "timestamp": "2026-08-19T15:13:09+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-4.input.diff",
+  "raw_output_path": "reviews/review-4.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "`make doctor` の入口と主要な欠落判定は実装されていますが、認証可能性を確認せず Codex/OCI を成功扱いする経路と、依存検出テストの対象範囲・CI網羅に重大な不足があります。blocker はありませんが、添付証跡は jetuse-dev ではなくローカルmacOSの結果であり、実環境E2Eとしては不十分です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 5,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "major",
+      "file": "ops/doctor.sh",
+      "line": 38,
+      "issue": "`codex --version` の出力だけで hard requirement を成功扱いしています。未ログインや期限切れでも `OK` となるため、「レビュー段階まで進んでから認証不足で失敗することを防ぐ」という追加機能の中心目的を満たしません。",
+      "suggestion": "利用するCodex CLIで非対話の認証状態確認を行ってください。確認できない場合は少なくとも hard failure または明確な警告にし、onboardingの「必須」と出力の保証範囲を一致させてください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "ops/doctor.sh",
+      "line": 69,
+      "issue": "`AUTH_MODE=config_file` の検査は選択プロファイルのセクション名が存在することしか確認しません。空の `[DEFAULT]` や、`tenancy`、`user`、`fingerprint`、`key_file`などが欠けたプロファイルも成功し、後続のOCI CLI/SDK認証で初めて失敗します。",
+      "suggestion": "選択プロファイルについて必須項目と`key_file`の存在・可読性を検査し、可能なら変更を伴わないOCI CLI認証プローブも追加してください。空セクション、欠落キー、存在しない鍵ファイルのテストを追加してください。"
+    },
+    {
+      "id": "F003",
+      "severity": "major",
+      "file": "packages/api/tests/test_ops_doctor.py",
+      "line": 57,
+      "issue": "コメント、onboarding、SKIPPED.mdは `ops/` と `.claude/skills/*/scripts/` の依存を機械照合すると主張していますが、実装は `OPS.glob(\"*.sh\")` のみです。`.claude`側は現在既知の`codex`を名指ししているだけなので、将来別コマンドが追加されてもテストは検出しません。",
+      "suggestion": "主張どおり `.claude/skills/*/scripts/` も構文解析可能な方法で走査するか、走査しないならドキュメントから機械照合の主張を削除し、依存一覧を明示的なテストデータとして管理してください。"
+    },
+    {
+      "id": "F004",
+      "severity": "major",
+      "file": "packages/api/tests/test_ops_doctor.py",
+      "line": 238,
+      "issue": "正常系とcodex欠落系は、ホストにOCI CLI、Terraform、Node/npm、コンテナエンジン等が揃っていなければskipされます。一般的なクリーンCIではdoctorの主要な実行テストが両方とも実行されず、壊れていてもテストスイートが成功し得ます。",
+      "suggestion": "対象外の必須コマンドは固定出力を返すテスト用shimで再現し、ホスト環境に依存せず正常系と各欠落系を実行してください。実物を必要とする統合テストとは分離してください。"
+    },
+    {
+      "id": "F005",
+      "severity": "major",
+      "file": "runs/2026-08-19T_PREFLIGHT-DOCTOR/e2e/01_doctor_ok.txt",
+      "line": 8,
+      "issue": "実環境E2Eとして添付されていますが、証跡はPython 3.14、bash 3.2、BSD dateのローカルmacOS実行です。SKIPPED.mdもjetuse-dev（Python 3.12、instance_principal）では未実施と明記しており、jetuse-dev上でdoctorが成功するという主張を裏づけません。",
+      "suggestion": "jetuse-dev上で正常系とinstance_principal系を実行して証跡を追加してください。実施しない場合はローカルpreflight証跡として明確に区別し、jetuse-dev実環境E2E完了を主張しないでください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 6,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-08-19T_PREFLIGHT-DOCTOR/e2e/` の正常系、codex欠落、雛形.env、変異検査、隔離検査、AUTH_MODE分岐の6シナリオを確認しました。最低2本は満たし、すべてローカルmacOSでは整合していますが、SKIPPED.mdがjetuse-dev未実施を明記しています。また、Codex未認証、空または不完全なOCIプロファイル、Terraform 1.7境界、Node 22境界、CIで必須ツールが未導入の場合のテスト実行性は裏づけられていません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されておらず、指示に従いブラウザツールは使用していません。"
+    }
+  }
+}
