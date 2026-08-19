@@ -312,3 +312,78 @@ def test_required_env_keys_match_the_fixture(tmp_path):
     env = (tmp_path / "repo" / ".env").read_text()
     missing = sorted(k for k in required if f"{k}=" not in env)
     assert not missing, f"合成 .env に足りない鍵: {missing}"
+
+
+# --- 個々の分岐を実行して確かめる -----------------------------------------------
+
+
+def _doctor_with_oci_config(tmp_path, config_text: str, extra_env=None):
+    """`~/.oci/config` の中身だけを差し替えて doctor を動かし、oci config の行を返す。"""
+    r, shimmed, faked = _run_doctor(tmp_path, [])          # fixture を作らせる
+    (tmp_path / "home" / ".oci" / "config").write_text(
+        config_text.replace("{KEY}", str(tmp_path / "home" / ".oci" / "key.pem")))
+    env = dict(os.environ)
+    env["PATH"] = f"{tmp_path / 'bin'}:/usr/bin:/bin"
+    env["HOME"] = str(tmp_path / "home")
+    env.pop("AUTH_MODE", None)
+    env.update(extra_env or {})
+    out = subprocess.run(["bash", str(tmp_path / "repo" / "ops" / "doctor.sh")],
+                         capture_output=True, text=True,
+                         cwd=tmp_path / "repo", env=env, timeout=300)
+    line = next((ln for ln in out.stdout.splitlines() if "oci config" in ln), "")
+    return out, line
+
+
+BASE_CFG = ("[DEFAULT]\nregion=us-chicago-1\ntenancy=t\nuser=u\n"
+            "fingerprint=f\nkey_file={KEY}\n")
+
+
+def test_empty_profile_is_rejected(tmp_path):
+    """空の `[DEFAULT]` を通さない（実行時まで認証失敗に気づけない）。"""
+    _, line = _doctor_with_oci_config(tmp_path, "[DEFAULT]\n")
+    assert "NG" in line and "tenancy" in line, line
+
+
+def test_missing_key_file_is_rejected(tmp_path):
+    """`key_file` が指す先が無いものを通さない。"""
+    _, line = _doctor_with_oci_config(tmp_path, BASE_CFG.replace("{KEY}", "/nope/none.pem"))
+    assert "NG" in line and "key_file" in line, line
+
+
+def test_missing_security_token_file_is_rejected(tmp_path):
+    """セッション認証でも**トークンの実体**を見る。"""
+    cfg = "[DEFAULT]\nregion=r\ntenancy=t\nkey_file={KEY}\nsecurity_token_file=/nope/x.tok\n"
+    _, line = _doctor_with_oci_config(tmp_path, cfg)
+    assert "NG" in line and "security_token_file" in line, line
+
+
+def test_percent_in_config_does_not_break_parsing(tmp_path):
+    """`%` を含む値で補間エラーにしない（`RawConfigParser`）。
+
+    **名前付きプロファイルで試す。** `[DEFAULT]` は `defaults()` が生の値を返すので
+    補間が走らず、素の `ConfigParser` でも通ってしまい検査にならない。
+    """
+    r, _, _ = _run_doctor(tmp_path, [])
+    env_path = tmp_path / "repo" / ".env"
+    env_path.write_text(env_path.read_text() + "OCI_PROFILE=WORK\n")
+    cfg = ("[DEFAULT]\nregion=r\n\n[WORK]\nregion=r\ntenancy=t\nuser=u\n"
+           "fingerprint=f\nkey_file={KEY}\npassphrase=100%x\n")
+    _, line = _doctor_with_oci_config(tmp_path, cfg)
+    assert "OK" in line, line
+
+
+@pytest.mark.parametrize("value,expect_ok", [
+    ("config_file", True),
+    ("config_file # local", True),          # 行末コメントは値に含めない
+    ("instance_principal", True),
+    ("resource_principal", True),
+    ("typo_mode", False),                   # 未知の値は通さない
+])
+def test_auth_mode_values(tmp_path, value, expect_ok):
+    """`AUTH_MODE` の扱い。一律「不要」に倒すと typo が素通りし、
+    一律必須にすると instance_principal で動く正しい環境が落ちる。"""
+    r, _, _ = _run_doctor(tmp_path, [])
+    env_path = tmp_path / "repo" / ".env"
+    env_path.write_text(env_path.read_text() + f"AUTH_MODE={value}\n")
+    _, line = _doctor_with_oci_config(tmp_path, BASE_CFG)
+    assert ("OK" in line) is expect_ok, f"AUTH_MODE={value}: {line}"

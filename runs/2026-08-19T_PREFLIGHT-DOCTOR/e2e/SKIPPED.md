@@ -12,6 +12,7 @@
 | 5 | **`.env` を退避**して CI 相当にする | テストは通り、doctor 自体は正しく落ちる | `05_isolation.txt` |
 | 6 | `AUTH_MODE` の5パターン | typo は NG、引用付きは OK、principal 系は「不要」 | `06_auth_mode.txt` |
 | 7 | **CI で skip しないこと** | SKIPPED 0 件 | `07_no_skip.txt` |
+| 9 | **各分岐の変異検査** | `RawConfigParser` / `AUTH_MODE` の分岐を殺すと FAIL | `09_branch_mutation.txt` |
 | 8 | `~/.oci/config` の中身 | 空の `[DEFAULT]` / `key_file`・`security_token_file` の実体なし を NG。`%` を含む値でも壊れない | `08_oci_profile.txt` |
 
 **実行環境は macOS の手元**（bash 3.2 / BSD date / Python 3.14 / AUTH_MODE=config_file）。
@@ -28,6 +29,10 @@
 
 前者は `re.M` を足し、後者は「揃っていれば通る」テストを足して塞いだ。
 **テストがあることと、テストが効いていることは別**。
+これは後半でもう一度起きた —— `%` の検査を `[DEFAULT]` で書いていたため、
+`RawConfigParser` を素の `ConfigParser` に戻しても落ちなかった
+（`[DEFAULT]` は `defaults()` が生の値を返し補間が走らない）。
+名前付きプロファイルに変えて、はじめて検査になった。
 
 ## doctor が陳腐化しない仕組み
 
