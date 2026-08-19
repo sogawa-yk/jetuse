@@ -15,9 +15,12 @@
 
 from __future__ import annotations
 
+import os
 import pathlib
 import re
+import stat
 import subprocess
+import tempfile
 
 import pytest
 
@@ -57,23 +60,26 @@ def test_mktemp_default_permissions_would_not_be_enough(tmp_path):
     """**なぜ chmod が要るか**を実測で示す。
 
     mktemp 自身は 0600 を作るが、名前を後置して作り直したファイルは umask 次第。
-    ここでは後置した場合に 0600 とは限らないことを確かめる（環境の umask に依存するため
-    「0600 でない」ことは断定せず、mktemp 本体との差だけを見る）。
+
+    シェルの `stat` は BSD と GNU で意味が違う。`-f` は macOS では「書式指定」だが
+    Linux では「ファイルシステム情報」で**成功してしまう**ため、
+    `stat -f ... || stat -c ...` のフォールバックが働かない（CI で実際に落ちた）。
+    移植性のために Python で見る。
     """
-    r = subprocess.run(
-        ["bash", "-c",
-         # **1ファイルにつき1つの format**。`%Lp %Lp` を2ファイルへ適用すると
-         # 先頭2値とも最初のファイルの mode になり、比較が成立しない。
-         'umask 022; f=$(mktemp -t t-XXXXXX); g="${f}.suffix"; : > "$g"; '
-         'stat -f "%Lp" "$f" 2>/dev/null || stat -c "%a" "$f"; '
-         'stat -f "%Lp" "$g" 2>/dev/null || stat -c "%a" "$g"; rm -f "$f" "$g"'],
-        capture_output=True, text=True, cwd=tmp_path)
-    assert r.returncode == 0, r.stderr
-    made, suffixed = r.stdout.split()
-    assert made == "600", f"mktemp が 0600 で作っていない（前提が崩れた）: {made}"
-    # umask 022 を明示したので、後置ファイルは 0644 になる = mktemp の保護を継承しない。
-    assert suffixed != "600", (
-        f"後置ファイルが 0600 になった（前提が変わった）: {suffixed}")
+    old = os.umask(0o022)
+    try:
+        fd, made = tempfile.mkstemp(dir=tmp_path)
+        os.close(fd)
+        suffixed = pathlib.Path(f"{made}.suffix")
+        suffixed.write_text("")
+        m_made = stat.S_IMODE(os.stat(made).st_mode)
+        m_suffixed = stat.S_IMODE(suffixed.stat().st_mode)
+    finally:
+        os.umask(old)
+
+    assert m_made == 0o600, f"mktemp が 0600 で作っていない（前提が崩れた）: {m_made:o}"
+    assert m_suffixed != 0o600, (
+        f"後置ファイルが 0600 になった（前提が変わった）: {m_suffixed:o}")
 
 
 # --- スタック検索の fail-closed ------------------------------------------------
