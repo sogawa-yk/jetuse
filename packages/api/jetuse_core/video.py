@@ -36,6 +36,13 @@ LIST_LIMIT_MAX = 100
 
 _PAR_NAME_PREFIX = "jetuse-video-"
 
+# 取り残された `running` を引き継いでよくなるまでの時間(specs/20 §3「同時実行の範囲」)。
+# 分析中にプロセスが落ちると `analysis_state` は `running` のまま残る。開始時刻を見ずに
+# `<> 'running'` だけで弾くと、その映像は**二度と再分析できない**(要求8 が死ぬ)。
+# 2 時間は、v1 が対象とする短い映像の分析(ffmpeg の 1 パス + 場面数ぶんのフレーム抽出。
+# 個々の上限は video_frames の SCAN_TIMEOUT_S / FRAME_TIMEOUT_S)を十分に上回る幅。
+ANALYSIS_STALE_SECONDS = 2 * 3600
+
 # 時刻列は **UTC で保存し、UTC として返す**(格納側は下記 to_utc_naive、既定値は
 # migration の SYS_EXTRACT_UTC)。列は TIMESTAMP(タイムゾーン無し)なので、末尾の "Z" を
 # 付けて「どの時間帯の値か」を明示する。付けないと "2026-08-19T10:00:00" が受け手の
@@ -56,6 +63,19 @@ _SCENE_COLUMNS = (
 )
 
 
+class AnalysisInProgressError(RuntimeError):
+    """その映像の分析が既に走っている(specs/20 §3)。API は 409 に対応させる。"""
+
+
+class AnalysisSupersededError(RuntimeError):
+    """自分の権利が別の実行に引き継がれていた(取り残された `running` の引き継ぎ)。
+
+    引き継がれた側が**何も書かずに降りる**ための合図。これが無いと、生きたまま
+    引き継がれた古い実行が新しい実行の場面・状態を上書きし、「同じ映像への分析は
+    同時に 1 つだけ」(specs/20 §3)が結果として破れる。
+    """
+
+
 def to_utc_naive(value: datetime | None) -> datetime | None:
     """aware な日時は UTC へ寄せ、tzinfo を落として返す(naive はそのまま UTC 扱い)。
 
@@ -68,7 +88,7 @@ def to_utc_naive(value: datetime | None) -> datetime | None:
     return value.astimezone(UTC).replace(tzinfo=None)
 
 
-def _os_client():
+def os_client():
     """映像バケットのある**リージョン**を向いた Object Storage クライアント。
 
     `config_file` モード(ローカル開発)では `sdk_signer_args` の region 引数は効かず、
@@ -87,7 +107,7 @@ def _os_client():
     return oci.object_storage.ObjectStorageClient(**args)
 
 
-def _require_bucket() -> str:
+def require_bucket() -> str:
     bucket = get_settings().video_bucket
     if not bucket:
         raise RuntimeError("VIDEO_BUCKET is not configured")
@@ -143,8 +163,8 @@ def create_asset(
     `data` はストリームのまま渡す(`UploadFile.file`)。バイト列に読み切ると
     映像 1 本分がそのままコンテナのメモリに載る。
     """
-    bucket = _require_bucket()
-    client = _os_client()
+    bucket = require_bucket()
+    client = os_client()
     ns = client.get_namespace().data
 
     asset_id = str(uuid.uuid4())
@@ -250,7 +270,7 @@ def get_asset(owner: str, asset_id: str) -> dict[str, Any] | None:
         return asset
 
 
-def _object_name(owner: str, asset_id: str) -> str | None:
+def object_name_for(owner: str, asset_id: str) -> str | None:
     with connect() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -259,6 +279,87 @@ def _object_name(owner: str, asset_id: str) -> str | None:
         )
         row = cur.fetchone()
         return row[0] if row else None
+
+
+# --- 分析の入口(排他) ---------------------------------------------------------
+
+
+def claim_analysis(owner: str, asset_id: str) -> str:
+    """その映像の分析を開始する権利を取り、**その権利の印**を返す(specs/20 §3)。
+
+    **アトミックな 1 文の UPDATE が入口**。`analysis_state` を条件に含めることで、
+    同じ映像に対する分析が同時に 2 つ走らない。読んでから書く 2 段にすると、
+    その隙間に相手も同じ判定を通れてしまう。
+
+    取れなければ `AnalysisInProgressError`(API は 409)。映像が無い/他人のものなら
+    `LookupError`(所有者以外に id の存在有無を漏らさない)。
+
+    `ANALYSIS_STALE_SECONDS` を過ぎた `running` は引き継ぐ —— 分析中に落ちた映像を
+    `running` のまま固めない。ただし**引き継ぎは「落ちている」ことを保証しない**
+    (単に遅いだけかもしれない)。そこで取るたびに新しい `analysis_token` を書き、
+    それを**権利の印**として返す。以降の書き込み(`_save_scenes` / `finish_analysis`)は
+    この印が台帳の値と一致するときだけ通す。印が変わっていれば、その実行は
+    引き継がれた側なので何も書かずに降りる。
+
+    `analysis_error` は消す(前回の失敗理由を今回の結果と混ぜない)。
+    """
+    stale = datetime.now(UTC).replace(tzinfo=None) - timedelta(
+        seconds=ANALYSIS_STALE_SECONDS
+    )
+    token = uuid.uuid4().hex
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE video_assets
+               SET analysis_state = 'running',
+                   analysis_started_at = SYS_EXTRACT_UTC(SYSTIMESTAMP),
+                   analysis_token = :tok,
+                   analysis_error = NULL
+             WHERE id = :id AND owner_sub = :o
+               AND (analysis_state <> 'running'
+                    OR analysis_started_at IS NULL
+                    OR analysis_started_at < :stale)
+            """,
+            id=asset_id, o=owner, stale=stale, tok=token,
+        )
+        claimed = cur.rowcount > 0
+        conn.commit()
+        if claimed:
+            return token
+        # 取れなかった理由を分ける。「走っている」と「無い」を同じ扱いにすると、
+        # 利用者は 409 と 404 のどちらなのか判らない
+        cur.execute(
+            "SELECT 1 FROM video_assets WHERE id = :id AND owner_sub = :o",
+            id=asset_id, o=owner,
+        )
+        if cur.fetchone() is None:
+            raise LookupError(asset_id)
+    raise AnalysisInProgressError(asset_id)
+
+
+def finish_analysis(
+    owner: str, asset_id: str, state: str, error: str | None = None,
+    *, token: str | None = None,
+) -> bool:
+    """分析の終わりを台帳へ書き、`running` を解く。書けたかどうかを返す。
+
+    **`token` を渡したときは、その権利がまだ自分のものである場合だけ書く。**
+    引き継がれた古い実行がここを素通しで書くと、新しい実行の `running` を解いて
+    3 本目の開始まで許してしまう。
+
+    **失敗を握りつぶさない**(specs/20 §3)。`failed` なら理由を必ず入れる。
+    """
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE video_assets SET analysis_state = :s, analysis_error = :e"
+            " WHERE id = :id AND owner_sub = :o"
+            "   AND (:tok IS NULL OR analysis_token = :tok)",
+            s=state, e=_fit(error, 4000), id=asset_id, o=owner, tok=token,
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 # --- 削除 ---------------------------------------------------------------------
@@ -270,8 +371,14 @@ def delete_asset(owner: str, asset_id: str) -> bool:
     **本体を先に消し、台帳は後**。逆順にすると Object Storage 側の削除が落ちたときに
     誰からも辿れない本体が残る(課金され続け、次の削除でも消せない)。この順なら
     失敗時は台帳行が残るだけで、もう一度 DELETE すれば片付く。
+
+    **分析の実行中に削除された場合の即時整合は取らない**(specs/20 §3「同時実行の範囲」)。
+    掃除の後に分析がサムネイルを置けば残骸になるが、データは壊れず、
+    `video_frames.reap_orphan_assets` が後から回収する。ここを完全に閉じるには
+    Object Storage と DB をまたぐ分散トランザクションか映像ごとの外部ロックが要り、
+    実害(残骸オブジェクト数個)に対して仕組みが重すぎる、と決めた。
     """
-    object_name = _object_name(owner, asset_id)
+    object_name = object_name_for(owner, asset_id)
     if object_name is None:
         return False
 
@@ -295,8 +402,8 @@ def _purge_objects(object_name: str) -> None:
     本体 1 個ではなく**プレフィックス配下を全部**消す。PAR を残すと、台帳から
     消えた後もその URL で映像を取れてしまう —— 削除したのに読める状態を残さない。
     """
-    bucket = _require_bucket()
-    client = _os_client()
+    bucket = require_bucket()
+    client = os_client()
     ns = client.get_namespace().data
     prefix = object_name.rsplit("/", 1)[0] + "/"
 
@@ -346,14 +453,14 @@ def playback_url(
     """
     if not 0 < ttl_seconds <= PLAYBACK_TTL_MAX:
         raise ValueError(f"ttl_seconds must be in 1..{PLAYBACK_TTL_MAX}")
-    object_name = _object_name(owner, asset_id)
+    object_name = object_name_for(owner, asset_id)
     if object_name is None:
         return None
 
     import oci.object_storage.models as osm
 
-    bucket = _require_bucket()
-    client = _os_client()
+    bucket = require_bucket()
+    client = os_client()
     ns = client.get_namespace().data
     expires = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
     par = client.create_preauthenticated_request(
