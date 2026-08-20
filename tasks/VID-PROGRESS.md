@@ -16,8 +16,8 @@ status: `todo` | `in_progress` | `blocked` | `done`
 | 1 | [VID-01 映像の保管と登録](VID-01.md) | — | バケット追加の apply（**済 2026-08-19**）+ コミット | done |
 | 2 | [VID-02 場面分割とフレーム抽出](VID-02.md) | VID-01 | コミット | done |
 | 3 | [VID-03 AI 分析（視覚 LLM）](VID-03.md) | VID-02 | コミット | done |
-| 4 | [VID-04 場面の横断検索](VID-04.md) | VID-03 | コミット | todo |
-| 5 | [VID-05 メタデータの確認・修正](VID-05.md) | VID-03 | コミット | todo |
+| 4 | [VID-04 場面の横断検索](VID-04.md) | VID-03 | コミット | done |
+| 5 | [VID-05 メタデータの確認・修正](VID-05.md) | VID-03 | コミット | done |
 | 6 | [VID-06 UI](VID-06.md) | VID-04, VID-05 | コミット | todo |
 
 > VID-04 と VID-05 は相互独立（検索は読み、編集は書き。ファイル衝突が無い）ので並列可。
