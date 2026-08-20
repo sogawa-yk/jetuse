@@ -1,0 +1,44 @@
+### 変異1: pending の判定を殺す（= ER-0015 を検出しない状態 / 初版と同じ）
+=========================== short test summary info ============================
+FAILED tests/test_health_schema.py::test_behind_when_the_image_needs_more_than_the_db_has
+FAILED tests/test_health_schema.py::test_behind_flips_the_overall_ok - Assert...
+FAILED tests/test_health_schema.py::test_behind_wins_over_foreign - Assertion...
+FAILED tests/test_health_schema.py::test_fresh_schema_reports_every_version_pending
+FAILED tests/test_health_schema.py::test_expectations_do_not_depend_on_the_current_branch
+5 failed, 6 passed in 0.49s
+
+### 変異2: behind を全体の ok に効かせない
+tests/test_health_schema.py:77: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_health_schema.py::test_behind_flips_the_overall_ok - assert...
+1 failed, 10 passed in 0.48s
+
+### 変異3: ランナーの警告を出さない
+tests/test_migrate_foreign_schema.py:418: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_migrate_foreign_schema.py::test_warns_even_though_nothing_is_applied
+FAILED tests/test_migrate_foreign_schema.py::test_warning_precedes_any_ddl - ...
+FAILED tests/test_migrate_foreign_schema.py::test_idempotent_second_run_still_warns
+FAILED tests/test_migrate_foreign_schema.py::test_cli_prints_the_warning_and_does_not_claim_up_to_date
+4 failed, 19 passed in 0.29s
+
+### 変異4: pending の向きを取り違える
+FAILED tests/test_migrate_foreign_schema.py::test_expectations_do_not_depend_on_the_current_branch
+FAILED tests/test_health_schema.py::test_behind_when_the_image_needs_more_than_the_db_has
+FAILED tests/test_health_schema.py::test_behind_flips_the_overall_ok - Assert...
+FAILED tests/test_health_schema.py::test_foreign_when_the_db_is_ahead - Asser...
+FAILED tests/test_health_schema.py::test_foreign_does_not_flip_the_overall_ok
+FAILED tests/test_health_schema.py::test_behind_wins_over_foreign - Assertion...
+FAILED tests/test_health_schema.py::test_fresh_schema_reports_every_version_pending
+FAILED tests/test_health_schema.py::test_expectations_do_not_depend_on_the_current_branch
+12 failed, 22 passed in 1.35s
+
+### 変異5: 診断が call_timeout を張らない（生の acquire に戻す）
+tests/test_migrate_foreign_schema.py:282: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_migrate_foreign_schema.py::test_applied_versions_sets_a_call_timeout
+1 failed, 22 passed in 0.30s
+
+### 復元後
+..................................                                       [100%]
+34 passed in 0.70s

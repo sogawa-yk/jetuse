@@ -1,0 +1,55 @@
+{
+  "review_n": 2,
+  "timestamp": "2026-08-19T14:58:26+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-2.input.diff",
+  "raw_output_path": "reviews/review-2.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "`ops/doctor.sh` の基本機能は追加されていますが、新規テストがコミット禁止の `.env` と実ホストの設定に依存しており、クリーンな CI checkout では失敗します。また、AUTH_MODE の誤判定と、jetuse-dev 実行を裏づけない E2E 証跡が残っています。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 2,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "blocker",
+      "file": "packages/api/tests/test_ops_doctor.py",
+      "line": 202,
+      "issue": "`test_missing_codex_fails_loudly` は codex 以外の必須条件を隔離せず、実リポジトリの `.env`、`~/.oci/config`、インストール済み CLI に依存しています。`.env` は `.gitignore` 対象でクリーンな checkout には存在しないため、少なくとも `.env` も NG となり、line 208 の `len(ng) == 1` が決定的に失敗します。`faked` も受け取るだけで利用していません。",
+      "suggestion": "doctor が参照する env/config パスをテスト用に上書き可能にし、tmp_path 配下へ有効な `.env` と OCI config を作成してください。必須 CLI も固定出力の shim で再現し、ホスト環境に依存せず codex だけを欠落させてください。正常系も同じ隔離 fixture で検証してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "ops/doctor.sh",
+      "line": 64,
+      "issue": "`config_file` 以外のすべての AUTH_MODE を「OCI config 不要」と成功扱いします。そのため typo や `AUTH_MODE=\"config_file\"` のような dotenv で有効な引用形式でも config 検査を迂回しますが、実アプリは未知の値を user-principal/config-file 経路として扱うため、doctor が成功した後に実行時エラーになります。",
+      "suggestion": "`resource_principal|instance_principal` だけを config 不要として明示し、未知の値は hard failure にしてください。.env は dotenv と同等の方法で解析するか、少なくとも引用符とインラインコメントを正規化してから分岐してください。"
+    },
+    {
+      "id": "F003",
+      "severity": "major",
+      "file": "runs/2026-08-19T_PREFLIGHT-DOCTOR/e2e/01_doctor_ok.txt",
+      "line": 7,
+      "issue": "添付証跡は jetuse-dev 実行を裏づけていません。onboarding では dev ホストを Python 3.12 としていますが証跡は Python 3.14で、さらに bash 3.2／BSD date なので macOS 手元環境の出力です。AUTH_MODE の instance/resource principal 分岐、Terraform 1.7 境界、OCI config 欠落も未検証で、SKIPPED.md にそれらを省略した理由がありません。",
+      "suggestion": "証跡をローカル preflight と明記して jetuse-dev E2E と区別し、jetuse-dev 上の正常系を追加してください。少なくとも config_file、instance_principal/resource_principal、未知の AUTH_MODE、Terraform 1.7 未満の分岐を検証するか、実施不能な各経路の理由を SKIPPED.md に記録してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 4,
+    "adequacy": "insufficient",
+    "notes": "確認した証跡は `01_doctor_ok.txt`、`02_doctor_missing_codex.txt`、`03_doctor_template_env.txt`、`04_mutation.txt` の4シナリオです。正常系、codex 欠落、雛形 `.env`、変異検査は確認できますが、01 は bash 3.2／BSD date／Python 3.14 のローカル macOS 実行であり、jetuse-dev 実行の証拠ではありません。さらに認証モード各分岐、未知の AUTH_MODE、Terraform 下限、OCI config 欠落が未検証で、03 には明示的な exit code もありません。SKIPPED.md は実資源を作らない理由としては妥当ですが、これらの未検証経路を省略する理由にはなっていません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されておらず、指示に従いブラウザツールは使用していません。"
+    }
+  }
+}

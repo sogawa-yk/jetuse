@@ -1,0 +1,63 @@
+{
+  "review_n": 5,
+  "timestamp": "2026-08-19T15:19:40+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-5.input.diff",
+  "raw_output_path": "reviews/review-5.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "`make doctor` の主要分岐は実装されていますが、OCI認証設定の検証不足とテストのホスト依存が残っています。また、添付E2Eの出力は現在の差分から生成される表示と一致せず、jetuse-dev実行でもないため証跡として不十分です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 3,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "major",
+      "file": "ops/doctor.sh",
+      "line": 82,
+      "issue": "`security_token_file` が設定されている場合、必須項目を `tenancy` だけに緩和していますが、セッショントークン認証にも署名用の `key_file` が必要です。また通常のAPIキー認証でも `key_file` の値が非空かしか確認せず、ファイルの存在・可読性を検証しないため、無効な認証設定をOKにします。",
+      "suggestion": "セッショントークン認証では少なくとも `tenancy`、`security_token_file`、`key_file` を要求し、両ファイルの存在と可読性も確認してください。通常認証についても `key_file` を同様に検査し、欠落ファイルのテストを追加してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "packages/api/tests/test_ops_doctor.py",
+      "line": 226,
+      "issue": "`_run_doctor` はホストに対象コマンドが存在すると固定fakeではなく実バイナリへshimします。そのため、例えばTerraform 1.6やNode 20がインストールされたホストでは正常系テストが失敗し、バージョン出力や動作が変わったCLIでも結果が変化します。「tmp_path内で再現するCI独立テスト」という主張を満たしていません。",
+      "suggestion": "doctor自身の単体テストでは、python3などテスト実行に必要なものを除き、OCI CLI、Terraform、Node、npm、Codex、コンテナエンジンを常に固定出力のfakeにしてください。実バイナリを使う検査は別の統合テストとして分離してください。"
+    },
+    {
+      "id": "F003",
+      "severity": "major",
+      "file": "runs/2026-08-19T_PREFLIGHT-DOCTOR/e2e/01_doctor_ok.txt",
+      "line": 8,
+      "issue": "証跡の `oci config 3 プロファイル` は、現在の `ops/doctor.sh` が出力する `プロファイル ${PROF}` と一致しません。`06_auth_mode.txt`にも同じ旧表示があり、証跡が最終差分の実行結果ではない可能性があります。さらにSKIPPED.mdはmacOSでの実行でありjetuse-dev未確認と明記しており、見出しの「jetuse-dev実環境E2E」とも矛盾します。",
+      "suggestion": "最終差分から全シナリオを再実行して証跡を更新してください。jetuse-devで実行しない場合はローカルpreflight証跡として明確に分類し、jetuse-dev E2E完了を主張しないでください。"
+    },
+    {
+      "id": "F004",
+      "severity": "minor",
+      "file": "ops/doctor.sh",
+      "line": 119,
+      "issue": "Pythonバージョン判定が文字列パターン `3.1[23]|3.1[4-9]` に固定されているため、将来のPython 3.20以降を3.12未満として誤って拒否します。",
+      "suggestion": "Terraformと同様にmajor/minorを整数として比較し、3.12以上を許可してください。3.11、3.12、3.20の境界テストも追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 7,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-08-19T_PREFLIGHT-DOCTOR/e2e/` の正常系、Codex欠落、雛形.env、変異検査、CI隔離、AUTH_MODE分岐、skip防止の7シナリオを確認しました。最低2本は満たしていますが、証跡のOCI config表示が現在の実装と一致せず、最終差分の実行結果として信頼できません。SKIPPED.mdも実行環境がローカルmacOSでjetuse-devは未確認と明記しています。OCI鍵ファイル欠落、security-token設定、Terraform/Node境界も未検証です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されておらず、指示に従いブラウザツールは使用していません。"
+    }
+  }
+}

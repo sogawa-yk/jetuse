@@ -1,0 +1,9 @@
+# シナリオ3: release PR 検出（実 PR #155 を使った回帰）
+
+## 3-1 別 base の PR を release PR と誤認しないこと
+#155 は head=public-dev / base=internal-dev の同期 PR（実在した形）。
+これで main への未リリースが隠れないことを確認する。
+
+  同期PR(base=internal-dev)のみ        -> status=unreleased  `public-dev` が `main` より 16 commit 先行。release PR が出ていない（merge すると公開配信物
+  release PR(base=main)あり          -> status=pr          release PR #999 が出ている（16 commit）
+  gh 取得失敗(None)                    -> status=unknown     `public-dev` が `main` より 16 commit 先行。PR の有無を確認できなかった

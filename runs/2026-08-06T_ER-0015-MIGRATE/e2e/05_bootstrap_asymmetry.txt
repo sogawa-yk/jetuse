@@ -1,0 +1,14 @@
+# シナリオ5: RUN_DB_BOOTSTRAP の設定箇所（migration が流れる経路の非対称）
+
+## リポジトリ全体で true を設定している箇所
+infra/orm/locals.tf:90:    RUN_DB_BOOTSTRAP   = "true"
+packages/api/entrypoint.sh:3:# RUN_DB_BOOTSTRAP=true のとき、ADBスキーマ用意+マイグレーションを先に実行してから uvicorn 起動。
+packages/api/entrypoint.sh:10:if [ "${RUN_DB_BOOTSTRAP}" = "true" ]; then
+
+## environments/app（開発者ごとのスタック）に設定が無いこと
+(なし = ops/dev-env-up.sh 経由では migration が流れない)
+
+## entrypoint.sh の分岐
+10:if [ "${RUN_DB_BOOTSTRAP}" = "true" ]; then
+11-  echo "[entrypoint] starting DB bootstrap in background (schema + migrate)..."
+12-  python -m jetuse_core.bootstrap &

@@ -1,0 +1,35 @@
+# シナリオ16: 権限境界（Codex review-1 の blocker への対応）
+
+## 見つけた実態
+
+public-dev のポリシーを絞るだけでは閉じなかった。テナンシ直下の `jetuse-dev` ポリシーが
+`jetuse-internal-dg` に **4コンパートメントへの manage all-resources** を与えており、
+その DG の matching rule は **5面すべて**を拾っていた。つまりどの環境の Container Instance /
+Function / ADB からでも、他環境を全操作できる状態だった。ER-0016 が指していたのもこの一部。
+
+## 是正後（入口と出口の両方）
+
+### 動的グループの matching rule（入口）
+  jetuse-internal-dg
+    types: ['autonomousdatabase', 'computecontainerinstance', 'fnfunc', 'generativeaisemanticstore']
+    comps: ['<internal-dev>']
+  jetuse-pubdev-dg
+    types: ['autonomousdatabase', 'computecontainerinstance', 'fnfunc', 'generativeaisemanticstore']
+    comps: ['<public-dev>']
+    （<internal-dev> = internal-dev / <public-dev> = public-dev）
+
+### ポリシーの付与先（出口）
+  jetuse-dev: 全7文 / dynamic-group 2文
+      Allow dynamic-group jetuse-internal-dg to manage all-resources in compartment jetuse:internal-dev
+      Allow dynamic-group jetuse-internal-dg to read objectstorage-namespaces in tenancy
+  jetuse-test: 全5文 / dynamic-group 0文
+  jetuse-pubdev-runtime-policy: {'jetuse-pubdev-dg': 20}
+
+## 観測上の注意（2026-08-09 に誤判定した）
+
+  `oci iam dynamic-group list` は matching-rule を返さない。`get` だけが返す。
+  list の null を見て「ルールが消えた」と誤って判断した。既知のルールを持つ
+  jetuse-pubdev-dg でも list=null / get=614文字 になることで確認済み。
+
+## 動的グループ数
+  50 本（deploy-test-dg を削除し pubdev-dg を追加。増減なし）

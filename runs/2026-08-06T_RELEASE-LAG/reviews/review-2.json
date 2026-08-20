@@ -1,0 +1,55 @@
+{
+  "review_n": 2,
+  "timestamp": "2026-08-06T01:03:51+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-2.input.diff",
+  "raw_output_path": "reviews/review-2.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "未リリース検出の基本ロジックと主要3シナリオは証跡で確認できています。ただし、外部コマンドがタイムアウトまたは起動不能になった場合に、意図したフォールバックをせず一覧生成全体が例外終了する問題があります。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 2,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "F001",
+      "severity": "major",
+      "file": "ops/stalled.py",
+      "line": 101,
+      "issue": "`git fetch` の非ゼロ終了しか失敗として処理していません。設定した60秒を超えると `subprocess.TimeoutExpired`、gitを起動できなければ `OSError` が送出され、「失敗しても止めず古い可能性を表示する」という仕様に反して `scan()` 全体が終了します。",
+      "suggestion": "`subprocess.run` を `try/except (subprocess.TimeoutExpired, OSError)` で囲み、例外時も `False` を返してください。タイムアウトと実行不能を再現するテストも追加してください。"
+    },
+    {
+      "id": "F002",
+      "severity": "major",
+      "file": "ops/stalled.py",
+      "line": 69,
+      "issue": "`gh pr list` にタイムアウトがなく、`gh` が存在しない場合の `FileNotFoundError` も処理されません。このため、GitHubを確認できない場合に `None` を返して `unknown` に落とすという公開された関数契約を満たさず、一覧生成が停止または無期限に待機します。既存テストは非ゼロの `CompletedProcess` だけを検証しており、この経路を網羅していません。",
+      "suggestion": "適切な `timeout` を指定し、`subprocess.TimeoutExpired` と `OSError` を捕捉して `None` を返してください。両例外の回帰テストを追加してください。"
+    },
+    {
+      "id": "F003",
+      "severity": "minor",
+      "file": "ops/stalled.py",
+      "line": 69,
+      "issue": "open PR の取得を `--limit 200` に固定しているため、open PR が200件を超えると release PRを再び取りこぼし、「release PR が出ていない」と誤表示します。テストも `limit >= 100` しか要求しておらず、完全取得を保証していません。",
+      "suggestion": "releaseペアごとに `--head` と `--base` を指定して照会するか、ページネーションによって全open PRを取得してください。200件超で対象PRが後続ページにある境界テストも追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 3,
+    "adequacy": "insufficient",
+    "notes": "`01_pytest_release_lag.txt` では対象14テストが全件成功し、`02_real_repo_scan.txt` では public/internal 両ペアの検出値16/10が独立した `git rev-list` と一致しています。`03_release_pr_detection.txt` も別base、正しいrelease PR、非ゼロ終了相当の3分岐を裏づけています。OCI未実施については `runs/2026-08-06T_RELEASE-LAG/e2e/SKIPPED.md` の「opsは配備物・Terraform・API経路に含まれない」という理由が妥当です。ただし、実装が掲げる外部コマンド失敗時の継続動作について、TimeoutExpired、実行ファイル不在、ghのハングを検証しておらず、major指摘の経路を裏づけるには不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ライブターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

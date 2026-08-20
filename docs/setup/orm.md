@@ -21,6 +21,32 @@ GitHubの**Deploy JetUse to Oracle Cloud**ボタンから、IAMとJetUse本体�
 
 Terraformは権限を迂回しない。実行ユーザーに権限がないIAM操作を有効にした場合、そのリソースのPlanまたはApplyがOCIの`403`で失敗する。権限の詳細は [IAMガイド](./iam.md) を参照。
 
+## 対応リージョン
+
+2階層で見る。**アプリが動くリージョン**と、**GenAI（推論/agentic API）が実証済みのリージョン**は一致しない。
+
+| 層 | リージョン | 補足 |
+|---|---|---|
+| アプリ（公開イメージ提供） | 大阪 ap-osaka-1 / 東京 ap-tokyo-1 / アシュバーン us-ashburn-1 / シカゴ us-chicago-1 | OCI Functionsは同一リージョンOCIRのイメージしか受け付けないため、各リージョンのOCIRへ事前公開している。Stackはデプロイリージョンのレジストリを自動選択する |
+| GenAI（実証済み） | 大阪 ap-osaka-1 / シカゴ us-chicago-1 | RAG・会話メモリ・デモ生成はGenAIに依存する |
+
+- アプリ対応外のリージョンはplan時に明示エラーで停止する。使う場合はイメージを自リージョンのOCIRへミラーし、`api_image_url` と `fn_router_image` を指定する（Issue #55 / ADR-0017）。
+- 東京・アシュバーンは**applyは通るがGenAIが動かない**。承知のうえで進める場合のみ `allow_unvalidated_genai_region=true` を設定する（未設定ならplan時に停止）。
+
+## デプロイ前チェックリスト
+
+別テナンシへ持ち出すときに確認する。
+
+- [ ] 対象リージョンをテナンシで**サブスクライブ**済み（未サブスクライブだとホームリージョン導出／region_guardが失敗）
+- [ ] **GenAI**（推論+agentic API）が対象リージョンで利用可（実証済=大阪/シカゴ。他は `allow_unvalidated_genai_region`）
+- [ ] **ADB ECPU** のサービス枠 ≥ `adb_ecpu_count`（既定2。新規テナンシは枠0が普通でLimitExceededになる）。`adb_db_version`（既定26ai）が対象リージョンで提供されること
+- [ ] **Container Instance** の `ci_shape`（既定 CI.Standard.E4.Flex）が対象リージョンで提供されること
+- [ ] **Functions / VCN** のサービス枠に余裕があること
+- [ ] `prefix` が英小文字始まり・ハイフン除去後15文字以内（VCN dns_labelの上限）
+- [ ] `ocir_namespace` は**既定のまま**（公開イメージのcross-tenancy pull用。自テナンシへミラーした場合のみ上書き）
+- [ ] `enable_auth=true` ならIdentity Domainはテナンシの**ホームリージョン**に作られる（destroyが失敗する場合は手動でdomainをdeactivateしてから再destroy。[customize.md](../guides/customize.md) 参照）
+- [ ] NL2SQL（SQL Search）を使うなら `semstore_ocid` に既存Semantic StoreのOCIDを設定（未設定だと503）
+
 ## 作成手順
 
 1. READMEの**Deploy JetUse to Oracle Cloud**ボタンを開く。

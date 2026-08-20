@@ -1,0 +1,32 @@
+# シナリオ7: 実 ADB に対する診断経路（読み取りのみ）
+
+対象: ap-osaka-1 / jetuse-loop-adb（.env が指す ADB。この検証のため STOPPED から起動）
+実行: ADB_WALLET_DIR="" PYTHONPATH=packages/api .venv/bin/python real_adb_check.py
+（ウォレットは ADB_OCID から Database API で生成。/tmp のキャッシュは再起動で消えていた）
+
+接続先 DSN=jetuseloop2_low  USER=<開発者スキーマ>  REGION=ap-osaka-1
+CALL_TIMEOUT_MS=10000
+
+== 1. applied_versions(): 実 Oracle から読む ==
+  適用済み 21 件 / 0.43s
+  先頭3件: ['001_init', '002_presets', '003_oci_conversation']
+  末尾3件: ['019_rag_adb_ingest', '020_http_tools', '021_http_tool_headers']
+
+== 2. 非 DDL: 表の数と適用済み一覧が前後で変わらない ==
+  実行前 user_tables=21
+  診断を3回まわした後 user_tables=21 / 適用済み 21 件
+  OK: 状態は変わっていない
+
+== 3. call_timeout が張られている ==
+  conn.call_timeout=10000 (期待 10000)
+
+== 4. schema_health(): 実 DB の状態から判定 ==
+  status=ok  applied=21  expected=21
+  イメージ(この checkout)が持つ版 = 21 件
+  応答 0.08s（有限時間で返る）
+
+== 5. capability_health() の schema（HTTP ルートが呼ぶ関数） ==
+  ok=False  schema.status=ok  3.4s
+  OK: schema_health と同じ結論・capabilities には混ざらない
+
+== すべて OK ==
