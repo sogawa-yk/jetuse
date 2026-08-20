@@ -1,6 +1,7 @@
-"""映像の登録・一覧・詳細・削除・再生 URL と分析(VID-01 / VID-03 / specs/20 §2 §3)。
+"""映像の登録・一覧・詳細・削除・再生 URL / 分析 / 場面の横断検索
+(VID-01 / VID-03 / VID-04 / specs/20 §2 §3 §4)。
 
-検索・場面編集は後続タスク。
+場面の編集(§5)は後続タスク(VID-05)。
 """
 
 import asyncio
@@ -12,10 +13,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 
 from jetuse_core import video as video_repo
-from jetuse_core import video_analyze, video_frames
+from jetuse_core import video_analyze, video_frames, video_search
 from jetuse_core.auth import AuthContext, require_user
 
 from ..deps import require_video
+from ..schemas import VideoSearchRequest
 
 logger = logging.getLogger("jetuse.service")
 router = APIRouter()
@@ -195,3 +197,37 @@ async def delete_video_asset(
     if not await asyncio.to_thread(video_repo.delete_asset, user.subject, asset_id):
         raise HTTPException(status_code=404, detail="video asset not found")
     return {"deleted": True}
+
+
+@router.post("/api/video/search")
+async def search_video_scenes(
+    body: VideoSearchRequest,
+    user: Annotated[AuthContext, Depends(require_user)],
+    _: Annotated[None, Depends(require_video)],
+):
+    """場面を横断検索する(specs/20 §4 / 要求4・5・10・11)。
+
+    **返すのは場面**。映像単位に丸めない(tasks/VID-04 禁止事項)。距離とメタデータ条件は
+    同一の SQL で評価し(ADR-0032 決定4)、**しきい値では切らずに順位で返す**
+    (実測で正解と無関係の差が 0.09 しかない。比較ドキュメント §5.5)。
+
+    根拠(要求11)は `hits[].matched` に必ず入る —— なぜその場面が出たのかを利用者が
+    確認できることは要件であり、AI 検索をブラックボックスにしないという方針そのもの。
+    """
+    filters = body.filters.model_dump(exclude_none=True) if body.filters else None
+    try:
+        return await asyncio.to_thread(
+            video_search.search, user.subject,
+            q=body.q, filters=filters,
+            similar_to_scene_id=body.similar_to_scene_id, limit=body.limit,
+        )
+    except video_search.SearchInputError as e:
+        # 条件の誤り(未知のキー・集合外の値・ベクトルの無い場面での類似検索)。
+        # **黙って全件に落とさない**(絞り込めたつもりで別のものを見ることになる)
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except LookupError as e:
+        # 類似検索の起点が無い / 他人のもの。所有者以外に id の存在有無を漏らさない
+        raise HTTPException(status_code=404, detail="video scene not found") from e
+    except video_search.SearchBackendError as e:
+        # 検索語を埋め込めなかった(上流の障害)。利用者が検索語を変えても直らない
+        raise HTTPException(status_code=502, detail=str(e)) from e

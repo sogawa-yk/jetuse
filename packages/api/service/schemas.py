@@ -7,9 +7,9 @@ import される。`validated()` は service/validators.py 側の純粋関数へ
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, StrictInt, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
-from jetuse_core import http_tools, rag_metadata, settings, tts
+from jetuse_core import http_tools, rag_metadata, settings, tts, video_search
 
 from .validators import validate_agent_definition, validate_usecase_definition
 
@@ -242,3 +242,66 @@ class UsecaseDefinition(BaseModel):
 
     def validated(self) -> dict:
         return validate_usecase_definition(self)
+
+
+class VideoSearchFilters(BaseModel):
+    """場面の絞り込み条件(VID-04 / specs/20 §4)。
+
+    **未知のキーを黙って捨てない**(`extra="forbid"`)。誤字が静かに「条件なしの全件」に
+    なると、利用者は絞り込めたつもりで別のものを見る(`jetuse_core.video_search` の
+    `SearchInputError` と同じ考えを、ワイヤの入口にも置く)。
+
+    **空文字は「指定なし」に寄せる。** 画面のフォームは未入力の欄を空文字で送るので、
+    ここで落とすと未入力の欄がひとつでもあるだけで検索が 422 になる。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # 期間。日付だけ("2026-12-31")ならその日を丸ごと含める(video_search._time_bound)
+    captured_from: str | None = Field(default=None, max_length=64)
+    captured_to: str | None = Field(default=None, max_length=64)
+    created_from: str | None = Field(default=None, max_length=64)
+    created_to: str | None = Field(default=None, max_length=64)
+    collection: str | None = Field(default=None, max_length=video_search.VALUE_MAX)
+    category: str | None = Field(default=None, max_length=video_search.VALUE_MAX)
+    rights: str | None = Field(default=None, max_length=video_search.VALUE_MAX)
+    place: str | None = Field(default=None, max_length=video_search.VALUE_MAX)
+    # 集合が決まっている項目も**型は str にする**。許される値は DB の CHECK 制約と
+    # 同じ集合(`video_search._ENUM_FILTERS`)が単一の真実源で、ここに写すと 2 か所を
+    # 揃え続けることになる。集合外の値は core が許容値つきの 422 で返す
+    indoor: str | None = Field(default=None, max_length=video_search.VALUE_MAX)
+    time_of_day: str | None = Field(default=None, max_length=video_search.VALUE_MAX)
+    has_people: bool | None = None
+    tags: list[str] | None = Field(default=None, max_length=video_search.TAGS_MAX)
+    duration_min_ms: StrictInt | None = Field(default=None, ge=0)
+    duration_max_ms: StrictInt | None = Field(default=None, ge=0)
+    analysis_state: str | None = Field(default=None, max_length=video_search.VALUE_MAX)
+    confirmed: bool | None = None
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+
+class VideoSearchRequest(BaseModel):
+    """`POST /api/video/search`(VID-04 / specs/20 §4)。
+
+    `q` と `similar_to_scene_id` の同時指定は `video_search.search` が 422 で弾く
+    (2 つのベクトルの混ぜ方を仕様が決めていない。勝手に決めて片方を捨てない)。
+
+    **未知のキーは filters と同じくここでも弾く**(`extra="forbid"`)。`{"query": "豪雨"}`
+    のような誤字を無視すると、検索語なしの一覧要求として成功し、**利用者が検索した
+    つもりで全場面を見る**(filters だけ塞いでもトップレベルに同じ穴が残る)。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    q: str | None = Field(default=None, max_length=1000)
+    filters: VideoSearchFilters | None = None
+    similar_to_scene_id: str | None = Field(default=None, max_length=64)
+    limit: int = Field(
+        default=video_search.DEFAULT_LIMIT, ge=1, le=video_search.LIMIT_MAX
+    )
