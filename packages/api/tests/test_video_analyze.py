@@ -878,3 +878,64 @@ def test_many_failing_scenes_still_record_a_reason(env, monkeypatch):
     assert result["analysis_state"] == "partial"
     stored = env["db"]["asset"]["error"]
     assert stored and len(stored.encode("utf-8")) <= video.ANALYSIS_ERROR_MAX_BYTES
+
+
+# --- 再分析の世代(VID-03 レビューの引き継ぎ) ---------------------------------
+
+
+def test_a_reanalysis_that_dies_early_leaves_no_scenes_from_the_previous_run(
+    env, monkeypatch
+):
+    """**世代を揃えて置き換える。**
+
+    新しい場面を保存する前(映像の取得・ffmpeg・場面分割)で落ちると、以前は前回の
+    description / tags / screen_text / embedding が残ったまま `analysis_state` だけ
+    今回のものへ動いた。台帳を読んだ側は「いつの分析結果か」を区別できず、検索は
+    消えたはずの前回のベクトルで当て続ける。
+    """
+    use_llm(monkeypatch, [answer(), answer(), answer(), "1 回目の要約。"])
+    va.analyze_asset(OWNER, ASSET)
+    assert [r["d"] for r in env["db"]["scenes"]] == [FULL_ANSWER["description"]] * 3
+
+    def boom(*a, **kw):
+        raise vf.VideoFrameError("映像を取得できませんでした")
+
+    monkeypatch.setattr(vf, "split_claimed_scenes", boom)
+    with pytest.raises(vf.VideoFrameError):
+        va.analyze_asset(OWNER, ASSET)
+
+    assert env["db"]["asset"]["state"] == "failed"
+    assert env["db"]["asset"]["error"]
+    assert env["db"]["scenes"] == []   # 前の世代の記述もベクトルも残さない
+    assert env["db"]["asset"]["summary"] is None
+
+
+def test_a_superseded_run_does_not_wipe_the_scenes_of_the_live_one(env, monkeypatch):
+    """引き継がれた側は**何も消さずに降りる**。ここは破壊的なので印を必ず見る。"""
+    env["db"]["scenes"].append({"id": "live", "s": 0, "e": 1000, "thumb": "t"})
+    env["db"]["asset"].update(state="running", token="live-token")
+    with pytest.raises(video.AnalysisSupersededError):
+        va._begin_analysis(OWNER, ASSET, "stale-token")
+    assert [r["id"] for r in env["db"]["scenes"]] == ["live"]
+
+
+def test_a_broken_vector_only_costs_that_scene_its_embedding(env, monkeypatch):
+    """VID-03 の引き継ぎ: 埋め込みの**値**が壊れていても記述は保存し `partial` にする。
+
+    非数値・NaN・次元違いをそのまま渡すと `array.array` 変換か DB の UPDATE で素の
+    例外になり、「記述は保存して partial」が破れて分析全体が落ちる。
+    """
+    use_llm(monkeypatch, [answer(), answer(), answer(), "要約。"])
+    monkeypatch.setattr(
+        "jetuse_core.embeddings.embed",
+        lambda texts, **kw: [
+            [0.01] * 1024, [float("nan")] + [0.01] * 1023, [0.01] * 3,
+        ],
+    )
+    result = va.analyze_asset(OWNER, ASSET)
+
+    assert result["analysis_state"] == "partial"
+    assert "埋め込みの値が使えない場面が 2 件" in result["analysis_error"]
+    assert all(r["d"] for r in env["db"]["scenes"])          # 記述は残る
+    stored = [r["emb"] for r in env["db"]["scenes"]]
+    assert sum(v is not None for v in stored) == 1           # 壊れた 2 件だけ NULL
