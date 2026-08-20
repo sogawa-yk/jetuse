@@ -29,7 +29,8 @@ import json
 import logging
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import wait as wait_futures
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -160,6 +161,14 @@ _THUMB_CONCURRENCY = 8
 # PAR はバケットに溜まり、映像を消すまで消えない(`video._purge_objects`)。
 _thumb_cache: dict[str, tuple[str, datetime]] = {}
 _thumb_lock = threading.Lock()
+# 発行中のサムネイル。**並行した検索が同じ object の PAR を二重に作らないため**の
+# 引換券(Future)を持つ。一覧で多数のサムネイルを引く画面(VID-06)が一番踏みやすい。
+_thumb_inflight: dict[str, "Future[str | None]"] = {}
+# 先行する発行を待つ上限。**検索 1 回ぶんの合計**であって 1 件あたりではない ——
+# 1 件ずつ上限を掛けると `20 秒 × 件数`(limit=100 なら 30 分超)まで伸び、
+# 「待ちを有限にして検索を固めない」という狙いが成立しない。待ちきれなかった
+# サムネイルは諦める(URL が欠けるだけ。次の検索ではキャッシュから取れる)。
+_THUMB_WAIT_SECONDS = 20
 
 
 class SearchInputError(ValueError):
@@ -196,6 +205,19 @@ def _bool_value(key: str, value: Any) -> bool:
     if not isinstance(value, bool):
         raise SearchInputError(f"{key} must be a boolean")
     return value
+
+
+def _limit_value(value: Any) -> int:
+    """返す件数。**`int()` で変換しない**(API スキーマと違う規則を core に作らない)。
+
+    `int(True)` は 1 なので、変換で受けると `limit: true` が「1 件」として通る。
+    ワイヤの入口は `VideoSearchRequest.limit`(StrictInt)が弾くが、core を直接呼ぶ
+    経路もあるので**同じ規則をここにも置く**。範囲外はクランプする(取得件数が減る
+    だけで検索の意味は壊れない。`video.list_assets` と同じ扱い)。
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SearchInputError("limit must be an integer")
+    return max(1, min(value, LIMIT_MAX))
 
 
 def _int_value(key: str, value: Any) -> int:
@@ -342,13 +364,19 @@ def ranked_sql(where: str, *, exclude_self: bool = False) -> str:
     `no_vector_count` ごと消えてしまう ——「該当が無い」のか「まだ分析されていない」
     のかを分けるための数字が、いちばん必要な場面で失われる。ベクトルの無い行は
     `has_vector DESC` で必ず後ろに寄るので、順位付きの結果が先に埋まる。
+
+    **件数は `FETCH FIRST` で切る前を数える**(`COUNT(*) OVER ()`)。分析関数は行を
+    絞る前に評価されるので、`limit` で切っても全一致件数が残る。返した行数を件数として
+    使うと、1000 件一致・`limit=20` の検索が画面に「20 件中 1 位」と出る ——
+    **画面の件数が嘘になる**(VID-04 の指摘を VID-06 で修正)。
     """
     self_clause = " AND vs.id <> :self_id" if exclude_self else ""
     return f"""
 SELECT {_HIT_COLUMNS},
        CASE WHEN vs.embedding IS NULL THEN 0 ELSE 1 END AS has_vector,
        VECTOR_DISTANCE(vs.embedding, :q, COSINE) AS distance,
-       COUNT(CASE WHEN vs.embedding IS NULL THEN 1 END) OVER () AS no_vector_count
+       COUNT(CASE WHEN vs.embedding IS NULL THEN 1 END) OVER () AS no_vector_count,
+       COUNT(*) OVER () AS match_count
   FROM {_FROM}
 {where}{self_clause}
 ORDER BY has_vector DESC, distance, vs.id
@@ -361,12 +389,16 @@ def filter_sql(where: str) -> str:
 
     ベクトルの有無で場面を外さない —— 分析が終わっていない場面も、条件に合うなら
     一覧に出るのが自然(「一覧から条件を選択して探せる」)。
+
+    件数(`match_count`)は `ranked_sql` と同じく**切る前**を数える。画面は
+    「全 N 件中 M 件を表示」を出すので、返した行数を件数にすると嘘になる。
     """
     return f"""
 SELECT {_HIT_COLUMNS},
        1 AS has_vector,
        CAST(NULL AS NUMBER) AS distance,
-       0 AS no_vector_count
+       0 AS no_vector_count,
+       COUNT(*) OVER () AS match_count
   FROM {_FROM}
 {where}
 ORDER BY va.created_at DESC, vs.asset_id, vs.start_ms
@@ -556,12 +588,15 @@ def _thumb_urls(objects: list[str]) -> dict[str, str]:
     (`video._purge_objects` がまとめて消す)。検索のたびに作ると、同じサムネイルに
     対する PAR が検索回数ぶん積み上がる。
 
-    **並行した検索が同じサムネイルを同時に要求すると、その回数だけ発行される**
-    (キャッシュの確認と登録はロックの中だが、発行そのものは外)。ここを 1 回に
-    まとめるには「発行中」を待たせる仕組みが要るが、**待ちを入れると検索が
-    Object Storage の応答に張り付く** —— PAR が数個余分に増えること(短命・映像の
-    削除でまとめて消える)より、検索が固まることのほうが害が大きい。よって
-    直列の再検索だけを 1 回に畳む。
+    **並行した検索も 1 回に畳む**(VID-04 の指摘 / VID-06 で修正)。発行中の object は
+    引換券(`Future`)を `_thumb_inflight` に置き、後から来た検索はそれを待つ。以前は
+    キャッシュの確認と登録だけをロックで守っており、同じサムネイルを含む検索が並行
+    すると**その回数だけ PAR が積み上がった** —— 一覧で多数のサムネイルを引く画面が
+    一番踏みやすい。待ちが増えるのを嫌って畳まない選択もあり得たが、待つ相手は
+    「自分が出すはずだった REST 往復」そのものなので、待っても遅くならない。
+
+    **待ちは有限**(`_THUMB_WAIT_SECONDS`)。先行が異常に遅ければそのサムネイルだけ
+    諦める(URL が 1 つ欠けるだけで、検索結果は返る)。
 
     **ここが落ちても検索は返す。** 検索の本体は DB で完結しており、サムネイルが
     出ないことと場面が見つからないことは別 —— Object Storage 側の不調で
@@ -571,18 +606,23 @@ def _thumb_urls(objects: list[str]) -> dict[str, str]:
     fresh = now + timedelta(seconds=_THUMB_MARGIN_SECONDS)
     out: dict[str, str] = {}
     todo: list[str] = []
+    waiting: dict[str, Future[str | None]] = {}
     with _thumb_lock:
         for name in {n for n in objects if n}:
             hit = _thumb_cache.get(name)
             if hit and hit[1] > fresh:
                 out[name] = hit[0]
+            elif name in _thumb_inflight:
+                waiting[name] = _thumb_inflight[name]  # 先行の発行を待つ(作らない)
             else:
                 todo.append(name)
+                _thumb_inflight[name] = Future()
         # 期限切れを溜めない(検索した場面のぶんだけ増え続けないように)
         for name, (_, expires) in list(_thumb_cache.items()):
             if expires <= now:
                 del _thumb_cache[name]
     if not todo:
+        _collect_waiting(waiting, out)
         return out
 
     try:
@@ -621,7 +661,45 @@ def _thumb_urls(objects: list[str]) -> dict[str, str]:
                 out[name] = url
     except Exception:  # noqa: BLE001
         logger.exception("video thumbnail URLs unavailable (ignored)")
+    finally:
+        # **引換券を必ず片付ける。** 途中で落ちても、待っている検索を宙吊りにしない
+        # (次の検索がやり直せるよう、発行できなかった object は in-flight から外す)
+        _release_inflight(todo, out)
+    _collect_waiting(waiting, out)
     return out
+
+
+def _release_inflight(names: list[str], issued: dict[str, str]) -> None:
+    """自分が握った引換券を、結果(または失敗の None)を入れて手放す。"""
+    with _thumb_lock:
+        for name in names:
+            future = _thumb_inflight.pop(name, None)
+            if future is not None and not future.done():
+                future.set_result(issued.get(name))
+
+
+def _collect_waiting(
+    waiting: dict[str, "Future[str | None]"], out: dict[str, str]
+) -> None:
+    """先行する発行の結果を受け取る。**待ちきれない/失敗はそのまま欠かす**。
+
+    待つのは**全体で 1 回**(`wait` に全 Future をまとめて渡す)。1 件ずつ
+    `future.result(timeout=...)` を呼ぶと上限が件数ぶん積み上がる。
+    """
+    if not waiting:
+        return
+    wait_futures(list(waiting.values()), timeout=_THUMB_WAIT_SECONDS)
+    for name, future in waiting.items():
+        if not future.done():
+            logger.warning("video thumbnail wait gave up (ignored): %s", name)
+            continue
+        try:
+            url = future.result()
+        except Exception:  # noqa: BLE001 — 理由はログにだけ残す
+            logger.warning("video thumbnail wait failed (ignored): %s", name)
+            continue
+        if url:
+            out[name] = url
 
 
 # --- 検索 ---------------------------------------------------------------------
@@ -728,7 +806,7 @@ def search(
         raise SearchInputError(
             "q と similar_to_scene_id は同時に指定できません(どちらか一方)"
         )
-    limit = max(1, min(int(limit), LIMIT_MAX))
+    limit = _limit_value(limit)
 
     where, binds, applied = build_where(owner, filters)
     binds["lim"] = limit
@@ -756,10 +834,16 @@ def search(
     # (`ranked_sql` の docstring)。並びで後ろに寄せてあるので、順位付きの結果は
     # limit まで埋まっている
     excluded = int(fetched[0]["no_vector_count"]) if fetched else 0
+    matched = int(fetched[0]["match_count"]) if fetched else 0
     rows = [r for r in fetched if r["has_vector"]]
 
     thumbs = _thumb_urls([r["thumb_object"] for r in rows])
-    total = len(rows)
+    # **順位の分母は「返した行数」ではなく全一致件数**(`limit` で切る前)。返した数を
+    # 使うと 1000 件一致・limit=20 の検索が「20 件中 1 位」と出て、画面の件数が嘘になる。
+    # 順位が付くのはベクトルのある場面だけなので、そのぶんを分母から外す。
+    # `max(..., len(rows))` は分析関数が取れない実装(fake / 将来の別バックエンド)でも
+    # 「返した件数より小さい分母」という辻褄の合わない数を出さないための下限。
+    total = max(matched - excluded, len(rows))
     hits = [
         _hit(row, thumbs, _reason(
             row, applied=applied, query=query,
@@ -770,6 +854,11 @@ def search(
     return {
         "mode": mode,
         "hits": hits,
+        # 全一致件数(順位を付けられた場面)と、そのうち今回返した件数。画面は
+        # 「全 N 件中 M 件を表示」をこの 2 つから出す —— 返した件数だけでは
+        # 「これで全部なのか、続きがあるのか」が判らない
+        "total": total,
+        "returned": len(hits),
         # 条件には一致したが**ベクトルが無くて順位を付けられなかった**件数。
         # 0 件の理由が「該当が無い」のか「まだ分析されていない」のかを分ける
         "excluded_no_vector": excluded,

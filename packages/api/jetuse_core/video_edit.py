@@ -176,6 +176,20 @@ def embedding_source(scene: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# 競合検査で突き合わせる項目。**人が直せる項目 + 埋め込みに載る項目**。
+# `source` / `confirmed_at` は入れない —— 中身が動いていない「確認」まで競合にすると、
+# 確認済みの場面を直せなくなる(確認は誰の修正も消さない)。
+_CONFLICT_FIELDS = (*EDITABLE_FIELDS, "objects", "actions", "weather")
+
+
+def _content_fingerprint(scene: dict[str, Any]) -> str:
+    """その場面の**中身**の印。読んだときと書く直前で比べ、動いていれば競合とする。"""
+    return json.dumps(
+        {f: _as_text(scene.get(f)) for f in _CONFLICT_FIELDS},
+        ensure_ascii=False, sort_keys=True,
+    )
+
+
 def _db_value(field: str, value: Any) -> Any:
     """列に渡す値。JSON 列だけ文字列にする(日本語はそのまま持つ)。"""
     if field == "tags":
@@ -268,8 +282,8 @@ def _as_text(value: Any) -> str | None:
 # --- 埋め込みの作り直し -------------------------------------------------------
 
 
-def _reembed(scene: dict[str, Any]) -> tuple[array.array | None, str | None, str]:
-    """直した場面のベクトルを作り直す。(ベクトル, 失敗理由, 載せた文字列) を返す。
+def _reembed(scene: dict[str, Any]) -> tuple[array.array | None, str | None]:
+    """直した場面のベクトルを作り直す。(ベクトル, 失敗理由) を返す。
 
     **落ちても編集は捨てない。** 埋め込みは検索に効かせるための派生物で、人が直した
     内容そのものではない。作れなければベクトルを NULL にして理由を返し、編集は保存する
@@ -280,17 +294,17 @@ def _reembed(scene: dict[str, Any]) -> tuple[array.array | None, str | None, str
     """
     text = video_analyze.embedding_text(embedding_source(scene))
     if not text.strip():
-        return None, "埋め込みに載せる文字がありません", text
+        return None, "埋め込みに載せる文字がありません"
     try:
         vectors = embeddings.embed([text])
     except Exception as e:  # noqa: BLE001 — 認証・429・タイムアウト・サービス障害
-        return None, f"埋め込みの生成に失敗: {str(e)[:200]}", text
+        return None, f"埋め込みの生成に失敗: {str(e)[:200]}"
     if len(vectors) != 1:
-        return None, f"埋め込みが 1 件ではありません({len(vectors)} 件)", text
+        return None, f"埋め込みが 1 件ではありません({len(vectors)} 件)"
     try:
-        return embeddings.as_vector(vectors[0]), None, text
+        return embeddings.as_vector(vectors[0]), None
     except ValueError as e:
-        return None, f"埋め込みの値が使えません: {e}", text
+        return None, f"埋め込みの値が使えません: {e}"
 
 
 # --- 修正 ---------------------------------------------------------------------
@@ -302,23 +316,30 @@ def patch_scene(
     """場面のメタデータを直し、`source` を `human` にする(specs/20 §5 / 要求8)。
 
     埋め込みは**トランザクションの外**で作る(上流への往復。行を掴んだまま待たない)。
-    そのぶん作っている間に中身が変わり得るので、書く直前に掴み直した行から同じ文字列を
-    組み立て、食い違えば `SceneChangedError` で降りる —— **直した内容と埋め込みが
-    食い違う状態を作らない**。
+    そのぶん作っている間に中身が変わり得るので、書く直前に掴み直した行を
+    **読んだときの中身**と突き合わせ、動いていれば `SceneChangedError` で降りる ——
+    直した内容と埋め込みが食い違う状態を作らず、かつ**先行した別リクエストの修正を
+    黙って消さない**。
+
+    **突き合わせるのは「書いたあと」ではなく「読んだとき」**(VID-05 の指摘 /
+    VID-06 で修正)。以前は上書き後の値から埋め込み文字列を作り直して比べていたが、
+    それだと**自分が直す項目**を相手が先に直していたときに、自分の値が相手の値を
+    覆い隠して食い違いが消える。画面は編集フォームから続けて保存できるので、
+    後から押した保存が相手の修正を消していた。
     """
     values = normalize_edits(changes)
 
     with connect() as conn:
         scene = _load_scene(conn.cursor(), owner, scene_id, lock=False)
     _reject_while_analyzing(scene)
-    vector, embed_error, text = _reembed({**scene, **values})
+    base = _content_fingerprint(scene)
+    vector, embed_error = _reembed({**scene, **values})
 
     with connect() as conn:
         cur = conn.cursor()
         current = _load_scene(cur, owner, scene_id, lock=True)
         _reject_while_analyzing(current)
-        merged = {**current, **values}
-        if video_analyze.embedding_text(embedding_source(merged)) != text:
+        if _content_fingerprint(current) != base:
             raise SceneChangedError(scene_id)
 
         sets = ", ".join(f"{f} = :{f}" for f in values)

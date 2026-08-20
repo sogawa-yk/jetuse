@@ -336,6 +336,49 @@ def test_a_scene_that_changed_under_us_is_a_conflict(env, monkeypatch):
     assert env["db"]["scenes"][SCENE]["place"] == "unknown"  # 1 列も書いていない
 
 
+def test_a_concurrent_edit_of_the_same_field_is_a_conflict(env, monkeypatch):
+    """**先行した別リクエストの更新を見落とさない**(VID-05 の指摘 / VID-06 で修正)。
+
+    上書き後の値から文字列を作り直して比べると、**自分が直す項目**を相手が先に
+    直していた場合に食い違いが消える(自分の値が相手の値を覆い隠す)。画面は編集
+    フォームから続けて保存できるので、後から押した保存が相手の修正を黙って消す。
+    比べるのは「読んだときの中身」であって「書いたあとの中身」ではない。
+    """
+    def racing_embed(texts, **kw):
+        env["db"]["scenes"][SCENE]["description"] = "別の誰かが先に直した説明。"
+        return [[0.02] * embeddings.EMBED_DIM]
+
+    monkeypatch.setattr(embeddings, "embed", racing_embed)
+    with pytest.raises(video_edit.SceneChangedError):
+        video_edit.patch_scene(OWNER, SCENE, {"description": "こちらが直した説明。"})
+    assert env["db"]["scenes"][SCENE]["description"] == "別の誰かが先に直した説明。"
+
+
+def test_a_concurrent_tag_edit_is_a_conflict(env, monkeypatch):
+    """埋め込みに載らない形の重なりも見る(同じ項目を同時に直したこと自体が競合)。"""
+    def racing_embed(texts, **kw):
+        env["db"]["scenes"][SCENE]["tags"] = '["先に付いたタグ"]'
+        return [[0.02] * embeddings.EMBED_DIM]
+
+    monkeypatch.setattr(embeddings, "embed", racing_embed)
+    with pytest.raises(video_edit.SceneChangedError):
+        video_edit.patch_scene(OWNER, SCENE, {"tags": ["こちらのタグ"]})
+
+
+def test_an_unrelated_confirm_does_not_block_the_edit(env, monkeypatch):
+    """**何でも 409 にはしない。** 中身が動いていない確認(`confirmed_at`)は競合ではない
+    —— そこまで弾くと、確認済みの場面を直せなくなる。"""
+    def racing_confirm(texts, **kw):
+        env["db"]["scenes"][SCENE]["source"] = "ai_confirmed"
+        env["db"]["scenes"][SCENE]["confirmed_at"] = "2026-08-20T09:30:00Z"
+        return [[0.02] * embeddings.EMBED_DIM]
+
+    monkeypatch.setattr(embeddings, "embed", racing_confirm)
+    res = video_edit.patch_scene(OWNER, SCENE, {"description": "直した説明です。"})
+    assert res["embedding_state"] == "ok"
+    assert env["db"]["scenes"][SCENE]["description"] == "直した説明です。"
+
+
 # --- 履歴(何を誰がいつ) -------------------------------------------------------
 
 
