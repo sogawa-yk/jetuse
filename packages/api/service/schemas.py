@@ -320,6 +320,9 @@ class VideoSearchRequest(BaseModel):
     q: str | None = Field(default=None, max_length=1000)
     filters: VideoSearchFilters | None = None
     similar_to_scene_id: str | None = Field(default=None, max_length=64)
-    limit: int = Field(
+    # **`StrictInt`。** 素の `int` は lax モードで `true` を 1 に、`"20"` を 20 に
+    # 変換するので、`{"limit": true}` が「1 件」として通ってしまう(core の
+    # `_limit_value` と規則が食い違う)。件数は文字列でも真偽値でもない。
+    limit: StrictInt = Field(
         default=video_search.DEFAULT_LIMIT, ge=1, le=video_search.LIMIT_MAX
     )

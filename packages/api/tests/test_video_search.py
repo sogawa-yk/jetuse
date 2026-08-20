@@ -55,7 +55,17 @@ class FakeCursor:
             return
         self.cols = _aliases(self.db["sql"])
         rows = self.db["rows"]
-        self.rows = [tuple(r.get(c) for c in self.cols) for r in rows[: binds["lim"]]]
+
+        def cell(row, col):
+            # `COUNT(*) OVER ()` は **`FETCH FIRST` で切る前の全一致件数**。
+            # 行が明示していなければ fake の DB 全体の件数を返す(実 SQL と同じ意味)。
+            if col == "match_count" and col not in row:
+                return len(rows)
+            return row.get(col)
+
+        self.rows = [
+            tuple(cell(r, c) for c in self.cols) for r in rows[: binds["lim"]]
+        ]
 
     @property
     def description(self):
@@ -335,7 +345,10 @@ def test_filter_only_search_does_not_drop_scenes_without_vectors(env):
 def test_zero_hits_returns_an_empty_list_not_an_error(env):
     env["rows"] = []
     res = video_search.search(OWNER, q="豪雨", filters={"place": "存在しない場所"})
-    assert res == {"mode": "vector", "hits": [], "excluded_no_vector": 0}
+    assert res == {
+        "mode": "vector", "hits": [], "total": 0, "returned": 0,
+        "excluded_no_vector": 0,
+    }
 
 
 def test_zero_hits_for_filter_only(env):
@@ -709,3 +722,138 @@ def test_route_503_when_bucket_not_configured(monkeypatch):
 
     monkeypatch.setattr(deps, "get_settings", lambda: SimpleNamespace(video_bucket=""))
     assert client.post("/api/video/search", json={}).status_code == 503
+
+
+# --- 件数(VID-06 で引き継いだ指摘) --------------------------------------------
+
+
+def test_reason_counts_every_match_not_just_the_returned_rows(env):
+    """「N 件中」の N は**全一致件数**。返した行数を使うと画面の件数が嘘になる。
+
+    1000 件一致していて limit=20 なら「1000 件中 1 位」であって「20 件中 1 位」ではない。
+    """
+    env["rows"] = [
+        scene(scene_id="a", distance=0.501, match_count=1000),
+        scene(scene_id="b", distance=0.610, match_count=1000),
+    ]
+    hits = video_search.search(OWNER, q="豪雨", limit=2)["hits"]
+    assert "1000 件中 1 位" in hits[0]["matched"]["reason"]
+    assert "1000 件中 2 位" in hits[1]["matched"]["reason"]
+
+
+def test_reason_count_excludes_matches_without_a_vector(env):
+    """順位を付けられない場面は分母に入れない(順位は付いた側の中の順位)。"""
+    env["rows"] = [
+        scene(scene_id="a", distance=0.5, match_count=10, no_vector_count=3),
+    ]
+    hits = video_search.search(OWNER, q="豪雨")["hits"]
+    assert "7 件中 1 位" in hits[0]["matched"]["reason"]
+
+
+def test_response_reports_total_and_returned_counts(env):
+    """画面が「全 N 件中 M 件」を出せるように、応答が件数を持つ。"""
+    env["rows"] = [scene(scene_id="a", match_count=1000, no_vector_count=4)]
+    res = video_search.search(OWNER, q="豪雨", limit=1)
+    assert res["total"] == 996
+    assert res["returned"] == 1
+    assert res["excluded_no_vector"] == 4
+
+
+def test_similar_search_counts_every_match(env):
+    env["vectors"] = {"s1": "raw"}
+    env["rows"] = [scene(scene_id="other", distance=0.2, match_count=42)]
+    hit = video_search.search(OWNER, similar_to_scene_id="s1")["hits"][0]
+    assert "42 件中 1 位" in hit["matched"]["reason"]
+
+
+def test_filter_only_search_reports_the_total(env):
+    env["rows"] = [scene(scene_id="a", match_count=7, distance=None)]
+    res = video_search.search(OWNER, filters={"indoor": "outdoor"}, limit=1)
+    assert res["total"] == 7 and res["returned"] == 1
+
+
+def test_limit_must_be_an_integer_not_a_bool(env):
+    """`True` が 1 件として通ると、API スキーマと違う規則が core にだけできる。"""
+    for bad in (True, False, "5", 3.0, None):
+        with pytest.raises(video_search.SearchInputError):
+            video_search.search(OWNER, q="豪雨", limit=bad)
+
+
+def test_route_rejects_a_boolean_limit(routed):
+    assert client.post(
+        "/api/video/search", json={"limit": True}
+    ).status_code == 422
+    assert client.post(
+        "/api/video/search", json={"limit": "20"}
+    ).status_code == 422
+
+
+def test_concurrent_searches_issue_one_par_per_object(storage):
+    """**同じサムネイルを並行して引いても PAR は 1 つ**。
+
+    PAR はバケットに溜まり、映像を消すまで消えない。一覧で多数のサムネイルを引く
+    画面(VID-06)が一番踏みやすい経路なので、発行を 1 回に畳む。
+    """
+    import threading
+
+    names = [f"video/o/a1/thumb/g/scene-{i:04d}.jpg" for i in range(5)]
+    start = threading.Barrier(4)
+    results: list[dict[str, str]] = []
+    lock = threading.Lock()
+
+    def call():
+        start.wait(timeout=10)
+        got = video_search._thumb_urls(names)
+        with lock:
+            results.append(got)
+
+    threads = [threading.Thread(target=call) for _ in range(4)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(timeout=30)
+        assert not th.is_alive()
+
+    assert sorted(storage.created) == sorted(names)  # 重複発行なし
+    assert len(results) == 4
+    for got in results:
+        assert set(got) == set(names)
+        assert got == results[0]  # 同じ URL を配る
+
+
+def test_thumb_failure_does_not_leave_waiters_stuck(storage):
+    """発行に失敗しても、待っている側が固まらない(次の検索で作り直せる)。"""
+    storage.fail = True
+    assert video_search._thumb_urls(["video/o/a1/thumb/g/scene-0001.jpg"]) == {}
+    storage.fail = False
+    got = video_search._thumb_urls(["video/o/a1/thumb/g/scene-0001.jpg"])
+    assert got["video/o/a1/thumb/g/scene-0001.jpg"].startswith("https://")
+
+
+def test_waiting_for_other_searches_is_bounded_in_total(storage, monkeypatch):
+    """**待ちの上限は検索 1 回ぶんの合計**(1 件あたりではない)。
+
+    1 件ずつ上限を掛けると `上限 × 件数` まで伸び、limit=100 の検索が実質固まる
+    (VID-06 の Codex review-2 の major)。
+    """
+    import time
+    from concurrent.futures import Future
+
+    monkeypatch.setattr(video_search, "_THUMB_WAIT_SECONDS", 0.3)
+    names = [f"video/o/a1/thumb/g/stuck-{i:04d}.jpg" for i in range(8)]
+    # 別の検索が発行中(いつまでも終わらない)状態を作る
+    with video_search._thumb_lock:
+        for name in names:
+            video_search._thumb_inflight[name] = Future()
+    try:
+        started = time.monotonic()
+        got = video_search._thumb_urls(names)
+        elapsed = time.monotonic() - started
+    finally:
+        with video_search._thumb_lock:
+            for name in names:
+                video_search._thumb_inflight.pop(name, None)
+
+    assert got == {}  # 待ちきれなかったぶんは欠かす(検索自体は返る)
+    assert elapsed < 0.3 * 3, f"待ちが件数ぶん積み上がっている: {elapsed:.2f}s"
+    assert not storage.created  # 待っている相手のぶんを重ねて発行しない
