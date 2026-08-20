@@ -13,7 +13,7 @@ status: `todo` | `in_progress` | `blocked` | `done`
 
 | 順 | タスク | 依存 | 人間ゲート | status |
 |---|---|---|---|---|
-| 1 | [VID-01 映像の保管と登録](VID-01.md) | — | バケット追加の apply + コミット | todo |
+| 1 | [VID-01 映像の保管と登録](VID-01.md) | — | バケット追加の apply（**済 2026-08-19**）+ コミット | done |
 | 2 | [VID-02 場面分割とフレーム抽出](VID-02.md) | VID-01 | コミット | todo |
 | 3 | [VID-03 AI 分析（2層）](VID-03.md) | VID-02 | **IAM 追加の承認** + コミット | todo |
 | 4 | [VID-04 場面の横断検索](VID-04.md) | VID-03 | コミット | todo |
