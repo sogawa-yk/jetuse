@@ -63,19 +63,47 @@ ANALYSIS_ERROR_MAX_BYTES = 4000
 # 付けて「どの時間帯の値か」を明示する。付けないと "2026-08-19T10:00:00" が受け手の
 # ローカル時刻と解釈されて 9 時間ずれる。**AT TIME ZONE は使わない** —— 素の TIMESTAMP に
 # 掛けるとセッションの時間帯で解釈されてから変換され、UTC で入れた値が動く。
-_TS = "TO_CHAR({col}, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')"
+TS_UTC = "TO_CHAR({col}, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')"
 _ASSET_COLUMNS = (
-    "id, title, " + _TS.format(col="created_at") + ", duration_ms, "
-    "collection, category, rights, " + _TS.format(col="captured_at") + ", "
+    "id, title, " + TS_UTC.format(col="created_at") + ", duration_ms, "
+    "collection, category, rights, " + TS_UTC.format(col="captured_at") + ", "
     "analysis_state, analysis_error, vision_state, object_name, thumb_object, summary"
 )
 
 
-_SCENE_COLUMNS = (
-    "id, start_ms, end_ms, description, tags, objects, people, actions, place, "
-    "scene_kind, indoor, time_of_day, weather, screen_text, thumb_object, source, "
-    + _TS.format(col="confirmed_at")
+# 場面の列と、行 → dict の変換は**1 か所に持つ**。詳細(get_asset)と編集(video_edit)が
+# 別々に並べると、列を足したときに片方だけが返す形になる(利用者から見れば同じ「場面」)。
+_SCENE_COLUMN_NAMES = (
+    "id", "start_ms", "end_ms", "description", "tags", "objects", "people", "actions",
+    "place", "scene_kind", "indoor", "time_of_day", "weather", "screen_text",
+    "thumb_object", "source",
 )
+
+
+def scene_columns(prefix: str = "") -> str:
+    """SELECT に並べる場面の列。`prefix` は結合時の別名(例 `"s."`)。"""
+    return ", ".join(prefix + c for c in _SCENE_COLUMN_NAMES) + ", " + TS_UTC.format(
+        col=prefix + "confirmed_at"
+    )
+
+
+def row_to_scene(row: tuple) -> dict[str, Any]:
+    """`scene_columns()` の並びの行を dict に。
+
+    JSON 列(tags/objects/people/actions)は**文字列のまま返す**。中身を作るのは分析側で、
+    ここで parse すると壊れた値を API 全体の 500 に変えてしまう(`IS JSON` で入口は守られ、
+    壊れていることは利用者が見て判る)。
+    """
+    scene = dict(zip(_SCENE_COLUMN_NAMES, row[:len(_SCENE_COLUMN_NAMES)], strict=True))
+    scene["confirmed_at"] = row[len(_SCENE_COLUMN_NAMES)]
+    return scene
+
+
+# `scene_columns()` が並べる列の数(末尾の confirmed_at ぶんを足す)。結合した SELECT で
+# 場面の後ろに別の列を足すとき、位置を数え直さずに済ませるため。
+SCENE_COLUMN_COUNT = len(_SCENE_COLUMN_NAMES) + 1
+
+_SCENE_COLUMNS = scene_columns()
 
 
 class AnalysisInProgressError(RuntimeError):
@@ -295,19 +323,7 @@ def get_asset(owner: str, asset_id: str) -> dict[str, Any] | None:
             " WHERE asset_id = :id ORDER BY start_ms",
             id=asset_id,
         )
-        asset["scenes"] = [
-            {
-                # JSON 列(tags/objects/people/actions)は**文字列のまま返す**。
-                # 中身を作るのは後続の分析タスクで、ここで parse すると壊れた値を
-                # 詳細 API 全体の 500 に変えてしまう(IS JSON で入口は守っている)
-                "id": r[0], "start_ms": r[1], "end_ms": r[2], "description": r[3],
-                "tags": r[4], "objects": r[5], "people": r[6], "actions": r[7],
-                "place": r[8], "scene_kind": r[9], "indoor": r[10],
-                "time_of_day": r[11], "weather": r[12], "screen_text": r[13],
-                "thumb_object": r[14], "source": r[15], "confirmed_at": r[16],
-            }
-            for r in cur.fetchall()
-        ]
+        asset["scenes"] = [row_to_scene(r) for r in cur.fetchall()]
         return asset
 
 

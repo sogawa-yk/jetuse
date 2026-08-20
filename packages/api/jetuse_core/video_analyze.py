@@ -412,6 +412,22 @@ def _begin_analysis(owner: str, asset_id: str, token: str) -> None:
     失敗すると `summary` は書かれない(`_save_analysis` は None を書かない)ので、
     消さないと `analysis_state` が `partial` / `failed` なのに前回成功時の要約が
     そのまま残る。NULL は「まだ無い」の意味なので、ここで戻すのが筋が通る。
+
+    **場面も同じ 1 トランザクションで消す**(VID-03 レビューの major)。要約だけを消すと、
+    新しい場面を保存する前(映像の取得・ffmpeg・場面分割)で落ちたときに、**前回の
+    description / tags / screen_text / embedding が残ったまま `analysis_state` だけ
+    今回のものへ動く**。台帳を読んだ側は「いつの分析結果か」を区別できず、検索
+    (specs/20 §4)は消えたはずの前回のベクトルで当て続ける。
+    **世代を揃えて置き換える** —— 今回の分析が始まった時点で、前の世代の結果は無い。
+
+    代償として、再分析が途中で落ちると前回の場面も残らない。それでよい:
+    `analysis_state` = `failed` + 理由(specs/20 §3)が「取れなかった」を示すのに対し、
+    古い場面を残すと画面には**成功したときと同じ見た目**で前回の結果が並ぶ。
+    「分析済み」と「分析したが取れなかった」を同じ表示にしない、が仕様の要求。
+
+    権利の印が合わなければ**何も消さずに降りる**。ここは破壊的なので、
+    `UPDATE` の rowcount を必ず見る —— 引き継がれた側がそのまま DELETE を撃つと、
+    新しい実行が入れたばかりの場面を消してしまう。
     """
     with connect() as conn:
         cur = conn.cursor()
@@ -420,6 +436,15 @@ def _begin_analysis(owner: str, asset_id: str, token: str) -> None:
             " WHERE id = :id AND owner_sub = :o AND analysis_token = :tok",
             id=asset_id, o=owner, tok=token,
         )
+        if cur.rowcount == 0:
+            cur.execute(
+                "SELECT 1 FROM video_assets WHERE id = :id AND owner_sub = :o",
+                id=asset_id, o=owner,
+            )
+            if cur.fetchone() is None:
+                raise LookupError(asset_id)
+            raise video.AnalysisSupersededError(asset_id)
+        cur.execute("DELETE FROM video_scenes WHERE asset_id = :id", id=asset_id)
         conn.commit()
 
 
@@ -446,7 +471,7 @@ def _save_analysis(
     owner: str,
     asset_id: str,
     token: str,
-    described: list[tuple[str, dict[str, Any], list[float] | None]],
+    described: list[tuple[str, dict[str, Any], array.array | None]],
     summary: str | None,
 ) -> None:
     """場面の記述・埋め込みと映像の要約を1トランザクションで書く。
@@ -489,7 +514,10 @@ def _save_analysis(
                 kind=meta["scene_kind"], indoor=meta["indoor"],
                 tod=meta["time_of_day"], weather=meta["weather"],
                 text=meta["screen_text"],
-                emb=array.array("f", vector) if vector is not None else None,
+                # ベクトルは `_embed_scenes` が検証済み(`embeddings.as_vector`)。
+                # ここで変換しないのは、壊れた値の例外をこの 1 トランザクションの
+                # 途中で上げないため —— 場面の記述ごと巻き添えで落ちる
+                emb=vector,
                 id=scene_id, asset=asset_id,
             )
         if summary is not None:
@@ -559,15 +587,20 @@ def _describe_all(
 
 def _embed_scenes(
     described: list[tuple[str, dict[str, Any]]]
-) -> tuple[list[list[float] | None], str | None]:
+) -> tuple[list[array.array | None], str | None]:
     """場面ごとの埋め込み(`cohere.embed-multilingual-v3.0` / 1024 次元)。
 
     落ちても記述は保存する。**埋め込みだけ失敗した場面をベクトル無しで残す**ほうが、
     説明ごと捨てるより利用者の役に立つ(検索に出ないことは `partial` の理由で判る)。
+
+    **件数だけでなく値も検べる**(`embeddings.as_vector` / VID-03 レビューの major)。
+    非数値・NaN/Infinity・次元違いをそのまま通すと、`array.array` 変換か DB の UPDATE で
+    素の例外になり、上の「記述は保存して `partial`」が破れて分析全体が落ちる。
+    壊れていたのがどの場面かは理由に残す —— 黙って全部をベクトル無しにしない。
     """
     if not described:
         return [], None
-    from .embeddings import embed
+    from .embeddings import as_vector, embed
 
     try:
         vectors = embed([embedding_text(m) for _, m in described])
@@ -578,7 +611,20 @@ def _embed_scenes(
             [None] * len(described),
             f"埋め込みの件数が場面数と合いません({len(vectors)} != {len(described)})",
         )
-    return list(vectors), None
+    out: list[array.array | None] = []
+    broken: list[str] = []
+    for (_, meta), vector in zip(described, vectors, strict=True):
+        try:
+            out.append(as_vector(vector))
+        except ValueError as e:
+            out.append(None)
+            broken.append(f"{meta['description'][:20]}…: {e}")
+    if broken:
+        return out, (
+            f"埋め込みの値が使えない場面が {len(broken)} 件ありました: "
+            + " / ".join(broken[:3])
+        )
+    return out, None
 
 
 def analyze_asset(

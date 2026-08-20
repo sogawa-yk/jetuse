@@ -128,6 +128,24 @@ class MinutesGenerateRequest(BaseModel):
     model: str = "gpt-oss-120b"
 
 
+class VideoSceneEdit(BaseModel):  # VID-05 (specs/20 §5)
+    """場面メタデータの修正。**送られた項目だけ**を直す(`exclude_unset`)。
+
+    `extra="forbid"` にするのは、直せない項目(objects / indoor など)を送ったときに
+    **黙って捨てない**ため。捨てると「直したのに変わらない」が起きて理由が判らない。
+    値そのものの検証(空文字・列幅・タグの型)は `jetuse_core.video_edit.normalize_edits`
+    が持つ —— HTTP とサービス層で二重に持つと、片方だけ直したときに食い違う。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    description: str | None = None
+    tags: list[str] | None = None
+    screen_text: str | None = None
+    place: str | None = None
+    scene_kind: str | None = None
+
+
 class SttSessionCreate(BaseModel):
     language: str = Field(default="ja", pattern=r"^[a-z]{2,3}(-[A-Z]{2})?$")  # VOICE-02
 

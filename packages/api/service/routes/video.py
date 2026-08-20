@@ -1,7 +1,5 @@
-"""映像の登録・一覧・詳細・削除・再生 URL / 分析 / 場面の横断検索
-(VID-01 / VID-03 / VID-04 / specs/20 §2 §3 §4)。
-
-場面の編集(§5)は後続タスク(VID-05)。
+"""映像の登録・一覧・詳細・削除・再生 URL / 分析 / 場面の横断検索 / 場面メタデータの確認・修正
+(VID-01 / VID-03 / VID-04 / VID-05 / specs/20 §2 §3 §4 §5)。
 """
 
 import asyncio
@@ -13,11 +11,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 
 from jetuse_core import video as video_repo
-from jetuse_core import video_analyze, video_frames, video_search
+from jetuse_core import video_analyze, video_edit, video_frames, video_search
 from jetuse_core.auth import AuthContext, require_user
 
 from ..deps import require_video
-from ..schemas import VideoSearchRequest
+from ..schemas import VideoSceneEdit, VideoSearchRequest
 
 logger = logging.getLogger("jetuse.service")
 router = APIRouter()
@@ -231,3 +229,90 @@ async def search_video_scenes(
     except video_search.SearchBackendError as e:
         # 検索語を埋め込めなかった(上流の障害)。利用者が検索語を変えても直らない
         raise HTTPException(status_code=502, detail=str(e)) from e
+
+# --- 場面メタデータの確認・修正(VID-05 / specs/20 §5 / 要求8) -----------------
+
+
+def _scene_http(fn, *args):
+    """場面の編集系で共通の失敗の写し方。**理由ごとに違う番号を返す**。
+
+    404 = 無い/他人のもの(所有者以外に存在を漏らさない)、409 = 分析中か、その場面が
+    途中で作り直された(やり直せば通る)、422 = 送られた値が受け取れない(直せる)。
+    ここを 1 か所に集めるのは、3 つのルートで対応付けがずれると
+    「同じ失敗なのに画面の出方が違う」が起きるため。
+    """
+    try:
+        return fn(*args)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail="video scene not found") from e
+    except video_repo.AnalysisInProgressError as e:
+        raise HTTPException(
+            status_code=409,
+            detail="この映像は分析中です。分析は場面を作り直すため、いまの修正は残りません",
+        ) from e
+    except video_edit.SceneChangedError as e:
+        raise HTTPException(
+            status_code=409,
+            detail="この場面は編集中に変わりました。取り直してからやり直してください",
+        ) from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+
+@router.patch("/api/video/scenes/{scene_id}")
+async def patch_video_scene(
+    scene_id: str,
+    req: VideoSceneEdit,
+    user: Annotated[AuthContext, Depends(require_user)],
+    _: Annotated[None, Depends(require_video)],
+):
+    """場面のメタデータを直す。**`source` は `human` になり、埋め込みを作り直す**。
+
+    送られた項目だけを直す(`exclude_unset`)。埋め込みを作り直せなかった場合も編集は
+    保存し、`embedding_state = "failed"` と理由を返す —— 直した内容を上流の障害で
+    捨てない。古いベクトルは残さない(直したのに古い説明で当たり続けることになる)。
+    """
+    changes = req.model_dump(exclude_unset=True)
+    return await asyncio.to_thread(
+        _scene_http, video_edit.patch_scene, user.subject, scene_id, changes
+    )
+
+
+@router.post("/api/video/scenes/{scene_id}/confirm")
+async def confirm_video_scene(
+    scene_id: str,
+    user: Annotated[AuthContext, Depends(require_user)],
+    _: Annotated[None, Depends(require_video)],
+):
+    """人が確認したことを残す(`ai` → `ai_confirmed`)。中身は変えない。"""
+    return await asyncio.to_thread(
+        _scene_http, video_edit.confirm_scene, user.subject, scene_id
+    )
+
+
+@router.get("/api/video/scenes/{scene_id}/edits")
+async def list_video_scene_edits(
+    scene_id: str,
+    user: Annotated[AuthContext, Depends(require_user)],
+    _: Annotated[None, Depends(require_video)],
+    limit: int = 100,
+):
+    """その場面の修正履歴(何を誰がいつ)。**残した記録を読めるようにする。**"""
+    edits = await asyncio.to_thread(
+        _scene_http, video_edit.list_edits, user.subject, scene_id, limit
+    )
+    return {"edits": edits}
+
+
+@router.delete("/api/video/scenes/{scene_id}")
+async def delete_video_scene(
+    scene_id: str,
+    user: Annotated[AuthContext, Depends(require_user)],
+    _: Annotated[None, Depends(require_video)],
+):
+    """不適切なメタデータを場面ごと消す(specs/20 §5)。履歴も一緒に消える。"""
+    if not await asyncio.to_thread(
+        _scene_http, video_edit.delete_scene, user.subject, scene_id
+    ):
+        raise HTTPException(status_code=404, detail="video scene not found")
+    return {"deleted": True}
