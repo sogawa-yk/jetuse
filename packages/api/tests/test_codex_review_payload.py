@@ -30,8 +30,10 @@ def _extract_attach_block(src: str) -> str:
     スクリプト全体は codex を実際に呼ぶので走らせられない。添付部分だけを切り出して
     同じ shell で評価する。切り出せなくなったら（＝構造が変わったら）テストは失敗する。
     """
-    m = re.search(r"(find \"\$E2E_DIR\" -type f \| sort \| while read -r ef; do.*?\nPYATTACH\n    done)",
-                  src, re.S)
+    m = re.search(
+        r"(find \"\$E2E_DIR\" -type f \| sort \| while read -r ef; do.*?\nPYATTACH\n    done)",
+        src, re.S,
+    )
     assert m, "証跡添付のループを見つけられない（run_codex_review.sh の構造が変わった）"
     return m.group(1)
 
@@ -130,7 +132,8 @@ def test_truncation_is_disclosed(tmp_path):
 
 def test_detection_fails_when_byte_truncation_returns(tmp_path):
     """**バイト切りに戻したら落ちること**を確かめる（テストが実効か）。"""
-    d = tmp_path / "e2e"; d.mkdir(parents=True, exist_ok=True)
+    d = tmp_path / "e2e"
+    d.mkdir(parents=True, exist_ok=True)
     (d / "long.txt").write_bytes(("これは日本語の証跡です。" * 800).encode("utf-8"))
     naive = f'find "{d}" -type f | sort | while read -r ef; do tail -c 8000 "$ef"; done'
     r = subprocess.run(["bash", "-c", naive], capture_output=True)
@@ -143,7 +146,8 @@ def test_detection_fails_when_byte_truncation_returns(tmp_path):
 
 def test_detection_fails_when_binary_guard_is_removed(tmp_path):
     """**ガードを外したら壊れること**を確かめる（テストが実効か）。"""
-    d = tmp_path / "e2e"; d.mkdir(parents=True, exist_ok=True)
+    d = tmp_path / "e2e"
+    d.mkdir(parents=True, exist_ok=True)
     (d / "shot.png").write_bytes(PNG)
     naive = f'find "{d}" -type f | sort | while read -r ef; do tail -c 8000 "$ef"; done'
     r = subprocess.run(["bash", "-c", naive], capture_output=True)

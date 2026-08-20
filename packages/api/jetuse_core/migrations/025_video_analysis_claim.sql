@@ -1,0 +1,15 @@
+-- VID-02 分析の入口を1本にするための列(specs/20 §3「同時実行の範囲」)。
+--
+-- 「1つの映像に対する分析は同時に1つだけ」を、`analysis_state` を条件に含めた
+-- アトミックな UPDATE(`... WHERE analysis_state <> 'running'`)で実現する。
+-- 取れなかった側は 409 になる。
+--
+-- `analysis_started_at` は**取り残された running を引き継ぐため**に要る。条件が
+-- `analysis_state <> 'running'` だけだと、分析中にプロセスが落ちた映像は
+-- `running` のまま固まり、**二度と再分析できなくなる**(要求8 の「再分析の依頼」が
+-- 死ぬ)。開始時刻を持てば「十分に古い running は引き継いでよい」と言える。
+--
+-- **1 文だけにする**(024 と同じ理由)。DDL は 1 文ごとに暗黙 commit されるので、
+-- 複数文にすると「片方だけ適用され、schema_migrations には記録が無い」状態を作れる。
+-- 既定値は入れない —— NULL は「まだ一度も分析を始めていない」。
+ALTER TABLE video_assets ADD (analysis_started_at TIMESTAMP)

@@ -194,8 +194,8 @@ def env(monkeypatch):
         yield FakeConn(db)
 
     monkeypatch.setattr(video, "connect", fake_connect)
-    monkeypatch.setattr(video, "_os_client", lambda: os_client)
-    monkeypatch.setattr(video, "_require_bucket", lambda: "jetuse-loop-video")
+    monkeypatch.setattr(video, "os_client", lambda: os_client)
+    monkeypatch.setattr(video, "require_bucket", lambda: "jetuse-loop-video")
     return {"db": db, "os": os_client}
 
 

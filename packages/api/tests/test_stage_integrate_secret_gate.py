@@ -39,10 +39,12 @@ def _repo(tmp_path, *, worktree_files: dict[str, str], staged: dict[str, str]):
     def g(*a):
         subprocess.run(["git", *a], cwd=r, check=True, capture_output=True)
     g("init", "-q")
-    g("config", "user.email", "t@e"); g("config", "user.name", "t")
+    g("config", "user.email", "t@e")
+    g("config", "user.name", "t")
     for name, body in worktree_files.items():
         (r / name).write_text(body, encoding="utf-8")
-    g("add", "-A"); g("commit", "-qm", "base")
+    g("add", "-A")
+    g("commit", "-qm", "base")
     for name, body in staged.items():
         (r / name).write_text(body, encoding="utf-8")
     g("add", "-A")
