@@ -1,25 +1,24 @@
 # JetUse on OCI — Generative AI Use-Case Platform (Public edition)
 
-A web app prototype that bundles internal generative-AI use cases on top of OCI Enterprise AI
-(OpenAI-compatible agentic API): chat / use-case engine / RAG / DB chat (NL2SQL) /
-agents (multiple frameworks) / voice (minutes, live transcription, voice chat) /
-image & video analysis — all on OCI managed services.
+A web app prototype built on OCI Enterprise AI (OpenAI-compatible agentic API) that bundles chat,
+use cases, RAG, DB chat (NL2SQL), agents, voice, and image/video analysis into one app —
+all running on OCI managed services.
 
-> [日本語 README](./README.md) ｜ Architecture: [docs/architecture/system.md](./docs/architecture/system.md)
+[日本語 README](./README.md)
 
-## Deploy to Oracle Cloud
+## Deploy
 
 [![Deploy JetUse to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/sogawa-yk/jetuse/releases/download/orm-main/jetuse-orm.zip)
 
-One Resource Manager stack contains both IAM and the JetUse application. No working directory is required. Select the IAM controls according to the executing user's permissions:
+The button hands one Terraform stack — IAM plus the application — to OCI Resource Manager (no working
+directory needed). It builds VCN / Autonomous Database / API Gateway / Container Instance / Functions /
+Object Storage / Identity Domain, and you sign in to the `app_url` output with `demo_username` /
+`demo_password`. The first apply takes 10–15 minutes.
 
-- Tenancy IAM administrator: leave `enable_dynamic_group` and `enable_runtime_policy` enabled.
-- Existing dynamic groups: disable `enable_dynamic_group` and create only the compartment runtime policy.
-- All IAM pre-created: disable both controls and create only application resources.
-
-An IAM operation fails during plan or apply when the executing user lacks its permission. End users sign in through the generated OIDC application and require no OCI IAM permissions. See [the Resource Manager guide](./docs/setup/orm.md) and [the IAM guide](./docs/setup/iam.md).
-
-Supported regions: **Osaka (ap-osaka-1), Tokyo (ap-tokyo-1), Ashburn (us-ashburn-1), and Chicago (us-chicago-1)**. The public images are pre-published to each region's OCIR (OCI Functions only accepts images from an OCIR in its own region) and the stack picks the deploy region's registry automatically. Other regions fail fast at plan time with an explicit message — to deploy there, mirror the images to your region's OCIR and set both `api_image_url` and `fn_router_image` (Issue #55 / ADR-0017).
+- Inputs are essentially the target compartment and `prefix`. Passwords are generated; images come from the public OCIR.
+- Toggle `enable_dynamic_group` / `enable_runtime_policy` to match the executing user's IAM permissions.
+- Supported regions, service limits, and the pre-deploy checklist: [Resource Manager guide](./docs/setup/orm.md).
+  Required permissions: [Public IAM requirements](./docs/setup/public-iam-requirements.md) and the [IAM guide](./docs/setup/iam.md).
 
 ## Features
 
@@ -29,7 +28,7 @@ Supported regions: **Osaka (ap-osaka-1), Tokyo (ap-tokyo-1), Ashburn (us-ashburn
 | Use cases | Form + prompt-template builder & sharing, 5 built-ins |
 | RAG | Upload docs → cited answers (Vector Store / Select AI backends) |
 | DB chat | NL → SQL generate & run (SQL Search / Select AI), result charting |
-| Agents | Tools, MCP, memory isolation. Engine: **native / OpenAI Agents SDK (default) / LangGraph** |
+| Agents | Tools, MCP, memory isolation. Engine: native / OpenAI Agents SDK (default) / LangGraph |
 | Voice | Minutes (diarization), live transcription, half-duplex voice chat |
 | Multimodal | Image-input chat, video frame analysis |
 | Admin/Ops | Audit log & usage dashboard, input moderation, rate limiting, OCI Logging/Monitoring |
@@ -38,64 +37,46 @@ Supported regions: **Osaka (ap-osaka-1), Tokyo (ap-tokyo-1), Ashburn (us-ashburn
 
 - **Frontend**: React SPA (Object Storage static hosting + API Gateway, HashRouter)
 - **API**: SSE = Container Instance (FastAPI) / non-streaming = OCI Functions (ADR-0005)
-- **AI**: OCI Enterprise AI (OpenAI-compatible Responses/Chat Completions, IAM signing), Osaka region
-- **Data**: ADB 26ai, Object Storage
+- **AI**: OCI Enterprise AI (OpenAI-compatible Responses/Chat Completions, IAM signing)
+- **Data**: ADB 26ai (conversations, definitions, minutes, NL2SQL), Object Storage (docs, audio, wallet)
 - **Auth**: IAM Identity Domain (OIDC + PKCE), SAML federation guide included
-- Details & Mermaid diagram → [docs/architecture/system.md](./docs/architecture/system.md)
 
-## Layout
+Details & Mermaid diagram → [docs/architecture/system.md](./docs/architecture/system.md)
+
+## Development
+
+Setup through your own cloud E2E environment: [onboarding guide](./docs/guides/onboarding.md) (Japanese).
+
+```bash
+cd packages/api && AUTH_REQUIRED=false uvicorn service.main:app --port 8000  # API (auth off)
+cd packages/web && VITE_AUTH_REQUIRED=false npm run dev                     # SPA (proxies /api to :8000)
+
+make lint && make test && make build   # before commit (entry point = root Makefile; see make help)
+make deploy DEV=<name>                  # deploy to your own OCI environment for E2E
+```
 
 ```
 packages/web/    React SPA
 packages/api/    FastAPI(service/) + Functions router(fn/) + shared logic(jetuse_core/)
-infra/terraform/ Terraform modules (environments/dev is the live env)
-docs/            plan / decisions(ADR) / verification / comparison/ / guides/ / setup / tips
+infra/           terraform/(modules and environments) + orm/(one-click stack)
+docs/            design, ADRs, verification reports, operational guides
 specs/           feature specs per phase
 ```
 
-## Deploy
-
-Prereqs: OCI tenancy (Osaka recommended), `~/.oci/config`, Terraform 1.15+ / Node 22 /
-Python 3.12 / podman. Put env-specific values in `.env` (template `.env.example`) — never
-commit credentials/OCIDs/endpoints. Human prerequisites: IAM dynamic group & policy
-(`docs/setup/iam.md`) and Identity Domain (`specs/06`).
-
-```bash
-# Infra
-cd infra/terraform/environments/dev && terraform init && terraform apply
-cd packages/api && python -m jetuse_core.migrate    # ADB migrations
-
-# API image (SSE / Container Instance)
-podman build -t <region>.ocir.io/<ns>/jetuse-dev-api:<ver> . && podman push <...>
-# → update api_image_url in tfvars, terraform apply
-
-# Functions router (non-streaming)
-podman build -f Containerfile.fn -t <region>.ocir.io/<ns>/jetuse-dev-fn-router:<ver> . && podman push <...>
-# → update fn_router_image in tfvars, terraform apply
-
-# SPA
-cd packages/web && npm install && npm run build && bash scripts/deploy.sh
-```
-
-Operational gotchas (see [docs/tips.md](./docs/tips.md)): recreating the CI to inject env vars
-does **not** redeploy code if the image tag is unchanged; OCIR push can fail silently under disk
-pressure (verify the version exists in the registry before apply); the dev ADB gets caught by
-nightly stops (start it before working).
-
-## Development
-
-```bash
-cd packages/api && AUTH_REQUIRED=false uvicorn service.main:app --port 8000
-cd packages/web && VITE_AUTH_REQUIRED=false npm run dev   # proxies /api to :8000
-```
-Before commit: `make lint && make test && make build` (single-command entry = root `Makefile`; see `make help`).
+Branches: `main` (stable Public edition, source of the Deploy button) / `public-dev` (Public integration) /
+`internal-dev` / `internal-stable`. Public changes land on `public-dev` and reach `main` at release time
+([branching and releases](./docs/guides/branching-and-releases.md)). Verification is done against real OCI
+environments; reports live in `docs/verification/`.
 
 ## Docs
 
-See [docs/architecture/system.md](./docs/architecture/system.md), [docs/comparison/aws-reference.md](./docs/comparison/aws-reference.md),
-the `docs/comparison/` selection studies, [docs/guides/customize.md](./docs/guides/customize.md),
-[docs/guides/demo-scenarios.md](./docs/guides/demo-scenarios.md), and [docs/tips.md](./docs/tips.md).
+Index: [docs/README.md](./docs/README.md). Frequently used:
 
-## License / status
-
-`main` is the stable Public edition and `internal-stable` is the Internal release line; development happens on `public-dev` and `internal-dev`. See the repository license for usage terms.
+| Topic | Where |
+|---|---|
+| Overall design & diagrams | [docs/architecture/system.md](./docs/architecture/system.md) |
+| Why a design was chosen | [docs/decisions/](./docs/decisions/) (ADR) |
+| Option studies (RAG/NL2SQL/agent FW/compute) | [docs/comparison/](./docs/comparison/) |
+| Customization | [docs/guides/customize.md](./docs/guides/customize.md) |
+| Demo scripts | [docs/guides/demo-scenarios.md](./docs/guides/demo-scenarios.md) |
+| Real-world gotchas | [docs/tips.md](./docs/tips.md) |
