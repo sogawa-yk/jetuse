@@ -35,6 +35,16 @@
 ## 成果物
 コード / `docs/verification/VID-01.md` に追記
 
+## 前タスクの残（VID-02 の Codex major。あなたの範囲なので取り込む）
+- `jetuse_core/video.py` の `finish_analysis` は「`failed` なら理由を必ず入れる」と書いてあるのに
+  **`state='failed', error=None` を保存できる**。state 文字列の検証も無い。**このタスクが
+  この関数の主な利用者**なので、値を検証して不正な組み合わせを弾くこと（理由の無い失敗を作らない）。
+- `ops` 系の `verify_migrations.py` は、使い捨てスキーマの作成後に例外で抜けると
+  **`DROP USER` に到達せず、CREATE 権限と無制限 quota を持つ検証ユーザーが残る**。
+  `try/finally` で後始末を保証すること（実 DB にユーザーが溜まる）。
+- `video_frames.py` の `_invoke` は `FileNotFoundError` とタイムアウトしか変換せず、
+  実行権限が無い場合の `PermissionError` 等が生の例外で漏れる。`FfmpegUnavailableError` に寄せること。
+
 ## 禁止事項
 - LLM に時刻や、渡していない情報を答えさせること
 - 判らない項目をもっともらしい値で埋めること（`unknown` にする）

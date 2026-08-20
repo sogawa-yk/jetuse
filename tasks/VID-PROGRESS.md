@@ -14,8 +14,8 @@ status: `todo` | `in_progress` | `blocked` | `done`
 | 順 | タスク | 依存 | 人間ゲート | status |
 |---|---|---|---|---|
 | 1 | [VID-01 映像の保管と登録](VID-01.md) | — | バケット追加の apply（**済 2026-08-19**）+ コミット | done |
-| 2 | [VID-02 場面分割とフレーム抽出](VID-02.md) | VID-01 | コミット | todo |
-| 3 | [VID-03 AI 分析（2層）](VID-03.md) | VID-02 | **IAM 追加の承認** + コミット | todo |
+| 2 | [VID-02 場面分割とフレーム抽出](VID-02.md) | VID-01 | コミット | done |
+| 3 | [VID-03 AI 分析（視覚 LLM）](VID-03.md) | VID-02 | コミット（**IAM 不要になった**） | todo |
 | 4 | [VID-04 場面の横断検索](VID-04.md) | VID-03 | コミット | todo |
 | 5 | [VID-05 メタデータの確認・修正](VID-05.md) | VID-03 | コミット | todo |
 | 6 | [VID-06 UI](VID-06.md) | VID-04, VID-05 | コミット | todo |
