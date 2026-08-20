@@ -37,10 +37,12 @@ def _repo(tmp_path):
     def g(*a):
         subprocess.run(["git", *a], cwd=r, check=True, capture_output=True)
     g("init", "-q")
-    g("config", "user.email", "t@e"); g("config", "user.name", "t")
+    g("config", "user.email", "t@e")
+    g("config", "user.name", "t")
     (r / ".gitignore").write_text(".env\n", encoding="utf-8")
     (r / "existing.py").write_text("old = 1\n", encoding="utf-8")
-    g("add", "-A"); g("commit", "-qm", "base")
+    g("add", "-A")
+    g("commit", "-qm", "base")
     return r
 
 
