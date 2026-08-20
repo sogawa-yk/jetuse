@@ -459,3 +459,111 @@ specs/20 §3 で範囲外と決めたもの。
 なお `deploy_cmd` の `ops/start-adb-if-stopped.sh` を引数なしで実行したため、
 `jetuse-dev-adb`（internal-dev / us-chicago-1）も起動している。E2E で使ったのは
 `jetuse-loop-adb`（ap-osaka-1）だけで、共有 ADB を止めるかは人間の判断に返す。
+
+---
+
+# VID-03 追記: AI 分析（視覚 LLM）
+
+実施日: 2026-08-20 / リージョン: us-chicago-1（Object Storage）/ ap-osaka-1（ADB・GenAI）/
+対象: `jetuse_core/video_analyze.py` + `POST /api/video/assets/{id}/analyze`
+仕様の正本: `specs/20-video-search.md` §3（3〜6）/ 判断: ADR-0032 決定1（**2026-08-20 改訂**）・決定5
+証跡: `runs/2026-08-20T1207_VID-03/e2e/`
+
+## 結論（先に）
+
+映像 1 本を実 OCI で分析し、**場面ごとに説明・タグ・物体・行動・画面内文字**が入り、
+**映像全体の要約**と**場面ごとの埋め込み**（`cohere.embed-multilingual-v3.0` / 1024 次元）が
+台帳に載るところまでを確認した。
+
+要求13 の核心である**日本語のテロップは正確に読めた**。映像に焼いた `大阪 OSAKA 12:34` /
+`雨のち曇り` が `screen_text` にそのまま入っている。AI Vision の `TEXT_DETECTION` が
+`大阪` を `XRR` に壊したのとは対照的で、**視覚 LLM への一本化（ADR-0032 決定1 改訂）が
+実測で正しかった**ことになる。
+
+**判らない項目は `unknown` のまま残った。** 真っ黒な場面に対して屋内外・時間帯・天候・
+場所・種別のすべてが `unknown` で、もっともらしい値では埋まっていない。
+
+| 完了条件 | 結果 | 証跡 |
+|---|---|---|
+| 実 OCI で映像1本を分析し、場面ごとに説明・タグ・物体 | ○ 3 場面すべて。要約と埋め込みも | `e2e/scenario-1-analyze.txt` |
+| **日本語のテロップが読める**（地名が正しく取れる） | ○ `大阪 OSAKA 12:34` を正確に | `e2e/scenario-2-japanese-telop.txt` |
+| **判らない項目が unknown**（もっともらしく埋めない） | ○ 真っ黒な場面は 5 項目すべて unknown | `e2e/scenario-3-unknown.txt` |
+| 再分析も同じ入口 | ○ 2 回目も `done` | `e2e/scenario-4-reanalyze.txt` |
+| 状態遷移と**失敗理由を必ず残す** | ○ `failed` + 理由。理由の無い `failed` は書けない | `e2e/scenario-6-failure-reason.txt` |
+| 単体テスト（JSON 不正 / 欠損 / 状態遷移 / unknown 保持） | ○ 58 件（`test_video_analyze.py`。全体 1279 件） | `make test` |
+
+## 1. 構成 —— AI Vision は呼ばない
+
+`vision_state` 列は残し、**分析のたびに `skipped` を書く**。列を消すと「使わないと決めた」のか
+「実装が呼び忘れている」のかが後から辿れない。scenario-1 で `vision_state = skipped` を実測。
+
+時刻は LLM に聞かない（ADR-0032 決定3）。区間は VID-02 の ffmpeg 実測が持ち、LLM へは
+**代表フレームの画像と固定プロンプトだけ**を送る。これはプロンプトを読むだけでは確かめられ
+ないので、**実際に送った内容を記録して**証跡にした（`scenario-7-no-extra-input.txt`）。
+送信は「テキスト 1 個（固定プロンプト）+ 画像 3 枚」だけで、開始・終了時刻も題名も
+`asset_id` も含まれていない。
+
+## 2. 実測した場面メタデータ（抜粋）
+
+```
+[0-5000ms]  description: 濃い青色の背景に、白い文字で地名、時刻、天気が表示されています。
+                         地名は「大阪」、時刻は「12:34」、天気は「雨のち曇り」と書かれています。
+            tags: ['天気予報','テロップ','大阪']   place: 大阪
+            indoor: unknown  time_of_day: unknown
+            screen_text: '大阪 OSAKA 12:34\n雨のち曇り'      ← 要求13
+[5000-10200ms] tags: ['PC画面','スクリーンショット','ウェブアプリケーション','ダッシュボード']
+            objects: ['コンピュータ画面','ウェブブラウザ','GUI']
+            screen_text: 'GenU-OCI\n…\n議事録\n…'（日本語の UI 文字を 30 行以上）
+[10200-15200ms] description: 画面は真っ黒で何も映っていません。
+            indoor/time_of_day/weather/place/scene_kind: すべて unknown   ← 埋めない
+```
+
+埋め込みは実際に 23ai の `VECTOR_DISTANCE` に載り、「日本語のテロップが出ている場面」で
+テロップ場面が 1 位（0.4742 / 0.5641 / 0.5860）に来た（`scenario-8-vector.txt`）。
+**しきい値では切らない**（specs/20 §4。差は 0.1 程度しかない）。
+
+## 3. 実機で分かったこと: 推論モデルは思考ぶんも `max_tokens` を使う
+
+最初の実行で**映像全体の要約が文の途中で切れた**（「…次に、コンピュータ」）。
+`gemini-2.5-pro` は推論モデルで、`max_tokens=1024` を思考で使い切っていた。
+
+記述側は JSON なので切れれば parse で落ちて `partial` になるが、**要約は素の文なので
+切れても気づけない**。上限を 4096 に上げたうえで、`finish_reason == "length"` を
+**失敗として扱う**ようにした（切れた要約を「分析済み」として保存しない）。
+`docs/tips.md` にも記録した。
+
+## 4. 状態遷移と失敗の残し方
+
+`pending` → `running`（`claim_analysis` のアトミック UPDATE）→ `done` / `partial` / `failed`。
+
+- **`partial` は理由を必ず持つ**。一部の場面だけ落ちた・要約が作れなかった・埋め込みが
+  落ちた、のいずれも記述は保存したうえで理由を残す（捨てるほうが利用者の損）
+- 実在しないモデル名で分析させると `failed` + 404 の理由が台帳に入り、**前回成功時の
+  要約は NULL に戻った**（失敗した分析の画面に前回の要約が残らない）
+- **理由の無い失敗は書けない**。`finish_analysis('failed', None)` / `('partial','   ')` /
+  `('finished', None)` はいずれも `ValueError`（VID-02 のレビュー指摘の取り込み）
+
+上流の障害（認証・429・タイムアウト・モデル不在）は `VisionServiceError` として
+**応答の中身の問題と区別**し、API は 502 を返す。`ffmpeg` が起動できない場合は 503。
+どちらも「利用者が映像を差し替えても直らない」ものを 422 で返さないための区別。
+
+## 5. VID-02 から引き継いだ指摘の始末
+
+| 指摘 | 対応 | 証跡 |
+|---|---|---|
+| `finish_analysis` が理由なしの `failed` を保存できる／state の検証が無い | 入口で `ValueError`。`failed`/`partial` は理由必須、`done`/`pending`/`running` は理由を持てない | `scenario-6-failure-reason.txt` |
+| `verify_migrations.py` が例外で抜けると検証ユーザーが残る | `try/finally` で後始末を保証。`--inject-failure` で**わざと落として消えることを実測** | `scenario-migration_inject.txt` |
+| （上の修正のレビューで判明）同名スキーマが既に在ると、作っていないものを `finally` が DROP する | **作成に成功したときだけ**消す。`--inject-existing` で「作らず・消さずに止まる」ことを実測 | `scenario-migration_existing.txt` |
+| `_invoke` が `PermissionError` 等を `FfmpegUnavailableError` に変換しない | `OSError` を一括で変換（実行権限なし・`Exec format error` も含む） | 単体テスト（3 種の起動失敗） |
+
+## 6. 実施しなかった範囲
+
+`runs/2026-08-20T1207_VID-03/e2e/SKIPPED.md`。要点は、(1) 配備済み API への HTTP 越しの
+`/analyze`（area=api の配備定義は ADB マイグレーションまで。コンテナ入れ替えは人間ゲート。
+状態コードの対応付けは `TestClient` で確認）、(2) 長時間・大量映像（ADR-0032 で v1 の外。
+`MAX_SCENES=60` で上限を置き、超過分は `partial` の理由に残す）、(3) 分析中の削除と残骸の
+即時回収（specs/20 §3 で範囲外）、(4) AI Vision との比較（不採用。呼ぶ実装を持たない）。
+
+後片付け: この run が作った `video_assets` / `video_scenes` 行とオブジェクトはすべて削除
+（`cleanup.txt`：残 0）。検証用スキーマ `JETUSE_SPIKE_VID03_*` も 2 回とも削除済み
+（`JETUSE_SPIKE*` の残存 0 を確認）。

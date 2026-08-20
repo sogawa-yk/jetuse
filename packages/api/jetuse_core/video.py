@@ -43,6 +43,21 @@ _PAR_NAME_PREFIX = "jetuse-video-"
 # 個々の上限は video_frames の SCAN_TIMEOUT_S / FRAME_TIMEOUT_S)を十分に上回る幅。
 ANALYSIS_STALE_SECONDS = 2 * 3600
 
+# 分析の状態(migration 022 の `video_assets_state_ck` と同じ集合)。
+# **ここに無い値は台帳へ書かせない。** 綴り違いをそのまま渡すと ORA-02290 になり、
+# 失敗の理由が「分析が失敗した理由」から「状態の書き方を間違えた」へすり替わる。
+ANALYSIS_STATES = frozenset({"pending", "running", "done", "failed", "partial"})
+
+# **理由を必ず持つ状態。**「失敗を握りつぶさない」(specs/20 §3)は、理由の無い
+# `failed` を保存できてしまうと成立しない。`partial` も同じ —— 何が取れなかったのかを
+# 残さない `partial` は、画面上「分析済み」と見分けがつかない。
+# 逆に `done` / `pending` / `running` に理由を残させない。前回の失敗理由が今回の結果に
+# 混ざると、「いま失敗しているのか、前に失敗したのか」が判らなくなる。
+ANALYSIS_STATES_WITH_REASON = frozenset({"failed", "partial"})
+
+# `analysis_error VARCHAR2(4000)`(migration 022)の実効上限。**バイト**で効く(`_fit_bytes`)。
+ANALYSIS_ERROR_MAX_BYTES = 4000
+
 # 時刻列は **UTC で保存し、UTC として返す**(格納側は下記 to_utc_naive、既定値は
 # migration の SYS_EXTRACT_UTC)。列は TIMESTAMP(タイムゾーン無し)なので、末尾の "Z" を
 # 付けて「どの時間帯の値か」を明示する。付けないと "2026-08-19T10:00:00" が受け手の
@@ -119,6 +134,32 @@ def _fit(value: str | None, limit: int) -> str | None:
     if value is None:
         return None
     value = value[:limit]
+    return value or None
+
+
+# 失敗理由を切り詰めるときの印。**黙って切らない**(途中で切れた文を全文と誤読させない)。
+_TRUNCATED = "…(以下省略)"
+
+
+def _fit_bytes(value: str | None, limit: int) -> str | None:
+    """**バイト長で**列幅に収める。空文字は None(値なし)に寄せる。
+
+    `analysis_error VARCHAR2(4000)`(migration 022)は CHAR 指定が無いので、既定では
+    **BYTE セマンティクス**で効く。日本語 1 文字は UTF-8 で 3 バイトなので、文字数で
+    切ると 4000 文字未満でも 4000 バイトを超えて `ORA-12899` になる。落ちる先が悪い ——
+    ここは分析の失敗を記録する最後の 1 文なので、落ちると
+    **理由が残らないうえ `analysis_state` が `running` のまま固まる**
+    (`ANALYSIS_STALE_SECONDS` が経つまで再分析もできない)。場面数ぶんの日本語の理由を
+    連ねる `video_analyze` では現実に届く長さ(60 場面 × 数十文字)。
+    `rag_adb.doc_key` が `VARCHAR2(400)` で同じ理由からバイト長で切っているのに揃える。
+    """
+    if value is None:
+        return None
+    raw = value.encode("utf-8")
+    if len(raw) > limit:
+        keep = limit - len(_TRUNCATED.encode("utf-8"))
+        # 途中のバイトで切れた文字は捨てる(errors="ignore")
+        value = raw[:keep].decode("utf-8", "ignore") + _TRUNCATED
     return value or None
 
 
@@ -348,15 +389,32 @@ def finish_analysis(
     引き継がれた古い実行がここを素通しで書くと、新しい実行の `running` を解いて
     3 本目の開始まで許してしまう。
 
-    **失敗を握りつぶさない**(specs/20 §3)。`failed` なら理由を必ず入れる。
+    **失敗を握りつぶさない**(specs/20 §3)。`failed` / `partial` は理由を必ず伴い、
+    伴わない呼び出しは `ValueError` で**書く前に**弾く。約束を docstring だけに書くと、
+    理由の無い `failed` がそのまま保存できてしまう(VID-02 レビュー指摘)。この関数の
+    主な利用者は分析の実行系(`video_frames` / `video_analyze`)で、そこは例外処理の
+    途中から呼ぶ —— 理由が空になる経路を作りやすいので、入口で落とす。
     """
+    if state not in ANALYSIS_STATES:
+        raise ValueError(
+            f"unknown analysis_state {state!r} (allowed: {sorted(ANALYSIS_STATES)})"
+        )
+    # **空白だけの理由を「理由あり」と数えない。** 空文字と同じく、読んだ人には
+    # 何も伝わらない。列幅に収めるのは判定の後ではなく前(判定は保存する値に対して行う)。
+    # 収めるのは**バイト長**(`_fit_bytes` の docstring)
+    reason = _fit_bytes(error.strip() if error else error, ANALYSIS_ERROR_MAX_BYTES)
+    if state in ANALYSIS_STATES_WITH_REASON and reason is None:
+        raise ValueError(f"analysis_state {state!r} requires a reason")
+    if state not in ANALYSIS_STATES_WITH_REASON and reason is not None:
+        raise ValueError(f"analysis_state {state!r} must not carry a reason")
+
     with connect() as conn:
         cur = conn.cursor()
         cur.execute(
             "UPDATE video_assets SET analysis_state = :s, analysis_error = :e"
             " WHERE id = :id AND owner_sub = :o"
             "   AND (:tok IS NULL OR analysis_token = :tok)",
-            s=state, e=_fit(error, 4000), id=asset_id, o=owner, tok=token,
+            s=state, e=reason, id=asset_id, o=owner, tok=token,
         )
         conn.commit()
         return cur.rowcount > 0
