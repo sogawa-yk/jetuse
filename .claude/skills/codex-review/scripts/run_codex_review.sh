@@ -27,6 +27,19 @@ SCOPE="${DIFF_SCOPE:-uncommitted}"
 # codex 入力 1,048,576 字上限超過＋空判定ハングの主因になる。生成物はソースでないため除外する
 # （deploy/CI が使う tracked dist は不変・untrack はしない）。
 EXCL=(':(exclude)packages/web/dist')
+
+# **未追跡の新規ファイルを diff に載せる。** `git diff HEAD` は追跡済みの変更しか出さないため、
+# 新規モジュール・新規テスト・新規 migration が**レビュー対象から丸ごと落ちていた**
+# （VID-01/02/03 の初回レビューが毎回「完了対象のファイルが diff 外」で FAIL していた原因。
+# さらに悪いのは、エージェントが stage し忘れたまま通ると**新規コードが未レビューで PASS しうる**こと）。
+#
+# `git add -N`（intent-to-add）は**内容を stage せず存在だけ**を index に伝えるので、
+# `git diff HEAD` に新規ファイルが現れる。`.gitignore` 済みは対象外のまま（`.env` 等は載らない）。
+# `worktree` スコープでも同じ理由で必要（`git diff` も未追跡は出さない）。
+if [ "$SCOPE" != "staged" ]; then
+  git add -N -- . ':(exclude)packages/web/dist' >/dev/null 2>&1 || true
+fi
+
 case "$SCOPE" in
   staged)      DIFF="$(git diff --staged -- . "${EXCL[@]}")" ;;
   worktree)    DIFF="$(git diff -- . "${EXCL[@]}")" ;;

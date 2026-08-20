@@ -43,4 +43,20 @@ if want web && [ -f packages/web/package.json ] && [ ! -d packages/web/node_modu
   ( cd packages/web && { npm ci --silent || npm install --silent; } )
 fi
 
+# --- infra: terraform のプロバイダ ---
+# **`.terraform/` は gitignore なので新しい worktree には無い。** 無いまま `make lint` を打つと
+# `ops/check-infra.sh` の `terraform init -lockfile=readonly` が
+# "Provider dependency changes detected" で落ちる（2026-08-20 の vid ステージで実際に踏んだ）。
+# backend 無しの init なので資格情報も課金も発生しない。**失敗しても続行する**
+# （terraform 未導入の環境でブートストラップ全体を止めない）。
+if want infra && command -v terraform >/dev/null 2>&1; then
+  for d in infra/terraform/environments/dev infra/orm \
+           infra/terraform/modules/iam infra/terraform/modules/hosted-agent; do
+    [ -d "$d" ] || continue
+    ( cd "$d" && terraform init -backend=false -input=false >/dev/null 2>&1 ) \
+      || echo "[bootstrap] infra: $d の init に失敗（make lint 前に手で init が要ります）" >&2
+  done
+  echo "[bootstrap] infra: terraform init（backend 無し）" >&2
+fi
+
 echo "[bootstrap] 完了: $WT (areas: ${AREAS})" >&2
