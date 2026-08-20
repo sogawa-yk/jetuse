@@ -173,10 +173,18 @@ def _run_ffmpeg(args: Sequence[str], *, timeout: int) -> subprocess.CompletedPro
 def _invoke(args: Sequence[str], *, timeout: int) -> tuple[bytes, str, int]:
     try:
         proc = _run_ffmpeg(args, timeout=timeout)
-    except FileNotFoundError as e:  # exe のパスは取れたが起動できない
-        raise FfmpegUnavailableError(f"ffmpeg を起動できません: {e}") from e
     except subprocess.TimeoutExpired as e:
         raise VideoFrameError(f"ffmpeg timed out after {timeout}s") from e
+    except OSError as e:
+        # **起動できない失敗は 1 つに寄せる。** `FileNotFoundError`(パスは取れたが実体が
+        # 無い)だけを拾うと、`PermissionError`(実行ビットが落ちている / noexec マウント)や
+        # `OSError: Exec format error`(別アーキテクチャの wheel)が生のまま呼び出し側へ
+        # 抜け、分析の失敗理由が `PermissionError: ...` という素の型名で台帳に残る。
+        # どれも**配備の不備**で、映像を差し替えても直らない —— 映像そのものの問題
+        # (`VideoDecodeError`)と混ぜない、というこのモジュールの区別に揃える。
+        raise FfmpegUnavailableError(
+            f"ffmpeg を起動できません: {type(e).__name__}: {e}"
+        ) from e
     stderr = (proc.stderr or b"").decode("utf-8", "replace")
     return proc.stdout or b"", stderr, proc.returncode
 
@@ -578,7 +586,7 @@ def split_asset_scenes(
     """
     token = video.claim_analysis(owner, asset_id)
     try:
-        result = _split_claimed(owner, asset_id, token, threshold=threshold)
+        result = split_claimed_scenes(owner, asset_id, token, threshold=threshold)
     except Exception as e:
         # **失敗を握りつぶさない**(specs/20 §3)。理由を台帳へ残してから投げ直す。
         # 権利が引き継がれていれば書けない —— 新しい実行の running を解かない
@@ -594,13 +602,23 @@ def split_asset_scenes(
     return result
 
 
-def _split_claimed(
-    owner: str, asset_id: str, token: str, *, threshold: float
+def split_claimed_scenes(
+    owner: str,
+    asset_id: str,
+    token: str,
+    *,
+    threshold: float = SCENE_THRESHOLD,
+    path: str | pathlib.Path | None = None,
 ) -> dict[str, Any]:
-    """`claim_analysis` を取った状態で走る本体。
+    """`claim_analysis` を**外側で取った**実行から呼ぶ場面分割(VID-03 の入口)。
 
     `token` は権利の印。台帳へ書く `_save_scenes` がこれを照合し、引き継がれていれば
-    1 行も書かずに `AnalysisSupersededError` を上げる。
+    1 行も書かずに `AnalysisSupersededError` を上げる。状態(`done` / `partial` /
+    `failed`)を書くのは、権利を取った外側の責任 —— ここでは触らない。
+
+    `path` に落とし済みの映像を渡せる。分析全体(`video_analyze`)は場面ごとの代表
+    フレームも要るので、渡さないと**同じ映像を 2 度 Object Storage から落とす**
+    (上限 500MB)。渡された一時ファイルの寿命は呼び出し側が持つ。
     """
     object_name = video.object_name_for(owner, asset_id)
     if object_name is None:
@@ -626,15 +644,17 @@ def _split_claimed(
     pre_existing = [o.name for o in _list_thumbs(client, ns, bucket, object_name)]
 
     uploaded: list[str] = []
-    with _download(object_name) as path:
-        info, scenes = split_scenes(path, threshold=threshold)
+    # 渡されていれば落とし直さない(nullcontext は片付けもしない = 呼び出し側の持ち物)
+    source = contextlib.nullcontext(path) if path is not None else _download(object_name)
+    with source as local:
+        info, scenes = split_scenes(local, threshold=threshold)
         max_ms = _safe_tail_ms(info)
         for i, scene in enumerate(scenes):
             # 代表フレームの**真ん中の 1 枚**をサムネイルにする。ここで数枚まとめて
             # 取らないのは、視覚 LLM へ渡す残りが要るのは後続タスクで、そのときに
             # 同じ `open_asset_video` / `scene_frames` で取り直せるため
             times = frame_times(scene, max_ms=max_ms)
-            jpeg = extract_frame(path, times[len(times) // 2], width=THUMB_WIDTH)
+            jpeg = extract_frame(local, times[len(times) // 2], width=THUMB_WIDTH)
             name = thumb_object_name(object_name, generation, i)
             client.put_object(ns, bucket, name, jpeg, content_type="image/jpeg")
             uploaded.append(name)

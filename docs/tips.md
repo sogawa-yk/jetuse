@@ -14,6 +14,8 @@
 - 2026-06-11 highlight.jsにTerraform/HCL文法は存在しない（commonにも全量にもない）→ カスタム文法を登録する（markdown.tsx hcl()）
 - **2026-06-11 サンプリングパラメータの実機対応マトリクス**: Responses系(gpt-oss)= `top_p` / `max_output_tokens` / `reasoning.effort`(low/highで推論トークン量が変わることを確認、43↔81tok) すべてOK。Chat Completions系(gemini/llama)= `top_p` / `max_tokens` / `stop` / `frequency_penalty` / `presence_penalty` / `seed` すべてOK。ペナルティ・stop・seedはResponses系に存在しないためUIはモデル系統で出し分けが必要
 - **2026-06-11 Gemini系は小さいmax_tokensで死ぬ**: 思考トークンがバジェットを食うため、max_tokens=100はストリーム無応答（90秒+）、512でも本文空（finish=max_tokens）、2000で正常。`reasoning_effort=minimal` は受理されるが思考は止まらない（none/lowは400）。対策=実用下限2048でサーバー側クランプ（CHAT-04b、models.py min_max_tokens）
+- **2026-08-20 Gemini系の切れた応答は「空」ではなく「途中まで」で返る**: `max_tokens=1024` の要約が文の途中（「…次に、コンピュータ」）で終わり、**成功応答として返った**（VID-03 実測）。JSON を要求している経路は parse で落ちて気づけるが、**素の文章は切れても気づけない**。`finish_reason == "length"` を見て失敗扱いにする（`video_analyze._content`）。上限そのものは思考トークンぶんを見込んで 4096（既存の「小さいmax_tokensで死ぬ」の続き）
+- **2026-08-20 ffmpeg の drawtext は `text=` に `:` を書くと落ちる**: テロップの `12:34` がフィルタの区切りと解釈され exit 234。`textfile=<パス>` で渡せば日本語も含めて素通し（E2E 素材の生成で踏んだ）
 - 2026-06-11 SSEのproduceスレッドで `stream_chat()` 呼び出しをtry外に置くと、同期例外時に終端イベントが送られずkeepaliveで永久ハングする（テストfakeの引数不一致のTypeErrorで発覚）。**ジェネレータ生成もtry内+except時にerrorイベント送出**が正解
 
 ## 認証（Identity Domains / oidc-client-ts）

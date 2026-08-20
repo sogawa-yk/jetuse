@@ -1,6 +1,6 @@
-"""映像の登録・一覧・詳細・削除・再生 URL(VID-01 / specs/20 §2)。
+"""映像の登録・一覧・詳細・削除・再生 URL と分析(VID-01 / VID-03 / specs/20 §2 §3)。
 
-分析・検索・場面編集は後続タスク。ここは映像を預かって取り出せるところまで。
+検索・場面編集は後続タスク。
 """
 
 import asyncio
@@ -12,6 +12,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 
 from jetuse_core import video as video_repo
+from jetuse_core import video_analyze, video_frames
 from jetuse_core.auth import AuthContext, require_user
 
 from ..deps import require_video
@@ -135,6 +136,54 @@ async def get_video_playback(
     if res is None:
         raise HTTPException(status_code=404, detail="video asset not found")
     return res
+
+
+@router.post("/api/video/assets/{asset_id}/analyze")
+async def analyze_video_asset(
+    asset_id: str,
+    user: Annotated[AuthContext, Depends(require_user)],
+    _: Annotated[None, Depends(require_video)],
+):
+    """映像を分析する。**再分析も同じ入口**(specs/20 §3 / 要求8)。
+
+    同じ映像の分析が既に走っていれば 409(specs/20 §3「同時実行の範囲」)。入口の排他は
+    `video.claim_analysis` のアトミックな UPDATE が持っており、ここでは例外を
+    HTTP に写すだけ —— 判定をルータ側で二重に持つと、片方だけ直したときに壊れる。
+
+    **同期で返す。** v1 は短い映像で成立させると決めてある(ADR-0032「v1 の外」:
+    長時間映像・大量映像の一括処理)。ジョブ基盤を足すのはその範囲を広げるときで、
+    いまは場面数の上限(`video_analyze.MAX_SCENES`)で所要時間を抑え、超過分は
+    `partial` の理由として残す。
+    """
+    try:
+        return await asyncio.to_thread(video_analyze.analyze_asset, user.subject, asset_id)
+    except video_repo.AnalysisInProgressError as e:
+        raise HTTPException(
+            status_code=409, detail="この映像の分析はすでに実行中です"
+        ) from e
+    except (LookupError, video_repo.AnalysisSupersededError) as e:
+        # 引き継がれた側は「自分の結果は無い」。**別の実行の結果を自分のものとして
+        # 返さない** —— 409 で「もう一度取り直せ」と伝える
+        if isinstance(e, video_repo.AnalysisSupersededError):
+            raise HTTPException(
+                status_code=409, detail="この映像の分析は別の実行に引き継がれました"
+            ) from e
+        raise HTTPException(status_code=404, detail="video asset not found") from e
+    except video_frames.FfmpegUnavailableError as e:
+        # **配備の不備を「入力が悪い」に見せない。** ffmpeg が起動できないのは
+        # サーバ側の問題で、利用者が映像を差し替えても直らない
+        raise HTTPException(
+            status_code=503, detail=f"映像処理の依存が使えません: {e}"
+        ) from e
+    except video_analyze.VisionServiceError as e:
+        # 視覚 LLM を呼べなかった(認証・429・タイムアウト・サービス障害)。上流の障害な
+        # ので 502 —— 422 にすると、直せないものを利用者に直させようとすることになる
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except (video_analyze.VideoAnalyzeError, video_frames.VideoFrameError) as e:
+        # ここまで来るのは映像そのものか応答の中身の問題。台帳には `failed` と理由が
+        # 入っている(specs/20 §3「握りつぶさない」)。画面にも同じ理由を返す ——
+        # 「失敗した」だけでは利用者が直せない
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 @router.delete("/api/video/assets/{asset_id}")
