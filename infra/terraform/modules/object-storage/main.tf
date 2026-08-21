@@ -47,6 +47,16 @@ resource "oci_objectstorage_bucket" "speech" {
   access_type    = "NoPublicAccess"
 }
 
+# 映像本体とサムネイル（VID-01 / specs/20 §2）。再生はオブジェクト単位の PAR で行うため
+# バケットは非公開のまま。app-data と分けるのは、保存期間・容量・権利の扱いが別物で、
+# ライフサイクル規則や監査をこのバケットにだけ掛けられるようにするため。
+resource "oci_objectstorage_bucket" "video" {
+  compartment_id = var.compartment_ocid
+  namespace      = local.ns
+  name           = "${var.prefix}-video"
+  access_type    = "NoPublicAccess"
+}
+
 # --- Destroy 時のバケット空け(FIX-58) ---------------------------------------
 # OCI provider に force_destroy 相当は無く、アプリが**実行時に書いたオブジェクト**
 # (RAGアップロード・議事録音声・OCR中間物など)が残っていると destroy が
@@ -58,7 +68,10 @@ resource "oci_objectstorage_bucket" "speech" {
 # 同じ命名規則の静的な文字列を使い、順序は depends_on で担保する
 # (destroy はこの resource → バケット の順に進む)。
 resource "terraform_data" "empty_buckets" {
-  for_each = toset(["${var.prefix}-spa", "${var.prefix}-app-data", "${var.prefix}-speech"])
+  for_each = toset([
+    "${var.prefix}-spa", "${var.prefix}-app-data", "${var.prefix}-speech",
+    "${var.prefix}-video",
+  ])
 
   input = { namespace = local.ns, bucket = each.value, region = var.region }
 
@@ -66,6 +79,7 @@ resource "terraform_data" "empty_buckets" {
     oci_objectstorage_bucket.spa,
     oci_objectstorage_bucket.app_data,
     oci_objectstorage_bucket.speech,
+    oci_objectstorage_bucket.video,
   ]
 
   provisioner "local-exec" {

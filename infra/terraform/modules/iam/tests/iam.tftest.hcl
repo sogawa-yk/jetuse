@@ -45,8 +45,27 @@ run "full_public_iam_contract" {
   }
 
   assert {
-    condition     = length(oci_identity_policy.runtime[0].statements) == 27
-    error_message = "Full Public runtime policy must contain the reviewed 27 statements."
+    condition     = length(oci_identity_policy.runtime[0].statements) == 28
+    error_message = "Full Public runtime policy must contain the reviewed 28 statements."
+  }
+
+  # VID-07: PAR の発行は `manage objects` に含まれない（PAR_MANAGE は bucket 側の
+  # permission）。この 1 文が欠けると、映像の再生 URL と直接アップロードが
+  # **404 BucketNotFound** で落ちる（権限不足がバケット不在に見える）。
+  # **`manage buckets` を丸ごと与えていないこと**まで見る —— バケットの削除権限は要らない。
+  assert {
+    condition = contains(
+      oci_identity_policy.runtime[0].statements,
+      "Allow dynamic-group jetuse-spike-iam01-runtime-dg to manage buckets in compartment id ocid1.compartment.oc1..publiciamtest where request.permission='PAR_MANAGE'"
+    )
+    error_message = "PAR issuance (video playback / direct upload) requires PAR_MANAGE on buckets."
+  }
+
+  assert {
+    condition = alltrue([for s in oci_identity_policy.runtime[0].statements :
+      !endswith(s, "to manage buckets in compartment id ocid1.compartment.oc1..publiciamtest")
+    ])
+    error_message = "Unscoped 'manage buckets' grants bucket delete; keep the PAR_MANAGE condition."
   }
 
   # PORT-03: 公式 "Permissions for Deploying Applications" が要求する2文。
@@ -125,7 +144,7 @@ run "minimal_without_semantic_store_or_deployer_policy" {
   }
 
   assert {
-    condition     = length(oci_identity_policy.runtime[0].statements) == 19
+    condition     = length(oci_identity_policy.runtime[0].statements) == 20
     error_message = "Minimal runtime policy must contain runtime and ADB statements only."
   }
 
