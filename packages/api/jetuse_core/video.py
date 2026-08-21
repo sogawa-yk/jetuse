@@ -26,6 +26,33 @@ ALLOWED_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
 # v1 は短い映像で成立させる(ADR-0032 範囲)。Container Instance 4GB を前提に上限を置く
 MAX_BYTES = 500 * 1024 * 1024
 
+# **API Gateway の本文上限**(2026-08-20 実測: 20 MiB ちょうど。20,971,199 バイトは通り
+# 20,971,720 バイトが 413)。ゲートウェイを通る multipart 経路(`POST /api/video/assets`)は
+# ここを越えられない —— **アプリが 500MB を許しても、要求はアプリに届かない**。
+GATEWAY_MAX_BODY_BYTES = 20 * 1024 * 1024
+
+# multipart 経路で受け付けるファイル本体の上限。上の上限は**本文全体**(メタデータの
+# フォーム項目と multipart の縁取りを含む)に効くので、その分を引いておく。64KiB は
+# 題名・所属・権利(合計 2KB 弱)と縁取りを十分に上回る幅。
+# **実態と違う案内をしない**(tasks/VID-07 禁止事項)。ここが 500MB のままだと、画面は
+# 「500MB まで」と言いながら 20MB で 413 になる —— 利用者は原因を辿れない。
+MULTIPART_MAX_BYTES = GATEWAY_MAX_BODY_BYTES - 64 * 1024
+
+# --- 直接アップロード(VID-07 / specs/20 §2) -----------------------------------
+
+# アップロード用 PAR の寿命。**短命にする**(tasks/VID-07 禁止事項)。ただし 100MB 級を
+# 細い上り回線で上げ切るには時間がかかり、PUT は 1 本の要求なので途中で期限が切れると
+# 上げ直しになる。1 時間は「上げ切れる幅」と「配ったまま長く残さない」の折衷。
+UPLOAD_TTL_SECONDS = 3600
+
+# アップロード用 PAR の名前。**再生用(`jetuse-video-`)と別の接頭辞にする** ——
+# 名前で用途が判らないと、棚卸ししたときに書き込み用が残っていても気づけない。
+_UPLOAD_PAR_NAME_PREFIX = "jetuse-video-upload-"
+
+# `uploading` のまま残った行を回収してよくなるまでの時間。**PAR の寿命より長く取る** ——
+# まだ有効な PAR で上げている最中の行を消すと、上げ切った直後の complete が 404 になる。
+UPLOAD_STALE_SECONDS = 2 * UPLOAD_TTL_SECONDS
+
 # 再生 URL の既定寿命と天井。**無期限の PAR を作らない**。
 # 天井を超える指定はクランプせず拒否する(黙って縮めると「延ばしたのに効かない」になる)
 PLAYBACK_TTL_SECONDS = 3600
@@ -108,6 +135,22 @@ _SCENE_COLUMNS = scene_columns()
 
 class AnalysisInProgressError(RuntimeError):
     """その映像の分析が既に走っている(specs/20 §3)。API は 409 に対応させる。"""
+
+
+class UploadIncompleteError(RuntimeError):
+    """本体がまだ確定していない映像に、本体を要る操作を掛けた(VID-07)。
+
+    2 段アップロードの中間状態(`upload_state = 'uploading'`)。API は 409 に対応させる ——
+    404 にすると「無い」と読めてしまうが、行は在るし上げ直せば使える。
+    """
+
+
+class UploadVerificationError(RuntimeError):
+    """上げられた実物が検証に落ちた(存在しない / 空 / 大きすぎる / 別の Content-Type)。
+
+    **「入れたと言われたから入った」ことにしない**(tasks/VID-07)。落ちた時点で
+    オブジェクト・PAR・台帳の行をまとめて片付けるので、呼び出し側は上げ直しになる。
+    """
 
 
 class AnalysisSupersededError(RuntimeError):
@@ -288,6 +331,311 @@ def create_asset(
     }
 
 
+# --- 直接アップロード(VID-07 / specs/20 §2) -----------------------------------
+
+
+def _par_url(par: Any) -> str:
+    """PAR の公開 URL。トークンは**作成時の応答にしか入っていない**(後から引けない)。"""
+    region = get_settings().oci_region
+    return getattr(par, "full_path", None) or (
+        f"https://objectstorage.{region}.oraclecloud.com{par.access_uri}"
+    )
+
+
+def create_upload_url(
+    owner: str,
+    filename: str,
+    size_bytes: int,
+    *,
+    title: str | None = None,
+    collection: str | None = None,
+    category: str | None = None,
+    rights: str | None = None,
+    captured_at: datetime | None = None,
+    duration_ms: int | None = None,
+    ttl_seconds: int = UPLOAD_TTL_SECONDS,
+) -> dict[str, Any]:
+    """本体を受け取らずに登録を始める —— 台帳に `uploading` の行を作り、
+    **書き込み専用・短命・オブジェクト名を固定した** PAR を返す(VID-07)。
+
+    ゲートウェイの本文上限は 20 MiB(`GATEWAY_MAX_BODY_BYTES`)で、4K の素材は入らない。
+    **本体をゲートウェイに通さない**ことが目的なので、ブラウザはこの PAR へ直接 PUT し、
+    上げ終えたら `complete_upload` で確定する。
+
+    PAR は次の 3 つを同時に満たす(tasks/VID-07 禁止事項「読み書き両用・長命にしない」):
+
+    - `ObjectWrite` = **書き込み専用**。実測でこの PAR からは GET / HEAD とも 404 になる
+      (`runs/.../e2e/spike-par-cors.md`)。読める PAR を配ると、上げる権利が読む権利になる
+    - `object_name` を**この映像 1 個に固定**する。`AnyObjectWrite` だとバケット全体に
+      書ける鍵を配ることになる
+    - `time_expires` は既定 1 時間(`UPLOAD_TTL_SECONDS`)
+
+    **PAR を先に作り、台帳の行は後**。逆順にすると、PAR の発行に失敗したときに
+    上げようのない行が残る。この順なら失敗時に PAR を消せばよく、消し損ねても
+    そこへ書ける相手は誰も居ない(URL を返していない)。
+
+    **ここで自分の古い中断分を回収する**(review-2 VID07-006)。回収を分析の前段だけに
+    置くと、**一度も分析しない利用者の中断分は永久に残る** —— 途中まで上がった大きな
+    本体と、上げようのない行が積む。登録をやり直す人はここを必ず通るので、
+    中断した本人が次に登録した時点で片付く。回収の失敗で新しい登録は止めない。
+    """
+    if not 0 < ttl_seconds <= UPLOAD_TTL_SECONDS:
+        raise ValueError(f"ttl_seconds must be in 1..{UPLOAD_TTL_SECONDS}")
+    if not 0 < size_bytes <= MAX_BYTES:
+        raise ValueError(f"size_bytes must be in 1..{MAX_BYTES}")
+
+    import oci.object_storage.models as osm
+
+    # 中断分の回収を**登録の入口**でも回す(分析だけを頼りにしない)。
+    # 掃除が転んでも新しい登録は通す —— 片付けの失敗で登録できなくなるほうが実害が大きい
+    try:
+        reap_stale_uploads(owner)
+    except Exception:
+        logger.exception("stale upload reap failed (ignored)")
+
+    bucket = require_bucket()
+    client = os_client()
+    ns = client.get_namespace().data
+
+    asset_id = str(uuid.uuid4())
+    ext = pathlib.Path(filename).suffix.lower()
+    # キーに利用者の入力(ファイル名)を混ぜないのは create_asset と同じ。以降の操作は
+    # **台帳に記録した object_name** だけを使い、組み立て直さない
+    object_name = f"video/{owner}/{asset_id}/source{ext}"
+    content_type = content_type_for(filename)
+    expires = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
+    par = client.create_preauthenticated_request(
+        ns, bucket,
+        osm.CreatePreauthenticatedRequestDetails(
+            name=f"{_UPLOAD_PAR_NAME_PREFIX}{asset_id}",
+            object_name=object_name,
+            access_type="ObjectWrite",
+            time_expires=expires,
+        ),
+    ).data
+
+    # 正規化は 1 回だけ(create_asset と同じ理由。保存する値と返す値を別々に作らない)
+    stored = {
+        "title": _fit(title or filename, 500),
+        "collection": _fit(collection, 255),
+        "category": _fit(category, 255),
+        "rights": _fit(rights, 1000),
+        "captured_at": to_utc_naive(captured_at),
+    }
+    try:
+        with connect() as conn:
+            conn.cursor().execute(
+                """
+                INSERT INTO video_assets(id, owner_sub, title, collection, category,
+                                         rights, captured_at, duration_ms, object_name,
+                                         analysis_state, upload_state)
+                VALUES (:id, :o, :t, :coll, :cat, :rights, :captured, :dur, :obj,
+                        'pending', 'uploading')
+                """,
+                id=asset_id, o=owner, t=stored["title"], coll=stored["collection"],
+                cat=stored["category"], rights=stored["rights"],
+                captured=stored["captured_at"], dur=duration_ms, obj=object_name,
+            )
+            conn.commit()
+    except Exception:
+        # 誰も使えない書き込み口を残さない
+        try:
+            client.delete_preauthenticated_request(ns, bucket, par.id)
+        except Exception:
+            logger.exception("upload PAR cleanup failed (ignored)")
+        raise
+
+    return {
+        "id": asset_id,
+        "upload_url": _par_url(par),
+        "object_name": object_name,
+        # ブラウザは**この値をそのまま** PUT の Content-Type に付ける。complete 側は
+        # 同じ規則で計算し直した値と突き合わせるので、別の型を混ぜると弾かれる
+        "content_type": content_type,
+        "expires_at": expires.isoformat(),
+        "max_bytes": MAX_BYTES,
+        "upload_state": "uploading",
+    }
+
+
+def _abandon_upload(owner: str, asset_id: str, object_name: str) -> bool:
+    """確定しなかった登録を**台帳の行・オブジェクト・PAR まで**片付ける。片付けたかを返す。
+
+    **行を先に消し、本体は後**。順番が逆だと、`uploading` の行を消せなかった相手
+    (= 別の実行が先に `ready` にした)の**確定済みの本体を消してしまう**: 回収側が
+    古い行を拾った直後に complete が通ると、本体を消してから DELETE が 0 件になり、
+    「台帳にはあるが本体が無い映像」が残る。条件付き DELETE を**権利の取得**として使い、
+    取れたときだけ本体に触る。
+
+    取れなかったときは何もしない —— その登録は誰か(確定した側 / 利用者の削除)が
+    既に引き取っている。取った後の掃除に失敗した場合は本体だけが残るが、台帳に行の
+    無いオブジェクトは `video_frames.reap_orphan_assets` が後から回収する。
+    """
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM video_assets"
+            " WHERE id = :id AND owner_sub = :o AND upload_state = 'uploading'",
+            id=asset_id, o=owner,
+        )
+        claimed = cur.rowcount > 0
+        conn.commit()
+    if claimed:
+        _purge_objects(object_name)
+    return claimed
+
+
+def complete_upload(owner: str, asset_id: str) -> dict[str, Any]:
+    """上げ終えた本体を**実物で検証してから**確定する(VID-07)。
+
+    **「入れたと言われたから入った」ことにしない。** ブラウザの PUT が 200 を返したと
+    いう申告ではなく、Object Storage に問い合わせて (a) 在ること (b) 空でないこと
+    (c) 上限を超えていないこと (d) Content-Type が発行時に渡した値と一致することを見る。
+    落ちたらオブジェクトごと片付けて `UploadVerificationError`(API は 422)。
+
+    **見る前に書き込み口を閉じる。** アップロード用 PAR は検証の**前**に消す ——
+    後に回すと、`head_object` で確かめてから台帳を `ready` にするまでの隙間に、
+    まだ生きている同じ PAR で中身を差し替えられる(検証した実物と、確定した実物が
+    別のものになる)。順番を逆にしただけで検証は意味を失うので、ここは
+    `strict=True` で**消せなかったら進まない**。
+
+    既に `ready` の行に対しては**何もせず返す**。complete の再送(応答が届かずに
+    もう一度呼ぶ)は正常な経路で、409 にすると成功した登録が失敗に見える。
+    """
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT object_name, upload_state FROM video_assets"
+            " WHERE id = :id AND owner_sub = :o",
+            id=asset_id, o=owner,
+        )
+        row = cur.fetchone()
+    if row is None:
+        raise LookupError(asset_id)
+    object_name, upload_state = row
+    if upload_state != "uploading":
+        return get_asset(owner, asset_id) or {}
+
+    bucket = require_bucket()
+    client = os_client()
+    ns = client.get_namespace().data
+    prefix = object_name.rsplit("/", 1)[0] + "/"
+
+    import oci
+
+    # **検証の前に書き込み口を閉じる**(上の docstring)。ここで失敗したら進まない ——
+    # 閉じられないまま検証しても「確かめた実物が確定される」保証にならない
+    _delete_pars(client, ns, bucket, prefix, strict=True)
+
+    try:
+        headers = client.head_object(ns, bucket, object_name).headers
+    except oci.exceptions.ServiceError as e:
+        if e.status != 404:
+            raise
+        headers = None
+
+    if headers is None:
+        _abandon_upload(owner, asset_id, object_name)
+        raise UploadVerificationError(
+            "アップロードされた映像が見つかりません。もう一度登録してください"
+        )
+
+    size = int(headers.get("content-length") or 0)
+    # `video/mp4; charset=...` のような付帯を落として比べる
+    got = (headers.get("content-type") or "").split(";")[0].strip().lower()
+    expected = content_type_for(object_name)
+    problem = None
+    if size <= 0:
+        problem = "アップロードされた映像が空です(0 バイト)"
+    elif size > MAX_BYTES:
+        problem = (
+            f"映像が大きすぎます({size} バイト。上限 {MAX_BYTES} バイト)"
+        )
+    elif got != expected.lower():
+        problem = (
+            f"アップロードされた映像の種別が違います"
+            f"(受け取った値 '{got}' / 期待 '{expected}')"
+        )
+    if problem:
+        _abandon_upload(owner, asset_id, object_name)
+        raise UploadVerificationError(problem)
+
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE video_assets SET upload_state = 'ready'"
+            " WHERE id = :id AND owner_sub = :o AND upload_state = 'uploading'",
+            id=asset_id, o=owner,
+        )
+        confirmed = cur.rowcount > 0
+        conn.commit()
+    if not confirmed:
+        # 更新できなかった理由は 2 つある。**取り違えると、確定したばかりの映像の
+        # 本体を消す。** complete が同時に 2 回呼ばれると(二度押し・応答が届かずの
+        # 再送)、負けた側から見た行は既に `ready` —— ここで一律に片付けると、
+        # 勝った側が確定した本体を消してしまう。
+        with connect() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT upload_state FROM video_assets WHERE id = :id AND owner_sub = :o",
+                id=asset_id, o=owner,
+            )
+            row = cur.fetchone()
+        if row is not None and row[0] == "ready":
+            asset = get_asset(owner, asset_id) or {}
+            asset["bytes"] = size
+            return asset
+        # 行そのものが消えていた(回収された / 利用者が削除した)。**上げた本体を
+        # 残さない** —— 台帳から辿れないオブジェクトは誰にも消せなくなる
+        _purge_objects(object_name)
+        raise LookupError(asset_id)
+
+    asset = get_asset(owner, asset_id) or {}
+    asset["bytes"] = size
+    return asset
+
+
+def reap_stale_uploads(owner: str) -> list[str]:
+    """`uploading` のまま放置された登録を回収する(tasks/VID-07)。
+
+    ブラウザが PUT の途中で閉じられると、行は `uploading`・本体は途中まで、という
+    残骸になる。**握りつぶすのとは違う**(specs/20 §3) —— 起きないことにするのではなく、
+    ここで後から回収すると決める。`video_frames.reap_orphan_assets` から呼ばれる。
+
+    消すのは `UPLOAD_STALE_SECONDS`(PAR の寿命の 2 倍)より古い行だけ。**まだ有効な
+    PAR で上げている最中の行を消さない** —— 消すと、上げ切った直後の complete が
+    「見つかりません」になり、利用者から見れば理由もなく登録が消える。
+    """
+    cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(
+        seconds=UPLOAD_STALE_SECONDS
+    )
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, object_name FROM video_assets"
+            " WHERE owner_sub = :o AND upload_state = 'uploading'"
+            "   AND created_at < :cut",
+            o=owner, cut=cutoff,
+        )
+        rows = cur.fetchall()
+
+    reclaimed: list[str] = []
+    for asset_id, object_name in rows:
+        try:
+            claimed = _abandon_upload(owner, asset_id, object_name)
+        except Exception:
+            # 1 本の失敗で残りを止めない。次の回収でもう一度拾う
+            logger.exception("stale upload cleanup failed: %s", asset_id)
+            continue
+        # 取れなかった行は**この回収が片付けたものではない**(拾った後に確定された /
+        # 利用者が消した)。数に入れると、触っていないものを片付けたと記録することになる
+        if claimed:
+            reclaimed.append(asset_id)
+    if reclaimed:
+        logger.info("reaped %d stale video upload(s) for %s", len(reclaimed), owner)
+    return reclaimed
+
+
 # --- 一覧・詳細 ---------------------------------------------------------------
 
 
@@ -297,7 +645,11 @@ def list_assets(owner: str, limit: int = 50, offset: int = 0) -> list[dict[str, 
     with connect() as conn:
         cur = conn.cursor()
         cur.execute(
-            f"SELECT {_ASSET_COLUMNS} FROM video_assets WHERE owner_sub = :o"
+            # **確定していない登録は出さない**(VID-07)。本体がまだ無い行を一覧に
+            # 混ぜると、開いても再生できず分析もできない映像が並ぶ。放置された行は
+            # `reap_stale_uploads` が回収する
+            f"SELECT {_ASSET_COLUMNS} FROM video_assets"
+            " WHERE owner_sub = :o AND upload_state = 'ready'"
             " ORDER BY created_at DESC, id DESC"
             " OFFSET :off ROWS FETCH NEXT :lim ROWS ONLY",
             o=owner, off=offset, lim=limit,
@@ -306,7 +658,12 @@ def list_assets(owner: str, limit: int = 50, offset: int = 0) -> list[dict[str, 
 
 
 def get_asset(owner: str, asset_id: str) -> dict[str, Any] | None:
-    """詳細(場面つき)。場面を埋めるのは後続の分析タスクで、v1 の登録直後は空。"""
+    """詳細(場面つき)。場面を埋めるのは後続の分析タスクで、v1 の登録直後は空。
+
+    **確定前(`uploading`)の行もそのまま返す。** 一覧(`list_assets`)は隠すが、ここは
+    隠さない —— id を知っているのは自分だけで、隠すと「登録したのに詳細が 404」に
+    なって状況が読めなくなる。本体を要る操作(再生・分析)はそれぞれの側で止めている。
+    """
     with connect() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -327,12 +684,22 @@ def get_asset(owner: str, asset_id: str) -> dict[str, Any] | None:
         return asset
 
 
-def object_name_for(owner: str, asset_id: str) -> str | None:
+def object_name_for(
+    owner: str, asset_id: str, *, ready_only: bool = False
+) -> str | None:
+    """台帳が持つ本体の位置。
+
+    `ready_only` は「本体が確定している行だけ」(VID-07)。再生のように**本体が要る**
+    操作で使う —— まだ上がっていないオブジェクトへ PAR を発行すると、期限切れまで
+    404 を返す URL を配ることになる。削除は逆に `uploading` の行も対象にする
+    (登録を途中でやめた利用者が消せなくなる)。
+    """
     with connect() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT object_name FROM video_assets WHERE id = :id AND owner_sub = :o",
-            id=asset_id, o=owner,
+            "SELECT object_name FROM video_assets WHERE id = :id AND owner_sub = :o"
+            "   AND (:ready = 0 OR upload_state = 'ready')",
+            id=asset_id, o=owner, ready=1 if ready_only else 0,
         )
         row = cur.fetchone()
         return row[0] if row else None
@@ -374,6 +741,7 @@ def claim_analysis(owner: str, asset_id: str) -> str:
                    analysis_token = :tok,
                    analysis_error = NULL
              WHERE id = :id AND owner_sub = :o
+               AND upload_state = 'ready'
                AND (analysis_state <> 'running'
                     OR analysis_started_at IS NULL
                     OR analysis_started_at < :stale)
@@ -384,14 +752,17 @@ def claim_analysis(owner: str, asset_id: str) -> str:
         conn.commit()
         if claimed:
             return token
-        # 取れなかった理由を分ける。「走っている」と「無い」を同じ扱いにすると、
-        # 利用者は 409 と 404 のどちらなのか判らない
+        # 取れなかった理由を分ける。「走っている」「本体がまだ無い」「無い」を同じ
+        # 扱いにすると、利用者はどれなのか判らない
         cur.execute(
-            "SELECT 1 FROM video_assets WHERE id = :id AND owner_sub = :o",
+            "SELECT upload_state FROM video_assets WHERE id = :id AND owner_sub = :o",
             id=asset_id, o=owner,
         )
-        if cur.fetchone() is None:
+        row = cur.fetchone()
+        if row is None:
             raise LookupError(asset_id)
+        if row[0] != "ready":
+            raise UploadIncompleteError(asset_id)
     raise AnalysisInProgressError(asset_id)
 
 
@@ -490,11 +861,22 @@ def _purge_objects(object_name: str) -> None:
         if not start:
             break
 
+    _delete_pars(client, ns, bucket, prefix)
+
+
+def _delete_pars(client, ns: str, bucket: str, prefix: str, *, strict: bool = False) -> None:
+    """そのプレフィックス配下を指す PAR を全部消す。
+
+    **全ページ集めてから消す。** 再生要求のたびに PAR が増えるので 1 ページ目だけでは
+    足りず、かつページ位置は件数に依存するため、辿りながら消すと詰めた分が飛ばされて
+    消し残る(= 削除後もその URL で読める)。オブジェクト側の next_start_with は
+    名前カーソルなので、この問題は起きない。
+
+    `strict` は**消せたことが前提になる呼び出し**用(`complete_upload` の入口)。
+    そこでは「書き込み口を閉じてから実物を見る」ことが検証の意味そのものなので、
+    消せなかったのに続けると、見た後で中身を差し替えられる余地を残す。
+    """
     try:
-        # **全ページ集めてから消す。** 再生要求のたびに PAR が増えるので 1 ページ目だけ
-        # では足りず、かつページ位置は件数に依存するため、辿りながら消すと詰めた分が
-        # 飛ばされて消し残る(= 削除後もその URL で読める)。
-        # オブジェクト側の next_start_with は名前カーソルなので、この問題は起きない。
         targets = []
         page = None
         while True:
@@ -506,8 +888,18 @@ def _purge_objects(object_name: str) -> None:
             if not page:
                 break
         for par in targets:
-            client.delete_preauthenticated_request(ns, bucket, par.id)
+            try:
+                client.delete_preauthenticated_request(ns, bucket, par.id)
+            except Exception as e:
+                # **既に閉じられていた(404)は、閉じられたのと同じ。** 同じ映像の
+                # complete が同時に走ると、両方が同じ PAR を数えてから消しにいく。
+                # 後から消したほうを失敗にすると、登録は成功しているのに 500 を返す
+                # ことになり、「再送は成功として返す」という約束が破れる
+                if getattr(e, "status", None) != 404:
+                    raise
     except Exception:
+        if strict:
+            raise
         # 本体が消えていれば PAR は 404 を返すだけになる。掃除漏れで削除全体を
         # 失敗にはしないが、黙って握り潰さない
         logger.exception("video PAR cleanup failed (ignored)")
@@ -527,7 +919,7 @@ def playback_url(
     """
     if not 0 < ttl_seconds <= PLAYBACK_TTL_MAX:
         raise ValueError(f"ttl_seconds must be in 1..{PLAYBACK_TTL_MAX}")
-    object_name = object_name_for(owner, asset_id)
+    object_name = object_name_for(owner, asset_id, ready_only=True)
     if object_name is None:
         return None
 
@@ -546,8 +938,4 @@ def playback_url(
             time_expires=expires,
         ),
     ).data
-    region = get_settings().oci_region
-    url = getattr(par, "full_path", None) or (
-        f"https://objectstorage.{region}.oraclecloud.com{par.access_uri}"
-    )
-    return {"url": url, "expires_at": expires.isoformat()}
+    return {"url": _par_url(par), "expires_at": expires.isoformat()}

@@ -83,7 +83,31 @@
 
 ## 2. 登録（要求1）
 
-- `POST /api/video/assets` — multipart で映像を受け、Object Storage へ置き、`pending` で登録
+**映像の本体は API Gateway を通さない**（2026-08-21・VID-07）。ゲートウェイの要求本文の上限は
+**20 MiB**（実測。`docs/verification/VID-01.md` §11.1）で、4K の素材はそこに入らない。
+本体は**書き込み専用の PAR へブラウザが直接 PUT** し、API はその前後だけを受け持つ。
+
+```
+1. POST /api/video/assets/upload-url   → 台帳に uploading の行 + PAR を返す（本体は載らない）
+2. PUT  <PAR の URL>                    → ブラウザ → Object Storage（ゲートウェイを通らない）
+3. POST /api/video/assets/{id}/complete → 実物を検証して ready + pending にする
+```
+
+- `POST /api/video/assets/upload-url` — 登録の入口。**書き込み専用（`ObjectWrite`）・短命
+  （既定 1 時間）・オブジェクト名を固定した** PAR と asset id を返す。読める PAR は配らない
+  （上げる権利が読む権利になる）。上限（500MB）超過は**発行前に** 413
+- `POST /api/video/assets/{id}/complete` — 確定。**実物を検証してから台帳を `ready` にする**
+  —— 存在・サイズ（0 でない／上限内）・Content-Type が発行時の値と一致すること。
+  落ちたらオブジェクト・PAR・行をまとめて片付けて 422。**「入れたと言われたから入った」
+  ことにしない**。**アップロード用 PAR は検証の前に消す** —— 後に回すと、確かめてから
+  確定するまでの隙間に同じ PAR で中身を差し替えられる（確かめた実物と確定した実物が
+  別のものになる）。消せなかったときは確定しない
+- **`uploading` のまま残った行は回収する**（`video.reap_stale_uploads`。PAR の寿命の 2 倍を
+  過ぎた行が対象で、`reap_orphan_assets` から呼ばれる）。確定していない映像は
+  **一覧に出さず・再生 URL も出さず・分析も 409 で止める**（本体がまだ無いため）
+- `POST /api/video/assets` — multipart で映像を受け、Object Storage へ置き、`pending` で登録。
+  **小さい映像用に残す**。本文がゲートウェイを通るので上限は 20 MiB より下（`MULTIPART_MAX_BYTES`）
+  で、超過時は**実測に基づく理由と直接アップロードへの誘導**を返す
 - **複数件をまとめて登録できる。** 1リクエスト1本だが、UI は複数ファイルを選んで順に投げる
 - `GET /api/video/assets` — 一覧（条件・ページング）
 - `GET /api/video/assets/{id}` — 詳細（場面つき）

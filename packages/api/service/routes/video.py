@@ -15,12 +15,31 @@ from jetuse_core import video_analyze, video_edit, video_frames, video_search
 from jetuse_core.auth import AuthContext, require_user
 
 from ..deps import require_video
-from ..schemas import VideoSceneEdit, VideoSearchRequest
+from ..schemas import VideoSceneEdit, VideoSearchRequest, VideoUploadUrlRequest
 
 logger = logging.getLogger("jetuse.service")
 router = APIRouter()
 
 _ALLOWED_HINT = "/".join(sorted(e.lstrip(".") for e in video_repo.ALLOWED_EXTENSIONS))
+
+
+def _MB(n: int) -> str:
+    """バイト数を利用者に見せる形へ。**桁を数えさせない**(20971520 では伝わらない)。"""
+    return f"{n / (1024 * 1024):.0f}MB"
+
+
+def _check_extension(filename: str) -> str:
+    """拡張子を検査し、正規化したファイル名を返す。multipart 経路と直接アップロードで
+    **同じ規則**を使う —— 片方だけ緩いと、そこから他方が想定しない映像が入る。
+    """
+    name = pathlib.Path(filename or "untitled").name
+    ext = pathlib.Path(name).suffix.lower()
+    if ext not in video_repo.ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unsupported video type '{ext}'. allowed: {_ALLOWED_HINT}",
+        )
+    return name
 
 
 def _parse_captured_at(raw: str | None) -> datetime | None:
@@ -58,19 +77,30 @@ async def _check_upload(file: UploadFile) -> tuple[str, int]:
 
     本文はストリームのまま Object Storage へ渡す(映像 1 本をメモリに載せない)。
     """
-    name = pathlib.Path(file.filename or "untitled").name
-    ext = pathlib.Path(name).suffix.lower()
-    if ext not in video_repo.ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=422,
-            detail=f"unsupported video type '{ext}'. allowed: {_ALLOWED_HINT}",
-        )
+    name = _check_extension(file.filename or "untitled")
     size = file.size
     if size is None:  # 稀に size を持たないクライアント。末尾へ seek して測る
         size = await asyncio.to_thread(file.file.seek, 0, 2)
         await asyncio.to_thread(file.file.seek, 0)
-    if size > video_repo.MAX_BYTES:
-        raise HTTPException(status_code=413, detail="file too large (max 500MB)")
+    if size > video_repo.MULTIPART_MAX_BYTES:
+        # **実態と違う案内をしない**(tasks/VID-07 禁止事項)。この経路は API Gateway の
+        # 本文上限(20 MiB・2026-08-20 実測)に阻まれるので、アプリ側の 500MB には
+        # そもそも届かない。ここを 500MB のままにすると、画面は「500MB まで」と言い
+        # ながら 20MB でゲートウェイに 413 で切られ、利用者は理由を辿れない。
+        # **直せる道を必ず添える** —— 大きい映像は本文を通さない経路で登録できる
+        # **丸めた値だけを出さない。** 20,905,985 バイトを「20MB」と丸めると
+        # 「20MB までです(送られたファイルは 20MB)」という、読んでも判らない文になる
+        # (実測でそう出た)。境界の話をするときは実数を添える
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"この経路は API Gateway の本文上限のため約 {_MB(video_repo.MULTIPART_MAX_BYTES)}"
+                f"({video_repo.MULTIPART_MAX_BYTES:,} バイト)までです"
+                f"(送られたファイルは {size:,} バイト)。"
+                f"大きい映像は /videos の登録画面から Object Storage へ直接アップロード"
+                f"してください(最大 {_MB(video_repo.MAX_BYTES)})"
+            ),
+        )
     if not size:
         raise HTTPException(status_code=422, detail="empty file")
     return name, size
@@ -100,6 +130,64 @@ async def create_video_asset(
             captured_at=captured, duration_ms=duration,
         )
     )
+
+
+@router.post("/api/video/assets/upload-url")
+async def create_video_upload_url(
+    req: VideoUploadUrlRequest,
+    user: Annotated[AuthContext, Depends(require_user)],
+    _: Annotated[None, Depends(require_video)],
+):
+    """登録の入口(1/2)。**本体を受け取らずに**書き込み専用の PAR を返す(VID-07)。
+
+    ゲートウェイの本文上限は 20 MiB(`video.GATEWAY_MAX_BODY_BYTES`・実測)なので、
+    4K の素材は multipart 経路では入らない。ブラウザはここで貰った URL へ直接 PUT し、
+    上げ終えたら `complete` を呼ぶ。**本体はゲートウェイを通らない。**
+
+    上限超過はここで弾く(413)。PAR を配ってから落とすと、利用者は 500MB を上げ切った
+    後で失敗を知ることになる。
+    """
+    name = _check_extension(req.filename)
+    if req.size_bytes > video_repo.MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"映像が大きすぎます(送られたファイルは {req.size_bytes:,} バイト)。"
+                f"上限は {_MB(video_repo.MAX_BYTES)}({video_repo.MAX_BYTES:,} バイト)です"
+            ),
+        )
+    captured = _parse_captured_at(req.captured_at)
+    return await asyncio.to_thread(
+        lambda: video_repo.create_upload_url(
+            user.subject, name, req.size_bytes,
+            title=req.title, collection=req.collection, category=req.category,
+            rights=req.rights, captured_at=captured, duration_ms=req.duration_ms,
+        )
+    )
+
+
+@router.post("/api/video/assets/{asset_id}/complete")
+async def complete_video_upload(
+    asset_id: str,
+    user: Annotated[AuthContext, Depends(require_user)],
+    _: Annotated[None, Depends(require_video)],
+):
+    """登録の入口(2/2)。上げ終えた本体を**実物で検証してから**確定する(VID-07)。
+
+    **ブラウザの申告を信じない。** Object Storage に問い合わせて、在ること・空でない
+    こと・上限内であること・Content-Type が発行時の値と一致することを見る。落ちたら
+    オブジェクト・PAR・台帳の行をまとめて片付けて 422 —— 中途半端な登録を残さない。
+
+    再送(応答が届かずにもう一度呼ぶ)は成功として返す。確定済みの行に 409 を返すと、
+    通信の揺れが「登録に失敗した」に見える。
+    """
+    try:
+        return await asyncio.to_thread(video_repo.complete_upload, user.subject, asset_id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail="video asset not found") from e
+    except video_repo.UploadVerificationError as e:
+        # **直せる失敗**。理由をそのまま見せる(「失敗しました」では上げ直しようがない)
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 @router.get("/api/video/assets")
@@ -160,6 +248,13 @@ async def analyze_video_asset(
     except video_repo.AnalysisInProgressError as e:
         raise HTTPException(
             status_code=409, detail="この映像の分析はすでに実行中です"
+        ) from e
+    except video_repo.UploadIncompleteError as e:
+        # **本体がまだ無い**(2 段アップロードの途中)。404 にすると「無い」と読めるが、
+        # 行は在るし上げ直せば使える。分析できないのは映像の中身の問題ではない
+        raise HTTPException(
+            status_code=409,
+            detail="この映像はアップロードが完了していません。登録し直してください",
         ) from e
     except (LookupError, video_repo.AnalysisSupersededError) as e:
         # 引き継がれた側は「自分の結果は無い」。**別の実行の結果を自分のものとして

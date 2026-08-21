@@ -10,7 +10,7 @@ import { useUser } from '../auth'
 import { PageContainer } from '../components/layout'
 import { OciButton, Panel, StatusBadge } from '../components/oci'
 import { usePrefs } from '../prefs'
-import { analyzeAsset, deleteAsset, errorText, listAssets, uploadAsset } from './videos/api'
+import { analyzeAsset, deleteAsset, errorText, listAssets, uploadAssetDirect } from './videos/api'
 import { formatTimecode, formatUtc } from './videos/format'
 import type { AnalysisState, VideoAsset } from './videos/types'
 
@@ -47,7 +47,9 @@ export default function Videos() {
   const [meta, setMeta] = useState({
     title: '', collection: '', category: '', rights: '', captured_at: '',
   })
-  const [uploading, setUploading] = useState<{ done: number; total: number } | null>(null)
+  const [uploading, setUploading] = useState<
+    { done: number; total: number; name: string; pct: number } | null
+  >(null)
   const [uploadErrors, setUploadErrors] = useState<string[]>([])
   const [uploaded, setUploaded] = useState(0)
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -82,21 +84,35 @@ export default function Videos() {
   }, [assets, load, offset])
 
   /** 複数ファイルを**順に**投げる。1 本ずつ結果を確定させ、落ちたファイルは名前で残す
-   *  —— まとめて「失敗しました」にすると、何本入って何本入らなかったのかが判らない。 */
+   *  —— まとめて「失敗しました」にすると、何本入って何本入らなかったのかが判らない。
+   *
+   *  本体は**ゲートウェイを通さず** Object Storage へ直接 PUT する(VID-07)。
+   *  ゲートウェイの本文上限は 20 MiB(実測)で、4K の素材はそこに入らない。
+   *  100MB 級は数分かかるので、**1 本ごとの進捗を出す**(固まったのか進んでいるのかを
+   *  利用者が判断できるようにする)。 */
   const upload = async (files: File[]) => {
-    setUploading({ done: 0, total: files.length })
+    setUploading({ done: 0, total: files.length, name: files[0]?.name ?? '', pct: 0 })
     setUploadErrors([])
     setUploaded(0)
     const failed: string[] = []
     let ok = 0
     for (const [i, file] of files.entries()) {
+      setUploading({ done: i, total: files.length, name: file.name, pct: 0 })
       try {
-        await uploadAsset(user, file, { ...meta, title: files.length === 1 ? meta.title : '' })
+        await uploadAssetDirect(
+          user,
+          file,
+          { ...meta, title: files.length === 1 ? meta.title : '' },
+          (ratio) => setUploading({
+            done: i, total: files.length, name: file.name,
+            pct: Math.round(ratio * 100),
+          }),
+        )
         ok += 1
       } catch (e) {
         failed.push(`${file.name}: ${errorText(e)}`)
       }
-      setUploading({ done: i + 1, total: files.length })
+      setUploading({ done: i + 1, total: files.length, name: file.name, pct: 100 })
     }
     setUploaded(ok)
     setUploadErrors(failed)
@@ -201,8 +217,9 @@ export default function Videos() {
                 className="text-xs file:mr-3 file:rounded-rw file:border-0 file:bg-cta file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-cta-ink"
               />
               {uploading && (
-                <span className="text-xs text-ink-muted">
-                  {t('videos.registering')} {uploading.done}/{uploading.total}
+                <span className="text-xs text-ink-muted" data-testid="upload-progress">
+                  {t('videos.registering')} {Math.min(uploading.done + 1, uploading.total)}
+                  /{uploading.total} — {uploading.name} {uploading.pct}%
                 </span>
               )}
               {!uploading && uploaded > 0 && (

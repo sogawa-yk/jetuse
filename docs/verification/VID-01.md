@@ -11,7 +11,7 @@
 場面行のすべてを残さない。
 
 映像用バケットの `terraform apply` は**人間の承認を得て実行された**（2026-08-19・ORM 経由で
-`jetuse-pubdev-video` を作成）。**E2E はその正規バケットに対してやり直した**。
+`<video-bucket>` を作成）。**E2E はその正規バケットに対してやり直した**。
 残る未達は「public-dev に配備済みの API コンテナ経由での疎通」だけで、これは
 `runs/2026-08-19T2225_VID-01/e2e/SKIPPED.md` に理由を明記している。
 
@@ -24,7 +24,7 @@
 | 所有者分離 | ○ 他人の映像は「存在しない」扱い | `e2e/scenario-3.txt` |
 | NULL と `unknown` の区別 | ○ 同じ列で別の値として残る | `e2e/scenario-4.txt` |
 | 単体テスト / `make lint` / `make test` | ○ `test_video.py` 18 件・全体パス | — |
-| 映像用バケットの apply | ○ 人間の承認後に実行済み（`jetuse-pubdev-video`） | `e2e/terraform-plan.txt` |
+| 映像用バケットの apply | ○ 人間の承認後に実行済み（`<video-bucket>`） | `e2e/terraform-plan.txt` |
 | 配備済み API コンテナ経由の疎通 | **未実施**（配備自体が後続の人間ゲート） | `e2e/SKIPPED.md` |
 
 ## 1. データモデル（migration 022 / 023）
@@ -147,11 +147,11 @@ PAR が消し残る**（＝台帳から消えた後もその URL で読める）
 | 層 | 使ったもの | 備考 |
 |---|---|---|
 | ADB | `jetuse-loop-adb`（internal-dev / ap-osaka-1・DSN `jetuseloop2_low`） | ループ固定環境。migration を実適用 |
-| Object Storage | **`jetuse-pubdev-video`（public-dev / us-chicago-1）** | apply で作られた正規バケット |
+| Object Storage | **`<video-bucket>`（public-dev / us-chicago-1）** | apply で作られた正規バケット |
 | 映像 | `imageio-ffmpeg` で生成した 2 秒 / 320x240 / 11,401 バイトの mp4 | 実ファイル |
 | API | `uvicorn service.main:app` を起動し **実 HTTP** で叩く | 配備済みコンテナではない（下記） |
 
-Object Storage 層は **apply 済みの正規バケット `jetuse-pubdev-video`** を使った。DB 層は
+Object Storage 層は **apply 済みの正規バケット `<video-bucket>`** を使った。DB 層は
 ループ固定環境（`jetuse-loop-adb`）のまま —— public-dev の ADB（`jetusepubdev`）は ORM スタックが
 生成した資格情報で保護されており、ループはそれを持たない（推測で触らない）。migration の適用は
 配備時に API コンテナの起動処理が行う。
@@ -164,7 +164,7 @@ Object Storage 層は **apply 済みの正規バケット `jetuse-pubdev-video`*
 `resource_principal` 権限と API Gateway 経由の疎通で、これは配備後でないと確かめられない。
 
 後片付け: この run が作った `video_assets` / `video_scenes` 行はすべて削除（残 0）。
-`jetuse-pubdev-video` に残ったオブジェクト・PAR は 0。apply 前に代替として使っていた
+`<video-bucket>` に残ったオブジェクト・PAR は 0。apply 前に代替として使っていた
 `jetuse-spike-vid01` バケットも削除済み（`oci os bucket get` が `BucketNotFound`）。
 
 ## 5. リージョンの落とし穴（実機で踏んだ）
@@ -978,3 +978,95 @@ URL に載せていない。載せるなら条件側も URL を正本にする�
 **jetuse-dev へ配備したコンテナ/配信 SPA に対する E2E**（`loop` の app スタックが無く、
 新規スタックの `terraform apply` は人間ゲート）。SPA と API はローカルで起動し、
 その先の依存（ADB / Object Storage / GenAI）はすべて実 OCI に向けて実ブラウザで検証した。
+
+## 11. VID-07: 配備済みゲートウェイ経由での登録（2026-08-21）
+
+**§1〜§10 の検証は Object Storage を SDK で直に叩いており、API Gateway を通る経路を
+通していなかった。** そのため、配備して利用者が触るまで次の 2 つが見えなかった。
+
+### 11.1 API Gateway の本文上限は 20 MiB（実測）
+
+`https://<pubdemo>/api/video/assets` に multipart を投げて二分した。**拡張子違い（`.txt`）で
+投げるとアプリは 422 を返す**ので、`422` なら通過・`413` ならゲートウェイ、と台帳を汚さずに測れる。
+
+| 本文長（multipart 全体） | 結果 |
+|---|---|
+| 1,000,200 / 17,000,200 / 20,000,200 / 20,970,199 / 20,971,199 | 422（通過） |
+| 20,971,720 / 30,000,200 / 52,428,800 | **413（ゲートウェイ）** |
+
+**境界は 20 MiB = 20,971,520 バイトちょうど**。利用者の「17MB は通り 20MB で落ちる」は、
+20MB を 20 MiB として送った場合と一致する。4K の素材はこの経路では入らない。
+
+証跡: `runs/2026-08-20T2223_VID-07/e2e/gateway-body-limit.md`
+
+### 11.2 配備済みアプリは PAR を発行できなかった（IAM）
+
+新経路を配備して叩くと 500。コンテナのログの原因は
+`CreatePreauthenticatedRequest` の **404 `BucketNotFound`（"…or you are not authorized"）**。
+バケットは在る（同じ経路の `put_object` は 200 で通った）。runtime policy が
+`manage objects` + `read buckets` しか持たず、**PAR_MANAGE（bucket 側の permission）が
+無かった**。
+
+**これは VID-07 だけの問題ではない。** 同じ発行経路の
+**`GET /api/video/assets/{id}/playback`（VID-01 §5 の再生 URL）も配備環境では 500** だった。
+§5 の検証が SDK 直叩きだったため、この経路差も 413 と同じく配備して初めて出た。
+
+対処は最小権限の 1 文（`manage buckets` は与えない）。
+
+```hcl
+"Allow dynamic-group <runtime-dg> to manage buckets in compartment id <c> where request.permission='PAR_MANAGE'"
+```
+
+`ops/orm-stack.sh public-dev apply --apply` の結果は **0 added / 1 changed / 0 destroyed**。
+証跡: `runs/.../e2e/iam-plan.log` / `iam-apply.log`。
+
+### 11.3 2 段アップロードの実機結果
+
+| 確かめたこと | 結果 |
+|---|---|
+| **3840x2160 25fps mp4 / 129,597,620 バイト（123.6 MiB）の登録** | **成功**（PUT 16.0 秒 → complete で `bytes=129597620` が一致 → 一覧に出る） |
+| 登録した映像の再生 | `playback` 200 → Range 取得 206 / 先頭に `ftyp` |
+| 書き込み専用 PAR の読み取り | GET / HEAD とも **404** |
+| サイズ 0 で確定 | **422**「アップロードされた映像が空です(0 バイト)」＋オブジェクトも行も片付く |
+| 別 Content-Type（`application/zip`）で確定 | **422**「種別が違います(受け取った値 'application/zip' / 期待 'video/mp4')」＋片付く |
+| 確定後に同じ PAR へ再 PUT | **401**（確定時に PAR を消しているため） |
+| 501MB の申告 | **413**（PAR を配る前に弾く） |
+| 中断した登録（本体なし／本体ありで未確定） | 一覧に出ない・分析は 409 → **回収された**（行・オブジェクトとも） |
+| multipart の 413 | アプリの文言が届く（上限は実測に合わせて 20,905,984 バイト） |
+
+証跡: `runs/2026-08-20T2223_VID-07/e2e/scenario-1〜4`。
+
+### 11.4 見落としの構造: E2E が「利用者の通る経路」を通していなかった
+
+**413 も PAR の権限不足も、同じ 1 つの原因から出ている。**
+
+VID-01〜06 の E2E は、Object Storage も ADB も **開発者の資格情報（`~/.oci/config`）で
+SDK を直接叩いて**確かめていた。ローカルの Python から `put_object` / `create_preauthenticated_request`
+を呼べば当然通る —— 開発者にはテナンシ全体の権限があるからだ。しかし利用者が実際に通るのは
+
+```
+ブラウザ → API Gateway → Container Instance（リソースプリンシパル）→ Object Storage / ADB
+```
+
+という経路で、ここには **SDK 直叩きには存在しない 2 つの関門**がある。
+
+| 関門 | SDK 直叩きでの見え方 | 実機での見え方 |
+|---|---|---|
+| **API Gateway**（本文 20 MiB） | 存在しない（HTTP すら経由しない） | 20 MiB 超で **413**。応答形式もアプリの `detail` ではなく `code`/`message` |
+| **リソースプリンシパルの権限** | 存在しない（開発者権限で通る） | `PAR_MANAGE` が無く **404 BucketNotFound** |
+
+**同じ形の見落としが 2 回続いた。** 1 回目は登録サイズ（配備して利用者が触って発覚）、
+2 回目は再生 URL（VID-07 の検証中に発覚。**VID-01 の完了報告後もずっと壊れていた**）。
+どちらも「ローカルでは動く」ことを確かめて完了にしていた。
+
+**教訓（以降の E2E に適用する）**
+
+1. **利用者が通る経路をそのまま通す。** 配備済みのエンドポイント（ゲートウェイの URL）に対して
+   HTTP で叩く。SDK 直叩きは*補助*であって、それ単独を完了の根拠にしない。
+2. **権限は「動かす主体」で確かめる。** 開発者の資格情報で通ることは、リソースプリンシパルで
+   通ることを何も保証しない。IAM に関わる機能（PAR・Vault・GenAI・Speech）は特にそう。
+3. **経路の途中にある装置（ゲートウェイ・LB・プロキシ）の制限を、アプリの制限より先に測る。**
+   アプリ側の上限がそれより大きいと、利用者にはアプリの案内が一切届かない。
+4. **配備してから触る。** VID-06 まで「ローカルの SPA + 実 OCI 依存」で E2E を済ませていた
+   （§10）。本タスクでは配備済み SPA を実ブラウザで開いて確かめている
+   （`runs/2026-08-20T2223_VID-07/e2e/scenario-6-real-browser.md`）。
