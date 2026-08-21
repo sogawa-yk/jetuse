@@ -12,6 +12,7 @@ module "object_storage" {
   compartment_ocid = var.compartment_ocid
   prefix           = var.prefix
   region           = var.region
+  spa_par_expiry   = var.spa_par_expiry
 }
 
 module "adb" {
@@ -149,4 +150,8 @@ module "iam" {
   prefix                = var.prefix
   enable_dynamic_group  = var.enable_dynamic_group
   enable_runtime_policy = var.enable_runtime_policy
+  # 動的グループを作らない環境では、ポリシーが参照する既存 DG 名をここで渡す。
+  # テナンシの DynamicResourceGroups には上限があり、環境ごとに 3 本ずつ作れない
+  # (2026-08-08: 50 本で quotaExceeded。48 本は他プロジェクトのもので消せない)。
+  existing_dynamic_group = var.existing_dynamic_group
 }

@@ -1,0 +1,47 @@
+{
+  "review_n": 7,
+  "timestamp": "2026-08-06T01:27:28+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-7.input.diff",
+  "raw_output_path": "reviews/review-7.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "blocker はありません。未リリース検出と異常系のテスト・E2E 証跡は十分ですが、fork 由来の同名ブランチ PR を release PR と誤認して警告を隠す可能性と、`gh` のJSONスキーマ異常時にレポート全体が落ちる経路が残っています。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 1,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "id": "REV-001",
+      "severity": "major",
+      "file": "ops/stalled.py",
+      "line": 202,
+      "issue": "release PR の照合条件が `headRefName` と `baseRefName` だけです。fork 側に `public-dev` または `internal-dev` という同名ブランチがあり対象 stable branch へのPRが開かれると、自リポジトリの開発枝をリリースするPRでなくても `status=\"pr\"` となり、今回追加した要注意警告が消えます。",
+      "suggestion": "`gh pr list --json` に `isCrossRepository`（または head repository/owner 情報）を追加し、自リポジトリ由来のPRだけを release PR と認定してください。同名fork PRを除外する回帰テストも追加してください。"
+    },
+    {
+      "id": "REV-002",
+      "severity": "minor",
+      "file": "ops/stalled.py",
+      "line": 113,
+      "issue": "`json.loads()` の結果をリストとして検証せず、例外処理の外で `len(recs)` を呼んでいます。`gh` が有効なJSONでも `null` を返すと `TypeError`、object や要素欠損を返すと後続の内包表記で例外となり、「取得不能は `None` に落としてレポート生成を継続する」というエラー処理を満たしません。",
+      "suggestion": "解析結果が `list` で、各要素が必要なキーと型を持つ `dict` か検証し、違反時は `None` を返してください。`null`、object、キー欠損要素のテストを追加してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 6,
+    "adequacy": "sufficient",
+    "notes": "`runs/2026-08-06T_RELEASE-LAG/e2e/` の6シナリオを確認しました。27件の単体テスト、実リポジトリでの16/10 commit照合、release PRのbase判定、オフライン耐性、判定不能状態、明示refspecを網羅しており、主要なdiffの主張を裏づけています。OCI配備対象外である理由は `SKIPPED.md` に具体的に記載され、代替検証も妥当です。ただし同名fork PRと有効JSONのスキーマ異常は未検証です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおり実ブラウザE2Eは実施していません。"
+    }
+  }
+}

@@ -21,9 +21,16 @@
 #   BRANCH_BASE=internal-dev make lint       # ローカルで検査したいとき
 #
 # base の解決順: 引数 > $BRANCH_BASE > $GITHUB_BASE_REF（PR の base）。
-# **どれも無ければスキップする（合格ではない）。** ローカルでは「その変更をどこへ向けるつもりか」を
-# git から知る術が無く、推測で落とすと通常の `make lint` が壊れるため。
-# 強制力があるのは CI（pull_request で $GITHUB_BASE_REF が入る）側。
+# **どれも無ければ merge-base から推定する。** 以前はここでスキップしていたが、黙って通ると
+# 「ローカルでは何も言われない → PR で初めて落ちる」になる（実際そうなった）。
+# 判定は **「HEAD の分岐点が public-dev に含まれるか」**:
+#   mbi = merge-base(HEAD, internal-dev)
+#   mbi が public-dev の祖先 → public-dev 起点 / そうでなければ internal-dev 起点
+# **単純な merge-base 等値比較では駄目。** internal-dev が public-dev に追いつく前
+# （同期は人間ゲートなので日常的にそうなる）、public-dev 先端から切った枝の
+# mb(pub) と mb(int) は食い違い、Public の作業を Internal と誤判定する。
+# ただし**推定では落とさない**（`make lint` を壊さない）。警告に留め、強制するのは CI
+# （pull_request で $GITHUB_BASE_REF が入る）側のまま。`make where` が同じ推定を使う。
 set -euo pipefail
 # **呼び出し元の worktree** を見る。$(dirname $0)/.. へ cd すると、ループが使う別 worktree から
 # 実行したときにスクリプトの置き場（＝主 worktree）の HEAD を検査してしまう。
@@ -32,11 +39,44 @@ cd "$(git rev-parse --show-toplevel)"
 PATHS_NAME="ops/internal-only-paths.txt"
 BASE="${1:-${BRANCH_BASE:-${GITHUB_BASE_REF:-}}}"
 
+# 推定で決めた base か（真なら FAIL を WARN に落とす）。
+ESTIMATED=0
 if [ -z "$BASE" ]; then
-  echo "[base] SKIP: base 未指定のため検査していません（合格ではない）。"
-  echo "[base]       ローカルで確かめるなら: BRANCH_BASE=internal-dev ops/check-branch-base.sh"
-  echo "[base]       PR では CI が \$GITHUB_BASE_REF を渡して必ず検査します。"
-  exit 0
+  _resolve() { for c in "origin/$1" "$1"; do
+      git rev-parse --verify --quiet "$c" >/dev/null && { echo "$c"; return 0; }; done; return 1; }
+  _pubref="$(_resolve public-dev || true)"
+  _intref="$(_resolve internal-dev || true)"
+  _cur="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  case "$_cur" in
+    public-dev|main)              BASE=public-dev ;;
+    internal-dev|internal-stable) BASE=internal-dev ;;
+    *)
+      if [ -n "$_pubref" ] && [ -n "$_intref" ]; then
+        _mbi="$(git merge-base HEAD "$_intref" 2>/dev/null || true)"
+        if [ -n "$_mbi" ]; then
+          # **終了値を 0 / 1 / それ以外で分ける。** `--is-ancestor` は「祖先ではない」を 1、
+          # 異常（不正な ref・リポジトリ破損など）を 1 より大きい値で返す。まとめて else に
+          # 入れると、判定できなかった場合を internal-dev 起点と確定してしまう。
+          # `|| _anc=$?` で条件文脈に入れる。裸で書くと `set -e` が非ゼロ終了で
+          # スクリプトごと落とし、判定に辿り着かない。
+          _anc=0
+          git merge-base --is-ancestor "$_mbi" "$_pubref" 2>/dev/null || _anc=$?
+          case "$_anc" in
+            0) BASE=public-dev ;;
+            1) BASE=internal-dev ;;
+            *) BASE="" ;;   # 推定不能。下の SKIP へ落ちる
+          esac
+        fi
+      fi
+      ;;
+  esac
+  if [ -z "$BASE" ]; then
+    echo "[base] SKIP: base を指定も推定もできません（合格ではない）。" >&2
+    echo "[base]       long-lived ブランチを取得すると推定できます: git fetch origin" >&2
+    exit 0
+  fi
+  ESTIMATED=1
+  echo "[base] 起点を推定: ${BASE}（明示するなら BRANCH_BASE=... / 詳細は make where）"
 fi
 
 BASE="${BASE#refs/heads/}"
@@ -172,8 +212,10 @@ if [ "$internal" -gt 0 ]; then
   exit 0
 fi
 
+_LVL=FAIL
+[ "$ESTIMATED" = 1 ] && _LVL=WARN
 cat >&2 <<EOF
-[base] FAIL: この PR は共有物しか変更していないのに base が internal-dev です（$shared 件）。
+[base] ${_LVL}: 共有物しか変更していないのに起点が internal-dev です（$shared 件）。
 
 $(printf '%s' "$shared_list")
   共有物を internal 側の枝に入れると Public へ届かず、両系統が乖離します。
@@ -183,4 +225,10 @@ $(printf '%s' "$shared_list")
   ただし「Public 版に出しても差し支えないか」を先に考えること。差し支えないなら
   一覧に足すのではなく public-dev 起点で作り直すのが正しい対応です。
 EOF
+# **推定では落とさない。** 推定は信頼できるが明示された base ではないので、`make lint` を
+# 止める根拠にはしない。この起点のまま PR を出せば CI が同じ判定で落とす。
+if [ "$ESTIMATED" = 1 ]; then
+  echo "[base] （推定のため lint は通します。この起点で PR を出すと CI が落とします）" >&2
+  exit 0
+fi
 exit 1

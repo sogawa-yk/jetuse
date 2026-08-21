@@ -81,6 +81,7 @@ from .routes import (
     health,
     minutes,
     usecases,
+    video,
     voice,
 )
 from .routes import rag as rag_routes
@@ -193,6 +194,7 @@ def create_app() -> FastAPI:
     app.include_router(usecases.router)
     app.include_router(capabilities.router)
     app.include_router(demos.router)
+    app.include_router(video.router)
     app.include_router(demos.crud_router)  # Demo CRUD(SP2-01 / specs/18 §2)
     app.include_router(builder.router)  # ビルダー・ヒアリング(SP3-01 / specs/19 §2)
 

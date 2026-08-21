@@ -1,0 +1,29 @@
+# シナリオ8: 実 ADB のまま status を3つとも出す（DB は一切変更しない）
+
+ER-0015 は「DB は据え置きでイメージだけ先に進んだ」状態なので、
+**イメージ側（migrations/ の中身）だけを動かす**のが忠実な再現になる。
+共有スキーマを壊す必要が無い。
+
+DB の実状態: user_tables=21 / schema_migrations=21 件
+イメージ(この checkout): 21 件
+
+== A. そのまま（DB とイメージが一致）==
+  status=ok applied=21 expected=21  0.16s
+
+== B. behind: イメージ側に未適用の版を1本足す（DB は触らない）==
+  status=behind applied=21 expected=22  0.15s
+  pending=['999_jetuse_spike_mig15']
+  hint=このイメージが要求する migration が 1 件未適用(999_jetuse_spike_mig15)。未適用のものが表を作る内容なら、その表を使う機能は 503 になる。docs/guides/dev-environments.md の「マイグレーションを後から流す」を参照
+  capability_health: ok=False schema.status=behind
+
+== C. foreign: イメージから1本外す（DB は触らない）==
+  status=foreign applied=21 expected=20  0.20s
+  foreign=['021_http_tool_headers']
+  capability_health: schema.status=foreign（foreign は ok を落とさない）
+
+== D. DB が一切変わっていないこと ==
+  user_tables 21 -> 21 / schema_migrations 21 -> 21 件
+  OK
+
+作業ツリーの残骸: なし
+== すべて OK ==

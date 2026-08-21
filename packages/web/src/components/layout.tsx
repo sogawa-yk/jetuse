@@ -25,6 +25,7 @@ const NAV: { to: string; key: string; icon: IconName }[] = [
   { to: '/minutes', key: 'nav.minutes', icon: 'minutes' },
   { to: '/realtime', key: 'nav.realtime', icon: 'realtime' },
   { to: '/voicechat', key: 'nav.voicechat', icon: 'voicechat' },
+  { to: '/videos', key: 'nav.videos', icon: 'video' },
   { to: '/video', key: 'nav.video', icon: 'video' },
   { to: '/ocr', key: 'nav.ocr', icon: 'ocr' },
   { to: '/demo-builder', key: 'nav.demobuilder', icon: 'idea' },

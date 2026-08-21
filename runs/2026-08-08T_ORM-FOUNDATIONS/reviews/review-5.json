@@ -1,0 +1,71 @@
+{
+  "review_n": 5,
+  "timestamp": "2026-08-09T09:18:40+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-5.input.diff",
+  "raw_output_path": "reviews/review-5.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "PASS",
+  "summary": "ORM 移行と両環境の収束は添付ログで裏付けられていますが、秘密を含み得る変数のマスク、ADB 起動の重複検出、権限境界の実測に major の不足があります。blocker は確認されなかったため verdict は PASS です。",
+  "severity_counts": {
+    "blocker": 0,
+    "major": 3,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "M001",
+      "severity": "major",
+      "file": "infra/terraform/environments/dev/schema.yaml",
+      "line": 32,
+      "issue": "Terraform で sensitive とされ、ADB_PASSWORD 等を含み得る `api_environment` が ORM schema に宣言されていません。`orm-stack.sh` は既存 stack variables を丸ごと引き継ぐため、この値も ORM に保持されますが、schema 上の password マスクがなくコンソールで秘密が平文表示される可能性があります。",
+      "suggestion": "秘密を独立した password 型変数または Vault Secret OCID 参照へ分離してください。移行まで `api_environment` を保持する必要がある場合も、秘密を含まない値だけに制限し、検証を追加してください。"
+    },
+    {
+      "id": "M002",
+      "severity": "major",
+      "file": "ops/start-adb-if-stopped.sh",
+      "line": 118,
+      "issue": "複数リージョンの重複を全探索後ではなく逐次検出しているため、最初のリージョンで STOPPED の ADB を見つけると、その場で起動してから後続リージョンの重複を検出します。「複数リージョンなら止める」という fail-closed の主張に反し、意図しない個体を既に変更した後で非ゼロ終了します。リージョン検索が一部失敗した場合も同様に、別リージョンの ADB を起動し得ます。",
+      "suggestion": "第一段階で全リージョンを検索してエラー・件数・重複を検証し、対象が一意かつ全検索成功の場合だけ第二段階で start を実行してください。検索失敗、同一リージョン重複、リージョン間重複を OCI CLI スタブで実行テストしてください。"
+    },
+    {
+      "id": "M003",
+      "severity": "major",
+      "file": "runs/2026-08-08T_ORM-FOUNDATIONS/e2e/SKIPPED.md",
+      "line": 7,
+      "issue": "差分の主要なセキュリティ主張である環境間 Resource Principal 分離について、添付証跡は Dynamic Group matching rule と Policy 定義の確認だけです。internal-dev principal から public-dev への拒否、および public-dev principal の同一環境への許可は実測されていません。「ワークロードを立てる必要があるため踏み込まなかった」という説明は、jetuse-dev の開発リソース作成が承認済みであることを踏まえると、中心的主張を未検証とする技術的制約にはなっていません。",
+      "suggestion": "各環境の Resource Principal から同一環境への許可と他環境への拒否を最低1本ずつ実測し、コマンド、終了コード、マスク済み応答を保存してください。実施不能なら、必要権限の不足など具体的な阻害要因を SKIPPED.md に記録してください。"
+    },
+    {
+      "id": "m001",
+      "severity": "minor",
+      "file": "ops/orm-stack.sh",
+      "line": 82,
+      "issue": "読み取り専用の `state` action も分岐前に `ADB_ADMIN_PASSWORD` を必須検証します。この秘密は state 取得には不要ですが、`ops/dev-env-up.sh` の通常経路まで ADB 管理パスワードを持つ実行環境でなければ利用できなくなり、最小権限と後方互換性を損ないます。",
+      "suggestion": "`state` 分岐を秘密変数の検証より前に移し、state 取得では compartment と stack 解決に必要な値だけを要求してください。ADB_ADMIN_PASSWORD 未設定でも state が取得できるテストを追加してください。"
+    },
+    {
+      "id": "m002",
+      "severity": "minor",
+      "file": "packages/api/tests/test_ops_orm_stack.py",
+      "line": 91,
+      "issue": "`test_find_stack_errors_on_a_bad_compartment` は OCI CLI をスタブ化せず実コマンドへ依存します。OCI CLI が未導入、未認証、または通信不能でも単に非ゼロになるためテストが成功し、意図した `find_stack` のエラー処理を通ったことを保証しません。また通常のテストが外部 OCI と最大180秒の通信を行います。",
+      "suggestion": "一時 PATH に `oci` スタブを置き、呼び出しを記録したうえで決定的な異常終了と正常な0件を返すテストへ変更してください。実 OCI の確認は E2E に分離してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 16,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-08-08T_ORM-FOUNDATIONS/e2e/` の要約、権限境界記録、マスク済み ORM logs を確認しました。internal-dev の `28 to import, 4 to add, 2 to change, 0 to destroy`、移行後の No changes、public-dev の quotaExceeded、専用 DG への Policy 差し替え、両環境の最終 No changes は証跡で裏付けられ、複数シナリオ条件を満たします。一方、中心的な環境間アクセス拒否・同一環境アクセス許可は未実測で、ADB ヘルパーの検索失敗・リージョン間重複など最終コードの境界条件にも実行証跡がないため、diff 全体の裏付けとしては不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

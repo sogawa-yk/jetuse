@@ -1,0 +1,16 @@
+# シナリオ4: 変異検査（テストが本当に効くか）
+
+## A: ops が新しいコマンドを使い始める — 4つの書き方で検出できるか
+  kubectl get pods                             検出kubectl
+  if ! kubectl get pods; then echo x; fi       検出kubectl
+  FOO=1 kubectl get pods                       検出kubectl
+  echo a | kubectl apply -f -                  検出kubectl
+
+## B: doctor が常に「codex なし」と言う形にする
+=========================== short test summary info ============================
+FAILED tests/test_ops_doctor.py::test_doctor_passes_when_everything_is_present
+1 failed, 10 passed in 4.92s
+
+## 復元後
+...........                                                              [100%]
+11 passed in 4.65s

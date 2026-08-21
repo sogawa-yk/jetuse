@@ -69,6 +69,10 @@ output "speech_bucket" {
   value = module.object_storage.speech_bucket
 }
 
+output "video_bucket" {
+  value = module.object_storage.video_bucket
+}
+
 output "app_log_id" {
   value = module.observability.app_log_id
 }

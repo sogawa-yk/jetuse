@@ -1,0 +1,79 @@
+{
+  "review_n": 4,
+  "timestamp": "2026-08-09T09:10:40+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-4.input.diff",
+  "raw_output_path": "reviews/review-4.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "ORM 移行と両環境の収束は生ログで確認できますが、人間承認待ちと明記された destroy・IAM/apply が実施済みで、承認証跡がありません。また秘密変数のマスク、ADB 重複検出、権限境界の実アクセス検証に不足があります。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 3,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "id": "B001",
+      "severity": "blocker",
+      "file": "runs/2026-08-08T_ORM-FOUNDATIONS/e2e/SKIPPED.md",
+      "line": 79,
+      "issue": "ADR-0031 は `jetuse:public` 撤去と public-dev apply を「承認後」と明記した Proposed 状態ですが、証跡は 181 resources の destroy、public-dev apply、Dynamic Group の削除・追加、IAM policy 変更が実施済みであることを示します。これらは loop-config.yml の通常フローに含まれず、明示された人間ゲート対象ですが、承認記録が添付されていません。",
+      "suggestion": "実施前に得た承認の日時・承認者・対象操作を追跡可能な証跡として添付し、ADR の Status を実態に合わせて更新してください。承認が存在しない場合は、無断の破壊・IAM変更として影響確認とインシデント対応を行ってください。"
+    },
+    {
+      "id": "M001",
+      "severity": "major",
+      "file": "infra/terraform/environments/dev/schema.yaml",
+      "line": 27,
+      "issue": "schema は `adb_admin_password` しか password 型にしていませんが、既存 stack variables から引き継ぐ `registry_password` と、ADB password 等を含み得る `api_environment` が宣言されていません。Terraform 側の sensitive 指定だけでは ORM コンソール上の stack variable をマスクできず、移行した秘密が平文表示される可能性があります。",
+      "suggestion": "stack で保持し得る全変数を schema に宣言し、少なくとも `registry_password` を password 型にしてください。秘密を含む map を安全に表現できない場合は `api_environment` を秘密変数へ分割するか、Vault Secret OCID 参照へ変更してください。"
+    },
+    {
+      "id": "M002",
+      "severity": "major",
+      "file": "ops/start-adb-if-stopped.sh",
+      "line": 74,
+      "issue": "ADB 検索を JMESPath の `[0]` で単一値に潰しているため、同じ compartment・region に同名 ADB が複数存在しても検出できません。STOPPED の別個体を見逃したり、93行目で先頭個体を誤って起動したりします。複数リージョンの重複だけを数える現在の `found` では防げません。",
+      "suggestion": "各リージョンで id と lifecycle-state の配列を取得し、件数が1以外なら fail-closed にしてください。同一リージョン内の0件・1件・複数件をモックした実行テストを追加してください。"
+    },
+    {
+      "id": "M003",
+      "severity": "major",
+      "file": "runs/2026-08-08T_ORM-FOUNDATIONS/e2e/SKIPPED.md",
+      "line": 7,
+      "issue": "差分の主要なセキュリティ主張は環境間の Resource Principal 権限分離ですが、証跡は Dynamic Group matching rule と policy 定義の観測だけで、internal-dev から public-dev への拒否および public-dev 内での許可を実測していません。SKIPPED.md の理由は必要なワークロードを用意しなかったという範囲説明に留まり、jetuse-dev での開発リソース作成が承認済みであることを踏まえると、中心的主張を未検証とする十分な制約になっていません。",
+      "suggestion": "各環境の Resource Principal から、同一環境の代表的リソースへの許可と他環境への拒否を最低1本ずつ実測し、コマンド、終了コード、マスク済み応答を保存してください。実施不能なら技術的・権限的な具体的制約を SKIPPED.md に記録してください。"
+    },
+    {
+      "id": "m001",
+      "severity": "minor",
+      "file": "packages/api/tests/test_ops_orm_stack.py",
+      "line": 103,
+      "issue": "`find_stack` は `STACK_REGION` を参照するのに、テストは `REGION` しか設定していません。`set -u` により OCI CLI を呼ぶ前に未定義変数で失敗するため、このテストは stack lookup の CLI エラー処理を検証せず常に期待どおりの非ゼロになります。",
+      "suggestion": "`STACK_REGION=us-chicago-1` を設定し、OCI CLI をスタブ化して異常終了を返してください。未定義変数ではなく、スタブが実際に呼ばれたことも検証してください。"
+    },
+    {
+      "id": "m002",
+      "severity": "minor",
+      "file": "runs/2026-08-08T_ORM-FOUNDATIONS/e2e/16_permission_boundary.txt",
+      "line": 15,
+      "issue": "マスク済み証跡としてコミットするファイルに compartment OCID の一意な末尾文字列と環境名の対応を残しています。完全な OCID ではありませんが、環境依存のテナンシ識別情報をリポジトリへ固定しています。",
+      "suggestion": "`<internal-dev-compartment>` / `<public-dev-compartment>` のような非実値の別名へ置換し、実 OCID と対応情報は `.env` またはコミット対象外の証跡に限定してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 16,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-08-08T_ORM-FOUNDATIONS/e2e/` の SKIPPED.md、権限境界記録、ORM raw logs を確認しました。internal-dev import の `28 to import, 4 to add, 2 to change, 0 to destroy`、移行後の No changes、public-dev の quotaExceeded、専用 DG への policy 差し替え、両環境の最終 No changes はログで裏付けられています。一方、中心的な環境間アクセス拒否は定義確認のみであり、許可・拒否の実アクセス試験がありません。また destroy・IAM/apply の人間承認証跡も確認できません。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

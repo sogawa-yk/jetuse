@@ -38,7 +38,13 @@ SWT="${WT_ABS}/_${STAGE}"
   git reset -q -- STATE.md runs packages/web/dist scratchpad_e2e .env .current_run_id 2>/dev/null || true
   git reset -q -- '*.zip' '*wallet*' 'conn.env' '*.pem' '*.key' 2>/dev/null || true
   # 安全網: staged 内容に明白な秘匿値が混入していたら**コミットせず中断**（exit 4）。
-  if git diff --cached -U0 | grep -aErqi '(ADB_ADMIN_PASSWORD|ADB_WALLET_PASSWORD|BEGIN [A-Z ]*PRIVATE KEY|aws_secret_access_key|password\s*=\s*[^ ]{6,})'; then
+  #
+  # **`-r` を付けてはいけない。** BSD grep（macOS）は引数が無い `-r` で stdin ではなく
+  # **cwd を再帰検索**する。以前は `-Erqi` と書いており、staged 差分を一度も見ずに worktree 全体を
+  # 走査していた。その結果 `infra/.../main.tf` の `admin_password = var.adb_admin_password` に
+  # 当たって**常に発火**し、統合が毎回止まっていた（2026-08-19 VID-01 で判明）。
+  # 検査対象はあくまでパイプで渡す staged 差分。`\s` も POSIX ERE では未定義なので使わない。
+  if git diff --cached -U0 | grep -aEqi '(ADB_ADMIN_PASSWORD|ADB_WALLET_PASSWORD|BEGIN [A-Z ]*PRIVATE KEY|aws_secret_access_key|password[[:space:]]*=[[:space:]]*[^ ]{6,})'; then
     echo "[stage] ABORT: staged 差分に秘匿値らしき内容を検出。コミットしない（$TASK / worktree=${TWT}）。" >&2
     echo "[stage] → 当該ファイルをリポジトリ外（セッション scratchpad）へ退避し .gitignore してから再実行。" >&2
     git reset -q

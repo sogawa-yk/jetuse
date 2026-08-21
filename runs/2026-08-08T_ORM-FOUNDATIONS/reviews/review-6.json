@@ -1,0 +1,63 @@
+{
+  "review_n": 6,
+  "timestamp": "2026-08-09T09:24:35+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-6.input.diff",
+  "raw_output_path": "reviews/review-6.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "実環境の収束は複数の ORM ログで確認できますが、添付されたリポジトリ内ログに有効期限内の PAR URL 相当値と実エンドポイントが残っており blocker です。加えて ADB 起動処理の fail-closed 不成立、ORM 上での秘密変数マスク不足、権限境界の未実測があります。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 3,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "B001",
+      "severity": "blocker",
+      "file": "runs/2026-08-08T_ORM-FOUNDATIONS/e2e/logs/orm-internal-dev-plan-mt6vrltik7ra.log",
+      "line": 1,
+      "issue": "マスク済み証跡を標榜していますが、Object Storage PAR の完全な `access_uri` / `full_path`、namespace、Identity Domain URL、API Gateway hostname などの環境実値がログ群に残っています。特に PAR URL は期限内なら認証情報として利用できるため、リポジトリへの保存は秘密情報の漏えいです。",
+      "suggestion": "PAR の `access_uri`、`full_path`、`par_id`、Object Storage namespace、Identity Domain/API Gateway endpoint を非実値へ置換してください。露出した PAR は失効・再発行し、全 `runs/**/e2e/logs` を同じ基準で再走査してください。"
+    },
+    {
+      "id": "M001",
+      "severity": "major",
+      "file": "ops/start-adb-if-stopped.sh",
+      "line": 118,
+      "issue": "コメントでは「調べ切ってから動かす」としていますが、実装はリージョン走査中に STOPPED ADB を直ちに起動します。後続リージョンで検索失敗や重複が判明しても既に変更済みであり、`rc=1` を設定するだけなので fail-closed になっていません。",
+      "suggestion": "第一段階で全リージョンの検索結果を収集し、全検索成功かつ対象が一意であることを確認してから、第二段階で start を実行してください。検索失敗、同一リージョン重複、リージョン間重複時に start が呼ばれないスタブテストを追加してください。"
+    },
+    {
+      "id": "M002",
+      "severity": "major",
+      "file": "infra/terraform/environments/dev/schema.yaml",
+      "line": 11,
+      "issue": "`orm-stack.sh` は既存 stack variables を丸ごと引き継ぎますが、秘密を含み得る `api_environment` が schema に宣言されていません。Terraform の sensitive 指定では ORM コンソールの変数表示をマスクできず、ADB パスワード等が平文表示される可能性があります。ADR も危険を認識しながら開発環境として許容しており、秘密管理上の十分な防止策ではありません。",
+      "suggestion": "`api_environment` へ秘密を格納できない構造にし、秘密を個別の password 型変数または Vault Secret OCID 参照へ分離してください。移行期間中も既存値に秘密が含まれないことを検証してから stack を更新してください。"
+    },
+    {
+      "id": "M003",
+      "severity": "major",
+      "file": "runs/2026-08-08T_ORM-FOUNDATIONS/e2e/SKIPPED.md",
+      "line": 7,
+      "issue": "5面構成の主要なセキュリティ主張である Resource Principal の環境間分離について、実測されたのは Dynamic Group matching rule と Policy 定義だけです。internal-dev から public-dev への拒否、および public-dev から同一環境への許可は未検証で、文書自身も工程を積まなかっただけと認めています。",
+      "suggestion": "各環境の Resource Principal から同一環境の代表資源への成功と、他環境への拒否を実測し、コマンド、終了コード、マスク済み応答を保存してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 16,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-08-08T_ORM-FOUNDATIONS/e2e/` の16シナリオを確認しました。internal-dev import の `28 to import, 4 to add, 2 to change, 0 to destroy`、移行後の No changes、public-dev の quotaExceeded、専用 DG への Policy 差し替え、両環境の最終 No changes は生ログで裏付けられています。一方、環境間アクセスの許可・拒否は未実測であり、ADB helper の検索失敗・重複時に変更しないことも最終コードでは裏付けられていません。また証跡ログ自体に PAR URLおよび環境固有 endpoint が残っています。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲット URL が提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "review_n": 7,
+  "timestamp": "2026-08-09T09:33:53+09:00",
+  "reviewer": "codex",
+  "model": "gpt-5.6-sol",
+  "input_diff_path": "reviews/review-7.input.diff",
+  "raw_output_path": "reviews/review-7.raw.txt",
+  "codex_exit_code": 0,
+  "verdict": "FAIL",
+  "summary": "`import --apply` が直前の plan 結果を固定・検査せず、AUTO_APPROVED で再 plan と apply を一体実行するため、移行の受入条件である `0 to destroy` を保証できない blocker があります。実環境証跡は両環境の収束を裏づけていますが、権限境界の実アクセス試験は未実施です。",
+  "severity_counts": {
+    "blocker": 1,
+    "major": 3,
+    "minor": 0
+  },
+  "findings": [
+    {
+      "id": "B001",
+      "severity": "blocker",
+      "file": "ops/orm-stack.sh",
+      "line": 317,
+      "issue": "`import --apply` は、事前に確認した plan job を適用せず、`create-apply-job --execution-plan-strategy AUTO_APPROVED` で新たな plan を即時適用します。構成・環境変数・実リソースの変化や import block の欠落により destroy/replace が発生しても、ADR の受入条件 `0 to destroy` を検査せず既存リソースを変更・削除し得ます。`--apply` の指定は apply の人間ゲートですが、未確認の destructive plan まで承認したことにはなりません。",
+      "suggestion": "plan job IDを保存し、ログまたはstructured planから destroy/replace が0件であることを機械検証してください。そのplanを指定してapplyする方式を利用し、計画が変わった場合は再承認させてください。destroy/replaceを含むplanではapply jobが作成されないテストも追加してください。"
+    },
+    {
+      "id": "M001",
+      "severity": "major",
+      "file": "ops/orm-stack.sh",
+      "line": 166,
+      "issue": "移行元の `infra/terraform/environments/dev/terraform.tfstate` を、移行完了後も通常のTerraform stateとして残し、`import` の入力にも固定しています。同じ実リソースをローカルstateとORM stateの両方が所有する状態になるため、旧ディレクトリでの誤ったapply/destroyがORM管理中のリソースを変更・削除できます。",
+      "suggestion": "移行成功とimportsなしのNo changesを確認した後、旧stateをコミット外の読み取り専用バックアップへ退避し、通常パスから除外してください。environments/devでのローカルapply/destroyを明示的に拒否するmigration markerやpreconditionも追加してください。"
+    },
+    {
+      "id": "M002",
+      "severity": "major",
+      "file": "ops/orm-stack.sh",
+      "line": 187,
+      "issue": "`import` では `time_offset` を常に除外する一方、`SPA_PAR_EXPIRY` が設定されていることを検証しません。未設定のまま実行すると新しい `time_offset` とPARが作成され、API Gateway配線も変更されるため、説明している「既存失効日時を据え置く」という移行契約を静かに破ります。",
+      "suggestion": "`ACTION=import` では空でない妥当なRFC3339の `SPA_PAR_EXPIRY` を必須にし、既存stateのPAR `time_expires` と一致することも可能なら検証してください。未設定・不正形式・不一致でstack updateやjob作成へ進まないテストを追加してください。"
+    },
+    {
+      "id": "M003",
+      "severity": "major",
+      "file": "runs/2026-08-08T_ORM-FOUNDATIONS/e2e/SKIPPED.md",
+      "line": 7,
+      "issue": "5コンパートメント構成の主要なセキュリティ主張であるResource Principalの環境間分離は、Dynamic Group matching ruleとPolicy定義の確認だけです。internal-devからpublic-devへの拒否、およびpublic-devから同一環境への許可は実測されていません。文書自身も技術的制約ではなく、単に工程を実施しなかったとしています。",
+      "suggestion": "各環境のResource Principalから、同一環境の代表リソースへの成功と他環境への403拒否を最低1本ずつ実測し、コマンド、終了コード、マスク済み応答を保存してください。"
+    }
+  ],
+  "e2e": {
+    "attached": true,
+    "scenarios_reviewed": 16,
+    "adequacy": "insufficient",
+    "notes": "`runs/2026-08-08T_ORM-FOUNDATIONS/e2e/` の16シナリオを確認しました。internal-devの `28 to import, 4 to add, 2 to change, 0 to destroy`、移行後の複数回のNo changes、public-devのquotaExceeded、専用DGへのPolicy差し替え、最終No changesはマスク済みログで裏づけられています。証跡内に完全なOCID、PAR URL、API Gateway/Identity Domainの実エンドポイントは見当たりません。一方、環境間の許可・拒否は定義確認のみで、SKIPPED.mdにも正当な実施不能理由がないため、diffの中心的なセキュリティ主張を裏づけるには不十分です。",
+    "live_check": {
+      "performed": false,
+      "target_url": "",
+      "result": "not_performed",
+      "scenarios": [],
+      "notes": "ターゲットURLが提供されていないため、指示どおりブラウザツールは使用していません。"
+    }
+  }
+}
