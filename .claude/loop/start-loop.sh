@@ -92,6 +92,13 @@ export LOOP_TASK="$TASK"
 #   権限プロンプトで止まらず自走する（bypassPermissions）。ただし「ループの価値＝人間ゲートを
 #   飛ばさない」ため、コミット/PR/push/merge/apply/destroy は --disallowedTools で権限層からも遮断する。
 #   完了条件は呼び出し側が GOAL env で登録済み（session_start.sh が goal.txt に記録）。
+#
+#   **`terraform apply` を deny するだけでは足りない。** 配備は `ops/` のスクリプト越しに
+#   打つので、コマンド名が一致せず素通りする。2026-08-21 に VID-07 のループが
+#   `ops/orm-stack.sh public-dev apply --apply` で **IAM ポリシーを承認前に適用**した
+#   （hard_gates の iam_identity を越えた）。ORM は API 経由なので `terraform` の
+#   文字列すら現れない。**apply を打ちうる入口をすべて名指しで塞ぐ**
+#   （`packages/api/tests/test_loop_apply_gate.py` が ops の実態と照合する）。
 # - 未設定（人間が付く逐次/worktree 起動）: 従来どおり対話モード。GOAL env を渡せば goal.txt に記録される。
 if [ "${LOOP_AUTONOMOUS:-0}" = "1" ]; then
   echo "[loop] 自律モードで起動（bypassPermissions＋ハードゲート deny / LOOP_TASK=${TASK}）。" >&2
@@ -99,7 +106,10 @@ if [ "${LOOP_AUTONOMOUS:-0}" = "1" ]; then
     --disallowedTools \
       "Bash(git commit:*)" "Bash(git push:*)" "Bash(git merge:*)" \
       "Bash(gh pr create:*)" "Bash(gh pr merge:*)" \
-      "Bash(terraform apply:*)" "Bash(terraform destroy:*)"
+      "Bash(terraform apply:*)" "Bash(terraform destroy:*)" \
+      "Bash(ops/orm-stack.sh:*)" "Bash(ops/dev-env-up.sh:*)" "Bash(ops/dev-env-down.sh:*)" \
+      "Bash(oci resource-manager job create-apply-job:*)" \
+      "Bash(oci resource-manager job create-destroy-job:*)"
 else
   echo "[loop] worktree で起動します（cd $WT / LOOP_TASK=${TASK}）。完了条件は GOAL env で登録（goal.txt）。" >&2
   exec claude
