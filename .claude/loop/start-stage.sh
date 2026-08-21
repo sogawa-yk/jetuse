@@ -27,4 +27,7 @@ echo "[stage] commit/merge は許可・push/PR/apply/destroy は遮断。/stage-
 exec claude --permission-mode bypassPermissions \
   --disallowedTools \
     "Bash(git push:*)" "Bash(gh pr create:*)" "Bash(gh pr merge:*)" \
-    "Bash(terraform apply:*)" "Bash(terraform destroy:*)"
+    "Bash(terraform apply:*)" "Bash(terraform destroy:*)" \
+    "Bash(ops/orm-stack.sh:*)" "Bash(ops/dev-env-up.sh:*)" "Bash(ops/dev-env-down.sh:*)" \
+    "Bash(oci resource-manager job create-apply-job:*)" \
+    "Bash(oci resource-manager job create-destroy-job:*)"
