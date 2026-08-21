@@ -30,7 +30,6 @@ const NAV: { to: string; key: string; icon: IconName }[] = [
   { to: '/ocr', key: 'nav.ocr', icon: 'ocr' },
   { to: '/admin', key: 'nav.admin', icon: 'admin' },
   { to: '/settings', key: 'nav.settings', icon: 'settings' },
-  { to: '/design', key: 'nav.design', icon: 'design' },
 ]
 
 const isDesktop = () => window.matchMedia('(min-width: 768px)').matches
