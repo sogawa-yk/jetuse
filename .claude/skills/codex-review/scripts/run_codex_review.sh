@@ -27,6 +27,19 @@ SCOPE="${DIFF_SCOPE:-uncommitted}"
 # codex 入力 1,048,576 字上限超過＋空判定ハングの主因になる。生成物はソースでないため除外する
 # （deploy/CI が使う tracked dist は不変・untrack はしない）。
 EXCL=(':(exclude)packages/web/dist')
+
+# **未追跡の新規ファイルを diff に載せる。** `git diff HEAD` は追跡済みの変更しか出さないため、
+# 新規モジュール・新規テスト・新規 migration が**レビュー対象から丸ごと落ちていた**
+# （VID-01/02/03 の初回レビューが毎回「完了対象のファイルが diff 外」で FAIL していた原因。
+# さらに悪いのは、エージェントが stage し忘れたまま通ると**新規コードが未レビューで PASS しうる**こと）。
+#
+# `git add -N`（intent-to-add）は**内容を stage せず存在だけ**を index に伝えるので、
+# `git diff HEAD` に新規ファイルが現れる。`.gitignore` 済みは対象外のまま（`.env` 等は載らない）。
+# `worktree` スコープでも同じ理由で必要（`git diff` も未追跡は出さない）。
+if [ "$SCOPE" != "staged" ]; then
+  git add -N -- . ':(exclude)packages/web/dist' >/dev/null 2>&1 || true
+fi
+
 case "$SCOPE" in
   staged)      DIFF="$(git diff --staged -- . "${EXCL[@]}")" ;;
   worktree)    DIFF="$(git diff -- . "${EXCL[@]}")" ;;
@@ -125,10 +138,37 @@ PAYLOAD="${REV_DIR}/review-${N}.payload.txt"
   fi
   printf '\n\n===== 実環境 E2E 証跡 (jetuse-dev / Codex は実行せず証跡を評価する) =====\n'
   if [ -d "$E2E_DIR" ] && [ -n "$(ls -A "$E2E_DIR" 2>/dev/null)" ]; then
+    # **codex の stdin は UTF-8 でなければならない。** 不正な1バイトで
+    # "input is not valid UTF-8" となり rc=1、レビューが判定不能(verdict=ERROR)になる
+    # (2026-08-19 VID-01 で発生)。壊し方は2つあり、両方を塞ぐ:
+    #   (a) バイナリ証跡(スクリーンショット PNG 等)をそのまま流す
+    #   (b) **バイト単位で切る**こと。`tail -c` は文字境界を見ないので、日本語の証跡が
+    #       上限を超えると先頭が文字の途中になり不正 UTF-8 になる
+    # `grep -I` は NUL の有無を見るだけで UTF-8 妥当性検査ではないため、判定にも使わない。
+    # ここでは実際にデコードを試み、**文字単位で**切り出す。
     find "$E2E_DIR" -type f | sort | while read -r ef; do
       printf -- '--- %s ---\n' "$ef"
-      tail -c 8000 "$ef"
-      printf '\n'
+      EF="$ef" python3 - <<'PYATTACH'
+import os, sys
+LIMIT = 8000  # 文字数。バイト数で切ると文字の途中で割れる
+path = os.environ["EF"]
+raw = open(path, "rb").read()
+try:
+    text = raw.decode("utf-8")
+except UnicodeDecodeError:
+    # **黙って落とさない。** 証跡が無いのか添付できなかったのかを区別できるようにする。
+    sys.stdout.write(
+        f"(バイナリ証跡: {len(raw)} バイト。テキストでないため中身は添付していない。\n"
+        " ファイルが存在すること自体が証跡である。中身の評価はできないので、\n"
+        " このファイルに依存する主張はテキスト証跡側で裏づけられているかを見ること)\n")
+    sys.exit(0)
+if len(text) > LIMIT:
+    sys.stdout.write(f"(先頭を省略: 全 {len(text)} 文字のうち末尾 {LIMIT} 文字)\n")
+    text = text[-LIMIT:]
+sys.stdout.write(text)
+if not text.endswith("\n"):
+    sys.stdout.write("\n")
+PYATTACH
     done
   else
     printf '(証跡なし: %s が空。デプロイ/E2E 未実施または対象外。完了主張ならその妥当性を厳しく見ること)\n' "$E2E_DIR"

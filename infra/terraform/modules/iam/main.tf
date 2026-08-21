@@ -78,6 +78,17 @@ locals {
     "Allow dynamic-group ${local.runtime_dynamic_group_name} to use autonomous-database-family in compartment id ${var.compartment_ocid}",
     "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage objects in compartment id ${var.compartment_ocid}",
     "Allow dynamic-group ${local.runtime_dynamic_group_name} to read buckets in compartment id ${var.compartment_ocid}",
+    # **PAR(事前認証要求)の発行は `manage objects` に含まれない。** PAR_MANAGE は
+    # bucket 側の permission なので、`read buckets`(BUCKET_INSPECT / BUCKET_READ)だけでは
+    # CreatePreauthenticatedRequest が **404 BucketNotFound**（"…or you are not authorized"）で
+    # 落ちる。バケットが見えていないように読めるが、実際は権限不足（2026-08-21 に
+    # jetuse-pubdemo で実機再現。同じ経路の put_object は成功していた）。
+    # 影響したのは映像の**再生 URL**(VID-01 `playback`)と**直接アップロード**(VID-07
+    # `upload-url` / 確定後の PAR 削除)。どちらも API が本体を中継しないための仕組みで、
+    # PAR を発行できないと機能そのものが成立しない。
+    # **`manage buckets` は付けない。** バケットの作成・削除・更新まで渡すことになる。
+    # 必要なのは PAR_MANAGE 1 つなので、permission で絞って与える。
+    "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage buckets in compartment id ${var.compartment_ocid} where request.permission='PAR_MANAGE'",
     "Allow dynamic-group ${local.runtime_dynamic_group_name} to manage ai-service-speech-family in compartment id ${var.compartment_ocid}",
     "Allow dynamic-group ${local.runtime_dynamic_group_name} to use ai-service-document-family in compartment id ${var.compartment_ocid}",
     "Allow dynamic-group ${local.runtime_dynamic_group_name} to use ai-service-language-family in compartment id ${var.compartment_ocid}",

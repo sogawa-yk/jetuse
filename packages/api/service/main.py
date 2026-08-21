@@ -78,6 +78,7 @@ from .routes import (
     health,
     minutes,
     usecases,
+    video,
     voice,
 )
 from .routes import rag as rag_routes
@@ -128,6 +129,7 @@ def create_app() -> FastAPI:
     app.include_router(usecases.router)
     app.include_router(capabilities.router)
     app.include_router(demos.router)
+    app.include_router(video.router)
     app.include_router(health.router)
 
     return app
