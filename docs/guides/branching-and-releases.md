@@ -34,7 +34,13 @@ internal-dev ── release PR ────▶ internal-stable = Internal 配信
 
 判定は `ops/check-branch-base.sh` が **CI（`pull_request`）で**検査する。`internal-dev` 宛の PR が共有物しか変更していないと落ちる。内部固有パスの一覧は `ops/internal-only-paths.txt`（単一の真実源）。
 
-ローカルの `make lint` では base を知る術が無いので既定でスキップする（**合格ではない**）。手元で確かめるなら `BRANCH_BASE=internal-dev make lint`。混在（内部固有＋共有物）は落とさず WARN に留める —— 分割を強制すると実務が回らないため。ただし共有部分が Public に届かないことは表示する。
+**いまどちらの版を触っているかは `make where`。** 版を言い忘れたまま作業が進むのを防ぐための入口で、ブランチ・推定した起点・変更内容との整合・配備先コンパートメント・ADB の状態を1画面で出す。
+
+起点は **「分岐点が public-dev に含まれるか」**で推定する（`mbi = merge-base(HEAD, internal-dev)` が `public-dev` の祖先なら `public-dev` 起点、そうでなければ `internal-dev` 起点）。単純な merge-base 等値比較にすると、internal-dev が public-dev に追いついていない間（同期は人間ゲートなので普通にある）に Public の作業を Internal と誤判定する。ローカルの `make lint` も同じ推定を使う（以前は base を知る術が無いとして**黙ってスキップ**しており、「ローカルでは何も言われず PR で初めて落ちる」状態だった）。**推定では落とさない** —— 明示された base ではないので `make lint` を止める根拠にはせず、WARN に留める。強制力は CI 側のまま。明示したいときは `BRANCH_BASE=internal-dev make lint`。
+
+推定の限界: 枝を切った位置が `public-dev` にも存在するコミットなら、`internal-dev` から切っていても区別できない。実害は小さい（その位置は `public-dev` にもあるので、共有物を入れる先として `public-dev` は正しい）。
+
+混在（内部固有＋共有物）は落とさず WARN に留める —— 分割を強制すると実務が回らないため。ただし共有部分が Public に届かないことは表示する。
 
 一覧に足すかどうか迷ったら、**「Public 版に出しても差し支えないか」**を先に考える。差し支えないなら一覧に足すのではなく `public-dev` 起点で作り直すのが正しい対応。
 
