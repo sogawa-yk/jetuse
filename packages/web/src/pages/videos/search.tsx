@@ -111,6 +111,7 @@ export default function VideoSearch() {
 
   return (
     <PageContainer
+      helpKey="videos"
       wide
       icon="search"
       title={t('videos.toSearch')}
@@ -118,8 +119,7 @@ export default function VideoSearch() {
       action={
         <Link
           to="/videos"
-          className="rounded-rw border border-line px-3.5 py-1.5 text-sm hover:border-action hover:text-action"
-        >
+          className="rounded-rw border border-line px-3.5 py-1.5 text-sm hover:border-action hover:text-action">
           {t('videos.toList')}
         </Link>
       }

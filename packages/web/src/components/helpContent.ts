@@ -4,7 +4,7 @@
  *  titleKey/descKey は i18n のキー(dict.ja.ts / dict.en.ts に help.* を定義)。 */
 export type HelpKey =
   | 'chat' | 'rag' | 'dbchat' | 'agents' | 'minutes'
-  | 'realtime' | 'voicechat' | 'video' | 'ocr'
+  | 'realtime' | 'voicechat' | 'video' | 'videos' | 'ocr'
 
 export type HelpEntry = { diagram: string; titleKey: string; descKey: string }
 
@@ -17,5 +17,7 @@ export const HELP_CONTENT: Record<HelpKey, HelpEntry> = {
   realtime:  { diagram: '/architecture/usecase-realtime.png',  titleKey: 'help.realtime.title',  descKey: 'help.realtime.desc' },
   voicechat: { diagram: '/architecture/usecase-voicechat.png', titleKey: 'help.voicechat.title', descKey: 'help.voicechat.desc' },
   video:     { diagram: '/architecture/usecase-video.png',     titleKey: 'help.video.title',     descKey: 'help.video.desc' },
+  // 映像の場面検索(VID)。図は svg（drawio の書き出しツールが無い環境で作ったため）。
+  videos:    { diagram: '/architecture/usecase-videos.svg',     titleKey: 'help.videos.title',    descKey: 'help.videos.desc' },
   ocr:       { diagram: '/architecture/usecase-ocr.png',       titleKey: 'help.ocr.title',       descKey: 'help.ocr.desc' },
 }

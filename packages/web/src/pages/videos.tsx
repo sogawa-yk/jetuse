@@ -166,6 +166,7 @@ export default function Videos() {
 
   return (
     <PageContainer
+      helpKey="videos"
       wide
       icon="video"
       title={t('nav.videos')}
@@ -173,8 +174,7 @@ export default function Videos() {
       action={
         <Link
           to="/videos/search"
-          className="rounded-rw bg-cta px-3.5 py-1.5 text-sm font-medium text-cta-ink hover:bg-cta-strong"
-        >
+          className="rounded-rw bg-cta px-3.5 py-1.5 text-sm font-medium text-cta-ink hover:bg-cta-strong">
           🔍 {t('videos.toSearch')}
         </Link>
       }

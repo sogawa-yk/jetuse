@@ -153,6 +153,7 @@ function VideoDetail() {
     <PageContainer
       wide
       icon="video"
+      helpKey="videos"
       title={asset?.title || t('nav.videos')}
       subtitle={asset ? [asset.collection, asset.category].filter(Boolean).join(' ・ ') : ''}
       action={
