@@ -283,6 +283,12 @@ class FakeCursor:
             self.rows = [(1,)] if (mine and asset["token"] == binds["tok"]) else []
         elif s.startswith("SELECT 1 FROM video_assets"):
             self.rows = [(1,)] if mine else []
+        elif s.startswith("SELECT upload_state FROM video_assets"):
+            # 取れなかった理由の切り分け(VID-07)。この fake の映像は確定済み
+            self.rows = [(asset.get("upload_state", "ready"),)] if mine else []
+        elif s.startswith("SELECT id, object_name FROM video_assets"):
+            # 中断した登録の回収(`video.reap_stale_uploads`)。ここには無い
+            self.rows = []
         elif s.startswith("UPDATE video_assets SET analysis_state = 'running'"):
             if asset["state"] != "running":
                 asset.update(state="running", token=binds["tok"], error=None)

@@ -304,6 +304,41 @@ class VideoSearchFilters(BaseModel):
         return value
 
 
+class VideoUploadUrlRequest(BaseModel):
+    """`POST /api/video/assets/upload-url`(VID-07 / specs/20 §2)。
+
+    **本体は載らない。** ここで受け取るのは「これから何を上げるか」の申告だけで、
+    映像そのものはブラウザが Object Storage へ直接 PUT する(ゲートウェイの本文上限
+    20 MiB を通さないため)。`size_bytes` は上限超過を**発行前に**弾くために要る ——
+    500MB を超える映像に PAR を配ってから落とすと、上げ切った後で失敗を知らせることになる。
+
+    **未知のキーを弾く**(`extra="forbid"`)。`{"filename": ..., "titel": ...}` のような
+    誤字を無視すると、題名が付かないまま登録が成功する。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(min_length=1, max_length=1000)
+    # **`StrictInt`。** 素の int は `"100"` や `true` を数として通す。サイズは
+    # 文字列でも真偽値でもない(上限判定が静かにずれる)
+    size_bytes: StrictInt = Field(ge=1)
+    title: str | None = Field(default=None, max_length=500)
+    collection: str | None = Field(default=None, max_length=255)
+    category: str | None = Field(default=None, max_length=255)
+    rights: str | None = Field(default=None, max_length=1000)
+    # 撮影日時は multipart 経路と同じ規則(ISO-8601 / 読めなければ 422)で
+    # ルータ側が解釈する。**読めない値を黙って NULL にしない**
+    captured_at: str | None = Field(default=None, max_length=64)
+    duration_ms: StrictInt | None = Field(default=None, ge=0)
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+
 class VideoSearchRequest(BaseModel):
     """`POST /api/video/search`(VID-04 / specs/20 §4)。
 

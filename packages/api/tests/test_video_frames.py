@@ -513,10 +513,23 @@ class FakeCursor:
             ) else []
         elif s.startswith("SELECT 1 FROM video_assets"):
             self.rows = [(1,)] if key in self.db["assets"] else []
+        elif s.startswith("SELECT upload_state FROM video_assets"):
+            # 取れなかった理由の切り分け（無い / 本体がまだ無い / 走っている）
+            asset = self.db["assets"].get(key)
+            self.rows = [] if asset is None else [(asset.get("upload", "ready"),)]
+        elif s.startswith("SELECT id, object_name FROM video_assets"):
+            # 中断した登録の回収（VID-07 `video.reap_stale_uploads`）。この fake は
+            # 分析側の検証用なので、`uploading` の行は持たない
+            self.rows = [
+                (aid, a["object_name"])
+                for (aid, o), a in self.db["assets"].items()
+                if o == binds["o"] and a.get("upload") == "uploading"
+                and a.get("created", self.db["clock"]) < binds["cut"]
+            ]
         elif s.startswith("UPDATE video_assets SET analysis_state = 'running'"):
             # 入口のアトミック UPDATE（specs/20 §3）。条件を fake でも同じ形で評価する
             asset = self.db["assets"].get(key)
-            if asset is not None and (
+            if asset is not None and asset.get("upload", "ready") == "ready" and (
                 asset["state"] != "running"
                 or asset["started_at"] is None
                 or asset["started_at"] < binds["stale"]
