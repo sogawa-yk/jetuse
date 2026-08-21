@@ -10,9 +10,7 @@ import { en } from '../i18n/dict.en'
 describe('helpContent registry', () => {
   it('every entry has a usecase diagram path and i18n keys present in ja/en', () => {
     for (const entry of Object.values(HELP_CONTENT)) {
-      // svg も許す。図の正本は .drawio で、プレビューは png（drawio から書き出す）だが、
-      // 書き出しツールが無い環境で作った図は svg を直接置く（<img> はどちらも表示できる）。
-      expect(entry.diagram).toMatch(/^\/architecture\/usecase-[a-z]+\.(png|svg)$/)
+      expect(entry.diagram).toMatch(/^\/architecture\/usecase-[a-z]+\.png$/)
       expect(ja[entry.titleKey as keyof typeof ja]).toBeTruthy()
       expect(ja[entry.descKey as keyof typeof ja]).toBeTruthy()
       expect(en[entry.titleKey as keyof typeof en]).toBeTruthy()

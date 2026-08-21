@@ -5,7 +5,7 @@
  *
  *  画面の配線（helpKey）はテストから見えにくく、ページを書き換えたときに黙って外れる。
  *  ソースを読んで確かめる。 */
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
@@ -18,7 +18,7 @@ describe('映像の場面検索のヘルプ', () => {
   it('helpContent に videos があり、図の実体を指している', () => {
     const e = HELP_CONTENT.videos
     expect(e).toBeTruthy()
-    expect(e.diagram).toMatch(/^\/architecture\/usecase-videos\.(png|svg)$/)
+    expect(e.diagram).toMatch(/^\/architecture\/usecase-videos\.png$/)
   })
 
   it('図の正本（docs/architecture/usecases）に実体がある', () => {
@@ -26,9 +26,8 @@ describe('映像の場面検索のヘルプ', () => {
     const root = join(here, '..', '..', '..', '..', '..')
     const name = HELP_CONTENT.videos.diagram.replace('/architecture/', '')
     const p = join(root, 'docs', 'architecture', 'usecases', name)
-    const body = readFileSync(p, 'utf-8')
-    expect(body.length).toBeGreaterThan(1000)
-    if (name.endsWith('.svg')) expect(body).toContain('<svg')
+    // png はバイナリなので存在とサイズだけ見る
+    expect(statSync(p).size).toBeGreaterThan(10_000)
   })
 
   it('3画面すべてに helpKey="videos" が付いている', () => {

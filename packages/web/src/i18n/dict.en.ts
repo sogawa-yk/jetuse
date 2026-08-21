@@ -371,13 +371,9 @@ export const en: Record<keyof typeof ja, string> = {
   'help.voicechat.desc': 'Ask by voice and get transcription → chat answer → spoken reply (OCI Speech TTS), half-duplex.',
   'help.videos.title': 'Video scene search',
   'help.videos.desc':
-    'Videos upload straight to Object Storage through a write-only pre-authenticated request, so they never pass '
-    + 'through the gateway body limit. ffmpeg detects shot changes and splits the video into time ranges; '
-    + 'representative frames from each range go to a vision model, which fills in the scene description, objects, '
-    + 'actions and on-screen text (Japanese included). **Timestamps come from ffmpeg — the model is never asked for them.** '
-    + 'Scene descriptions are embedded and stored in Autonomous DB 26ai, and search evaluates vector distance and '
-    + 'metadata filters in one SQL statement. Results are scenes, not files: each carries why it matched and plays '
-    + 'from its own timestamp.',
+    'Videos upload straight to Object Storage, then ffmpeg splits them into scenes. A vision model describes '
+    + 'each scene — objects, actions, on-screen text — and the result is stored with its embedding in Autonomous DB. '
+    + 'Search combines natural language with filters, and each hit plays from its own timestamp.',
   'help.video.title': 'Video analysis',
   'help.video.desc': 'Split a video into evenly spaced frames in the browser and analyze them together with a vision-capable model (the video itself is never sent to the server).',
   'help.ocr.title': 'OCR / document understanding',
