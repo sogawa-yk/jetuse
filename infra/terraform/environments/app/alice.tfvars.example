@@ -35,4 +35,6 @@ api_environment = {
   ADB_WALLET_PASSWORD = "<shared wallet pw>"
   ADB_PASSWORD        = "<JETUSE_ALICE のパスワード>"
   ADB_QUERY_PASSWORD  = "<JETUSE_ALICE_Q のパスワード>"
+  SPEECH_BUCKET       = "jetuse-dev-speech" # 共有バケット(VOICE-01)
+  VIDEO_BUCKET        = "jetuse-dev-video"  # 共有バケット(VID-01)
 }

@@ -14,6 +14,10 @@ output "speech_bucket" {
   value = oci_objectstorage_bucket.speech.name
 }
 
+output "video_bucket" {
+  value = oci_objectstorage_bucket.video.name
+}
+
 # 例: /p/<token>/n/<ns>/b/<bucket>/o/ — API GWバックエンドURLの基底に使う
 output "spa_par_access_uri" {
   value     = oci_objectstorage_preauthrequest.spa_read.access_uri

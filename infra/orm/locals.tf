@@ -97,6 +97,7 @@ locals {
     ADB_OCID           = module.adb.adb_id # フォールバック(バケット未配置時にAPI生成)
     RAG_BUCKET         = module.object_storage.app_data_bucket
     SPEECH_BUCKET      = module.object_storage.speech_bucket
+    VIDEO_BUCKET       = module.object_storage.video_bucket
     OS_NAMESPACE       = module.object_storage.namespace
     # Monitoring 名前空間は prefix 由来にする(既定 "jetuse_dev" のままだと別テナンシに
     # dev 名前空間が出る)。名前空間はハイフン不可なので "_" へ正規化。
