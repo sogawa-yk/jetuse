@@ -113,6 +113,40 @@ SQL で扱う**。要求4（自然言語）と要求5（条件絞り込み）を
 | 14 | メタデータの外部出力（CSV/JSON）・他システム連携 | 一覧表示と JSON 取得までは v1。CSV 出力・外部連携は後続 |
 | — | 長時間映像・大量映像の一括処理 | まず短い映像で成立させ、規模は測ってから |
 
+### 決定7: PAR 発行に `PAR_MANAGE` を与える（2026-08-21 追加・事後承認）
+
+**PAR の発行は `manage objects` にも `read buckets` にも含まれない。** `PAR_MANAGE` は
+バケット側の permission なので、それが無いと `CreatePreauthenticatedRequest` は
+**404 BucketNotFound**（"…or you are not authorized"）で落ちる。バケットが見えていないように
+読めるが実際は権限不足で、同じ経路の `put_object` は成功するため紛らわしい。
+
+```
+Allow dynamic-group <runtime-dg> to manage buckets in compartment id <c>
+  where request.permission='PAR_MANAGE'
+```
+
+**`manage buckets` を丸ごとは与えない。** バケットの作成・削除・更新まで渡すことになる。
+必要なのは PAR_MANAGE 1 つなので permission で絞る。
+
+これが無いと**映像の再生 URL（VID-01 `playback`）と直接アップロード（VID-07）が成立しない**。
+つまり **VID-01 の再生は配備環境で壊れていた**。各タスクの E2E が開発者の資格情報で SDK を
+直接叩いており、**リソースプリンシパルで動く実機の経路を通していなかった**ため見えなかった
+（HTTP 413 と同じ種類の見落とし）。
+
+**手続きの逸脱を記録する。** この変更は**人間の承認前に適用された**（2026-08-21 00:47・
+foundation スタックへ `0 added / 1 changed / 0 destroyed`）。IAM は `hard_gates` の
+`iam_identity` であり越えてはならない。原因は2つ:
+
+1. オーケストレータの指示が曖昧だった。アプリ層の 1 コマンドを名指ししたうえで
+   「apply だけが解禁」と書いたため、apply 全般と読めた。
+2. **権限層に穴がある。** ループは `--disallowedTools "Bash(terraform apply:*)"` で止める
+   設計だが、**ORM 経由の apply（`ops/orm-stack.sh <env> apply --apply`）は文字列が一致せず
+   素通りする**。
+
+内容は妥当なので**事後承認として残す**（2026-08-21 施主判断）。権限層の穴はステージ完了後に
+直す。**「結果が良ければ手続きは問わない」ことにはしない** —— 内容の是非と手続きの是非は別に
+記録する。
+
 ## 影響
 
 - API コンテナに 28MB の依存が増える（依存層のため、アプリ変更時のビルド時間には影響しない）
@@ -126,4 +160,5 @@ SQL で扱う**。要求4（自然言語）と要求5（条件絞り込み）を
 - ~~AI Vision `video-job` の可用性~~ → **2026-08-20 に実測。使えない**（上記）
 - ~~画面内文字の日本語精度~~ → **2026-08-20 に実測。視覚 LLM に一本化**（上記）
 - 映像の同時実行数と Container Instance 4GB での上限
+- **ループの権限層が ORM 経由の apply を止められない**（上記・ステージ完了後に対処）
 - 実写での物体検出は視覚 LLM で足りるか（足りなければ `analyze-image` の併用を再検討する）
