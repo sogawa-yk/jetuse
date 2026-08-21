@@ -232,9 +232,6 @@ export default function Rag() {
                 ))}
               </ul>
             )}
-            {files.length > 0 && files.some((f) => f.backends) && (
-              <p className="mt-2 text-[10px] leading-snug text-ink-muted">{t('rag.beLegend')}</p>
-            )}
           </div>
         </div>
 

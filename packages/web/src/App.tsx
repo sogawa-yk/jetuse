@@ -10,7 +10,6 @@ const Agents = lazy(() => import('./pages/agents'))
 const Builder = lazy(() => import('./pages/builder'))
 const Chat = lazy(() => import('./pages/chat'))
 const DbChat = lazy(() => import('./pages/dbchat'))
-const Design = lazy(() => import('./pages/design'))
 const Admin = lazy(() => import('./pages/admin'))
 const Home = lazy(() => import('./pages/home'))
 const Minutes = lazy(() => import('./pages/minutes'))
@@ -73,7 +72,6 @@ export default function App() {
           <Route path="builder/:id" element={<Builder />} />
           <Route path="admin" element={<Admin />} />
           <Route path="settings" element={<Settings onBranding={setBranding} />} />
-          <Route path="design" element={<Design />} />
         </Route>
       </Route>
     </Routes>
