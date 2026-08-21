@@ -1,49 +1,22 @@
 # JetUse on OCI — 生成AIユースケース基盤（Public版）
 
-OCI Enterprise AI（OpenAI互換 agentic API）を基盤に、社内向け生成AIユースケースを束ねた
-Webアプリのプロトタイプ。チャット / ユースケースエンジン / RAG / DBチャット(NL2SQL) /
-エージェント（複数フレームワーク） / 音声（議事録・リアルタイム文字起こし・音声チャット） /
-画像・映像分析を、OCIのマネージドサービス上で提供する。
+OCI Enterprise AI（OpenAI互換 agentic API）を基盤に、チャット / ユースケース / RAG / DBチャット(NL2SQL) /
+エージェント / 音声 / 画像・映像分析を1つのWebアプリにまとめたプロトタイプ。すべてOCIのマネージドサービス上で動く。
 
-> [English README](./README.en.md) ｜ アーキテクチャ図: [docs/architecture/system.md](./docs/architecture/system.md)
->
-> 🚀 **新しく参加する開発者は [docs/guides/onboarding.md](./docs/guides/onboarding.md) から**（ローカル起動→テスト→自分専用E2E環境）
->
-> 📚 **ドキュメント目次（ルーティング）: [docs/README.md](./docs/README.md)** ｜ 技術ナレッジまとめ: [docs/KNOWLEDGE.md](./docs/KNOWLEDGE.md)
+[English README](./README.en.md)
 
-## 🚀 ワンクリックデプロイ（Deploy to Oracle Cloud）
+## デプロイ
 
 [![Deploy JetUse to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/sogawa-yk/jetuse/releases/download/orm-main/jetuse-orm.zip)
 
-このボタンは、IAMとJetUse本体を含む1つのTerraformスタックをOCI Resource Managerへ渡します。Working directoryの指定は不要です。
-VCN / Autonomous Database / API Gateway / Container Instance / Functions / Object Storage /
-Identity Domain（OIDC）/ Dynamic Group / Policyを一括構築し、**OIDC登録・DBセットアップまで含めて使えるアプリ**が立ち上がります。
+このボタンは、IAMとアプリ本体を含む1つのTerraformスタックをOCI Resource Managerへ渡す（Working directoryの指定は不要）。
+VCN / Autonomous Database / API Gateway / Container Instance / Functions / Object Storage / Identity Domain を
+一括構築し、出力の `app_url` に `demo_username` / `demo_password` でログインできる状態になる。初回は10〜15分。
 
-- **テナンシIAM権限がある場合**: `enable_dynamic_group=true`、`enable_runtime_policy=true`（既定）でIAMを含めて作成。
-- **Dynamic Groupが作成済みの場合**: `enable_dynamic_group=false`にして、コンパートメントのRuntime Policyだけを作成。
-- **IAMがすべて作成済みの場合**: 両方を`false`にしてアプリリソースだけを作成。
-- 権限のないIAM操作を有効にするとPlan / Applyが権限エラーになるため、実行ユーザーの権限に合わせて選択してください。
-- **入力**: 対象コンパートメント、テナンシのホームリージョン、prefix。パスワード類は自動生成し、イメージは公開 OCIR を既定使用。
-- **所要時間**: 初回は Autonomous Database 作成とDB初期化に約10〜15分。
-- **デプロイ後**: 出力の `app_url` を開き、`demo_username` / `demo_password`（出力）でログイン。
-- **対応リージョン（2階層）**:
-  - **アプリ（イメージ提供）= 4リージョン**: 大阪（ap-osaka-1）/ 東京（ap-tokyo-1）/ アシュバーン（us-ashburn-1）/ シカゴ（us-chicago-1）。公開イメージを各リージョンのOCIRへ事前公開しており（OCI Functions は同一リージョンOCIRのイメージ必須）、スタックはデプロイリージョンのOCIRを自動選択します。対応外リージョンは plan 時に明示エラー（イメージを自リージョンOCIRへミラーし `api_image_url` と `fn_router_image` を指定すれば利用可 — Issue #55 / ADR-0017）。
-  - **GenAI（推論/agentic API）実証済 = 2リージョンのみ**: 大阪（ap-osaka-1）/ シカゴ（us-chicago-1）。RAG・会話メモリ・デモ生成はGenAIに依存します。東京/アシュバーンは**applyは通ってもGenAIが動きません**。承知の上で他リージョンへ進める場合のみ `allow_unvalidated_genai_region=true` を設定（plan時に明示エラーで停止します）。
-- **デプロイ前チェックリスト（別テナンシへ持ち出す場合）**:
-  - [ ] 対象リージョンをテナンシで**サブスクライブ**済み（未サブスクライブだと home リージョン導出/region_guard が失敗）
-  - [ ] **GenAI**（推論+agentic API）が対象リージョンで利用可（実証済=大阪/シカゴ。他は `allow_unvalidated_genai_region`）
-  - [ ] **ADB ECPU** のサービス枠 ≥ `adb_ecpu_count`（既定2。新規テナンシは枠0が普通→LimitExceeded）。`adb_db_version`(既定26ai)が対象リージョンで提供されること
-  - [ ] **Container Instance** の `ci_shape`（既定 CI.Standard.E4.Flex）が対象リージョンで提供されること
-  - [ ] **Functions / VCN** のサービス枠（アプリ/VCNの上限に余裕）
-  - [ ] `prefix` は英小文字始まり・ハイフン除去後15文字以内（VCN dns_label 上限）
-  - [ ] `ocir_namespace` は**既定のまま**（公開イメージの cross-tenancy pull 用。自テナンシへミラーした場合のみ上書き）
-  - [ ] `enable_auth=true` なら Identity Domain はテナンシの**ホームリージョン**に作成される（destroy が失敗する場合は手動で domain を deactivate → 再 destroy。`docs/guides/customize.md` 参照）
-  - [ ] NL2SQL(SQL Search)を使うなら `semstore_ocid` に既存 Semantic Store の OCID を設定（未設定だと503）
-- 権限・Dynamic Group一覧は [Public版 IAM要件](./docs/setup/public-iam-requirements.md)、IAM設定の詳細は [IAMガイド](./docs/setup/iam.md)、デプロイ手順は [Resource Managerガイド](./docs/setup/orm.md)。
-
-> ORM は Terraform のみを実行するため、コンテナイメージ（公開OCIR）・SPA配信・DB初期化・OIDC登録は
-> それぞれ「事前公開イメージ」「Terraformオブジェクト配信」「コンテナ起動時の自己ブートストラップ」
-> 「`oci_identity_domains_*` リソース」で自動化している（[docs/setup/orm.md](./docs/setup/orm.md)）。
+- 入力は対象コンパートメントと `prefix` 程度。パスワードは自動生成、コンテナイメージは公開OCIRを使う。
+- 実行ユーザーのIAM権限に応じて `enable_dynamic_group` / `enable_runtime_policy` を切り替える。
+- 対応リージョン・サービス枠・事前チェックリストは [Resource Managerガイド](./docs/setup/orm.md)。
+  必要な権限は [Public版 IAM要件](./docs/setup/public-iam-requirements.md) と [IAMガイド](./docs/setup/iam.md)。
 
 ## 機能
 
@@ -53,94 +26,54 @@ Identity Domain（OIDC）/ Dynamic Group / Policyを一括構築し、**OIDC登�
 | ユースケース | フォーム+プロンプトテンプレートの定義・共有（ビルダー）、組み込み5種 |
 | RAG | 文書アップロード→引用付き回答（Vector Store / Select AI の2バックエンド） |
 | DBチャット | 自然言語→SQL生成・実行（SQL Search / Select AI）、結果のグラフ化 |
-| エージェント | ツール実行・MCP・記憶分離。エンジンは **native / OpenAI Agents SDK（既定） / LangGraph** を選択 |
+| エージェント | ツール実行・MCP・記憶分離。エンジンは native / OpenAI Agents SDK（既定） / LangGraph |
 | 音声 | 議事録（話者分離）、リアルタイム文字起こし、音声チャット（半二重） |
 | マルチモーダル | 画像入力チャット、動画フレーム分析 |
 | 管理・運用 | 監査ログ・利用ダッシュボード、入力モデレーション、レート制限、OCI Logging/Monitoring連携 |
 
-## アーキテクチャ概要
+## アーキテクチャ
 
 - **フロント**: React SPA（Object Storage静的配信 + API Gateway、HashRouter）
-- **API**: SSE系=Container Instance（FastAPI） / 非ストリーミング=OCI Functions（適材適所、ADR-0005）
-- **AI**: OCI Enterprise AI（OpenAI互換 Responses/Chat Completions、IAM署名）。リージョン=大阪
-- **データ**: ADB 26ai（会話・定義・議事録・SQL Search/Select AI）、Object Storage（文書・音声・ウォレット）
+- **API**: SSE系=Container Instance（FastAPI） / 非ストリーミング=OCI Functions（ADR-0005）
+- **AI**: OCI Enterprise AI（OpenAI互換 Responses/Chat Completions、IAM署名）
+- **データ**: ADB 26ai（会話・定義・議事録・NL2SQL）、Object Storage（文書・音声・ウォレット）
 - **認証**: IAM Identity Domain（OIDC + PKCE）。SAMLフェデレーション手順あり
-- 詳細とMermaid図 → [docs/architecture/system.md](./docs/architecture/system.md)
 
-## リポジトリ構成
+詳細とMermaid図 → [docs/architecture/system.md](./docs/architecture/system.md)
+
+## 開発
+
+初回セットアップから自分専用のE2E環境までは [オンボーディングガイド](./docs/guides/onboarding.md)。
+
+```bash
+cd packages/api && AUTH_REQUIRED=false uvicorn service.main:app --port 8000  # API（認証オフ）
+cd packages/web && VITE_AUTH_REQUIRED=false npm run dev                     # SPA（/api を :8000 へ）
+
+make lint && make test && make build   # コミット前チェック（入口は root Makefile・一覧は make help）
+make deploy DEV=<名>                    # 自分専用のOCI環境へ配備してE2E
+```
 
 ```
 packages/web/    React SPA
 packages/api/    FastAPI(service/) + Functionsルーター(fn/) + 共有ロジック(jetuse_core/)
-infra/terraform/ Terraformモジュール群（environments/dev が実環境）
-docs/            plan.md(計画) / decisions(ADR) / verification(検証レポート) /
-                 comparison/(比較資料) / guides/(入門・運用) / setup(IAM・SAML手順) / tips.md(実機ハマり集)
+infra/           terraform/(モジュールと環境) + orm/(ワンクリックスタック)
+docs/            設計・ADR・検証レポート・運用ガイド
 specs/           機能仕様（フェーズごと）
 ```
 
-## デプロイ（2系統）
+ブランチは `main`（Public安定版・Deployボタンの配信元）/ `public-dev`（Public統合）/
+`internal-dev` / `internal-stable`。Publicの変更は `public-dev` へ入れ、リリース時に `main` へ運ぶ
+（[ブランチとリリース](./docs/guides/branching-and-releases.md)）。検証は実機確認主義（結果は `docs/verification/`）。
 
-### 前提
-- OCIテナンシ（大阪リージョン推奨）、`~/.oci/config`、Terraform 1.15+ / Node 22 / Python 3.12 / podman
-- 環境依存値は `.env`（雛形 `.env.example`）。**認証情報・OCID・エンドポイント実値はコミットしない**
-- 人間の事前作業: IAM動的グループ/ポリシー（`docs/setup/iam.md`）、Identity Domain（`specs/06`）
+## ドキュメント
 
-### A. インフラ（Terraform）
-```bash
-cd infra/terraform/environments/dev
-cp terraform.tfvars.example terraform.tfvars   # 値を設定（コミット禁止）
-terraform init
-terraform apply                                 # VCN/ADB/API GW/バケット/Functions/Logging 等
-```
-- ADBマイグレーション: `cd packages/api && python -m jetuse_core.migrate`（JETUSE_APPユーザー）
-
-### B. アプリ
-```bash
-# API（SSE系・Container Instance）
-cd packages/api
-podman build -t <region>.ocir.io/<ns>/jetuse-dev-api:<ver> .
-podman push  <region>.ocir.io/<ns>/jetuse-dev-api:<ver>
-# → infra/.../terraform.tfvars の api_image_url を更新して terraform apply
-
-# Functionsルーター（非ストリーミング）
-podman build -f Containerfile.fn -t <region>.ocir.io/<ns>/jetuse-dev-fn-router:<ver> .
-podman push <同上> ; tfvars の fn_router_image を更新して apply
-
-# SPA（静的配信）
-cd packages/web && npm install && npm run build && bash scripts/deploy.sh
-```
-
-> 運用の落とし穴（[docs/tips.md](./docs/tips.md) に詳説）:
-> - 環境変数注入のためのCI再作成でも、**同じイメージタグだとコード変更は反映されない** → コード変更時は必ず再ビルド
-> - OCIRへのpushはディスク逼迫時に静かに失敗しうる → apply前にレジストリ側でバージョン存在を確認
-> - dev ADBは夜間停止に巻き込まれるため、作業前に起動確認（`ops/start-adb-if-stopped.sh`）
-
-## 開発
-
-> 新規参加者向けの手順は [docs/guides/onboarding.md](./docs/guides/onboarding.md)（初回セットアップ・自分専用E2E環境まで）。
-
-```bash
-# API（ローカル、認証オフ）
-cd packages/api && AUTH_REQUIRED=false uvicorn service.main:app --port 8000
-# SPA（/api を localhost:8000 へプロキシ）
-cd packages/web && VITE_AUTH_REQUIRED=false npm run dev
-```
-- コミット前: `make lint && make test && make build`（単一コマンド入口 = root `Makefile`。個別は `make help`）
-- 検証は実機確認主義（結果は `docs/verification/`）。複数人での実機E2Eは [docs/guides/dev-environments.md](./docs/guides/dev-environments.md)
-- ブランチとリリース: `main` = Public 安定版（Deploy ボタンの配信元）、`public-dev` = Public 統合、`internal-dev` / `internal-stable` = Internal 側。Public の変更は `public-dev` へ入れ、リリース時に `main` へ（[運用詳細](./docs/guides/branching-and-releases.md)）。
-
-## ドキュメント早見
+目次は [docs/README.md](./docs/README.md)。よく見るもの:
 
 | 知りたいこと | 参照 |
 |---|---|
 | 全体設計・図 | [docs/architecture/system.md](./docs/architecture/system.md) |
 | 設計判断の理由 | [docs/decisions/](./docs/decisions/)（ADR） |
-| AWS版参考実装との機能比較 | [docs/comparison/aws-reference.md](./docs/comparison/aws-reference.md) |
-| 方式選定（RAG/NL2SQL/エージェントFW/コンピュート/アクセス制御） | `docs/comparison/` |
+| 方式選定（RAG/NL2SQL/エージェントFW/コンピュート） | [docs/comparison/](./docs/comparison/) |
 | カスタマイズ方法 | [docs/guides/customize.md](./docs/guides/customize.md) |
 | デモ台本 | [docs/guides/demo-scenarios.md](./docs/guides/demo-scenarios.md) |
 | 実機ハマり集 | [docs/tips.md](./docs/tips.md) |
-
-## ライセンス / 位置づけ
-
-`main` は Public 安定版、`internal-stable` は Internal 正式版として運用する（開発は `public-dev` / `internal-dev`）。利用条件はリポジトリのライセンスを参照。

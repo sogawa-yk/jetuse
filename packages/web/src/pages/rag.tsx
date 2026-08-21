@@ -5,15 +5,12 @@ import { PageContainer } from '../components/layout'
 import { Md } from '../components/markdown'
 import { readSse } from '../lib/sse'
 import { usePrefs } from '../prefs'
-import { BackendCapabilityPanel } from './rag/BackendCapabilities'
 import { BackendStatusBadges } from './rag/BackendStatusBadges'
 import { hasSendableFile } from './rag/sendReadiness'
 import { UPLOAD_ACCEPT } from './rag/uploadFormats'
 import {
-  pickRagBackendCapabilities,
   type BackendStatus,
   type RagBackend,
-  type RagBackendCapabilities,
 } from './rag/capabilityCatalog'
 
 type RagFile = {
@@ -43,7 +40,6 @@ export default function Rag() {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [backend, setBackend] = useState<RagBackend>('vector_store')
-  const [caps, setCaps] = useState<RagBackendCapabilities | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -59,15 +55,6 @@ export default function Rag() {
   useEffect(() => {
     void loadFiles()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user])
-
-  // RAGM-03: バックエンドの能力差は API の能力カタログが正本(画面は描くだけ)。
-  // 取れなければパネルを出さない(RAGチャット自体は動く)。
-  useEffect(() => {
-    fetch('/api/capabilities', { headers: authHeaders(user) })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => setCaps(pickRagBackendCapabilities(d)))
-      .catch(() => setCaps(null))
   }, [user])
 
   // 取り込み中(VS処理中 or いずれかのバックエンドがpending)は定期的に状態を更新。
@@ -296,10 +283,6 @@ export default function Rag() {
               ),
             )}
             <div ref={bottomRef} />
-          </div>
-          {/* RAGM-03: 選択中のバックエンドで何ができるか(取り込み状況バッジとは別物) */}
-          <div className="border-t border-line p-3 pb-0">
-            <BackendCapabilityPanel backend={backend} caps={caps} />
           </div>
           <form
             className="flex items-end gap-2 border-t border-line p-3"
