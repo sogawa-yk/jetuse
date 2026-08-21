@@ -1,6 +1,0 @@
-<<<<<<<< HEAD:packages/web/dist/assets/infoDiagram-5YYISTIA-CbHlSVcV.js
-import{t as e}from"./mermaid-parser.core-C248w_6D.js";import{g as t,h as n}from"./src-oaGqIoNi.js";import{c as r}from"./chunk-CSCIHK7Q-DTFitOfK.js";import{t as i}from"./chunk-WU5MYG2G-D79yvgcx.js";var a={parse:n(async n=>{let r=await e(`info`,n);t.debug(r)},`parse`)},o={version:`11.15.0`},s={parser:a,db:{getVersion:n(()=>o.version,`getVersion`)},renderer:{draw:n((e,n,a)=>{t.debug(`rendering info diagram
-========
-import{t as e}from"./mermaid-parser.core-DS-2FxVI.js";import{g as t,h as n}from"./src-oaGqIoNi.js";import{c as r}from"./chunk-CSCIHK7Q-D64ZWDgQ.js";import{t as i}from"./chunk-WU5MYG2G-E8c4zCPO.js";var a={parse:n(async n=>{let r=await e(`info`,n);t.debug(r)},`parse`)},o={version:`11.15.0`},s={parser:a,db:{getVersion:n(()=>o.version,`getVersion`)},renderer:{draw:n((e,n,a)=>{t.debug(`rendering info diagram
->>>>>>>> origin/public-dev:packages/web/dist/assets/infoDiagram-5YYISTIA-DfGI4uob.js
-`+e);let o=i(n);r(o,100,400,!0),o.append(`g`).append(`text`).attr(`x`,100).attr(`y`,40).attr(`class`,`version`).attr(`font-size`,32).style(`text-anchor`,`middle`).text(`v${a}`)},`draw`)}};export{s as diagram};
