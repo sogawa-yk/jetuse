@@ -9,7 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
-from jetuse_core import http_tools, rag_metadata, settings, tts
+from jetuse_core import http_tools, rag_metadata, settings, tts, video_search
 
 from .validators import validate_agent_definition, validate_usecase_definition
 
@@ -178,6 +178,24 @@ class MinutesGenerateRequest(BaseModel):
     model: str = "gpt-oss-120b"
 
 
+class VideoSceneEdit(BaseModel):  # VID-05 (specs/20 §5)
+    """場面メタデータの修正。**送られた項目だけ**を直す(`exclude_unset`)。
+
+    `extra="forbid"` にするのは、直せない項目(objects / indoor など)を送ったときに
+    **黙って捨てない**ため。捨てると「直したのに変わらない」が起きて理由が判らない。
+    値そのものの検証(空文字・列幅・タグの型)は `jetuse_core.video_edit.normalize_edits`
+    が持つ —— HTTP とサービス層で二重に持つと、片方だけ直したときに食い違う。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    description: str | None = None
+    tags: list[str] | None = None
+    screen_text: str | None = None
+    place: str | None = None
+    scene_kind: str | None = None
+
+
 class SttSessionCreate(BaseModel):
     language: str = Field(default="ja", pattern=r"^[a-z]{2,3}(-[A-Z]{2})?$")  # VOICE-02
 
@@ -292,3 +310,104 @@ class UsecaseDefinition(BaseModel):
 
     def validated(self) -> dict:
         return validate_usecase_definition(self)
+
+
+class VideoSearchFilters(BaseModel):
+    """場面の絞り込み条件(VID-04 / specs/20 §4)。
+
+    **未知のキーを黙って捨てない**(`extra="forbid"`)。誤字が静かに「条件なしの全件」に
+    なると、利用者は絞り込めたつもりで別のものを見る(`jetuse_core.video_search` の
+    `SearchInputError` と同じ考えを、ワイヤの入口にも置く)。
+
+    **空文字は「指定なし」に寄せる。** 画面のフォームは未入力の欄を空文字で送るので、
+    ここで落とすと未入力の欄がひとつでもあるだけで検索が 422 になる。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # 期間。日付だけ("2026-12-31")ならその日を丸ごと含める(video_search._time_bound)
+    captured_from: str | None = Field(default=None, max_length=64)
+    captured_to: str | None = Field(default=None, max_length=64)
+    created_from: str | None = Field(default=None, max_length=64)
+    created_to: str | None = Field(default=None, max_length=64)
+    collection: str | None = Field(default=None, max_length=video_search.VALUE_MAX)
+    category: str | None = Field(default=None, max_length=video_search.VALUE_MAX)
+    rights: str | None = Field(default=None, max_length=video_search.VALUE_MAX)
+    place: str | None = Field(default=None, max_length=video_search.VALUE_MAX)
+    # 集合が決まっている項目も**型は str にする**。許される値は DB の CHECK 制約と
+    # 同じ集合(`video_search._ENUM_FILTERS`)が単一の真実源で、ここに写すと 2 か所を
+    # 揃え続けることになる。集合外の値は core が許容値つきの 422 で返す
+    indoor: str | None = Field(default=None, max_length=video_search.VALUE_MAX)
+    time_of_day: str | None = Field(default=None, max_length=video_search.VALUE_MAX)
+    has_people: bool | None = None
+    tags: list[str] | None = Field(default=None, max_length=video_search.TAGS_MAX)
+    duration_min_ms: StrictInt | None = Field(default=None, ge=0)
+    duration_max_ms: StrictInt | None = Field(default=None, ge=0)
+    analysis_state: str | None = Field(default=None, max_length=video_search.VALUE_MAX)
+    confirmed: bool | None = None
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+
+class VideoUploadUrlRequest(BaseModel):
+    """`POST /api/video/assets/upload-url`(VID-07 / specs/20 §2)。
+
+    **本体は載らない。** ここで受け取るのは「これから何を上げるか」の申告だけで、
+    映像そのものはブラウザが Object Storage へ直接 PUT する(ゲートウェイの本文上限
+    20 MiB を通さないため)。`size_bytes` は上限超過を**発行前に**弾くために要る ——
+    500MB を超える映像に PAR を配ってから落とすと、上げ切った後で失敗を知らせることになる。
+
+    **未知のキーを弾く**(`extra="forbid"`)。`{"filename": ..., "titel": ...}` のような
+    誤字を無視すると、題名が付かないまま登録が成功する。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(min_length=1, max_length=1000)
+    # **`StrictInt`。** 素の int は `"100"` や `true` を数として通す。サイズは
+    # 文字列でも真偽値でもない(上限判定が静かにずれる)
+    size_bytes: StrictInt = Field(ge=1)
+    title: str | None = Field(default=None, max_length=500)
+    collection: str | None = Field(default=None, max_length=255)
+    category: str | None = Field(default=None, max_length=255)
+    rights: str | None = Field(default=None, max_length=1000)
+    # 撮影日時は multipart 経路と同じ規則(ISO-8601 / 読めなければ 422)で
+    # ルータ側が解釈する。**読めない値を黙って NULL にしない**
+    captured_at: str | None = Field(default=None, max_length=64)
+    duration_ms: StrictInt | None = Field(default=None, ge=0)
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+
+class VideoSearchRequest(BaseModel):
+    """`POST /api/video/search`(VID-04 / specs/20 §4)。
+
+    `q` と `similar_to_scene_id` の同時指定は `video_search.search` が 422 で弾く
+    (2 つのベクトルの混ぜ方を仕様が決めていない。勝手に決めて片方を捨てない)。
+
+    **未知のキーは filters と同じくここでも弾く**(`extra="forbid"`)。`{"query": "豪雨"}`
+    のような誤字を無視すると、検索語なしの一覧要求として成功し、**利用者が検索した
+    つもりで全場面を見る**(filters だけ塞いでもトップレベルに同じ穴が残る)。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    q: str | None = Field(default=None, max_length=1000)
+    filters: VideoSearchFilters | None = None
+    similar_to_scene_id: str | None = Field(default=None, max_length=64)
+    # **`StrictInt`。** 素の `int` は lax モードで `true` を 1 に、`"20"` を 20 に
+    # 変換するので、`{"limit": true}` が「1 件」として通ってしまう(core の
+    # `_limit_value` と規則が食い違う)。件数は文字列でも真偽値でもない。
+    limit: StrictInt = Field(
+        default=video_search.DEFAULT_LIMIT, ge=1, le=video_search.LIMIT_MAX
+    )

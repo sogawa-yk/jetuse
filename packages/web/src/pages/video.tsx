@@ -1,6 +1,7 @@
 /** 映像分析(MM-01): 動画→等間隔Nフレーム抽出(ブラウザ内canvas)→visionモデルで一括分析。
  *  動画自体はサーバーへ送らない(フレームのみ /api/chat/stream のimagesで送信) */
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { authHeaders, reauthenticate, useUser } from '../auth'
 import { PageContainer } from '../components/layout'
 import { Md } from '../components/markdown'
@@ -163,6 +164,13 @@ export default function Video() {
             </div>
             <p className="text-[11px] text-ink-muted">{t('video.formats')}</p>
             <p className="text-[11px] text-ink-muted">{t('video.note')}</p>
+            {/* 導線の整理(VID-06): 登録して場面ごとに検索・頭出しするなら /videos */}
+            <p className="text-[11px] text-ink-muted">
+              {t('videos.searchHint')} —{' '}
+              <Link to="/videos" className="text-action hover:underline">
+                {t('nav.videos')}
+              </Link>
+            </p>
             {extracting && <p className="text-xs text-ink-muted">{t('video.extracting')}</p>}
             {frames.length > 0 && (
               <div className="grid grid-cols-3 gap-1.5">
