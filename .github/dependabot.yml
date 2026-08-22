@@ -1,0 +1,36 @@
+# 依存の更新提案。**SHA ピン留めと対で要る。**
+# アクションを SHA で固定するとサプライチェーンには強くなるが、**更新が止まる**
+# （タグと違って自動では動かない）。Dependabot が SHA ごと上げる PR を出すことで、
+# 「固定したまま腐らせない」を両立させる。
+version: 2
+updates:
+  # GitHub Actions（SHA ピン留めを追随させる）
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, ci]
+
+  # Python（API）
+  - package-ecosystem: pip
+    directory: /packages/api
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, api]
+    groups:
+      # 細かい PR を量産しない。まとめて1本にする。
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  # Node（SPA）
+  - package-ecosystem: npm
+    directory: /packages/web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, web]
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
