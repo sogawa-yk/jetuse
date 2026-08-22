@@ -14,10 +14,14 @@ on:
     branches: ["**"]
   pull_request:
 
+# 検査しかしないので読み取りだけ（OSS: フォーク PR を踏み台にさせない）。
+permissions:
+  contents: read
+
 jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: check no real OCID
         run: ops/check-no-real-ocid.sh

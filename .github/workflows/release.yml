@@ -13,7 +13,10 @@ name: release
 #  - SPA(dist)をビルドし、Terraformと共にDeploy専用zipへ同梱
 #  - IAMとJetUse本体を含む1つのzipをGitHubのorm-mainリリースへpublish
 #  - **dist をリポジトリへ commit しない**(ADR-0030)。branch protection と両立しないため、
-#    追跡された packages/web/dist は人がコミットし、陳腐化は ci.yml の web ジョブが検出する。
+#    **dist は追跡しない**（2026-08-22 / OSS 化）。ビルド出力は環境で一致しない（macOS と
+#    CI(Linux) でチャンクのハッシュが変わる）ため、「コミット済みと一致するか」を CI で見ると
+#    ソースを違えていなくても落ち、外部の貢献者が詰む。このワークフローがビルドして zip へ
+#    同梱する（もともとそうしている）。ci.yml は「配布物として組み立てられるか」を見る。
 # 必要な GitHub Secrets:
 #  - OCIR_USERNAME: "<namespace>/<user>"(Identity Domain利用時は
 #                   "<namespace>/oracleidentitycloudservice/<user>")
@@ -42,8 +45,8 @@ jobs:
   images:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -55,7 +58,7 @@ jobs:
               --username "${{ secrets.OCIR_USERNAME }}" --password-stdin
           done
       - name: Build & push API image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: packages/api/Containerfile
@@ -72,7 +75,7 @@ jobs:
             ord.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-api:latest
             ord.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-api:${{ github.sha }}
       - name: Build & push Functions router image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: packages/api/Containerfile.fn
@@ -96,7 +99,7 @@ jobs:
       # (infra/orm/locals.tf の hosted_agents_enabled)。
       # ビルドコンテキストはリポジトリルート(jetuse_shared が agent-containers の外にあるため)。
       - name: Build & push agent images (openai)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: packages/agent-containers/Containerfile.openai
@@ -109,7 +112,7 @@ jobs:
             ord.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-agent-openai:latest
             ord.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-agent-openai:${{ github.sha }}
       - name: Build & push agent images (langgraph)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: packages/agent-containers/Containerfile.langgraph
@@ -122,7 +125,7 @@ jobs:
             ord.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-agent-langgraph:latest
             ord.ocir.io/${{ env.OCIR_NAMESPACE }}/jetuse-agent-langgraph:${{ github.sha }}
       - name: Build & push agent images (adk)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: packages/agent-containers/Containerfile.adk
@@ -144,8 +147,8 @@ jobs:
       run:
         working-directory: packages/web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
           cache: npm
