@@ -74,16 +74,11 @@ jobs:
         run: npm run test
       - name: Build
         run: npm run build
-      - name: 配布物（ORM スタック zip）を組み立てられるか
-        working-directory: .
-        # **dist はもう追跡しない**（2026-08-22 / OSS 化）。以前は「コミット済み dist と
-        # 一致するか」を見ていたが、**ビルド出力は環境で一致しない** —— macOS と CI(Linux)
-        # でチャンクのハッシュが変わり、ソースを1文字も違えていなくても落ちる。実際この方式で
-        # CI が5回落ちた。外部の貢献者は環境を揃えられないため、OSS では貢献の入口を塞ぐ。
-        #
-        # 代わりに **配布物として組み立てられること**を見る。dist の中身ではなく、
-        # 「リリースが通る形になっているか」が本当に守りたいこと。
-        run: bash scripts/package-orm-stacks.sh "$RUNNER_TEMP/orm-check"
+      # **dist はもう追跡しない**（2026-08-22 / OSS 化）。以前は「コミット済み dist と
+      # 一致するか」を見ていたが、**ビルド出力は環境で一致しない** —— macOS と CI(Linux)
+      # でチャンクのハッシュが変わり、ソースを1文字も違えていなくても落ちる。実際この方式で
+      # CI が5回落ちた。外部の貢献者は環境を揃えられないため、OSS では貢献の入口を塞ぐ。
+      # 「配布物として組み立てられるか」は terraform ジョブが見る（そちらが zip を作るため）。
 
   terraform:
     runs-on: ubuntu-latest
@@ -115,6 +110,19 @@ jobs:
       - name: test hosted agent CLI scripts
         # terraform test は local-exec を実行しないので、シェル側の判断はモックで確認する
         run: sh infra/terraform/modules/hosted-agent/scripts/smoke_test.sh
+      # **zip は SPA の dist を同梱する。** dist は追跡しないので、ここで作る。
+      # 以前は追跡された dist をそのまま使えたが、ビルド出力が環境で一致しない問題で
+      # 貢献の入口を塞いでいた（上の web ジョブのコメント参照）。
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: packages/web/package-lock.json
+      - name: Build SPA (zip の同梱物)
+        working-directory: packages/web
+        run: |
+          npm ci
+          npm run build
       - name: Build Deploy to OCI archive
         run: bash scripts/package-orm-stacks.sh "$RUNNER_TEMP/orm-packages"
       - name: Validate packaged JetUse stack

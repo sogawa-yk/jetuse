@@ -43,7 +43,8 @@ def test_actions_are_pinned_to_a_commit(wf: pathlib.Path):
         if ref.startswith("./"):      # ローカルの composite action はリポジトリ内なので対象外
             continue
         if "@" not in ref:
-            bad.append(ref); continue
+            bad.append(ref)
+            continue
         if not re.fullmatch(r"[0-9a-f]{40}", ref.split("@", 1)[1]):
             bad.append(ref)
     assert not bad, f"SHA でピン留めされていない: {bad}"
