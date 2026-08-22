@@ -20,9 +20,13 @@ build/
 # node
 node_modules/
 dist/
-# ORMワンクリック(INFRA-03): SPAビルド成果物のみ追跡しTerraformでバケットへ配信(release.ymlが更新)
-!/packages/web/dist/
-!/packages/web/dist/**
+# **packages/web/dist は追跡しない**（2026-08-22 / OSS 化に向けて）。
+# 以前は ORM ワンクリック配布の都合で追跡し、陳腐化を ci.yml が検出していた。しかし
+# **ビルド出力は環境で一致しない** —— macOS と CI(Linux) でチャンクのハッシュが変わり、
+# ソースを1文字も違えていなくても「dist がソースと一致しません」で落ちる。実際この方式で
+# CI が5回落ち、そのたびに Linux コンテナでビルドし直して合わせていた。
+# 外部の貢献者は環境を揃えられないため、**OSS では貢献の入口を塞ぐ**。
+# 配布物は release.yml が main でビルドして zip へ同梱する（もともとそうしている）。
 .vite/
 
 # terraform
