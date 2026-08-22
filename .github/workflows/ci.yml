@@ -61,7 +61,7 @@ jobs:
         working-directory: packages/web
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
           cache: npm
@@ -113,7 +113,7 @@ jobs:
       # **zip は SPA の dist を同梱する。** dist は追跡しないので、ここで作る。
       # 以前は追跡された dist をそのまま使えたが、ビルド出力が環境で一致しない問題で
       # 貢献の入口を塞いでいた（上の web ジョブのコメント参照）。
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
           cache: npm
