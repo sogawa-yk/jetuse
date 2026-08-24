@@ -5,7 +5,7 @@
 
 ## OCI Enterprise AI（OpenAI互換API）
 
-- **2026-08-24 TTS の可否はリージョンだけでなくテナンシにも依る**: DEPLOYTEST では us-chicago-1 / us-phoenix-1 の両方で HTTP 404 になり `tts: unavailable`（2026-07-28 に別テナンシの us-chicago-1 で「可」を実測しているのと食い違う）。購読・提供状況の差と見られる（未検証）。**`/api/health` の総合 `ok` が TTS 1点で false になる**ため、公開版の利用者は「全体 NG」と受け取る
+- **2026-08-24 TTS の可否はリージョンだけでなくテナンシにも依る**: DEPLOYTEST では us-chicago-1 / us-phoenix-1 の両方で HTTP 404 になり `tts: unavailable`（2026-07-28 に別テナンシの us-chicago-1 で「可」を実測しているのと食い違う）。購読・提供状況の差と見られる（未検証）。**同テナンシでは 2026-07-30 の PUBLIC-IAM-02 でも「TTS を除く」と記録されており、1か月近く再現し続けている**（docs/verification/PUBLIC-IAM-02.md）。**`/api/health` の総合 `ok` が TTS 1点で false になる**ため、公開版の利用者は「全体 NG」と受け取る
 - **2026-06-10 ⭐ Conversationsの履歴圧縮は未文書フラグで制御**: `metadata.short_term_memory_optimization`（既定 `"false"` が自動付与される）。`"true"` でコンテキスト約2.5kトークン超から圧縮が発動し、**長会話の累計入力トークン42%削減・圧縮後も記憶保持OK**を実測。JetUseでは既定有効化済み（CHAT-06b）→ docs/verification/CP2-measurements.md
 - 2026-06-10 Conversationオブジェクトに**retention/TTLの公開フィールドはない**（クライアントから保持期間は制御不可）。能動的に消す手段は削除のみ → 会話削除時の同期削除を実装（CHAT-09）
 - 2026-06-10 **記憶保持の計測プローブに個人情報様の値（社員番号等）を使わない**: 圧縮と無関係にgpt-ossが「個人情報は保持できません」と拒否し、記憶喪失と誤判定する。中立的な事実（プロジェクトのコードネーム等）を使う
