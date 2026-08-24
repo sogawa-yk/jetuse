@@ -5,6 +5,7 @@
 
 ## OCI Enterprise AI（OpenAI互換API）
 
+- **2026-08-24 TTS の可否はリージョンだけでなくテナンシにも依る**: DEPLOYTEST では us-chicago-1 / us-phoenix-1 の両方で HTTP 404 になり `tts: unavailable`（2026-07-28 に別テナンシの us-chicago-1 で「可」を実測しているのと食い違う）。購読・提供状況の差と見られる（未検証）。**`/api/health` の総合 `ok` が TTS 1点で false になる**ため、公開版の利用者は「全体 NG」と受け取る
 - **2026-06-10 ⭐ Conversationsの履歴圧縮は未文書フラグで制御**: `metadata.short_term_memory_optimization`（既定 `"false"` が自動付与される）。`"true"` でコンテキスト約2.5kトークン超から圧縮が発動し、**長会話の累計入力トークン42%削減・圧縮後も記憶保持OK**を実測。JetUseでは既定有効化済み（CHAT-06b）→ docs/verification/CP2-measurements.md
 - 2026-06-10 Conversationオブジェクトに**retention/TTLの公開フィールドはない**（クライアントから保持期間は制御不可）。能動的に消す手段は削除のみ → 会話削除時の同期削除を実装（CHAT-09）
 - 2026-06-10 **記憶保持の計測プローブに個人情報様の値（社員番号等）を使わない**: 圧縮と無関係にgpt-ossが「個人情報は保持できません」と拒否し、記憶喪失と誤判定する。中立的な事実（プロジェクトのコードネーム等）を使う
@@ -26,6 +27,11 @@
 
 ## OCI運用
 
+- **2026-08-24 ⭐ GenAI の Vector Store / File は Terraform 管理外なので `destroy` しても残り、課金され続ける**: RAG を使うとアプリが実行時に Vector Store を作る（名前は `jetuse-rag-demo`）。Destroy 前後で数えて確認した —— ADB / Container Instance / Functions は 0 になったのに **Vector Store だけ残った**。DEPLOYTEST で 6個積み上がり ¥125/日（月¥3,750）が発生していた。**スタックを消したら GenAI リソースも消したか確認する**（公開版の利用者にも同じことが起きる）→ docs/verification/PUBLIC-DEPLOY-E2E-2026-08-24.md
+- **2026-08-24 ⭐ Vector Store はストアあたり 1 GB が最小課金単位**（実測 ¥15.62/GB/日）: 実データ 141KB の6ストアに 6 GB 分が請求されていた。**中身の大きさはほぼ無関係で、存在すること自体が課金される**。試験用のストアを作りっぱなしにしない
+- **2026-08-24 ⭐ コンパートメントを削除すると、中の GenAI リソースは「読めるが消せない」状態で残って課金され続ける**: `GET /vector_stores/<id>` は 200 なのに `DELETE` は 404 `NotAuthorizedOrNotFound`。コントロールプレーンの `delete_generative_ai_project` も 404（実行者は `Administrators` なので権限不足ではない）。**コンパートメントを消す前に中の GenAI リソースを消すこと** —— 順序を間違えると API からは回収不能になり SR 送りになる
+- **2026-08-24 GenAI の Files 一覧は `OpenAi-Project` ヘッダ必須**（無いと 400 `OpenAi-Project header must be provided.`）。Vector Store 本体の CRUD（CP 側）は `opc-compartment-id` だけでよい。棚卸しでは project を先に列挙してから files を引く
+- **2026-08-24 usage-api はホームリージョンでしか実行できない**（他リージョンだと 403 `Please go to your home region to execute this operation`）。課金を調べるときは `oci iam region-subscription list` でホームリージョンを確かめてから `--region` を指定する
 - **2026-06-10 夜間停止はADBを巻き込み、ADBは自動再開しない**（computeと違う）→ 翌朝アプリ全死。`ops/start-adb-if-stopped.sh` を用意（cron登録は人間判断、backlog #10）。**セッション開始時に挙動が変な時はまずADBの状態を疑う**
 - 2026-06-10 DB停止時にoracledbはタイムアウト未設定だと**無限ハング**する。`tcp_connect_timeout` / `POOL_GETMODE_TIMEDWAIT+wait_timeout` / `call_timeout` の3層設定が必要（CHAT-07）。プールはADB再開後に自動回復する（CI再起動不要）
 - 2026-06-10 ~~`.env`のADB_OCIDがスパイクADBを指す問題~~ **解消**: スパイクADB2本は削除済み（2026-06-11ユーザー指示）、ADB_OCIDはjetuse-dev-adbに修正済み。jetusedevウォレットは非公開バケット `jetuse-dev-app-data` の `adb_wallet.zip`（/home/opc/adb_wallet/は旧スパイク用で無効）

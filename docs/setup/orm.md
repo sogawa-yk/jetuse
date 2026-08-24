@@ -55,6 +55,10 @@ Terraformは権限を迂回しない。実行ユーザーに権限がないIAM�
 4. `prefix`をテナンシ内で一意にする。`enable_dynamic_group=false`にした場合は既存のDynamic Group名を`existing_dynamic_group`に入力する。
 5. Planで作成先、IAM、課金対象を確認してApplyする。
 
+CLI（`oci resource-manager stack create`）で作る場合は、**`tenancy_ocid` と `region` を変数に明示する**。
+コンソール経由では `schema.yaml` の hidden 変数として自動注入されるが、CLI では入らず plan が
+`No value for required variable` で失敗する（2026-08-24 実測）。
+
 Resource Managerが自動入力する`region`はリソースの配備リージョンであり、テナンシのホームリージョンではない。Identity DomainとIAMのCREATEに必要なホームリージョンは、Stackがregion subscriptionsから自動導出する（ユーザー入力不要）。
 
 ## 主な入力
@@ -111,6 +115,32 @@ Resource Managerが自動入力する`region`はリソースの配備リージ�
 同じStackで`enable_dynamic_group=true`から`false`へ変更すると、TerraformはそのStackが管理しているDynamic GroupとテナンシPolicyを削除するPlanを作る。既存IAMへ管理を移す場合は、Planを確認し、必要に応じて先にTerraform stateを移管する。
 
 StackをDestroyすると、そのStackで作成したIAMも削除対象になる。共有IAMをこのStackに作らせない場合は、初回から該当フラグを`false`にする。
+
+### Destroy しても消えないもの（課金が残る）
+
+**GenAI の Vector Store と File は Terraform 管理外**で、アプリが実行時（RAG の利用時）に作る。
+Stack を Destroy しても**残り続け、ストレージとして課金される**。
+
+実測（2026-08-24 / DEPLOYTEST）: Destroy 後に ADB・Container Instance・Functions は 0 件になったが、
+Vector Store だけが残った。放置した6個で **¥125/日（月約¥3,750）** が発生していた。
+**ストアあたり 1 GB が最小課金単位**と見られ（実測 ¥15.62/GB/日）、中身が数KBでも1GB分課金される。
+
+Destroy の後は次を確認して消す。
+
+```bash
+# Vector Store（CP エンドポイント。opc-compartment-id ヘッダが要る）
+GET/DELETE https://generativeai.<region>.oci.oraclecloud.com/20231130/openai/v1/vector_stores[/<id>]
+
+# File（DP エンドポイント。opc-compartment-id に加えて OpenAi-Project ヘッダが必須）
+GET/DELETE https://inference.generativeai.<region>.oci.oraclecloud.com/openai/v1/files[/<id>]
+```
+
+**コンパートメントごと消す場合は順序に注意する。** 先にコンパートメントを削除すると、中の GenAI リソースは
+`GET` では見えるのに `DELETE` が 404 `NotAuthorizedOrNotFound` になり、**API からは回収できなくなる**
+（コントロールプレーンの project 削除も同じく 404。テナンシ管理者でも不可）。
+必ず **GenAI リソースを消してからコンパートメントを消す**。
+
+詳細: [docs/verification/PUBLIC-DEPLOY-E2E-2026-08-24.md](../verification/PUBLIC-DEPLOY-E2E-2026-08-24.md)
 
 ## 配布と検証
 
