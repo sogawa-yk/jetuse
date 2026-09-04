@@ -17,6 +17,7 @@
 - **2026-08-20 Gemini系の切れた応答は「空」ではなく「途中まで」で返る**: `max_tokens=1024` の要約が文の途中（「…次に、コンピュータ」）で終わり、**成功応答として返った**（VID-03 実測）。JSON を要求している経路は parse で落ちて気づけるが、**素の文章は切れても気づけない**。`finish_reason == "length"` を見て失敗扱いにする（`video_analyze._content`）。上限そのものは思考トークンぶんを見込んで 4096（既存の「小さいmax_tokensで死ぬ」の続き）
 - **2026-08-20 ffmpeg の drawtext は `text=` に `:` を書くと落ちる**: テロップの `12:34` がフィルタの区切りと解釈され exit 234。`textfile=<パス>` で渡せば日本語も含めて素通し（E2E 素材の生成で踏んだ）
 - 2026-06-11 SSEのproduceスレッドで `stream_chat()` 呼び出しをtry外に置くと、同期例外時に終端イベントが送られずkeepaliveで永久ハングする（テストfakeの引数不一致のTypeErrorで発覚）。**ジェネレータ生成もtry内+except時にerrorイベント送出**が正解
+- **2026-09-04 GenAI の project / vector store は空でも 1GB/h の最低課金枠がかかる**: ファイル0件の project と実データ27KBの vector store が、それぞれ File Store Storage / Vector Store Storage として**きっかり 1 GB/h**（約15 JPY/日・件）で計上され続けていた。中身を消しても止まらず、リソース自体の削除が必要。**これらは Terraform 管理外**（`jetuse_core/genai.py` が `project_autocreate` で自動生成する）ため `terraform destroy` では残る。配備を畳んだ後は明示的に消すこと
 
 ## 認証（Identity Domains / oidc-client-ts）
 
@@ -31,6 +32,8 @@
 - 2026-06-10 ~~`.env`のADB_OCIDがスパイクADBを指す問題~~ **解消**: スパイクADB2本は削除済み（2026-06-11ユーザー指示）、ADB_OCIDはjetuse-dev-adbに修正済み。jetusedevウォレットは非公開バケット `jetuse-dev-app-data` の `adb_wallet.zip`（/home/opc/adb_wallet/は旧スパイク用で無効）
 - **2026-06-11 jetusedevウォレットのewallet.pemはパスワード保護**: `wallet_password` 未指定だとoracledb thinが**stdinでPEMパスフレーズを無限プロンプト**し、プール経由だと背景スレッドで沈黙→DPY-4005に見える（実害: migrate実行が謎ハング）。パスワードは tfvars の `ADB_WALLET_PASSWORD`。migrate実行例は docs/verification/UC-01-03.md 参照
 - 2026-06-11 プールの `wait_timeout=5000` はコールドmTLS接続（>5秒）で不足しDPY-4005になる → 15秒に変更。DB停止の即時503は `tcp_connect_timeout` 側が担うので影響なし
+- **2026-09-04 Resource Search の索引は実状態から遅れる。棚卸しの根拠に使わない**: `oci search resource structured-search` が GenAI hosted deployment を12件 **ACTIVE** と返したが、実 API（`list_hosted_deployments`）では**全件 DELETED**（`time_updated` は destroy と同時刻）。Search は当たりを付けるまでで、確定は各サービス API か Usage API（`request_summarized_usages`。**home region でのみ実行可**・`group_by` は最大4キー・compartment を含めるなら `compartment_depth` 必須）で行う
+- **2026-09-04 DELETED なコンパートメントに ACTIVE なリソースが残ることがあり、直接は削除できない**: 読み取りは通るのに削除だけ `404 NotAuthorizedOrNotFound` を返す（`Administrators`＝`manage all-resources IN TENANCY` でも同じ。**権限ではなくコンパートメントの状態が原因**なのでポリシーを疑うと嵌る）。回避は2通り — ①OCID を持つリソース（GenAI project 等）は `change_*_compartment` で生きているコンパートメントへ**移動してから削除**する（移動は非同期。直後の削除は404になるので `get_*` で反映を確認してから消す）②OCID を持たない OpenAI 互換リソース（vector store 等）は移動 API が無いが、`opc-compartment-id` ヘッダを**生きているコンパートメントに差し替える**と削除が通る（ID 解決がヘッダ非依存）
 
 ## 開発環境
 
